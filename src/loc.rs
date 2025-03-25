@@ -46,7 +46,6 @@ pub enum LocId {
 
     // About dialog
     AboutDialogTitle,
-    AboutDialogDescription,
     AboutDialogVersion,
 
     SearchNeedleLabel,
@@ -536,20 +535,6 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "О программе",
         /* zh_hans */ "关于",
         /* zh_hant */ "關於",
-    ],
-    // AboutDialogDescription
-    [
-        /* en      */ "Grug's favorite editor",
-        /* de      */ "Grugs Lieblingseditor",
-        /* es      */ "El editor favorito de Grug",
-        /* fr      */ "L'éditeur préféré de Grug",
-        /* it      */ "L'editor preferito di Grug",
-        /* ja      */ "Grugのお気に入りエディタ",
-        /* ko      */ "Grug이 가장 좋아하는 편집기",
-        /* pt_br   */ "O editor favorito do Grug",
-        /* ru      */ "Любимый редактор Груга",
-        /* zh_hans */ "Grug最喜欢的编辑器",
-        /* zh_hant */ "Grug最喜歡的編輯器",
     ],
     // AboutDialogVersion
     [

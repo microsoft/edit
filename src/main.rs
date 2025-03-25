@@ -1192,11 +1192,7 @@ fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
         ctx.block_begin("content");
         ctx.attr_padding(Rect::three(1, 2, 1));
         {
-            ctx.label(
-                "description",
-                Overflow::TruncateTail,
-                loc(LocId::AboutDialogDescription),
-            );
+            ctx.label("description", Overflow::TruncateTail, "Microsoft Edit");
             ctx.attr_position(Position::Center);
             ctx.label(
                 "version",
