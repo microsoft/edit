@@ -1460,6 +1460,26 @@ impl TextBuffer {
                         cursor_beg.logical_pos.y + 1,
                         line_number_width
                     );
+                } else if visual_line < self.stats.visual_lines {
+                    // Place " ... | " at the beginning of a wrapped line
+                    let number_width = (cursor_beg.logical_pos.y + 1).ilog10() as usize + 1;
+                    _ = write!(
+                        line,
+                        "{0:1$}{0:∙<2$} │ ",
+                        "",
+                        line_number_width - number_width,
+                        number_width
+                    );
+                    // Blending in the background color will "dim" the indicator dots.
+                    fb.blend_fg(
+                        Rect {
+                            left: 0,
+                            top: y + 1,
+                            right: line_number_width as i32,
+                            bottom: y + 2,
+                        },
+                        fb.indexed(IndexedColor::DefaultBackground),
+                    );
                 } else {
                     // Place "    | " at the beginning of the line.
                     // Since we know that we won't see line numbers greater than i64::MAX (9223372036854775807)
