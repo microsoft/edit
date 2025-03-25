@@ -1451,17 +1451,24 @@ impl TextBuffer {
             }
 
             if line_number_width != 0 {
-                if (self.word_wrap_column == CoordType::MAX || cursor_beg.logical_pos.x == 0)
-                    && visual_line < self.stats.visual_lines
-                {
+                if visual_line >= self.stats.visual_lines {
+                    // Past the end of the buffer? Place "    | " in the margin.
+                    // Since we know that we won't see line numbers greater than i64::MAX (9223372036854775807)
+                    // any time soon, we can use a static string as the template (`MARGIN`) and slice it,
+                    // because `line_number_width` can't possibly be larger than 19.
+                    let off = 19 - line_number_width;
+                    unsafe { std::hint::assert_unchecked(off < MARGIN_TEMPLATE.len()) };
+                    line.push_str(&MARGIN_TEMPLATE[off..]);
+                } else if self.word_wrap_column == CoordType::MAX || cursor_beg.logical_pos.x == 0 {
+                    // Regular line? Place "123 | " in the margin.
                     _ = write!(
                         line,
                         "{:1$} │ ",
                         cursor_beg.logical_pos.y + 1,
                         line_number_width
                     );
-                } else if visual_line < self.stats.visual_lines {
-                    // Place " ... | " at the beginning of a wrapped line
+                } else {
+                    // Wrapped line? Place " ... | " in the margin.
                     let number_width = (cursor_beg.logical_pos.y + 1).ilog10() as usize + 1;
                     _ = write!(
                         line,
@@ -1480,14 +1487,6 @@ impl TextBuffer {
                         },
                         fb.indexed(IndexedColor::DefaultBackground),
                     );
-                } else {
-                    // Place "    | " at the beginning of the line.
-                    // Since we know that we won't see line numbers greater than i64::MAX (9223372036854775807)
-                    // any time soon, we can use a static string as the template (`MARGIN`) and slice it,
-                    // because `line_number_width` can't possibly be larger than 19.
-                    let off = 19 - line_number_width;
-                    unsafe { std::hint::assert_unchecked(off < MARGIN_TEMPLATE.len()) };
-                    line.push_str(&MARGIN_TEMPLATE[off..]);
                 }
             }
 
