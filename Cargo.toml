@@ -14,6 +14,10 @@ lto = true
 panic = "abort"
 debug-assertions = true # Temporary while I test this
 
+[profile.bench]
+codegen-units = 16
+lto = "thin"
+
 [dependencies]
 
 [target.'cfg(unix)'.dependencies]
@@ -32,3 +36,10 @@ features = [
     "Win32_System_Memory",
     "Win32_System_Threading",
 ]
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "lib"
+harness = false

@@ -18,45 +18,22 @@
 // * Multi-Cursor
 // * For the focus path we can use the tree depth to O(1) check if the path contains the focus.
 
-#![allow(
-    dead_code,
-    clippy::needless_if,
-    clippy::uninit_assumed_init,
-    clippy::missing_transmute_annotations
-)]
-
-use buffer::RcTextBuffer;
-use helpers::{COORD_TYPE_SAFE_MAX, DisplayablePathBuf};
-use input::{kbmod, vk};
-
-use crate::framebuffer::IndexedColor;
-use crate::helpers::{Rect, Size};
-use crate::loc::{LocId, loc};
-use crate::tui::*;
-use crate::vt::Token;
+use edit::buffer::{self, RcTextBuffer};
+use edit::framebuffer::{self, IndexedColor};
+use edit::helpers::*;
+use edit::input::{self, kbmod, vk};
+use edit::loc::{LocId, loc};
+use edit::sys;
+use edit::trust_me_bro;
+use edit::tui::*;
+use edit::vt::{self, Token};
+use edit::{apperr, icu};
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
 use std::{cmp, process};
 
 #[cfg(feature = "debug-latency")]
 use std::fmt::Write;
-
-mod apperr;
-mod buffer;
-mod framebuffer;
-mod fuzzy;
-mod helpers;
-mod icu;
-mod input;
-mod loc;
-mod memchr;
-mod sys;
-mod trust_me_bro;
-mod tui;
-mod ucd;
-mod ucd_gen;
-mod utf8;
-mod vt;
 
 struct StateSearch {
     kind: StateSearchKind,
@@ -467,7 +444,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         // Otherwise, focus the replace input field, if it exists.
         if state.buffer.has_selection() {
             let selection = state.buffer.extract_selection(false);
-            let selection = helpers::string_from_utf8_lossy_owned(selection);
+            let selection = string_from_utf8_lossy_owned(selection);
             state.search_needle = selection;
             focus = state.wants_search.kind;
         }
