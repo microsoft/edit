@@ -232,7 +232,10 @@ fn run() -> apperr::Result<()> {
             draw(&mut ctx, &mut state);
 
             #[cfg(feature = "debug-layout")]
-            state.buffer.debug_replace_everything(&tui.debug_layout());
+            {
+                drop(ctx);
+                state.buffer.debug_replace_everything(&tui.debug_layout());
+            }
 
             #[cfg(feature = "debug-latency")]
             {
@@ -1194,6 +1197,7 @@ fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
         {
             ctx.label("description", Overflow::TruncateTail, "Microsoft Edit");
             ctx.attr_position(Position::Center);
+
             ctx.label(
                 "version",
                 Overflow::TruncateHead,
@@ -1204,6 +1208,7 @@ fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
                 ),
             );
             ctx.attr_position(Position::Center);
+
             ctx.label(
                 "copyright",
                 Overflow::TruncateTail,
