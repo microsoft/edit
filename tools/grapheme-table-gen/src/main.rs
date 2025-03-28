@@ -1,7 +1,7 @@
 mod rules;
 
 use crate::rules::{JOIN_RULES_GRAPHEME_CLUSTER, JOIN_RULES_LINE_BREAK};
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use indoc::writedoc;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -187,6 +187,15 @@ fn main() -> anyhow::Result<()> {
             cp
         );
     }
+    for (cp, &expected) in out.ucd.values[..0x80].iter().enumerate() {
+        let last = out.trie.stages.last().unwrap();
+        let actual = last.values[cp];
+        assert_eq!(
+            expected, actual,
+            "trie sanity check failed for direct ASCII mapping of U+{:04X}",
+            cp
+        );
+    }
 
     let buf = match out.arg_lang {
         Language::C => generate_c(out),
@@ -276,7 +285,17 @@ fn generate_c(out: Output) -> String {
         buf.push_str("};\n");
     }
 
-    buf.push_str("inline int ucd_grapheme_cluster_lookup(const uint32_t cp)\n{\n");
+    _ = writedoc!(
+        buf,
+        "
+        inline int ucd_grapheme_cluster_lookup(const uint32_t cp)
+        {{
+            if (cp < 0x80) {{
+                return s_stage{}[cp];
+            }}
+        ",
+        out.trie.stages.len() - 1,
+    );
     for stage in &out.trie.stages {
         if stage.index == 0 {
             _ = writeln!(
@@ -297,8 +316,14 @@ fn generate_c(out: Output) -> String {
             );
         }
     }
-    _ = writeln!(buf, "    return s{};", out.trie.stages.len() - 1);
-    buf.push_str("}\n");
+    _ = writedoc!(
+        buf,
+        "
+                return s{};
+        }}
+        ",
+        out.trie.stages.len() - 1,
+    );
 
     _ = writedoc!(
         buf,
@@ -358,7 +383,7 @@ fn generate_rust(out: Output) -> String {
 
         _ = write!(
             buf,
-            "#[rustfmt::skip]\npub const STAGE{}: [u{}; {}] = [",
+            "#[rustfmt::skip]\nconst STAGE{}: [u{}; {}] = [",
             stage.index,
             stage.bits,
             stage.values.len(),
@@ -374,7 +399,7 @@ fn generate_rust(out: Output) -> String {
 
     _ = writeln!(
         buf,
-        "#[rustfmt::skip]\npub const GRAPHEME_JOIN_RULES: [[u32; {}]; {}] = [",
+        "#[rustfmt::skip]\nconst GRAPHEME_JOIN_RULES: [[u32; {}]; {}] = [",
         out.rules_gc[0].len(),
         out.rules_gc.len(),
     );
@@ -390,7 +415,7 @@ fn generate_rust(out: Output) -> String {
     if out.arg_line_breaks {
         _ = writeln!(
             buf,
-            "#[rustfmt::skip]\npub const LINE_BREAK_JOIN_RULES: [u32; {}] = [",
+            "#[rustfmt::skip]\nconst LINE_BREAK_JOIN_RULES: [u32; {}] = [",
             out.rules_lb.len(),
         );
         for r in &out.rules_lb {
@@ -404,40 +429,55 @@ fn generate_rust(out: Output) -> String {
         "
         #[inline(always)]
         pub fn ucd_grapheme_cluster_lookup(cp: char) -> usize {{
-            let cp = cp as usize;
+            unsafe {{
+                let cp = cp as usize;
+                if cp < 0x80 {{
+                    return STAGE{}[cp] as usize;
+                }}
         ",
+        out.trie.stages.len() - 1,
     );
     for stage in &out.trie.stages {
         if stage.index == 0 {
             _ = writeln!(
                 buf,
-                "    let s = STAGE{}[cp >> {}] as usize;",
+                "        let s = *STAGE{}.get_unchecked(cp >> {}) as usize;",
                 stage.index, stage.shift,
             );
         } else if stage.index != out.trie.stages.len() - 1 {
             _ = writeln!(
                 buf,
-                "    let s = STAGE{}[s + ((cp >> {}) & {})] as usize;",
+                "        let s = *STAGE{}.get_unchecked(s + ((cp >> {}) & {})) as usize;",
                 stage.index, stage.shift, stage.mask,
             );
         } else {
             _ = writeln!(
                 buf,
-                "    STAGE{}[s + (cp & {})] as usize",
+                "        let s = *STAGE{}.get_unchecked(s + (cp & {})) as usize;",
                 stage.index, stage.mask,
             );
         }
     }
-    buf.push_str("}\n");
+    _ = writedoc!(
+        buf,
+        "
+                s
+            }}
+        }}
+        ",
+    );
 
     _ = writedoc!(
         buf,
         "
         #[inline(always)]
         pub fn ucd_grapheme_cluster_joins(state: u32, lead: usize, trail: usize) -> u32 {{
-            let l = lead & 15;
-            let t = trail & 15;
-            (GRAPHEME_JOIN_RULES[state as usize][l] >> (t * 2)) & 3
+            unsafe {{
+                let l = lead & 15;
+                let t = trail & 15;
+                let s = GRAPHEME_JOIN_RULES.get_unchecked(state as usize);
+                (s[l] >> (t * 2)) & 3
+            }}
         }}
         #[inline(always)]
         pub fn ucd_grapheme_cluster_joins_done(state: u32) -> bool {{
@@ -456,9 +496,12 @@ fn generate_rust(out: Output) -> String {
             "
             #[inline(always)]
             pub fn ucd_line_break_joins(lead: usize, trail: usize) -> bool {{
-                let l = lead >> 6;
-                let t = trail >> 6;
-                ((LINE_BREAK_JOIN_RULES[l] >> t) & 1) != 0
+                unsafe {{
+                    let l = lead >> 6;
+                    let t = trail >> 6;
+                    let s = *LINE_BREAK_JOIN_RULES.get_unchecked(l as usize);
+                    ((s >> t) & 1) != 0
+                }}
             }}
             ",
         );
@@ -759,24 +802,35 @@ fn build_trie(mut uncompressed: Vec<TrieType>, shifts: &[usize]) -> Trie {
     let mut cumulative_shift = 0;
     let mut stages = Vec::new();
 
-    for &shift in shifts.iter() {
+    for (stage, &shift) in shifts.iter().enumerate() {
         let chunk_size = 1 << shift;
         let mut cache = HashMap::new();
         let mut compressed = Vec::new();
         let mut offsets = Vec::new();
+        let mut off = 0;
 
-        for off in (0..uncompressed.len()).step_by(chunk_size) {
+        while off < uncompressed.len() {
             let chunk = &uncompressed[off..off + chunk_size.min(uncompressed.len() - off)];
-            let offset = cache.entry(chunk).or_insert_with(|| {
-                if let Some(existing) = find_existing(&compressed, chunk) {
-                    existing as TrieType
-                } else {
-                    let overlap = measure_overlap(&compressed, chunk);
-                    compressed.extend_from_slice(&chunk[overlap..]);
-                    (compressed.len() - chunk.len()) as TrieType
-                }
-            });
-            offsets.push(*offset);
+
+            let offset = if stage == 0 && off < 0x80 {
+                // The first stage (well, really the last stage - the one which contains the values instead of indices)
+                // contains a direct 1:1 mapping for all ASCII codepoints as they're most common in IT environments.
+                compressed.extend_from_slice(chunk);
+                (compressed.len() - chunk.len()) as TrieType
+            } else {
+                *cache.entry(chunk).or_insert_with(|| {
+                    if let Some(existing) = find_existing(&compressed, chunk) {
+                        existing as TrieType
+                    } else {
+                        let overlap = measure_overlap(&compressed, chunk);
+                        compressed.extend_from_slice(&chunk[overlap..]);
+                        (compressed.len() - chunk.len()) as TrieType
+                    }
+                })
+            };
+
+            offsets.push(offset);
+            off += chunk.len();
         }
 
         stages.push(Stage {
