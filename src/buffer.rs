@@ -201,11 +201,11 @@ impl TextBuffer {
             width: 0,
             margin_width: 0,
             margin_enabled: false,
-            word_wrap_column: CoordType::MAX,
+            word_wrap_column: 0,
             word_wrap_enabled: false,
             tab_size: 4,
             indent_with_tabs: false,
-            ruler: CoordType::MAX,
+            ruler: 0,
             encoding: "UTF-8",
             newlines_are_crlf: cfg!(windows), // Unfortunately Windows users insist on CRLF
             overtype: false,
@@ -399,8 +399,8 @@ impl TextBuffer {
         true
     }
 
-    pub fn set_ruler(&mut self, column: Option<CoordType>) {
-        self.ruler = column.unwrap_or(CoordType::MAX);
+    pub fn set_ruler(&mut self, column: CoordType) {
+        self.ruler = column;
     }
 
     fn reflow(&mut self, force: bool) {
@@ -413,13 +413,15 @@ impl TextBuffer {
             0
         };
 
-        let word_wrap_column = if self.word_wrap_enabled {
-            self.get_text_width()
+        let text_width = self.get_text_width();
+        // 2 columns are required, because otherwise wide glyphs wouldn't ever fit.
+        let word_wrap_column = if self.word_wrap_enabled && text_width >= 2 {
+            text_width
         } else {
-            CoordType::MAX
+            0
         };
 
-        if force || self.word_wrap_column != word_wrap_column {
+        if force || self.word_wrap_column > word_wrap_column {
             self.word_wrap_column = word_wrap_column;
 
             if self.cursor.offset != 0 {
@@ -1223,7 +1225,7 @@ impl TextBuffer {
         let x = pos.x.max(0);
         let y = pos.y.max(0);
 
-        if self.word_wrap_column == CoordType::MAX {
+        if self.word_wrap_column <= 0 {
             // goto_line_start() is very fast for seeking across lines. But we don't need that
             // of course if the `y` didn't actually change. The only exception is if we're
             // moving leftward in the same line as there's no read_backward() for that.
@@ -1332,7 +1334,7 @@ impl TextBuffer {
         cursor
     }
 
-    fn cursor_move_to_offset(&mut self, offset: usize) {
+    pub fn cursor_move_to_offset(&mut self, offset: usize) {
         self.set_cursor(self.cursor_move_to_offset_internal(self.cursor, offset))
     }
 
@@ -1366,7 +1368,7 @@ impl TextBuffer {
                 && cursor.logical_pos.y >= 0
                 && cursor.logical_pos.y <= self.stats.logical_lines
                 && cursor.visual_pos.x >= 0
-                && cursor.visual_pos.x <= self.word_wrap_column
+                && (self.word_wrap_column <= 0 || cursor.visual_pos.x <= self.word_wrap_column)
                 && cursor.visual_pos.y >= 0
                 && cursor.visual_pos.y <= self.stats.visual_lines
         );
@@ -1459,7 +1461,7 @@ impl TextBuffer {
                     let off = 19 - line_number_width;
                     unsafe { std::hint::assert_unchecked(off < MARGIN_TEMPLATE.len()) };
                     line.push_str(&MARGIN_TEMPLATE[off..]);
-                } else if self.word_wrap_column == CoordType::MAX || cursor_beg.logical_pos.x == 0 {
+                } else if self.word_wrap_column <= 0 || cursor_beg.logical_pos.x == 0 {
                     // Regular line? Place "123 | " in the margin.
                     _ = write!(
                         line,
@@ -1637,7 +1639,7 @@ impl TextBuffer {
             fb.blend_fg(margin, 0x7f7f7f7f);
         }
 
-        if self.ruler > 0 && self.ruler < CoordType::MAX {
+        if self.ruler > 0 {
             let left = destination.left + self.margin_width + (self.ruler - origin.x).max(0);
             let right = destination.right;
             if left < right {
@@ -1937,7 +1939,7 @@ impl TextBuffer {
         // may have changed. This includes even text before the insertion point up to the line
         // start, because this write may have joined with a word before the initial cursor.
         // See other uses of `word_wrap_cursor_next_line` in this function.
-        if self.word_wrap_column != CoordType::MAX {
+        if self.word_wrap_column > 0 {
             let safe_start = self.goto_line_start(cursor, cursor.logical_pos.y);
             let next_line = self.cursor_move_to_logical_internal(
                 cursor,
@@ -2109,7 +2111,7 @@ impl TextBuffer {
         // Move to the point where the modification took place.
         let cursor = self.cursor_move_to_logical_internal(self.cursor, change.cursor);
 
-        let safe_cursor = if self.word_wrap_column != CoordType::MAX {
+        let safe_cursor = if self.word_wrap_column > 0 {
             // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
             // This is because the undo/redo operation may have changed the visual position of the cursor.
             self.goto_line_start(cursor, cursor.logical_pos.y)

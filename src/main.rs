@@ -131,11 +131,8 @@ impl State {
     }
 
     fn set_path(&mut self, path: PathBuf, filename: String) {
-        self.buffer.set_ruler(if filename == "COMMIT_EDITMSG" {
-            Some(72)
-        } else {
-            None
-        });
+        let ruler = if filename == "COMMIT_EDITMSG" { 72 } else { 0 };
+        self.buffer.set_ruler(ruler);
         self.filename = filename;
         self.path = Some(path);
     }
