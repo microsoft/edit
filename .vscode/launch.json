@@ -10,7 +10,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/README.md"
+                "${workspaceFolder}/src/main.rs"
             ],
         },
         {
@@ -21,7 +21,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/README.md"
+                "${workspaceFolder}/src/main.rs"
             ],
         }
     ]

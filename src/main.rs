@@ -3,6 +3,7 @@
 // * Find & Replace All, followed by Ctrl+Z breaks the buffer.
 // * Rapid clicking on buttons is recognized as double clicks.
 // * And of course the word wrap dilemma.
+// * Global shortcuts should not trigger when there are modal dialogs.
 // --------------------------------------------------
 // * Backspace at an indented line start should unindent by 1.
 // * ...same for Shift+Tab.

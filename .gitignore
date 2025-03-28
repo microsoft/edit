@@ -1,8 +1,10 @@
+*.profraw
+*.user
 .idea
 .vs
-*.user
-bin
 CMakeSettings.json
+bin
+lcov.info
 obj
 out
 target

@@ -8,8 +8,6 @@ use std::str;
 
 pub type CoordType = i32;
 
-pub const COORD_TYPE_MIN: CoordType = -2147483647 - 1;
-pub const COORD_TYPE_MAX: CoordType = 2147483647;
 pub const COORD_TYPE_SAFE_MIN: CoordType = -32767 - 1;
 pub const COORD_TYPE_SAFE_MAX: CoordType = 32767;
 
@@ -21,12 +19,12 @@ pub struct Point {
 
 impl Point {
     pub const MIN: Point = Point {
-        x: COORD_TYPE_MIN,
-        y: COORD_TYPE_MIN,
+        x: CoordType::MIN,
+        y: CoordType::MIN,
     };
     pub const MAX: Point = Point {
-        x: COORD_TYPE_MAX,
-        y: COORD_TYPE_MAX,
+        x: CoordType::MAX,
+        y: CoordType::MAX,
     };
 }
 

@@ -1102,20 +1102,20 @@ impl TextBuffer {
             .with_tab_size(self.tab_size)
     }
 
-    fn goto_line_start(&self, mut cursor: ucd::UcdCursor, y: CoordType) -> ucd::UcdCursor {
-        let cursor_before = cursor;
+    fn goto_line_start(&self, cursor: ucd::UcdCursor, y: CoordType) -> ucd::UcdCursor {
+        let mut result = cursor;
         let mut seek_to_line_start = true;
 
-        if y > cursor.logical_pos.y {
-            while y > cursor.logical_pos.y {
-                let chunk = self.read_forward(cursor.offset);
+        if y > result.logical_pos.y {
+            while y > result.logical_pos.y {
+                let chunk = self.read_forward(result.offset);
                 if chunk.is_empty() {
                     break;
                 }
 
-                let (delta, line) = ucd::newlines_forward(chunk, 0, cursor.logical_pos.y, y);
-                cursor.offset += delta;
-                cursor.logical_pos.y = line;
+                let (delta, line) = ucd::newlines_forward(chunk, 0, result.logical_pos.y, y);
+                result.offset += delta;
+                result.logical_pos.y = line;
             }
 
             // If we're at the end of the buffer, we could either be there because the last
@@ -1123,58 +1123,72 @@ impl TextBuffer {
             // line of text without trailing newline. The only way to make sure is to seek
             // backwards to the line start again. But otherwise we can skip that.
             seek_to_line_start =
-                cursor.offset == self.text_length() && cursor.offset != cursor_before.offset;
+                result.offset == self.text_length() && result.offset != cursor.offset;
         }
 
         if seek_to_line_start {
             loop {
-                let chunk = self.read_backward(cursor.offset);
+                let chunk = self.read_backward(result.offset);
                 if chunk.is_empty() {
                     break;
                 }
 
                 let (delta, line) =
-                    ucd::newlines_backward(chunk, chunk.len(), cursor.logical_pos.y, y);
-                cursor.offset -= chunk.len() - delta;
-                cursor.logical_pos.y = line;
+                    ucd::newlines_backward(chunk, chunk.len(), result.logical_pos.y, y);
+                result.offset -= chunk.len() - delta;
+                result.logical_pos.y = line;
                 if delta > 0 {
                     break;
                 }
             }
         }
 
-        if cursor.offset == cursor_before.offset {
-            return cursor;
+        if result.offset == cursor.offset {
+            return result;
         }
 
-        cursor.logical_pos.x = 0;
-        cursor.visual_pos.x = 0;
-        cursor.visual_pos.y = cursor.logical_pos.y;
-        cursor.column = 0;
+        result.logical_pos.x = 0;
+        result.visual_pos.x = 0;
+        result.visual_pos.y = result.logical_pos.y;
+        result.column = 0;
 
-        if self.word_wrap_column != CoordType::MAX {
-            let mut cursor_top = cursor_before;
-            let mut cursor_bottom = cursor;
-            let upward = cursor_top.offset > cursor_bottom.offset;
+        if self.word_wrap_column > 0 {
+            let upward = result.offset < cursor.offset;
+            let (top, bottom) = if upward {
+                (result, cursor)
+            } else {
+                (cursor, result)
+            };
 
+            let mut bottom_remeasured = self
+                .measurement_config()
+                .with_cursor(top)
+                .goto_logical(bottom.logical_pos);
+
+            // The second problem is that visual positions can be ambiguous. A single logical position
+            // can map to two visual positions: One at the end of the preceeding line in front of
+            // a word wrap, and another at the start of the next line after the same word wrap.
+            //
+            // This, however, only applies if we go upwards, because only then `bottom ≅ cursor`,
+            // and thus only then this `bottom` is ambiguous. Otherwise, `bottom ≅ result`
+            // and `result` is at a line start which is never ambiguous.
             if upward {
-                mem::swap(&mut cursor_top, &mut cursor_bottom);
+                let a = bottom_remeasured.visual_pos.x;
+                let b = bottom.visual_pos.x;
+                bottom_remeasured.visual_pos.y = bottom_remeasured.visual_pos.y
+                    + (a != 0 && b == 0) as CoordType
+                    - (a == 0 && b != 0) as CoordType;
             }
 
-            let cursor_end = self
-                .measurement_config()
-                .with_cursor(cursor_top)
-                .goto_logical(cursor_bottom.logical_pos);
-
-            let mut delta = cursor_end.visual_pos.y - cursor_top.visual_pos.y;
+            let mut delta = bottom_remeasured.visual_pos.y - top.visual_pos.y;
             if upward {
                 delta = -delta;
             }
 
-            cursor.visual_pos.y = cursor_before.visual_pos.y + delta;
+            result.visual_pos.y = cursor.visual_pos.y + delta;
         }
 
-        cursor
+        result
     }
 
     fn cursor_move_to_offset_internal(
@@ -1656,16 +1670,28 @@ impl TextBuffer {
         }
 
         if show_cursor {
+            let mut x = self.cursor.visual_pos.x;
+            let mut y = self.cursor.visual_pos.y;
+
+            if self.word_wrap_column > 0 && x >= self.word_wrap_column {
+                // The line the cursor is on wraps exactly on the word wrap column which
+                // means the cursor is invisible. We need to move it to the next line.
+                x = 0;
+                y += 1;
+            }
+
+            // Move the cursor into screen space.
+            x += destination.left - origin.x + self.margin_width;
+            y += destination.top - origin.y;
+
+            let cursor = Point { x, y };
             let text = Rect {
                 left: destination.left + self.margin_width,
                 top: destination.top,
                 right: destination.right,
                 bottom: destination.bottom,
             };
-            let cursor = Point {
-                x: self.cursor.visual_pos.x - origin.x + destination.left + self.margin_width,
-                y: self.cursor.visual_pos.y - origin.y + destination.top,
-            };
+
             if text.contains(cursor) {
                 fb.set_cursor(cursor, self.overtype);
                 fb.blend_bg(
@@ -2411,6 +2437,24 @@ impl GapBuffer {
 }
 
 impl Document for GapBuffer {
+    fn read_forward(&self, off: usize) -> &[u8] {
+        let off = off.min(self.text_length);
+        let beg;
+        let len;
+
+        if off < self.gap_off {
+            // Cursor is before the gap: We can read until the start of the gap.
+            beg = off;
+            len = self.gap_off - off;
+        } else {
+            // Cursor is after the gap: We can read until the end of the buffer.
+            beg = off + self.gap_len;
+            len = self.text_length - off;
+        }
+
+        unsafe { slice::from_raw_parts(self.text.add(beg), len) }
+    }
+
     fn read_backward(&self, off: usize) -> &[u8] {
         let off = off.min(self.text_length);
         let beg;
@@ -2426,24 +2470,6 @@ impl Document for GapBuffer {
             // The cursor_off doesn't account of the gap_len.
             // (This allows us to move the gap without recalculating the cursor position.)
             len = off - self.gap_off;
-        }
-
-        unsafe { slice::from_raw_parts(self.text.add(beg), len) }
-    }
-
-    fn read_forward(&self, off: usize) -> &[u8] {
-        let off = off.min(self.text_length);
-        let beg;
-        let len;
-
-        if off < self.gap_off {
-            // Cursor is before the gap: We can read until the start of the gap.
-            beg = off;
-            len = self.gap_off - off;
-        } else {
-            // Cursor is after the gap: We can read until the end of the buffer.
-            beg = off + self.gap_len;
-            len = self.text_length - off;
         }
 
         unsafe { slice::from_raw_parts(self.text.add(beg), len) }
