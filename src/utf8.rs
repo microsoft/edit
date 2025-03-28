@@ -1,4 +1,3 @@
-use crate::helpers;
 use std::{hint, iter, mem};
 
 #[derive(Clone, Copy)]
@@ -12,6 +11,10 @@ impl<'a> Utf8Chars<'a> {
         Self { source, offset }
     }
 
+    pub fn source(&self) -> &'a [u8] {
+        self.source
+    }
+
     pub fn offset(&self) -> usize {
         self.offset
     }
@@ -20,32 +23,10 @@ impl<'a> Utf8Chars<'a> {
         self.offset = offset;
     }
 
-    #[inline(always)]
-    fn fffd() -> Option<char> {
-        // Improves performance by ~5% and reduces code size.
-        helpers::cold_path();
-        Some('\u{FFFD}')
-    }
-}
-
-impl Iterator for Utf8Chars<'_> {
-    type Item = char;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.offset >= self.source.len() {
-            return None;
-        }
-
-        let c = self.source[self.offset];
-        self.offset += 1;
-
+    #[cold]
+    fn next_slow(&mut self, c: u8) -> char {
         // See: https://datatracker.ietf.org/doc/html/rfc3629
         // as well as ICU's `utf8.h` for the bitmask approach.
-
-        // UTF8-1 = %x00-7F
-        if (c & 0x80) == 0 {
-            return Some(c as char);
-        }
 
         if self.offset >= self.source.len() {
             return Self::fffd();
@@ -186,7 +167,36 @@ impl Iterator for Utf8Chars<'_> {
         cp = (cp << 6) | t;
 
         self.offset += 1;
-        Some(unsafe { mem::transmute(cp) })
+        unsafe { mem::transmute(cp) }
+    }
+
+    // Improves performance by ~5% and reduces code size.
+    #[cold]
+    #[inline(always)]
+    fn fffd() -> char {
+        '\u{FFFD}'
+    }
+}
+
+impl Iterator for Utf8Chars<'_> {
+    type Item = char;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.source.len() {
+            return None;
+        }
+
+        let c = self.source[self.offset];
+        self.offset += 1;
+
+        // Fast-passing ASCII allows this function to be trivially inlined everywhere,
+        // as the full decoder is a little too large for that.
+        if (c & 0x80) == 0 {
+            // UTF8-1 = %x00-7F
+            Some(c as char)
+        } else {
+            Some(self.next_slow(c))
+        }
     }
 }
 
