@@ -111,6 +111,7 @@ impl<'parser, 'input> Stream<'parser, 'input> {
     /// Parses the next VT sequence from the previously given input.
     ///
     /// Can't implement Iterator, because this is a "lending iterator".
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<Token<'parser, 'input>> {
         // I don't know how to tell Rust that `self.parser` and its lifetime
         // `'parser` outlives `self`, and at this point I don't care.

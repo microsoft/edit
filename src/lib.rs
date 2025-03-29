@@ -1,9 +1,4 @@
-#![allow(
-    dead_code,
-    clippy::needless_if,
-    clippy::uninit_assumed_init,
-    clippy::missing_transmute_annotations
-)]
+#![allow(clippy::missing_transmute_annotations, clippy::new_without_default)]
 
 pub mod apperr;
 pub mod buffer;

@@ -453,7 +453,7 @@ fn generate_rust(out: Output) -> String {
         } else {
             _ = writeln!(
                 buf,
-                "        let s = *STAGE{}.get_unchecked(s + (cp & {})) as usize;",
+                "        *STAGE{}.get_unchecked(s + (cp & {})) as usize",
                 stage.index, stage.mask,
             );
         }
@@ -461,7 +461,6 @@ fn generate_rust(out: Output) -> String {
     _ = writedoc!(
         buf,
         "
-                s
             }}
         }}
         ",
@@ -499,7 +498,7 @@ fn generate_rust(out: Output) -> String {
                 unsafe {{
                     let l = lead >> 6;
                     let t = trail >> 6;
-                    let s = *LINE_BREAK_JOIN_RULES.get_unchecked(l as usize);
+                    let s = *LINE_BREAK_JOIN_RULES.get_unchecked(l);
                     ((s >> t) & 1) != 0
                 }}
             }}

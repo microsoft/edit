@@ -518,13 +518,12 @@ impl TextBuffer {
     ) -> apperr::Result<()> {
         let mut read = 0;
 
-        #[allow(invalid_value)]
-        let mut buf: [u8; 4096] = unsafe { MaybeUninit::uninit().assume_init() };
+        let mut buf = [const { MaybeUninit::<u8>::uninit() }; 4096];
         let mut first_chunk_len = 0;
 
         // Read enough bytes to detect the BOM.
         while first_chunk_len < BOM_MAX_LEN {
-            read = file.read(&mut buf[first_chunk_len..])?;
+            read = helpers::file_read_uninit(file, &mut buf[first_chunk_len..])?;
             if read == 0 {
                 break;
             }
@@ -534,7 +533,8 @@ impl TextBuffer {
         if let Some(encoding) = encoding {
             self.encoding = encoding;
         } else {
-            let bom = detect_bom(&buf[..first_chunk_len]);
+            let bom =
+                detect_bom(unsafe { helpers::slice_assume_init_ref(&buf[..first_chunk_len]) });
             self.encoding = bom.unwrap_or("UTF-8");
         }
 
@@ -644,12 +644,13 @@ impl TextBuffer {
     fn read_file_as_utf8(
         &mut self,
         file: &mut File,
-        buf: &mut [u8],
+        buf: &mut [MaybeUninit<u8>],
         first_chunk_len: usize,
         done: bool,
     ) -> apperr::Result<()> {
         {
-            let mut first_chunk = &buf[..first_chunk_len];
+            let mut first_chunk =
+                unsafe { helpers::slice_assume_init_ref(&buf[..first_chunk_len]) };
             if first_chunk.starts_with(b"\xEF\xBB\xBF") {
                 first_chunk = &first_chunk[3..];
                 self.encoding = "UTF-8 BOM";
@@ -697,7 +698,7 @@ impl TextBuffer {
     fn read_file_with_icu(
         &mut self,
         file: &mut File,
-        buf: &mut [u8],
+        buf: &mut [MaybeUninit<u8>],
         first_chunk_len: usize,
         mut done: bool,
     ) -> apperr::Result<()> {
@@ -705,11 +706,12 @@ impl TextBuffer {
 
         let mut c = icu::Converter::new(&mut pivot_buffer, self.encoding, "UTF-8")?;
 
-        let mut first_chunk = &buf[..first_chunk_len];
+        let mut first_chunk = unsafe { helpers::slice_assume_init_ref(&buf[..first_chunk_len]) };
         while !first_chunk.is_empty() {
             let off = self.text_length();
             let gap = self.buffer.allocate_gap(off, 8 * 1024, 0);
-            let (input_advance, mut output_advance) = c.convert(first_chunk, gap)?;
+            let (input_advance, mut output_advance) =
+                c.convert(first_chunk, helpers::slice_as_uninit_mut(gap))?;
 
             // Remove the BOM from the file, if this is the first chunk.
             // Our caller ensures to only call us once the BOM has been identified,
@@ -730,14 +732,16 @@ impl TextBuffer {
 
         loop {
             if !done {
-                let read = file.read(&mut buf[buf_len..])?;
+                let read = helpers::file_read_uninit(file, &mut buf[buf_len..])?;
                 buf_len += read;
                 done = read == 0;
             }
 
             let flush = done && buf_len == 0;
             let gap = self.buffer.allocate_gap(self.text_length(), 8 * 1024, 0);
-            let (input_advance, output_advance) = c.convert(&buf[..buf_len], gap)?;
+            let read = unsafe { helpers::slice_assume_init_ref(&buf[..buf_len]) };
+            let (input_advance, output_advance) =
+                c.convert(read, helpers::slice_as_uninit_mut(gap))?;
 
             self.buffer.commit_gap(output_advance);
             buf_len -= input_advance;
@@ -779,8 +783,7 @@ impl TextBuffer {
 
     fn write_file_with_icu(&mut self, mut file: File) -> apperr::Result<()> {
         let mut pivot_buffer = [const { MaybeUninit::<u16>::uninit() }; 4096];
-        #[allow(invalid_value)]
-        let mut buf: [u8; 4096] = unsafe { MaybeUninit::uninit().assume_init() };
+        let mut buf = [const { MaybeUninit::<u8>::uninit() }; 4096];
         let mut c = icu::Converter::new(&mut pivot_buffer, "UTF-8", self.encoding)?;
         let mut offset = 0;
 
@@ -790,7 +793,8 @@ impl TextBuffer {
             || self.encoding == "gb18030"
         {
             let (_, output_advance) = c.convert(b"\xEF\xBB\xBF", &mut buf)?;
-            file.write_all(&buf[..output_advance])?;
+            let chunk = unsafe { helpers::slice_assume_init_ref(&buf[..output_advance]) };
+            file.write_all(chunk)?;
         }
 
         loop {
@@ -800,7 +804,8 @@ impl TextBuffer {
             }
 
             let (input_advance, output_advance) = c.convert(chunk, &mut buf)?;
-            file.write_all(&buf[..output_advance])?;
+            let chunk = unsafe { helpers::slice_assume_init_ref(&buf[..output_advance]) };
+            file.write_all(chunk)?;
             offset += input_advance;
         }
 

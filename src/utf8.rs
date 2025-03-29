@@ -167,7 +167,11 @@ impl<'a> Utf8Chars<'a> {
         cp = (cp << 6) | t;
 
         self.offset += 1;
-        unsafe { mem::transmute(cp) }
+
+        #[allow(clippy::transmute_int_to_char)]
+        unsafe {
+            mem::transmute(cp)
+        }
     }
 
     // Improves performance by ~5% and reduces code size.

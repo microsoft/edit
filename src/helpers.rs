@@ -1,8 +1,11 @@
+use crate::apperr;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::ffi::{CStr, CString, OsStr, OsString, c_char};
-use std::mem;
+use std::io::Read;
+use std::mem::{self, MaybeUninit};
 use std::path::{Path, PathBuf};
+use std::ptr;
 use std::slice;
 use std::str;
 
@@ -324,6 +327,11 @@ impl DisplayableCString {
         Self { value, str }
     }
 
+    /// Creates a new `DisplayableCString` from a C string.
+    ///
+    /// # Safety
+    ///
+    /// Just as unsafe as the corresponding `CStr::from_ptr` method.
     pub unsafe fn from_ptr(ptr: *const c_char) -> Self {
         let s = unsafe { CStr::from_ptr(ptr) };
         Self::new(s.to_owned())
@@ -338,12 +346,25 @@ impl DisplayableCString {
     }
 }
 
+/// Creates a `&str` from a pointer and a length.
+/// Exists, because `std::str::from_raw_parts` is unstable, par for the course.
+///
+/// # Safety
+///
+/// The given data must be valid UTF-8.
+/// The given data must outlive the returned reference.
 #[inline]
 #[must_use]
 pub const unsafe fn str_from_raw_parts<'a>(ptr: *const u8, len: usize) -> &'a str {
     unsafe { str::from_utf8_unchecked(slice::from_raw_parts(ptr, len)) }
 }
 
+/// Creates a `&mut str` from a pointer and a length.
+///
+/// # Safety
+///
+/// The given data must be valid UTF-8.
+/// The given data must outlive the returned reference.
 #[inline]
 #[must_use]
 pub const unsafe fn str_from_raw_parts_mut<'a>(ptr: *mut u8, len: usize) -> &'a mut str {
@@ -364,11 +385,11 @@ pub fn vec_insert_at<T: Copy>(dst: &mut Vec<T>, off: usize, src: &[T]) {
 
         if off < dst_len {
             // Move the tail of the vector to make room for the new elements.
-            std::ptr::copy(ptr, ptr.add(src_len), dst_len - off);
+            ptr::copy(ptr, ptr.add(src_len), dst_len - off);
         }
 
         // Copy the new elements into the vector.
-        std::ptr::copy_nonoverlapping(src.as_ptr(), ptr, src_len);
+        ptr::copy_nonoverlapping(src.as_ptr(), ptr, src_len);
         // Update the length of the vector.
         dst.set_len(dst_len + src_len);
     }
@@ -386,6 +407,51 @@ pub fn string_from_utf8_lossy_owned(v: Vec<u8>) -> String {
 pub fn vec_replace_all_reuse<T: Clone>(dst: &mut Vec<T>, src: &[T]) {
     dst.clear();
     dst.extend_from_slice(src);
+}
+
+pub fn file_read_uninit<T: Read>(
+    file: &mut T,
+    buf: &mut [MaybeUninit<u8>],
+) -> apperr::Result<usize> {
+    unsafe {
+        let buf_slice = slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len());
+        let n = file.read(buf_slice)?;
+        Ok(n)
+    }
+}
+
+/// Turns a `&[MaybeUninit<T>]` into a `&[T]`.
+/// A copy of `MaybeUninit::assume_init_ref` which is unstable (yay).
+///
+/// # Safety
+///
+/// Rust is happy to blast you in the face if you look at a `MaybeUninit` the wrong way.
+/// As such, make sure that the slice is fully initialized.
+#[inline(always)]
+pub const unsafe fn slice_assume_init_ref<T>(m: &[MaybeUninit<T>]) -> &[T] {
+    unsafe { &*(m as *const _ as *const [T]) }
+}
+
+/// Turns a `&mut [MaybeUninit<T>]` into a `&mut [T]`.
+/// A copy of `MaybeUninit::assume_init_mut` which is unstable (yay).
+///
+/// # Safety
+///
+/// Rust is happy to blast you in the face if you look at a `MaybeUninit` the wrong way.
+/// As such, make sure that the slice is fully initialized.
+#[inline(always)]
+pub const unsafe fn slice_assume_init_mut<T>(m: &mut [MaybeUninit<T>]) -> &mut [T] {
+    unsafe { &mut *(m as *mut _ as *mut [T]) }
+}
+
+#[inline(always)]
+pub const fn slice_as_uninit_ref<T>(slice: &[T]) -> &[MaybeUninit<T>] {
+    unsafe { slice::from_raw_parts(slice.as_ptr() as *const MaybeUninit<T>, slice.len()) }
+}
+
+#[inline(always)]
+pub const fn slice_as_uninit_mut<T>(slice: &mut [T]) -> &mut [MaybeUninit<T>] {
+    unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut MaybeUninit<T>, slice.len()) }
 }
 
 // Works just like `std::hint::cold_path`, but it's stable.

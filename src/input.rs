@@ -276,6 +276,7 @@ impl<'parser, 'vt, 'input> Stream<'parser, 'vt, 'input> {
     /// Parses the next input action from the previously given input.
     ///
     /// Can't implement Iterator, because this is a "lending iterator".
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<Input<'input>> {
         loop {
             if self.parser.bracketed_paste {

@@ -12,12 +12,18 @@ pub type Result<T> = result::Result<T, Error>;
 pub struct Error(NonZeroU32);
 
 impl Error {
+    #[allow(dead_code)]
     const FLAGS_MASK: u32 = 0xF8000000; // Top 5 bits
     const FLAGS_CUSTOM_FAILURE: u32 = 0xA0000000;
 
     const TAG_APP: u32 = Self::FLAGS_CUSTOM_FAILURE | (1 << 16);
     const TAG_ICU: u32 = Self::FLAGS_CUSTOM_FAILURE | (2 << 16);
 
+    /// Creates a new error code.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the code is non-zero and correctly tagged up.
     pub const unsafe fn new(code: u32) -> Self {
         Error(unsafe { NonZeroU32::new_unchecked(code) })
     }

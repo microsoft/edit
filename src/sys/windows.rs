@@ -6,7 +6,7 @@ use std::fs::{self, File};
 use std::mem::MaybeUninit;
 use std::os::windows::io::FromRawHandle;
 use std::path::{Path, PathBuf};
-use std::ptr::{null, null_mut};
+use std::ptr::{self, null, null_mut};
 use std::{mem, time};
 use windows_sys::Win32::Foundation;
 use windows_sys::Win32::Globalization;
@@ -101,8 +101,8 @@ pub fn init() -> apperr::Result<()> {
             0,
             null_mut(),
         );
-        if STATE.stdin == Foundation::INVALID_HANDLE_VALUE
-            || STATE.stdout == Foundation::INVALID_HANDLE_VALUE
+        if ptr::eq(STATE.stdin, Foundation::INVALID_HANDLE_VALUE)
+            || ptr::eq(STATE.stdout, Foundation::INVALID_HANDLE_VALUE)
         {
             return Err(get_last_error());
         }
@@ -230,7 +230,7 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
             if ok == 0 || STATE.wants_exit {
                 return None;
             }
-            &*(&input_buf[..read as usize] as *const _ as *const [Console::INPUT_RECORD])
+            helpers::slice_assume_init_ref(&input_buf[..read as usize])
         };
 
         for inp in input {
@@ -260,7 +260,7 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
             }
         }
 
-        read_more = !resize_event.is_some() && utf16_buf_len == 0;
+        read_more = resize_event.is_none() && utf16_buf_len == 0;
     }
 
     const RESIZE_EVENT_FMT_MAX_LEN: usize = 16; // "\x1b[8;65535;65535t"
@@ -288,7 +288,7 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
     if utf16_buf_len > 0 {
         unsafe {
             let last_char = utf16_buf[utf16_buf_len - 1].assume_init();
-            if 0xD800 <= last_char && last_char <= 0xDBFF {
+            if (0xD800..0xDC00).contains(&last_char) {
                 STATE.leading_surrogate = last_char;
                 utf16_buf_len -= 1;
             }
@@ -355,10 +355,7 @@ pub fn canonicalize<P: AsRef<Path>>(path: P) -> apperr::Result<PathBuf> {
     let path = path.as_mut_os_string();
     let mut path = mem::take(path).into_encoded_bytes();
 
-    if path.len() > 6
-        && &path[0..4] == br"\\?\"
-        && (b'A'..b'Z').contains(&path[4])
-        && path[5] == b':'
+    if path.len() > 6 && &path[0..4] == br"\\?\" && path[4].is_ascii_uppercase() && path[5] == b':'
     {
         path.drain(0..4);
     }
@@ -368,6 +365,14 @@ pub fn canonicalize<P: AsRef<Path>>(path: P) -> apperr::Result<PathBuf> {
     Ok(path)
 }
 
+/// Reserves a virtual memory region of the given size.
+/// To commit the memory, use `virtual_commit`.
+/// To release the memory, use `virtual_release`.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Don't forget to release the memory when you're done with it or you'll leak it.
 pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<*mut u8> {
     unsafe {
         let mut base = null_mut();
@@ -387,12 +392,25 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<*mut u8> {
     }
 }
 
+/// Releases a virtual memory region of the given size.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Make sure to only pass pointers acquired from `virtual_reserve`.
 pub unsafe fn virtual_release(base: *mut u8, size: usize) {
     unsafe {
         Memory::VirtualFree(base as *mut _, size, Memory::MEM_RELEASE);
     }
 }
 
+/// Commits a virtual memory region of the given size.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Make sure to only pass pointers acquired from `virtual_reserve`
+/// and to pass a size less than or equal to the size passed to `virtual_reserve`.
 pub unsafe fn virtual_commit(base: *mut u8, size: usize) -> apperr::Result<()> {
     unsafe {
         check_ptr_return(Memory::VirtualAlloc(
@@ -415,6 +433,13 @@ unsafe fn load_library(name: *const u16) -> apperr::Result<Foundation::HMODULE> 
     }
 }
 
+/// Loads a function from a dynamic library.
+///
+/// # Safety
+///
+/// This function is highly unsafe as it requires you to know the exact type
+/// of the function you're loading. No type checks whatsoever are performed.
+//
 // It'd be nice to constrain T to std::marker::FnPtr, but that's unstable.
 pub unsafe fn get_proc_address<T>(handle: Foundation::HMODULE, name: &CStr) -> apperr::Result<T> {
     unsafe {
@@ -427,7 +452,7 @@ pub unsafe fn get_proc_address<T>(handle: Foundation::HMODULE, name: &CStr) -> a
     }
 }
 
-pub unsafe fn load_icu() -> apperr::Result<Foundation::HMODULE> {
+pub fn load_icu() -> apperr::Result<Foundation::HMODULE> {
     unsafe { load_library(w!("icu.dll")) }
 }
 
@@ -505,7 +530,7 @@ pub fn format_error(err: apperr::Error) -> String {
                 | Debug::FORMAT_MESSAGE_FROM_SYSTEM
                 | Debug::FORMAT_MESSAGE_IGNORE_INSERTS,
             null(),
-            err.value() as u32,
+            err.value(),
             0,
             &mut ptr as *mut *mut _ as *mut _,
             0,

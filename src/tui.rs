@@ -17,20 +17,6 @@ type InputText<'input> = input::InputText<'input>;
 type InputKey = input::InputKey;
 type InputMouseState = input::InputMouseState;
 
-struct RefinedInputMouse {
-    state: InputMouseState,
-    modifier: u32,
-    gesture: InputMouseGesture,
-}
-
-enum RefinedInput<'a> {
-    None,
-    Text(InputText<'a>),
-    Keyboard(InputKey),
-    Mouse(RefinedInputMouse),
-    Scroll(Point),
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum InputMouseGesture {
     None,
@@ -275,7 +261,6 @@ impl Tui {
         Context {
             tui: self,
 
-            now,
             input_text,
             input_keyboard,
             input_mouse_modifiers,
@@ -981,7 +966,6 @@ impl Tui {
 pub struct Context<'tui, 'input> {
     tui: &'tui mut Tui,
 
-    now: std::time::Instant,
     /// Current text input, if any.
     input_text: Option<InputText<'input>>,
     /// Current keyboard input, if any.
@@ -2081,7 +2065,7 @@ impl Context<'_, '_> {
                 }),
                 _ => None,
             })
-            .unwrap_or_else(|| ListContent {
+            .unwrap_or(ListContent {
                 selected: 0,
                 selected_node: ptr::null(),
             });
@@ -2733,11 +2717,6 @@ enum NodeContent {
     Text(TextContent),
     Textarea(TextareaContent),
     Scrollarea(ScrollareaContent),
-}
-
-struct ScrollareaThumb {
-    top: CoordType,
-    bottom: CoordType,
 }
 
 struct NodeSiblings {

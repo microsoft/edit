@@ -121,14 +121,18 @@ impl<'pivot> Converter<'pivot> {
         format!("{}\0", input)
     }
 
-    pub fn convert(&mut self, input: &[u8], output: &mut [u8]) -> apperr::Result<(usize, usize)> {
+    pub fn convert(
+        &mut self,
+        input: &[u8],
+        output: &mut [MaybeUninit<u8>],
+    ) -> apperr::Result<(usize, usize)> {
         let f = assume_loaded();
 
         let input_beg = input.as_ptr();
         let input_end = unsafe { input_beg.add(input.len()) };
         let mut input_ptr = input_beg;
 
-        let output_beg = output.as_mut_ptr();
+        let output_beg = output.as_mut_ptr() as *mut u8;
         let output_end = unsafe { output_beg.add(output.len()) };
         let mut output_ptr = output_beg;
 
@@ -211,6 +215,11 @@ impl Drop for Text {
 }
 
 impl Text {
+    /// Constructs an ICU `UText` instance from a `TextBuffer`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the given `TextBuffer` outlives the returned `Text` instance.
     pub unsafe fn new(tb: &TextBuffer) -> apperr::Result<Self> {
         let f = init_if_needed()?;
 
@@ -531,6 +540,11 @@ impl Regex {
     pub const MULTILINE: i32 = icu_ffi::UREGEX_MULTILINE;
     pub const LITERAL: i32 = icu_ffi::UREGEX_LITERAL;
 
+    /// Constructs a regex, plain and simple. Read `uregex_open` docs.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the given `Text` outlives the returned `Regex` instance.
     pub unsafe fn new(pattern: &str, flags: i32, text: &Text) -> apperr::Result<Self> {
         let f = init_if_needed()?;
         unsafe {
@@ -558,6 +572,13 @@ impl Regex {
         }
     }
 
+    /// Updates the regex pattern with the given text.
+    /// If the text contents have changed, you can pass the same text as you usued
+    /// initially and it'll trigger ICU to reload the text and invalidate its caches.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the given `Text` outlives the `Regex` instance.
     pub unsafe fn set_text(&mut self, text: &Text) {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
@@ -832,7 +853,7 @@ fn assume_loaded() -> &'static LibraryFunctions {
 }
 
 mod icu_ffi {
-    #![allow(non_camel_case_types)]
+    #![allow(dead_code, non_camel_case_types)]
 
     use crate::apperr;
     use std::ffi::{c_char, c_int, c_void};

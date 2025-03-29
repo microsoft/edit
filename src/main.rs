@@ -25,7 +25,6 @@ use edit::helpers::*;
 use edit::input::{self, kbmod, vk};
 use edit::loc::{LocId, loc};
 use edit::sys;
-use edit::trust_me_bro;
 use edit::tui::*;
 use edit::vt::{self, Token};
 use edit::{apperr, icu};
@@ -202,8 +201,7 @@ fn run() -> apperr::Result<()> {
         #[cfg(feature = "debug-latency")]
         let mut passes = 0usize;
 
-        // TODO: lifetime
-        let vt_iter = vt_parser.parse(trust_me_bro::this_lifetime_change_is_totally_safe(&input));
+        let vt_iter = vt_parser.parse(&input);
         let mut input_iter = input_parser.parse(vt_iter);
 
         // Process all input.
@@ -540,10 +538,10 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                 ctx.needs_rerender();
             }
 
-            if state.wants_search.kind == StateSearchKind::Replace {
-                if ctx.button("replace-all", Overflow::Clip, loc(LocId::SearchReplaceAll)) {
-                    action = SearchAction::ReplaceAll;
-                }
+            if state.wants_search.kind == StateSearchKind::Replace
+                && ctx.button("replace-all", Overflow::Clip, loc(LocId::SearchReplaceAll))
+            {
+                action = SearchAction::ReplaceAll;
             }
 
             if ctx.button("close", Overflow::Clip, loc(LocId::SearchClose)) {
@@ -790,7 +788,7 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 }
 
 fn draw_file_picker(ctx: &mut Context, state: &mut State) {
-    if state.wants_file_picker == StateFilePicker::Save && !state.path.is_none() {
+    if state.wants_file_picker == StateFilePicker::Save && state.path.is_some() {
         // `draw_handle_save` will handle things.
         return;
     }
@@ -839,7 +837,7 @@ fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.label(
                 "name-label",
                 Overflow::Clip,
-                &loc(LocId::SaveAsDialogNameLabel),
+                loc(LocId::SaveAsDialogNameLabel),
             );
             ctx.editline("name", &mut state.file_picker_pending_name);
             ctx.inherit_focus();

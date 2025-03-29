@@ -58,13 +58,6 @@ pub struct UcdCursor {
     pub column: CoordType,
 }
 
-pub struct WrapOpportunity {
-    absolute_offset: usize,
-    offset_next_cluster: usize,
-    props_next_cluster: usize,
-    logical_pos_x: CoordType,
-}
-
 #[derive(Clone)]
 pub struct MeasurementConfig<'doc> {
     buffer: &'doc dyn Document,
@@ -201,7 +194,6 @@ impl<'doc> MeasurementConfig<'doc> {
             }
 
             // Calculate the columns at which to stop.
-            let offset_target = offset_target;
             let logical_target_x = match logical_pos_y.cmp(&logical_target.y) {
                 std::cmp::Ordering::Less => CoordType::MAX,
                 std::cmp::Ordering::Equal => logical_target.x,

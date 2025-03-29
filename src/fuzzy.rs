@@ -125,7 +125,7 @@ fn do_score_fuzzy(
                     // found out this is contiguous otherwise there wouldn't have been a score
                     query_index > 0 ||
                     // lastly check if the query is completely contiguous at this index in the target
-                    target_lower[target_index..].starts_with(&query_lower)
+                    target_lower[target_index..].starts_with(query_lower)
                 )
             {
                 matches[current_index] = matches_sequence_len + 1;
@@ -143,7 +143,7 @@ fn do_score_fuzzy(
     // Restore Positions (starting from bottom right of matrix)
     let mut positions = Vec::new();
 
-    if query.len() != 0 && target.len() != 0 {
+    if !query.is_empty() && !target.is_empty() {
         let mut query_index = query.len() - 1;
         let mut target_index = target.len() - 1;
 

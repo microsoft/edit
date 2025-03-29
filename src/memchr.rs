@@ -1,7 +1,7 @@
 //! Rust has a very popular `memchr` crate. It's quite fast, so you may ask yourself
 //! why we don't just use it: Simply put, this is optimized for short inputs.
 
-use std::ptr::null;
+use std::ptr::{self, null};
 
 /// memchr(), but with two needles.
 /// Returns the index of the first occurrence of either needle in the `haystack`.
@@ -58,7 +58,7 @@ unsafe fn memchr2_fallback(
     end: *const u8,
 ) -> *const u8 {
     unsafe {
-        while beg != end {
+        while !ptr::eq(beg, end) {
             let ch = *beg;
             if ch == needle1 || ch == needle2 {
                 break;
@@ -234,7 +234,7 @@ unsafe fn memrchr2_fallback(
     mut end: *const u8,
 ) -> *const u8 {
     unsafe {
-        while end != beg {
+        while !ptr::eq(end, beg) {
             end = end.sub(1);
             let ch = *end;
             if ch == needle1 || needle2 == ch {
@@ -472,7 +472,7 @@ mod tests {
             let page_size = 4096;
 
             // 3 pages: uncommitted, committed, uncommitted
-            let ptr = sys::virtual_reserve(page_size * 3).unwrap() as *mut u8;
+            let ptr = sys::virtual_reserve(page_size * 3).unwrap();
             sys::virtual_commit(ptr.add(page_size), page_size).unwrap();
             slice::from_raw_parts_mut(ptr.add(page_size), page_size)
         };
