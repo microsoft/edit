@@ -1612,7 +1612,6 @@ impl TextBuffer {
                 {
                     cursor = self.cursor_move_to_logical_internal(cursor, selection_beg);
                     beg = cursor.visual_pos.x;
-                    debug_assert_eq!(cursor.visual_pos.y, cursor_beg.visual_pos.y);
                 }
 
                 // The end of the selection is within this line. We need to update selection_end.
@@ -1620,7 +1619,6 @@ impl TextBuffer {
                 {
                     cursor = self.cursor_move_to_logical_internal(cursor, selection_end);
                     end = cursor.visual_pos.x;
-                    debug_assert_eq!(cursor.visual_pos.y, cursor_beg.visual_pos.y);
                 }
 
                 beg = beg.max(origin.x);
