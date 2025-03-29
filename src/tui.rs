@@ -2068,6 +2068,7 @@ impl Context<'_, '_> {
 
     pub fn list_begin(&mut self, classname: &'static str) {
         self.block_begin(classname);
+        self.attr_focusable();
 
         let last_node = self.tree.last_node_mut();
         let content = self
