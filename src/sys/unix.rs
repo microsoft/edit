@@ -1,12 +1,13 @@
 use crate::{apperr, helpers};
-use std::ffi::{CStr, c_int, c_void};
+use std::borrow::Cow;
+use std::ffi::{CStr, CString, c_int, c_void};
 use std::fmt::Write as _;
-use std::fs::File;
-use std::mem;
+use std::fs::{self, File};
 use std::os::fd::FromRawFd;
 use std::ptr::{null, null_mut};
 use std::thread;
 use std::time;
+use std::{mem, ptr};
 
 struct State {
     stdin: libc::c_int,
@@ -255,6 +256,14 @@ pub fn open_stdin_if_redirected() -> Option<File> {
     }
 }
 
+/// Reserves a virtual memory region of the given size.
+/// To commit the memory, use `virtual_commit`.
+/// To release the memory, use `virtual_release`.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Don't forget to release the memory when you're done with it or you'll leak it.
 pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<*mut u8> {
     unsafe {
         let ptr = libc::mmap(
@@ -265,7 +274,7 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<*mut u8> {
             -1,
             0,
         );
-        if ptr == libc::MAP_FAILED {
+        if ptr::eq(ptr, libc::MAP_FAILED) {
             Err(apperr::Error::new(libc::ENOMEM as u32))
         } else {
             Ok(ptr as *mut u8)
@@ -273,12 +282,25 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<*mut u8> {
     }
 }
 
+/// Releases a virtual memory region of the given size.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Make sure to only pass pointers acquired from `virtual_reserve`.
 pub unsafe fn virtual_release(base: *mut u8, size: usize) {
     unsafe {
         libc::munmap(base as *mut libc::c_void, size);
     }
 }
 
+/// Commits a virtual memory region of the given size.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Make sure to only pass pointers acquired from `virtual_reserve`
+/// and to pass a size less than or equal to the size passed to `virtual_reserve`.
 pub unsafe fn virtual_commit(base: *mut u8, size: usize) -> apperr::Result<()> {
     unsafe {
         let status = libc::mprotect(
@@ -305,6 +327,13 @@ unsafe fn load_library(name: &CStr) -> apperr::Result<*mut c_void> {
     }
 }
 
+/// Loads a function from a dynamic library.
+///
+/// # Safety
+///
+/// This function is highly unsafe as it requires you to know the exact type
+/// of the function you're loading. No type checks whatsoever are performed.
+//
 // It'd be nice to constrain T to std::marker::FnPtr, but that's unstable.
 pub unsafe fn get_proc_address<T>(handle: *mut c_void, name: &CStr) -> apperr::Result<T> {
     unsafe {
@@ -317,8 +346,79 @@ pub unsafe fn get_proc_address<T>(handle: *mut c_void, name: &CStr) -> apperr::R
     }
 }
 
-pub unsafe fn load_icu() -> apperr::Result<*mut c_void> {
-    unsafe { load_library(c"icu.dll") }
+pub fn load_libicuuc() -> apperr::Result<*mut c_void> {
+    unsafe { load_library(c"libicuuc.so") }
+}
+
+pub fn load_libicui18n(_libicuuc: *mut c_void) -> apperr::Result<*mut c_void> {
+    unsafe { load_library(c"libicui18n.so") }
+}
+
+/// ICU, by default, adds the major version as a suffix to each exported symbol.
+/// They also recommend to disable this for system-level installations (`runConfigureICU Linux --disable-renaming`),
+/// but I found that many (most?) Linux distributions don't do this for some reason.
+/// This function returns the suffix, if any.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn icu_proc_suffix(handle: *mut c_void) -> String {
+    unsafe {
+        type T = *const c_void;
+
+        // Check if the ICU library is using unversioned symbols.
+        // Return an empty suffix in that case.
+        if get_proc_address::<T>(handle, c"u_errorName").is_ok() {
+            return String::new();
+        }
+
+        // In the versions (63-76) and distributions (Arch/Debian) I tested,
+        // this symbol seems to be always present. This allows us to call `dladdr`.
+        // It's the `UCaseMap::~UCaseMap()` destructor which for some reason isn't
+        // in a namespace. Thank you ICU maintainers for this oversight.
+        let proc = match get_proc_address::<T>(handle, c"_ZN8UCaseMapD1Ev") {
+            Ok(proc) => proc,
+            Err(_) => return String::new(),
+        };
+
+        // `dladdr` is specific to GNU's libc unfortunately.
+        let mut info: libc::Dl_info = mem::zeroed();
+        let ret = libc::dladdr(proc, &mut info);
+        if ret == 0 {
+            return String::new();
+        }
+
+        // The library path is in `info.dli_fname`.
+        let path = match CStr::from_ptr(info.dli_fname).to_str() {
+            Ok(name) => name,
+            Err(_) => return String::new(),
+        };
+
+        let path = match fs::read_link(path) {
+            Ok(path) => path,
+            Err(_) => path.into(),
+        };
+
+        // I'm going to assume it's something like "libicuuc.so.76.1".
+        let path = path.into_os_string();
+        let path = path.to_string_lossy();
+        let suffix_start = match path.rfind(".so.") {
+            Some(pos) => pos + 4,
+            None => return String::new(),
+        };
+        let version = &path[suffix_start..];
+        let version_end = version.find('.').unwrap_or(version.len());
+        let version = &version[..version_end];
+        format!("_{}", version)
+    }
+}
+
+pub fn add_icu_proc_suffix<'a>(name: &'a CStr, suffix: &str) -> Cow<'a, CStr> {
+    if suffix.is_empty() {
+        Cow::Borrowed(name)
+    } else {
+        let name = unsafe { name.to_str().unwrap_unchecked() };
+        let combined = format!("{}{}\0", name, suffix);
+        let combined = unsafe { CString::from_vec_unchecked(combined.into_bytes()) };
+        Cow::Owned(combined)
+    }
 }
 
 pub fn preferred_languages() -> Vec<String> {
@@ -339,11 +439,11 @@ pub fn preferred_languages() -> Vec<String> {
 
 #[inline]
 pub fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
-    unsafe { apperr::Error::new(err.raw_os_error().unwrap_or(0) as u32) }
+    errno_to_apperr(err.raw_os_error().unwrap_or(0))
 }
 
 pub fn format_error(err: apperr::Error) -> String {
-    let errno = err.value() & 0xFFFF;
+    let errno = err.code();
     let mut result = format!("Error {}", errno);
 
     unsafe {
@@ -359,7 +459,7 @@ pub fn format_error(err: apperr::Error) -> String {
 }
 
 fn errno_to_apperr(no: c_int) -> apperr::Error {
-    unsafe { apperr::Error::new(no.max(1) as u32) }
+    unsafe { apperr::Error::new(0x80000000 | no.max(0) as u32) }
 }
 
 fn check_int_return(ret: libc::c_int) -> apperr::Result<libc::c_int> {

@@ -452,8 +452,12 @@ pub unsafe fn get_proc_address<T>(handle: Foundation::HMODULE, name: &CStr) -> a
     }
 }
 
-pub fn load_icu() -> apperr::Result<Foundation::HMODULE> {
+pub fn load_libicuuc() -> apperr::Result<Foundation::HMODULE> {
     unsafe { load_library(w!("icu.dll")) }
+}
+
+pub fn load_libicui18n(libicuuc: Foundation::HMODULE) -> apperr::Result<Foundation::HMODULE> {
+    Ok(libicuuc)
 }
 
 pub fn preferred_languages() -> Vec<String> {

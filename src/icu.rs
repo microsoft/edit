@@ -724,24 +724,21 @@ pub fn fold_case(input: &str) -> String {
     input.to_ascii_lowercase()
 }
 
+// WARNING:
+// The order of the fields MUST match the order of strings in the following two arrays.
 #[allow(non_snake_case)]
+#[repr(C)]
 struct LibraryFunctions {
+    // LIBICUUC_PROC_NAMES
     u_errorName: icu_ffi::u_errorName,
-
     ucnv_getAvailableName: icu_ffi::ucnv_getAvailableName,
     ucnv_open: icu_ffi::ucnv_open,
     ucnv_close: icu_ffi::ucnv_close,
     ucnv_convertEx: icu_ffi::ucnv_convertEx,
-
     ucasemap_open: icu_ffi::ucasemap_open,
     ucasemap_utf8FoldCase: icu_ffi::ucasemap_utf8FoldCase,
-
-    ucol_open: icu_ffi::ucol_open,
-    ucol_strcollUTF8: icu_ffi::ucol_strcollUTF8,
-
     utext_setup: icu_ffi::utext_setup,
     utext_close: icu_ffi::utext_close,
-
     uregex_open: icu_ffi::uregex_open,
     uregex_close: icu_ffi::uregex_close,
     uregex_setStackLimit: icu_ffi::uregex_setStackLimit,
@@ -751,26 +748,23 @@ struct LibraryFunctions {
     uregex_findNext: icu_ffi::uregex_findNext,
     uregex_start64: icu_ffi::uregex_start64,
     uregex_end64: icu_ffi::uregex_end64,
+
+    // LIBICUI18N_PROC_NAMES
+    ucol_open: icu_ffi::ucol_open,
+    ucol_strcollUTF8: icu_ffi::ucol_strcollUTF8,
 }
 
-// SAFETY:
-const LIBRARY_FUNCTIONS_NAMES: [&CStr; 20] = [
+const LIBICUUC_PROC_NAMES: [&CStr; 18] = [
+    // Found in libicuuc.so on UNIX, icu.dll on Windows.
     c"u_errorName",
-    //
     c"ucnv_getAvailableName",
     c"ucnv_open",
     c"ucnv_close",
     c"ucnv_convertEx",
-    //
     c"ucasemap_open",
     c"ucasemap_utf8FoldCase",
-    //
-    c"ucol_open",
-    c"ucol_strcollUTF8",
-    //
     c"utext_setup",
     c"utext_close",
-    //
     c"uregex_open",
     c"uregex_close",
     c"uregex_setTimeLimit",
@@ -780,6 +774,12 @@ const LIBRARY_FUNCTIONS_NAMES: [&CStr; 20] = [
     c"uregex_findNext",
     c"uregex_start64",
     c"uregex_end64",
+];
+
+const LIBICUI18N_PROC_NAMES: [&CStr; 2] = [
+    // Found in libicui18n.so on UNIX, icu.dll on Windows.
+    c"ucol_open",
+    c"ucol_strcollUTF8",
 ];
 
 enum LibraryFunctionsState {
@@ -797,7 +797,10 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
         unsafe {
             LIBRARY_FUNCTIONS = LibraryFunctionsState::Failed;
 
-            let Ok(icu) = sys::load_icu() else {
+            let Ok(libicuuc) = sys::load_libicuuc() else {
+                return;
+            };
+            let Ok(libicui18n) = sys::load_libicui18n(libicuuc) else {
                 return;
             };
 
@@ -805,7 +808,7 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
 
             // OH NO I'M DOING A BAD THING
             //
-            // If this assertion hits, you either forgot to update `LIBRARY_FUNCTIONS_NAMES`
+            // If this assertion hits, you either forgot to update `LIBRARY_PROC_NAMES`
             // or you're on a platform where `dlsym` behaves different from classic UNIX and Windows.
             //
             // This code assumes that we can treat the `LibraryFunctions` struct containing various different function
@@ -814,18 +817,33 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
             // still better than loading every function one by one, just to blow up our binary size for no reason.
             const _: () = assert!(
                 mem::size_of::<LibraryFunctions>()
-                    == mem::size_of::<TransparentFunction>() * LIBRARY_FUNCTIONS_NAMES.len()
+                    == mem::size_of::<TransparentFunction>()
+                        * (LIBICUUC_PROC_NAMES.len() + LIBICUI18N_PROC_NAMES.len())
             );
 
             let mut funcs = MaybeUninit::<LibraryFunctions>::uninit();
             let mut ptr = funcs.as_mut_ptr() as *mut TransparentFunction;
 
-            for name in LIBRARY_FUNCTIONS_NAMES {
-                let Ok(func) = sys::get_proc_address(icu, name) else {
-                    return;
-                };
-                ptr.write(func);
-                ptr = ptr.add(1);
+            #[cfg(unix)]
+            let suffix = sys::icu_proc_suffix(libicuuc);
+
+            for names in [&LIBICUUC_PROC_NAMES[..], &LIBICUI18N_PROC_NAMES[..]] {
+                for name in names {
+                    #[cfg(unix)]
+                    let name = &sys::add_icu_proc_suffix(name, &suffix);
+
+                    let Ok(func) = sys::get_proc_address(libicui18n, name) else {
+                        debug_assert!(
+                            false,
+                            "Failed to load ICU function: {}",
+                            name.to_string_lossy()
+                        );
+                        return;
+                    };
+
+                    ptr.write(func);
+                    ptr = ptr.add(1);
+                }
             }
 
             LIBRARY_FUNCTIONS = LibraryFunctionsState::Loaded(funcs.assume_init());
