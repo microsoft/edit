@@ -1156,6 +1156,7 @@ impl TextBuffer {
         result.visual_pos.x = 0;
         result.visual_pos.y = result.logical_pos.y;
         result.column = 0;
+        result.wrap_opp = false;
 
         if self.word_wrap_column > 0 {
             let upward = result.offset < cursor.offset;
@@ -2171,7 +2172,8 @@ impl TextBuffer {
         // Restore the previous cursor.
         let cursor_before = self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
         change.cursor_before = self.cursor.logical_pos;
-        self.set_cursor_internal(cursor_before);
+        // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
+        self.cursor = cursor_before;
 
         if self.undo_stack.is_empty() {
             self.last_history_type = HistoryType::Other;

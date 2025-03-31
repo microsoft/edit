@@ -10,9 +10,8 @@ use std::io::Write as IoWrite;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
-type TrieType = u32;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+// `CharacterWidth` is 2 bits.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum CharacterWidth {
     ZeroWidth,
     Narrow,
@@ -20,8 +19,10 @@ enum CharacterWidth {
     Ambiguous,
 }
 
+// `ClusterBreak` is 4 bits without `StartOfText`, 5 bits with it.
 // NOTE: The order of these items must match JOIN_RULES_GRAPHEME_CLUSTER.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::upper_case_acronyms)]
 enum ClusterBreak {
     Other,         // GB999
     CR,            // GB3, GB4, GB5
@@ -41,8 +42,17 @@ enum ClusterBreak {
     ZWJ,           // GB9, GB11
 }
 
+// Extended information for each `ClusterBreak` via --extended.
+// Currently only used for storing the subtype "tab" for `ClusterBreak::Control`.
+// As such, this is 1 bit.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClusterBreakExt {
+    ControlTab = 1,
+}
+
+// `LineBreak` is 5 bits.
 // NOTE: The order of these items must match JOIN_RULES_LINE_BREAK.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 enum LineBreak {
     Other, // Anything else
@@ -79,12 +89,93 @@ enum LineBreak {
     // Other Characters
     Alphabetic,  // AL & HL
     Ideographic, // ID & EB & EM
+
+    StartOfText, // LB2 (optional via --extended)
 }
 
-#[derive(Clone, Default)]
+#[repr(transparent)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+struct TrieType(u32);
+
+impl TrieType {
+    fn new(packing: &BitPacking, cb: ClusterBreak, lb: LineBreak, cw: CharacterWidth) -> Self {
+        let cb = cb as u32;
+        let lb = lb as u32;
+        let cw = cw as u32;
+        assert!(cb <= packing.mask_cluster_break);
+        assert!(lb <= packing.mask_line_break);
+        assert!(cw <= packing.mask_character_width);
+
+        let cb = cb << packing.shift_cluster_break;
+        let lb = lb << packing.shift_line_break;
+        let cw = cw << packing.shift_character_width;
+        Self(cb | lb | cw)
+    }
+
+    fn change_cluster_break_ext(&mut self, packing: &BitPacking, cbe: ClusterBreakExt) {
+        let mask = packing.mask_cluster_break_ext;
+        let shift = packing.shift_cluster_break_ext;
+
+        let cbe = cbe as u32;
+        assert!(cbe <= mask);
+
+        self.0 = (self.0 & !(mask << shift)) | (cbe << shift);
+    }
+
+    fn change_width(&mut self, packing: &BitPacking, cw: CharacterWidth) {
+        let mask = packing.mask_character_width;
+        let shift = packing.shift_character_width;
+
+        let cw = cw as u32;
+        assert!(cw <= mask);
+
+        self.0 = (self.0 & !(mask << shift)) | (cw << shift);
+    }
+
+    fn value(&self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Default)]
+struct BitPacking {
+    mask_cluster_break: u32,
+    mask_cluster_break_ext: u32,
+    mask_line_break: u32,
+    mask_character_width: u32,
+
+    shift_cluster_break: u32,
+    shift_cluster_break_ext: u32,
+    shift_line_break: u32,
+    shift_character_width: u32,
+}
+
+impl BitPacking {
+    fn new(line_breaks: bool, extended: bool) -> Self {
+        let cb_width: u32 = if extended { 5 } else { 4 };
+        let cb_ext_width: u32 = if extended { 1 } else { 0 };
+        let lb_width: u32 = if line_breaks { 5 } else { 0 };
+        let cw_width: u32 = 3;
+
+        Self {
+            mask_cluster_break: (1 << cb_width) - 1,
+            mask_cluster_break_ext: (1 << cb_ext_width) - 1,
+            mask_line_break: (1 << lb_width) - 1,
+            mask_character_width: (1 << cw_width) - 1,
+
+            shift_cluster_break: 0,
+            shift_cluster_break_ext: cb_width,
+            shift_line_break: cb_width + cb_ext_width,
+            shift_character_width: cb_width + cb_ext_width + lb_width,
+        }
+    }
+}
+
+#[derive(Default)]
 struct Ucd {
     description: String,
-    values: Vec<u32>,
+    values: Vec<TrieType>,
+    packing: BitPacking,
 }
 
 #[derive(Clone, Default)]
@@ -112,20 +203,43 @@ enum Language {
 #[derive(Default)]
 struct Output {
     arg_lang: Language,
+    arg_extended: bool,
     arg_no_ambiguous: bool,
     arg_line_breaks: bool,
 
     ucd: Ucd,
     trie: Trie,
-    rules_gc: [Vec<u32>; 2],
+    rules_gc: Vec<Vec<u32>>,
     rules_lb: Vec<u32>,
     total_size: usize,
+}
+
+impl Output {
+    fn args(&self) -> String {
+        let mut buf = String::new();
+        match self.arg_lang {
+            Language::C => buf.push_str("--lang=c"),
+            Language::Rust => buf.push_str("--lang=rust"),
+        }
+        if self.arg_extended {
+            buf.push_str(" --extended")
+        }
+        if self.arg_no_ambiguous {
+            buf.push_str(" --no-ambiguous")
+        }
+        if self.arg_line_breaks {
+            buf.push_str(" --line-breaks")
+        }
+        buf
+    }
 }
 
 const HELP: &str = "\
 Usage: grapheme-table-gen [options...] <ucd.nounihan.grouped.xml>
   -h, --help            Prints help information
   --lang=<c|rust>       Output language (default: c)
+  --extended            Expose a start-of-text property for kickstarting the segmentation
+                        Expose tab and linefeed as grapheme cluster properties
   --no-ambiguous        Treat all ambiguous characters as narrow
   --line-breaks         Store and expose line break information
 ";
@@ -143,6 +257,7 @@ fn main() -> anyhow::Result<()> {
             "rust" => Ok(Language::Rust),
             l => bail!("invalid language: \"{}\"", l),
         })?,
+        arg_extended: args.contains("--extended"),
         arg_no_ambiguous: args.contains("--no-ambiguous"),
         arg_line_breaks: args.contains("--line-breaks"),
         ..Default::default()
@@ -161,10 +276,26 @@ fn main() -> anyhow::Result<()> {
     // More stages = Less size. The trajectory roughly follows a+b*c^stages, where c < 1.
     // 4 still gives ~30% savings over 3 stages and going beyond 5 gives diminishing returns (<10%).
     out.trie = build_best_trie(&out.ucd.values, 2, 8, 4);
+
     // The joinRules above has 2 bits per value. This packs it into 32-bit integers to save space.
     out.rules_gc = JOIN_RULES_GRAPHEME_CLUSTER
-        .map(|t| t.iter().map(|row| prepare_rules_row(row, 2, 3)).collect());
-    out.rules_lb = JOIN_RULES_LINE_BREAK
+        .iter()
+        .map(|t| {
+            let rules_gc_len = if out.arg_extended { t.len() } else { 16 };
+            t[..rules_gc_len]
+                .iter()
+                .map(|row| prepare_rules_row(row, 2, 3))
+                .collect()
+        })
+        .collect();
+
+    // Same for line breaks, but in 2D.
+    let rules_lb_len = if out.arg_extended {
+        JOIN_RULES_LINE_BREAK.len()
+    } else {
+        24
+    };
+    out.rules_lb = JOIN_RULES_LINE_BREAK[..rules_lb_len]
         .iter()
         .map(|row| prepare_rules_row(row, 1, 0))
         .collect();
@@ -176,13 +307,14 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Run a quick sanity check to ensure that the trie works as expected.
-    for (cp, &expected) in out.ucd.values.iter().enumerate() {
+    for (cp, expected) in out.ucd.values.iter().enumerate() {
         let mut actual = 0;
         for s in &out.trie.stages {
             actual = s.values[actual as usize + ((cp >> s.shift) & s.mask)];
         }
         assert_eq!(
-            expected, actual,
+            expected.value(),
+            actual,
             "trie sanity check failed for U+{:04X}",
             cp
         );
@@ -191,7 +323,8 @@ fn main() -> anyhow::Result<()> {
         let last = out.trie.stages.last().unwrap();
         let actual = last.values[cp];
         assert_eq!(
-            expected, actual,
+            expected.value(),
+            actual,
             "trie sanity check failed for direct ASCII mapping of U+{:04X}",
             cp
         );
@@ -204,23 +337,6 @@ fn main() -> anyhow::Result<()> {
 
     std::io::stdout().write_all(buf.as_bytes())?;
     Ok(())
-}
-
-impl Output {
-    fn args(&self) -> String {
-        let mut buf = String::new();
-        match self.arg_lang {
-            Language::C => buf.push_str("--lang=c"),
-            Language::Rust => buf.push_str("--lang=rust"),
-        }
-        if self.arg_no_ambiguous {
-            buf.push_str(" --no-ambiguous")
-        }
-        if self.arg_line_breaks {
-            buf.push_str(" --line-breaks")
-        }
-        buf
-    }
 }
 
 fn generate_c(out: Output) -> String {
@@ -330,8 +446,8 @@ fn generate_c(out: Output) -> String {
         "
         inline int ucd_grapheme_cluster_joins(const int state, const int lead, const int trail)
         {{
-            const int l = lead & 15;
-            const int t = trail & 15;
+            const int l = lead & {0};
+            const int t = trail & {0};
             return (s_grapheme_cluster_join_rules[state][l] >> (t * 2)) & 3;
         }}
         inline bool ucd_grapheme_cluster_joins_done(const int state)
@@ -340,9 +456,11 @@ fn generate_c(out: Output) -> String {
         }}
         inline int ucd_grapheme_cluster_character_width(const int val)
         {{
-            return (val >> 4) & 3;
+            return val >> {1};
         }}
         ",
+        out.ucd.packing.mask_cluster_break,
+        out.ucd.packing.shift_character_width,
     );
 
     if out.arg_line_breaks {
@@ -351,11 +469,44 @@ fn generate_c(out: Output) -> String {
             "
             inline bool ucd_line_break_joins(const int lead, const int trail)
             {{
-                const int l = lead >> 6;
-                const int t = trail >> 6;
+                const int l = (lead >> {0}) & {1};
+                const int t = (trail >> {0}) & {1};
                 return (s_line_break_join_rules[l] >> t) & 1;
             }}
             ",
+            out.ucd.packing.shift_line_break,
+            out.ucd.packing.mask_line_break,
+        );
+    }
+
+    if out.arg_extended {
+        _ = writedoc!(
+            buf,
+            "
+            inline int ucd_start_of_text_properties()
+            {{
+                return {:#x};
+            }}
+            inline int ucd_tab_properties()
+            {{
+                return {:#x};
+            }}
+            inline int ucd_linefeed_properties()
+            {{
+                return {:#x};
+            }}
+            ",
+            TrieType::new(
+                &out.ucd.packing,
+                // Control behaves identical to SOT (start of text) in a way,
+                // as it doesn't join with any surrounding character.
+                ClusterBreak::Control,
+                LineBreak::StartOfText,
+                CharacterWidth::ZeroWidth,
+            )
+            .value(),
+            out.ucd.values['\t' as usize].value(),
+            out.ucd.values['\n' as usize].value(),
         );
     }
 
@@ -472,8 +623,8 @@ fn generate_rust(out: Output) -> String {
         #[inline(always)]
         pub fn ucd_grapheme_cluster_joins(state: u32, lead: usize, trail: usize) -> u32 {{
             unsafe {{
-                let l = lead & 15;
-                let t = trail & 15;
+                let l = lead & {0};
+                let t = trail & {0};
                 let s = GRAPHEME_JOIN_RULES.get_unchecked(state as usize);
                 (s[l] >> (t * 2)) & 3
             }}
@@ -484,9 +635,11 @@ fn generate_rust(out: Output) -> String {
         }}
         #[inline(always)]
         pub fn ucd_grapheme_cluster_character_width(val: usize) -> usize {{
-            (val >> 4) & 3
+            val >> {1}
         }}
         ",
+        out.ucd.packing.mask_cluster_break,
+        out.ucd.packing.shift_character_width,
     );
 
     if out.arg_line_breaks {
@@ -496,13 +649,46 @@ fn generate_rust(out: Output) -> String {
             #[inline(always)]
             pub fn ucd_line_break_joins(lead: usize, trail: usize) -> bool {{
                 unsafe {{
-                    let l = lead >> 6;
-                    let t = trail >> 6;
+                    let l = (lead >> {0}) & {1};
+                    let t = (trail >> {0}) & {1};
                     let s = *LINE_BREAK_JOIN_RULES.get_unchecked(l);
                     ((s >> t) & 1) != 0
                 }}
             }}
             ",
+            out.ucd.packing.shift_line_break,
+            out.ucd.packing.mask_line_break,
+        );
+    }
+
+    if out.arg_extended {
+        _ = writedoc!(
+            buf,
+            "
+            #[inline(always)]
+            pub fn ucd_start_of_text_properties() -> usize {{
+                {:#x}
+            }}
+            #[inline(always)]
+            pub fn ucd_tab_properties() -> usize {{
+                {:#x}
+            }}
+            #[inline(always)]
+            pub fn ucd_linefeed_properties() -> usize {{
+                {:#x}
+            }}
+            ",
+            TrieType::new(
+                &out.ucd.packing,
+                // Control behaves identical to SOT (start of text) in a way,
+                // as it doesn't join with any surrounding character.
+                ClusterBreak::Control,
+                LineBreak::StartOfText,
+                CharacterWidth::ZeroWidth,
+            )
+            .value(),
+            out.ucd.values['\t' as usize].value(),
+            out.ucd.values['\n' as usize].value(),
         );
     }
 
@@ -511,16 +697,19 @@ fn generate_rust(out: Output) -> String {
 }
 
 fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::Result<Ucd> {
+    let packing = BitPacking::new(out.arg_line_breaks, out.arg_extended);
     let ambiguous_value = if out.arg_no_ambiguous {
         CharacterWidth::Narrow
     } else {
         CharacterWidth::Ambiguous
     };
+
     let mut values = vec![
-        trie_value(
+        TrieType::new(
+            &packing,
             ClusterBreak::Other,
+            LineBreak::Other,
             CharacterWidth::Narrow,
-            LineBreak::Other
         );
         1114112
     ];
@@ -605,7 +794,7 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
                 ),
             };
 
-            let mut width = match char_attributes.east_asian {
+            let mut cw = match char_attributes.east_asian {
                 "N" | "Na" | "H" => CharacterWidth::Narrow, // Half-width, Narrow, Neutral
                 "F" | "W" => CharacterWidth::Wide,          // Wide, Full-width
                 "A" => ambiguous_value,                     // Ambiguous
@@ -628,10 +817,10 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
                     // because they don't support zero-width graphemes, as zero-width columns can't exist.
                     // So, we turn all of them into Extend, which is roughly how wcswidth() would treat them.
                     cb = ClusterBreak::Extend;
-                    width = CharacterWidth::ZeroWidth;
+                    cw = CharacterWidth::ZeroWidth;
                 }
                 "Me" | "Mn" | "Cf" => {
-                    width = CharacterWidth::ZeroWidth;
+                    cw = CharacterWidth::ZeroWidth;
                 }
                 _ => {}
             };
@@ -673,8 +862,12 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
                 LineBreak::Other
             };
 
-            values[range].fill(trie_value(cb, width, lb));
+            values[range].fill(TrieType::new(&packing, cb, lb, cw));
         }
+    }
+
+    if out.arg_extended {
+        values['\t' as usize].change_cluster_break_ext(&packing, ClusterBreakExt::ControlTab);
     }
 
     // U+00AD: Soft Hyphen
@@ -683,7 +876,7 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
     // a word break occurs, the text renderer should display a hyphen.
     // A terminal does not support computerized typesetting, but unlike the other
     // gc=Cf cases we give it a Narrow width, because that matches wcswidth().
-    values[0x00AD] = trie_value_mod_width(values[0x00AD], CharacterWidth::Narrow);
+    values[0x00AD].change_width(&packing, CharacterWidth::Narrow);
 
     // U+2500 to U+257F: Box Drawing block
     // U+2580 to U+259F: Block Elements block
@@ -692,10 +885,11 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
     // Most of these characters are LineBreak.Other, but some are actually LineBreak.Alphabetic.
     // But to us this doesn't really matter much, because it doesn't make much sense anyway that
     // a light double dash is "alphabetic" while a light triple dash is not.
-    values[0x2500..=0x259F].fill(trie_value(
+    values[0x2500..=0x259F].fill(TrieType::new(
+        &packing,
         ClusterBreak::Other,
-        CharacterWidth::Narrow,
         LineBreak::Other,
+        CharacterWidth::Narrow,
     ));
 
     // U+FE0F Variation Selector-16 is used to turn unqualified Emojis into qualified ones.
@@ -705,11 +899,12 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
     //
     // U+FE0F actually has a LineBreak property of CM (Combining Mark),
     // but for us that's equivalent to Other.
-    values[0xFE0F] = trie_value_mod_width(values[0xFE0F], CharacterWidth::Wide);
+    values[0xFE0F].change_width(&packing, CharacterWidth::Wide);
 
     Ok(Ucd {
         description,
         values,
+        packing,
     })
 }
 
@@ -756,19 +951,6 @@ fn extract_range(node: &roxmltree::Node) -> RangeInclusive<usize> {
     first..=last
 }
 
-fn trie_value(cb: ClusterBreak, width: CharacterWidth, lb: LineBreak) -> TrieType {
-    let cb = cb as TrieType;
-    let width = (width as TrieType) << 4;
-    let lb = (lb as TrieType) << 6;
-    cb | width | lb
-}
-
-fn trie_value_mod_width(value: TrieType, width: CharacterWidth) -> TrieType {
-    let value = value & !(3 << 4); // mask out the width bits
-    let width = (width as TrieType) << 4;
-    value | width
-}
-
 fn build_best_trie(
     uncompressed: &[TrieType],
     min_shift: usize,
@@ -797,7 +979,9 @@ fn build_best_trie(
         .unwrap()
 }
 
-fn build_trie(mut uncompressed: Vec<TrieType>, shifts: &[usize]) -> Trie {
+fn build_trie(uncompressed: Vec<TrieType>, shifts: &[usize]) -> Trie {
+    // Fun fact: Rust optimizes the into_iter/collect into a no-op. Neat!
+    let mut uncompressed: Vec<u32> = uncompressed.into_iter().map(|c| c.value()).collect();
     let mut cumulative_shift = 0;
     let mut stages = Vec::new();
 
@@ -815,15 +999,15 @@ fn build_trie(mut uncompressed: Vec<TrieType>, shifts: &[usize]) -> Trie {
                 // The first stage (well, really the last stage - the one which contains the values instead of indices)
                 // contains a direct 1:1 mapping for all ASCII codepoints as they're most common in IT environments.
                 compressed.extend_from_slice(chunk);
-                (compressed.len() - chunk.len()) as TrieType
+                (compressed.len() - chunk.len()) as u32
             } else {
                 *cache.entry(chunk).or_insert_with(|| {
                     if let Some(existing) = find_existing(&compressed, chunk) {
-                        existing as TrieType
+                        existing as u32
                     } else {
                         let overlap = measure_overlap(&compressed, chunk);
                         compressed.extend_from_slice(&chunk[overlap..]);
-                        (compressed.len() - chunk.len()) as TrieType
+                        (compressed.len() - chunk.len()) as u32
                     }
                 })
             };
@@ -871,13 +1055,13 @@ fn build_trie(mut uncompressed: Vec<TrieType>, shifts: &[usize]) -> Trie {
     Trie { stages, total_size }
 }
 
-fn find_existing(haystack: &[TrieType], needle: &[TrieType]) -> Option<usize> {
+fn find_existing(haystack: &[u32], needle: &[u32]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
 }
 
-fn measure_overlap(prev: &[TrieType], next: &[TrieType]) -> usize {
+fn measure_overlap(prev: &[u32], next: &[u32]) -> usize {
     (0..prev.len().min(next.len()))
         .rev()
         .find(|&i| prev[prev.len() - i..] == next[..i])
