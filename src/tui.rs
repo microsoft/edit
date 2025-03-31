@@ -1564,6 +1564,7 @@ impl Context<'_, '_> {
                         }
                     } else {
                         tb.selection_update_visual(pos);
+                        tc.preferred_column = tb.get_cursor_visual_pos().x;
 
                         let height = inner.height();
 
@@ -1605,13 +1606,13 @@ impl Context<'_, '_> {
                 _ => {
                     match self.tui.mouse_state {
                         InputMouseState::Left => {
-                            tc.preferred_column = tb.get_cursor_visual_pos().x;
                             if self.input_mouse_modifiers.contains(kbmod::SHIFT) {
                                 // TODO: Untested because Windows Terminal surprisingly doesn't support Shift+Click.
                                 tb.selection_update_visual(pos);
                             } else {
                                 tb.cursor_move_to_visual(pos);
                             }
+                            tc.preferred_column = tb.get_cursor_visual_pos().x;
                             make_cursor_visible = true;
                         }
                         InputMouseState::Release => {
