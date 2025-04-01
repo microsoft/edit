@@ -511,14 +511,12 @@ fn get_last_error() -> apperr::Error {
 }
 
 #[inline]
-fn gle_to_apperr(gle: u32) -> apperr::Error {
-    unsafe {
-        apperr::Error::new(if gle == 0 {
-            0x8000FFFF
-        } else {
-            0x80070000 | gle
-        })
-    }
+const fn gle_to_apperr(gle: u32) -> apperr::Error {
+    apperr::Error::new_sys(if gle == 0 {
+        0x8000FFFF
+    } else {
+        0x80070000 | gle
+    })
 }
 
 #[inline]
@@ -526,7 +524,7 @@ pub fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
     gle_to_apperr(err.raw_os_error().unwrap_or(0) as u32)
 }
 
-pub fn format_error(err: apperr::Error) -> String {
+pub fn apperr_format(code: u32) -> String {
     unsafe {
         let mut ptr: *mut u8 = null_mut();
         let len = Debug::FormatMessageA(
@@ -534,14 +532,14 @@ pub fn format_error(err: apperr::Error) -> String {
                 | Debug::FORMAT_MESSAGE_FROM_SYSTEM
                 | Debug::FORMAT_MESSAGE_IGNORE_INSERTS,
             null(),
-            err.value(),
+            code,
             0,
             &mut ptr as *mut *mut _ as *mut _,
             0,
             null_mut(),
         );
 
-        let mut result = format!("Error {:#08x}", err.value());
+        let mut result = format!("Error {:#08x}", code);
 
         if len > 0 {
             let msg = helpers::str_from_raw_parts(ptr, len as usize);
@@ -554,6 +552,10 @@ pub fn format_error(err: apperr::Error) -> String {
 
         result
     }
+}
+
+pub fn apperr_is_not_found(err: apperr::Error) -> bool {
+    err == gle_to_apperr(Foundation::ERROR_FILE_NOT_FOUND)
 }
 
 fn check_bool_return(ret: Foundation::BOOL) -> apperr::Result<()> {

@@ -83,6 +83,7 @@ struct State {
     search_needle: String,
     search_replacement: String,
     search_options: buffer::SearchOptions,
+    search_success: bool,
 
     wants_encoding_focus: bool,
     wants_encoding_change: StateEncodingChange,
@@ -120,6 +121,7 @@ impl State {
             search_needle: String::new(),
             search_replacement: String::new(),
             search_options: buffer::SearchOptions::default(),
+            search_success: true,
 
             wants_encoding_focus: false,
             wants_encoding_change: StateEncodingChange::None,
@@ -175,10 +177,12 @@ fn run() -> apperr::Result<()> {
         .map(PathBuf::from)
     {
         let filename = get_filename_from_path(&path);
-        match file_open(&path) {
-            Ok(mut file) => state.buffer.read_file(&mut file, None)?,
-            Err(apperr::APP_FILE_NOT_FOUND) if !filename.is_empty() => {}
-            Err(err) => return Err(err),
+        if !filename.is_empty() {
+            match file_open(&path) {
+                Ok(mut file) => state.buffer.read_file(&mut file, None)?,
+                Err(err) if sys::apperr_is_not_found(err) => {}
+                Err(err) => return Err(err),
+            }
         }
         state.set_path(path, filename);
     } else if let Some(mut file) = sys::open_stdin_if_redirected() {
@@ -432,6 +436,12 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         ReplaceAll,
     }
 
+    if let Err(err) = icu::init() {
+        error_log_add(ctx, state, err);
+        state.wants_search.kind = StateSearchKind::Disabled;
+        return;
+    }
+
     let mut action = SearchAction::None;
     let mut focus = StateSearchKind::Hidden;
 
@@ -469,6 +479,9 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 
                 if ctx.editline("needle", &mut state.search_needle) {
                     action = SearchAction::Search;
+                }
+                if !state.search_success {
+                    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
                 }
                 ctx.attr_intrinsic_size(Size {
                     width: COORD_TYPE_SAFE_MAX,
@@ -552,7 +565,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
     }
     ctx.block_end();
 
-    let result = match action {
+    state.search_success = match action {
         SearchAction::None => return,
         SearchAction::Search => state
             .buffer
@@ -567,14 +580,8 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
             state.search_options,
             &state.search_replacement,
         ),
-    };
-
-    if let Err(err) = result {
-        if err == apperr::APP_ICU_MISSING {
-            state.wants_search.kind = StateSearchKind::Disabled;
-        }
-        error_log_add(ctx, state, err);
     }
+    .is_ok();
 
     ctx.needs_rerender();
 }

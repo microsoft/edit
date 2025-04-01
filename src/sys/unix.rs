@@ -275,7 +275,7 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<*mut u8> {
             0,
         );
         if ptr::eq(ptr, libc::MAP_FAILED) {
-            Err(apperr::Error::new(libc::ENOMEM as u32))
+            Err(errno_to_apperr(libc::ENOMEM))
         } else {
             Ok(ptr as *mut u8)
         }
@@ -309,7 +309,7 @@ pub unsafe fn virtual_commit(base: *mut u8, size: usize) -> apperr::Result<()> {
             libc::PROT_READ | libc::PROT_WRITE,
         );
         if status != 0 {
-            Err(apperr::Error::new(libc::ENOMEM as u32))
+            Err(errno_to_apperr(libc::ENOMEM))
         } else {
             Ok(())
         }
@@ -320,7 +320,7 @@ unsafe fn load_library(name: &CStr) -> apperr::Result<*mut c_void> {
     unsafe {
         let handle = libc::dlopen(name.as_ptr(), libc::RTLD_LAZY);
         if handle.is_null() {
-            Err(apperr::Error::new(libc::ELIBACC as u32))
+            Err(errno_to_apperr(libc::ELIBACC))
         } else {
             Ok(handle)
         }
@@ -339,7 +339,7 @@ pub unsafe fn get_proc_address<T>(handle: *mut c_void, name: &CStr) -> apperr::R
     unsafe {
         let sym = libc::dlsym(handle, name.as_ptr());
         if sym.is_null() {
-            Err(apperr::Error::new(libc::ELIBACC as u32))
+            Err(errno_to_apperr(libc::ELIBACC))
         } else {
             Ok(mem::transmute_copy(&sym))
         }
@@ -442,12 +442,11 @@ pub fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
     errno_to_apperr(err.raw_os_error().unwrap_or(0))
 }
 
-pub fn format_error(err: apperr::Error) -> String {
-    let errno = err.code();
-    let mut result = format!("Error {}", errno);
+pub fn apperr_format(code: u32) -> String {
+    let mut result = format!("Error {}", code);
 
     unsafe {
-        let ptr = libc::strerror(errno as i32);
+        let ptr = libc::strerror(code as i32);
         if !ptr.is_null() {
             let msg = CStr::from_ptr(ptr).to_string_lossy();
             result.push_str(": ");
@@ -458,8 +457,12 @@ pub fn format_error(err: apperr::Error) -> String {
     result
 }
 
-fn errno_to_apperr(no: c_int) -> apperr::Error {
-    unsafe { apperr::Error::new(0x80000000 | no.max(0) as u32) }
+pub fn apperr_is_not_found(err: apperr::Error) -> bool {
+    err == errno_to_apperr(libc::ENOENT)
+}
+
+const fn errno_to_apperr(no: c_int) -> apperr::Error {
+    apperr::Error::new_sys(if no < 0 { 0 } else { no as u32 })
 }
 
 fn check_int_return(ret: libc::c_int) -> apperr::Result<libc::c_int> {

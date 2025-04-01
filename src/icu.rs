@@ -39,13 +39,13 @@ pub fn get_available_encodings() -> &'static [DisplayableCString] {
     }
 }
 
-pub fn format_error(err: apperr::Error) -> String {
-    fn format(err: apperr::Error) -> &'static str {
+pub fn apperr_format(code: u32) -> String {
+    fn format(code: u32) -> &'static str {
         let Ok(f) = init_if_needed() else {
             return "";
         };
 
-        let status = icu_ffi::UErrorCode::new(err.code());
+        let status = icu_ffi::UErrorCode::new(code);
         let ptr = unsafe { (f.u_errorName)(status) };
         if ptr.is_null() {
             return "";
@@ -55,11 +55,11 @@ pub fn format_error(err: apperr::Error) -> String {
         str.to_str().unwrap_or("")
     }
 
-    let msg = format(err);
+    let msg = format(code);
     if !msg.is_empty() {
         format!("ICU Error: {}", msg)
     } else {
-        format!("ICU Error: {:#08x}", err.code())
+        format!("ICU Error: {:#08x}", code)
     }
 }
 
@@ -724,6 +724,12 @@ pub fn fold_case(input: &str) -> String {
     input.to_ascii_lowercase()
 }
 
+pub fn apperr_is_regex_error(err: apperr::Error) -> bool {
+    // As per icu.h:
+    // > Error codes in the range 0x10300-0x103ff are reserved for regular expression related errors.
+    matches!(err, apperr::Error::Icu(0x10300..0x10400))
+}
+
 // WARNING:
 // The order of the fields MUST match the order of strings in the following two arrays.
 #[allow(non_snake_case)]
@@ -789,6 +795,11 @@ enum LibraryFunctionsState {
 }
 
 static mut LIBRARY_FUNCTIONS: LibraryFunctionsState = LibraryFunctionsState::Uninitialized;
+
+pub fn init() -> apperr::Result<()> {
+    init_if_needed()?;
+    Ok(())
+}
 
 #[allow(static_mut_refs)]
 fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {

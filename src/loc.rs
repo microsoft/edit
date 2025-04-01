@@ -9,6 +9,8 @@ pub enum LocId {
     Yes,
     No,
 
+    ErrorIcuMissing,
+
     // File menu
     File,
     FileOpen,
@@ -164,6 +166,21 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Нет",
         /* zh_hans */ "否",
         /* zh_hant */ "否",
+    ],
+
+    // ErrorIcuMissing
+    [
+        /* en      */ "ICU library not found",
+        /* de      */ "ICU-Bibliothek nicht gefunden",
+        /* es      */ "Biblioteca ICU no encontrada",
+        /* fr      */ "Bibliothèque ICU introuvable",
+        /* it      */ "Libreria ICU non trovata",
+        /* ja      */ "ICUライブラリが見つかりません",
+        /* ko      */ "ICU 라이브러리를 찾을 수 없습니다",
+        /* pt_br   */ "Biblioteca ICU não encontrada",
+        /* ru      */ "Библиотека ICU не найдена",
+        /* zh_hans */ "未找到ICU库",
+        /* zh_hant */ "未找到ICU庫",
     ],
 
     // File
