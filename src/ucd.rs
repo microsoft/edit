@@ -196,6 +196,7 @@ impl<'doc> MeasurementConfig<'doc> {
             }
 
             let props_current_cluster = props_next_cluster;
+            let mut props_last_char;
             let mut offset_next_cluster;
             let mut state = 0;
             let mut width = 0;
@@ -215,6 +216,7 @@ impl<'doc> MeasurementConfig<'doc> {
                 // records the offset of the next character after the returned one, we need
                 // to save the offset of the previous `chunk_iter` before calling `next()`.
                 // Similar applies to the width.
+                props_last_char = props_next_cluster;
                 offset_next_cluster = chunk_range.start + chunk_iter.offset();
                 width += ucd_grapheme_cluster_character_width(props_next_cluster) as CoordType;
 
@@ -249,14 +251,14 @@ impl<'doc> MeasurementConfig<'doc> {
             width = width.min(2);
 
             // Tabs require special handling because they can have a variable width.
-            if props_current_cluster == ucd_tab_properties() {
+            if props_last_char == ucd_tab_properties() {
                 // `tab_size` is clamped to >= 1 at the start of this method.
                 unsafe { std::hint::assert_unchecked(tab_size >= 1) };
                 width = tab_size - (column % tab_size);
             }
 
             // Hard wrap: Both the logical and visual position advance by one line.
-            if props_current_cluster == ucd_linefeed_properties() {
+            if props_last_char == ucd_linefeed_properties() {
                 helpers::cold_path();
 
                 wrap_opp = false;
@@ -1229,6 +1231,73 @@ mod test {
             let actual = &text[beg.offset..end.offset];
             assert_eq!(actual, expected);
         }
+    }
+
+    #[test]
+    fn test_wrap_tab() {
+        // |foo_    | <- 1 space
+        // |____b   | <- 1 tab, 1 space
+        let text = "foo \t b";
+        let bytes = text.as_bytes();
+        let mut cfg = MeasurementConfig::new(&bytes)
+            .with_word_wrap_column(8)
+            .with_tab_size(4);
+        let max = CoordType::MAX;
+
+        let end0 = cfg.goto_visual(Point { x: max, y: 0 });
+        assert_eq!(
+            end0,
+            UcdCursor {
+                offset: 4,
+                logical_pos: Point { x: 4, y: 0 },
+                visual_pos: Point { x: 4, y: 0 },
+                column: 4,
+                wrap_opp: true,
+            },
+        );
+
+        let beg1 = cfg.goto_visual(Point { x: 0, y: 1 });
+        assert_eq!(
+            beg1,
+            UcdCursor {
+                offset: 4,
+                logical_pos: Point { x: 4, y: 0 },
+                visual_pos: Point { x: 0, y: 1 },
+                column: 4,
+                wrap_opp: false,
+            },
+        );
+
+        let end1 = cfg.goto_visual(Point { x: max, y: 1 });
+        assert_eq!(
+            end1,
+            UcdCursor {
+                offset: 7,
+                logical_pos: Point { x: 7, y: 0 },
+                visual_pos: Point { x: 6, y: 1 },
+                column: 10,
+                wrap_opp: true,
+            },
+        );
+    }
+
+    #[test]
+    fn test_crlf() {
+        let text = "a\r\nbcd\r\ne".as_bytes();
+        let cursor = MeasurementConfig::new(&text).goto_visual(Point {
+            x: CoordType::MAX,
+            y: 1,
+        });
+        assert_eq!(
+            cursor,
+            UcdCursor {
+                offset: 6,
+                logical_pos: Point { x: 3, y: 1 },
+                visual_pos: Point { x: 3, y: 1 },
+                column: 3,
+                wrap_opp: false,
+            }
+        );
     }
 
     #[test]
