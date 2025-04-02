@@ -1936,6 +1936,10 @@ impl Context<'_, '_> {
                     kbmod::CTRL => tb.write(&self.tui.clipboard, true),
                     _ => return false,
                 },
+                vk::W => match modifiers {
+                    kbmod::CTRL => tb.delete(CursorMovement::Word, -1),
+                    _ => return false,
+                },
                 vk::Y => match modifiers {
                     kbmod::CTRL => tb.redo(),
                     _ => return false,
