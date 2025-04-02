@@ -194,6 +194,9 @@ fn run() -> apperr::Result<()> {
     query_color_palette(&mut tui, &mut vt_parser);
     sys::inject_window_size_into_stdin();
 
+    #[cfg(feature = "debug-latency")]
+    let mut last_latency_width = 0;
+
     loop {
         let read_timeout = vt_parser.read_timeout().min(tui.read_timeout());
         let Some(input) = sys::read_stdin(read_timeout) else {
@@ -258,11 +261,21 @@ fn run() -> apperr::Result<()> {
 
             // "μs" is 3 bytes and 2 columns.
             let cols = status.len() as i32 - 3 + 2;
-            let x = tui.size().width - cols;
+
+            // Since the status may shrink and grow, we may have to overwrite the previous one with whitespace.
+            let padding = (last_latency_width - cols).max(0);
 
             // To avoid moving the cursor, push and pop it onto the VT cursor stack.
-            _ = write!(output, "\x1b7\x1b[1;{}H{}\x1b8", x + 1, status);
+            _ = write!(
+                output,
+                "\x1b7\x1b[1;{0}H{1:2$}{3}\x1b8",
+                tui.size().width - cols - padding + 1,
+                "",
+                padding as usize,
+                status
+            );
 
+            last_latency_width = cols;
             sys::write_stdout(&output);
         }
         #[cfg(not(feature = "debug-latency"))]
