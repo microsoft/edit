@@ -801,9 +801,12 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 }
 
 fn draw_file_picker(ctx: &mut Context, state: &mut State) {
-    if state.wants_file_picker == StateFilePicker::Save && state.path.is_some() {
+    if state.wants_file_picker == StateFilePicker::Save {
+        if state.path.is_some() {
         // `draw_handle_save` will handle things.
         return;
+        }
+        state.wants_file_picker = StateFilePicker::SaveAs;
     }
 
     let width = (ctx.size().width - 20).max(10);
