@@ -51,7 +51,12 @@ enum StateSearchKind {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StateFilePicker {
     None,
+
     Open,
+    // Internal state to handle the unsaved changes dialog.
+    OpenUnsavedChanges, // Show the unsaved changes dialog.
+    OpenForce,          // Ignore any buffer dirty flags.
+
     Save,
     SaveAs,
 }
@@ -299,6 +304,12 @@ fn draw(ctx: &mut Context, state: &mut State) {
     draw_editor(ctx, state);
     draw_statusbar(ctx, state);
 
+    // If the user presses "Save" on the exit dialog we'll possible show a SaveAs dialog.
+    // The exit dialog should then get hidden.
+    if state.wants_exit {
+        draw_handle_wants_exit(ctx, state);
+    }
+
     if state.wants_file_picker != StateFilePicker::None {
         draw_file_picker(ctx, state);
     }
@@ -309,12 +320,6 @@ fn draw(ctx: &mut Context, state: &mut State) {
 
     if state.wants_encoding_change != StateEncodingChange::None {
         draw_dialog_encoding_change(ctx, state);
-    }
-
-    // If the user presses "Save" on the exit dialog we'll possible show a SaveAs dialog.
-    // The exit dialog should then get hidden.
-    if state.wants_exit && state.wants_file_picker == StateFilePicker::None {
-        draw_handle_wants_exit(ctx, state);
     }
 
     if state.wants_about {
@@ -819,10 +824,37 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 }
 
 fn draw_file_picker(ctx: &mut Context, state: &mut State) {
+    if state.wants_file_picker == StateFilePicker::Open {
+        state.wants_file_picker = if state.buffer.is_dirty() {
+            StateFilePicker::OpenUnsavedChanges
+        } else {
+            StateFilePicker::OpenForce
+        };
+    }
+
+    if state.wants_file_picker == StateFilePicker::OpenUnsavedChanges {
+        match draw_unsaved_changes_dialog(ctx) {
+            UnsavedChangesDialogResult::None => return,
+            UnsavedChangesDialogResult::Save => {
+                // TODO: Ideally this would be a special case of `StateFilePicker::Save`,
+                // where the open dialog reopens right after saving.
+                // But that felt annoying to implement so I didn't do it.
+                state.wants_file_picker = StateFilePicker::Save;
+            }
+            UnsavedChangesDialogResult::Discard => {
+                state.wants_file_picker = StateFilePicker::OpenForce;
+            }
+            UnsavedChangesDialogResult::Cancel => {
+                state.wants_file_picker = StateFilePicker::None;
+                return;
+            }
+        }
+    }
+
     if state.wants_file_picker == StateFilePicker::Save {
         if state.path.is_some() {
-        // `draw_handle_save` will handle things.
-        return;
+            // `draw_handle_save` will handle things.
+            return;
         }
         state.wants_file_picker = StateFilePicker::SaveAs;
     }
@@ -833,7 +865,7 @@ fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
     ctx.modal_begin(
         "file-picker",
-        if state.wants_file_picker == StateFilePicker::Open {
+        if state.wants_file_picker == StateFilePicker::OpenForce {
             loc(LocId::FileOpen)
         } else {
             loc(LocId::FileSaveAs)
@@ -922,8 +954,8 @@ fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         ctx.scrollarea_end();
 
         if activated {
-            if let Some(path) = draw_dialog_saveas_update_path(state) {
-                if state.wants_file_picker == StateFilePicker::Open {
+            if let Some(path) = draw_file_picker_update_path(state) {
+                if state.wants_file_picker == StateFilePicker::OpenForce {
                     // File Open? Just load the file and store the path if it was successful.
                     if draw_handle_load_impl(ctx, state, Some(&path), None) {
                         save_path = Some(path);
@@ -1003,7 +1035,7 @@ fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 }
 
 // Returns Some(path) if the caller should attempt to save the file.
-fn draw_dialog_saveas_update_path(state: &mut State) -> Option<PathBuf> {
+fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     let path = state.file_picker_pending_dir.as_path();
     let path = path.join(&state.file_picker_pending_name);
     let mut normalized = PathBuf::new();
@@ -1170,6 +1202,24 @@ fn draw_handle_wants_exit(ctx: &mut Context, state: &mut State) {
         return;
     }
 
+    match draw_unsaved_changes_dialog(ctx) {
+        UnsavedChangesDialogResult::None => {}
+        UnsavedChangesDialogResult::Save => state.wants_file_picker = StateFilePicker::Save,
+        UnsavedChangesDialogResult::Discard => state.exit = true,
+        UnsavedChangesDialogResult::Cancel => state.wants_exit = false,
+    }
+}
+
+enum UnsavedChangesDialogResult {
+    None,
+    Save,
+    Discard,
+    Cancel,
+}
+
+fn draw_unsaved_changes_dialog(ctx: &mut Context) -> UnsavedChangesDialogResult {
+    let mut result = UnsavedChangesDialogResult::None;
+
     ctx.modal_begin("unsaved-changes", loc(LocId::UnsavedChangesDialogTitle));
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
@@ -1192,33 +1242,35 @@ fn draw_handle_wants_exit(ctx: &mut Context, state: &mut State) {
             ctx.table_next_row();
 
             if ctx.button("yes", Overflow::Clip, loc(LocId::UnsavedChangesDialogYes)) {
-                state.wants_file_picker = StateFilePicker::Save;
+                result = UnsavedChangesDialogResult::Save;
             }
             ctx.focus_on_first_present();
             if ctx.button("no", Overflow::Clip, loc(LocId::UnsavedChangesDialogNo)) {
-                state.exit = true;
+                result = UnsavedChangesDialogResult::Discard;
             }
             if ctx.button(
                 "cancel",
                 Overflow::Clip,
                 loc(LocId::UnsavedChangesDialogCancel),
             ) {
-                state.wants_exit = false;
+                result = UnsavedChangesDialogResult::Cancel;
             }
 
             // TODO: This should highlight the corresponding letter in the label.
             if ctx.consume_shortcut(vk::S) {
-                state.wants_file_picker = StateFilePicker::Save;
+                result = UnsavedChangesDialogResult::Save;
             } else if ctx.consume_shortcut(vk::N) {
-                state.exit = true;
+                result = UnsavedChangesDialogResult::Discard;
             }
         }
         ctx.table_end();
     }
 
     if ctx.modal_end() {
-        state.wants_exit = false;
+        result = UnsavedChangesDialogResult::Cancel;
     }
+
+    result
 }
 
 fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
