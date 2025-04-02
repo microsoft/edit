@@ -337,6 +337,7 @@ fn draw(ctx: &mut Context, state: &mut State) {
 fn draw_menubar(ctx: &mut Context, state: &mut State) {
     ctx.menubar_begin();
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::White));
+    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
     {
         if ctx.menubar_menu_begin(loc(LocId::File), 'F') {
             draw_menu_file(ctx, state);
@@ -462,6 +463,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
     ctx.block_begin("search");
     ctx.attr_focus_well();
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::White));
+    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
     {
         if ctx.contains_focus() && ctx.consume_shortcut(vk::ESCAPE) {
             state.wants_search.kind = StateSearchKind::Hidden;
@@ -482,6 +484,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                 }
                 if !state.search_success {
                     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+                    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
                 }
                 ctx.attr_intrinsic_size(Size {
                     width: COORD_TYPE_SAFE_MAX,
@@ -606,6 +609,7 @@ fn draw_editor(ctx: &mut Context, state: &mut State) {
 fn draw_statusbar(ctx: &mut Context, state: &mut State) {
     ctx.table_begin("statusbar");
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::White));
+    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
     ctx.table_set_cell_gap(Size {
         width: 2,
         height: 0,
@@ -640,6 +644,7 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                     offset_y: 0,
                 });
                 ctx.attr_background_rgba(ctx.indexed(IndexedColor::White));
+                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
                 ctx.attr_padding(Rect::two(0, 1));
                 ctx.attr_border();
                 {
@@ -693,6 +698,7 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 offset_y: 0,
             });
             ctx.attr_background_rgba(ctx.indexed(IndexedColor::White));
+            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
             ctx.attr_border();
             ctx.attr_padding(Rect::two(0, 1));
             ctx.table_set_cell_gap(Size {
@@ -922,6 +928,7 @@ fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
         ctx.modal_begin("overwrite", loc(LocId::FileOverwriteWarning));
         ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+        ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
         {
             ctx.label(
                 "description",
@@ -1144,6 +1151,7 @@ fn draw_handle_wants_exit(ctx: &mut Context, state: &mut State) {
 
     ctx.modal_begin("unsaved-changes", loc(LocId::UnsavedChangesDialogTitle));
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
     {
         ctx.label(
             "description",
@@ -1229,6 +1237,7 @@ fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
 fn draw_error_log(ctx: &mut Context, state: &mut State) {
     ctx.modal_begin("errors", "Error");
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
     {
         ctx.block_begin("content");
         ctx.attr_padding(Rect::two(1, 2));

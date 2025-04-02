@@ -1197,6 +1197,7 @@ impl Context<'_, '_> {
         self.focus_on_first_present();
         self.attr_border();
         self.attr_background_rgba(self.indexed(IndexedColor::White));
+        self.attr_foreground_rgba(self.indexed(IndexedColor::Black));
         self.attr_float(FloatSpec {
             anchor: Anchor::Root,
             gravity_x: 0.5,
@@ -2198,6 +2199,7 @@ impl Context<'_, '_> {
             });
             self.attr_border();
             self.attr_background_rgba(self.indexed(IndexedColor::White));
+            self.attr_foreground_rgba(self.indexed(IndexedColor::Black));
             return true;
         }
 
