@@ -276,6 +276,8 @@ fn run() -> apperr::Result<()> {
 }
 
 fn draw(ctx: &mut Context, state: &mut State) {
+    let root_focused = ctx.contains_focus();
+
     draw_menubar(ctx, state);
     if state.wants_search.kind != StateSearchKind::Hidden {
         draw_search(ctx, state);
@@ -309,27 +311,29 @@ fn draw(ctx: &mut Context, state: &mut State) {
         draw_error_log(ctx, state);
     }
 
-    // Shortcuts that are not handled as part of the textarea, etc.
-    if ctx.consume_shortcut(kbmod::CTRL | vk::O) {
-        state.wants_file_picker = StateFilePicker::Open;
-    }
-    if ctx.consume_shortcut(kbmod::CTRL | vk::S) {
-        state.wants_file_picker = StateFilePicker::Save;
-    }
-    if ctx.consume_shortcut(kbmod::CTRL_SHIFT | vk::S) {
-        state.wants_file_picker = StateFilePicker::SaveAs;
-    }
-    if ctx.consume_shortcut(kbmod::CTRL | vk::Q) {
-        state.wants_exit = true;
-    }
-    if state.wants_search.kind != StateSearchKind::Disabled {
-        if ctx.consume_shortcut(kbmod::CTRL | vk::F) {
-            state.wants_search.kind = StateSearchKind::Search;
-            state.wants_search.focus = true;
+    if root_focused {
+        // Shortcuts that are not handled as part of the textarea, etc.
+        if ctx.consume_shortcut(kbmod::CTRL | vk::O) {
+            state.wants_file_picker = StateFilePicker::Open;
         }
-        if ctx.consume_shortcut(kbmod::CTRL | vk::H) {
-            state.wants_search.kind = StateSearchKind::Replace;
-            state.wants_search.focus = true;
+        if ctx.consume_shortcut(kbmod::CTRL | vk::S) {
+            state.wants_file_picker = StateFilePicker::Save;
+        }
+        if ctx.consume_shortcut(kbmod::CTRL_SHIFT | vk::S) {
+            state.wants_file_picker = StateFilePicker::SaveAs;
+        }
+        if ctx.consume_shortcut(kbmod::CTRL | vk::Q) {
+            state.wants_exit = true;
+        }
+        if state.wants_search.kind != StateSearchKind::Disabled {
+            if ctx.consume_shortcut(kbmod::CTRL | vk::F) {
+                state.wants_search.kind = StateSearchKind::Search;
+                state.wants_search.focus = true;
+            }
+            if ctx.consume_shortcut(kbmod::CTRL | vk::H) {
+                state.wants_search.kind = StateSearchKind::Replace;
+                state.wants_search.focus = true;
+            }
         }
     }
 }

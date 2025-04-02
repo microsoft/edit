@@ -344,9 +344,9 @@ impl Tui {
 
         for root in Tree::iterate_siblings(self.prev_tree.root_first) {
             if let Some(float) = &root.attributes.float {
-                let anchor = Tree::node_ref(root.parent).unwrap();
-                let mut x = anchor.outer.left;
-                let mut y = anchor.outer.top;
+                let (mut x, mut y) = Tree::node_ref(root.parent)
+                    .map(|parent| (parent.outer.left, parent.outer.top))
+                    .unwrap_or((0, 0));
                 let size = root.intrinsic_to_outer();
 
                 x += float.offset.x;
@@ -1101,7 +1101,10 @@ impl Context<'_, '_> {
         let anchor = match spec.anchor {
             Anchor::Last if !last_node.siblings.prev.is_null() => last_node.siblings.prev,
             Anchor::Last | Anchor::Parent => last_node.parent,
-            Anchor::Root => self.tree.root_first,
+            // By not giving such floats a parent, they get the same origin as the original root node,
+            // but they also gain their own "root id" in the tree. That way, their focus path is totally unique,
+            // which means that we can easily check if a modal is open by calling `is_focused()` on the original root.
+            Anchor::Root => null(),
         };
 
         // Remove the node from the UI tree and insert it into the floater list.
