@@ -39,8 +39,6 @@ pub struct Framebuffer {
     buffers: [Buffer; 2],
     frame_counter: usize,
     auto_colors: [u32; 2], // [dark, light]
-    cursor: Point,
-    cursor_overtype: bool,
 }
 
 impl Framebuffer {
@@ -50,8 +48,6 @@ impl Framebuffer {
             buffers: Default::default(),
             frame_counter: 0,
             auto_colors: [0, 0],
-            cursor: Point { x: -1, y: -1 },
-            cursor_overtype: false,
         }
     }
 
@@ -62,7 +58,7 @@ impl Framebuffer {
             self.indexed_colors[IndexedColor::Black as usize],
             self.indexed_colors[IndexedColor::BrightWhite as usize],
         ];
-        if !Self::quick_is_dark(self.auto_colors[0]) {
+        if !Bitmap::quick_is_dark(self.auto_colors[0]) {
             self.auto_colors.swap(0, 1);
         }
     }
@@ -76,23 +72,24 @@ impl Framebuffer {
                 buffer.attributes = AttributeBuffer::new(size);
             }
 
+            let front = &mut self.buffers[self.frame_counter & 1];
             // Trigger a full redraw. (Yes, it's a hack.)
-            let buffer = &mut self.buffers[self.frame_counter & 1];
-            buffer.fg_bitmap.fill(1);
+            front.fg_bitmap.fill(1);
+            // Trigger a cursor update as well, just to be sure.
+            front.cursor = Cursor::new_invalid();
         }
 
         self.frame_counter = self.frame_counter.wrapping_add(1);
-        self.cursor = Point { x: -1, y: -1 };
 
-        let buffer = &mut self.buffers[self.frame_counter & 1];
-        buffer
-            .bg_bitmap
-            .fill(self.indexed_colors[IndexedColor::Background as usize]);
-        buffer
-            .fg_bitmap
-            .fill(self.indexed_colors[IndexedColor::Foreground as usize]);
-        buffer.attributes.reset();
-        buffer.text.fill_whitespace();
+        let back = &mut self.buffers[self.frame_counter & 1];
+        let bg = self.indexed_colors[IndexedColor::Background as usize];
+        let fg = self.indexed_colors[IndexedColor::Foreground as usize];
+
+        back.text.fill_whitespace();
+        back.bg_bitmap.fill(bg);
+        back.fg_bitmap.fill(fg);
+        back.attributes.reset();
+        back.cursor = Cursor::new_disabled();
     }
 
     /// Replaces text contents in a single line of the framebuffer.
@@ -107,8 +104,8 @@ impl Framebuffer {
         clip_right: CoordType,
         text: &str,
     ) -> Rect {
-        let buffer = &mut self.buffers[self.frame_counter & 1];
-        buffer.text.replace_text(y, origin_x, clip_right, text)
+        let back = &mut self.buffers[self.frame_counter & 1];
+        back.text.replace_text(y, origin_x, clip_right, text)
     }
 
     pub fn draw_scrollbar(
@@ -232,36 +229,28 @@ impl Framebuffer {
     }
 
     pub fn contrasted(&self, color: u32) -> u32 {
-        self.auto_colors[Self::quick_is_dark(color) as usize]
+        self.auto_colors[Bitmap::quick_is_dark(color) as usize]
     }
 
     pub fn blend_bg(&mut self, target: Rect, bg: u32) {
-        let buffer = &mut self.buffers[self.frame_counter & 1];
-        buffer.bg_bitmap.blend(target, bg);
+        let back = &mut self.buffers[self.frame_counter & 1];
+        back.bg_bitmap.blend(target, bg);
     }
 
     pub fn blend_fg(&mut self, target: Rect, fg: u32) {
-        let buffer = &mut self.buffers[self.frame_counter & 1];
-        buffer.fg_bitmap.blend(target, fg);
+        let back = &mut self.buffers[self.frame_counter & 1];
+        back.fg_bitmap.blend(target, fg);
     }
 
     pub fn replace_attr(&mut self, target: Rect, attr: Attributes) {
-        let buffer = &mut self.buffers[self.frame_counter & 1];
-        buffer.attributes.replace(target, attr);
-    }
-
-    fn quick_is_dark(c: u32) -> bool {
-        let r = c & 0xff;
-        let g = (c >> 8) & 0xff;
-        let b = (c >> 16) & 0xff;
-        // Rough approximation of the sRGB luminance Y = 0.2126 R + 0.7152 G + 0.0722 B.
-        let l = r * 3 + g * 10 + b;
-        l < 128 * 14
+        let back = &mut self.buffers[self.frame_counter & 1];
+        back.attributes.replace(target, attr);
     }
 
     pub fn set_cursor(&mut self, pos: Point, overtype: bool) {
-        self.cursor = pos;
-        self.cursor_overtype = overtype;
+        let back = &mut self.buffers[self.frame_counter & 1];
+        back.cursor.pos = pos;
+        back.cursor.overtype = overtype;
     }
 
     pub fn render(&mut self) -> String {
@@ -315,6 +304,9 @@ impl Framebuffer {
             let mut cfg = ucd::MeasurementConfig::new(&line_bytes);
             let mut chunk_end = 0;
 
+            if result.is_empty() {
+                result.push_str("\x1b[m");
+            }
             _ = write!(result, "\x1b[{};1H", y + 1);
 
             while {
@@ -386,20 +378,22 @@ impl Framebuffer {
             } {}
         }
 
-        if self.cursor.x >= 0 && self.cursor.y >= 0 {
-            // CUP to the cursor position.
-            // DECSCUSR to set the cursor style.
-            // DECTCEM to show the cursor.
-            _ = write!(
-                result,
-                "\x1b[{};{}H\x1b[{} q\x1b[?25h",
-                self.cursor.y + 1,
-                self.cursor.x + 1,
-                if self.cursor_overtype { 1 } else { 5 }
-            );
-        } else {
-            // DECTCEM to hide the cursor.
-            result.push_str("\x1b[?25l");
+        if back.cursor != front.cursor {
+            if back.cursor.pos.x >= 0 && back.cursor.pos.y >= 0 {
+                // CUP to the cursor position.
+                // DECSCUSR to set the cursor style.
+                // DECTCEM to show the cursor.
+                _ = write!(
+                    result,
+                    "\x1b[{};{}H\x1b[{} q\x1b[?25h",
+                    back.cursor.pos.y + 1,
+                    back.cursor.pos.x + 1,
+                    if back.cursor.overtype { 1 } else { 5 }
+                );
+            } else {
+                // DECTCEM to hide the cursor.
+                result.push_str("\x1b[?25l");
+            }
         }
 
         result
@@ -416,6 +410,7 @@ struct Buffer {
     bg_bitmap: Bitmap,
     fg_bitmap: Bitmap,
     attributes: AttributeBuffer,
+    cursor: Cursor,
 }
 
 #[derive(Default)]
@@ -646,6 +641,15 @@ impl Bitmap {
         }
     }
 
+    fn quick_is_dark(c: u32) -> bool {
+        let r = c & 0xff;
+        let g = (c >> 8) & 0xff;
+        let b = (c >> 16) & 0xff;
+        // Rough approximation of the sRGB luminance Y = 0.2126 R + 0.7152 G + 0.0722 B.
+        let l = r * 3 + g * 10 + b;
+        l < 128 * 14
+    }
+
     /// Iterates over each row in the bitmap.
     fn iter(&self) -> ChunksExact<u32> {
         self.data.chunks_exact(self.size.width as usize)
@@ -723,5 +727,27 @@ impl AttributeBuffer {
     /// Iterates over each row in the bitmap.
     fn iter(&self) -> ChunksExact<Attributes> {
         self.data.chunks_exact(self.size.width as usize)
+    }
+}
+
+#[derive(Default, PartialEq, Eq)]
+struct Cursor {
+    pos: Point,
+    overtype: bool,
+}
+
+impl Cursor {
+    const fn new_invalid() -> Self {
+        Self {
+            pos: Point::MIN,
+            overtype: false,
+        }
+    }
+
+    const fn new_disabled() -> Self {
+        Self {
+            pos: Point { x: -1, y: -1 },
+            overtype: false,
+        }
     }
 }

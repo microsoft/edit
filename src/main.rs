@@ -287,7 +287,12 @@ fn run() -> apperr::Result<()> {
             // Print the number of passes and latency in the top right corner.
             let time_end = std::time::Instant::now();
             let status = time_end - time_beg;
-            let status = format!("{}x {:.3}μs", passes, status.as_nanos() as f64 / 1000.0);
+            let status = format!(
+                "{}P {}B {:.3}μs",
+                passes,
+                output.len(),
+                status.as_nanos() as f64 / 1000.0
+            );
 
             // "μs" is 3 bytes and 2 columns.
             let cols = status.len() as i32 - 3 + 2;
