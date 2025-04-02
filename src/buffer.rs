@@ -13,7 +13,7 @@
 //! The solution to the former is to keep line caches, which further complicates the architecture.
 //! There's no solution for the latter. However, there's a chance that the performance will still be sufficient.
 
-use crate::framebuffer::{Framebuffer, IndexedColor};
+use crate::framebuffer::{Attributes, Framebuffer, IndexedColor};
 use crate::helpers::{self, COORD_TYPE_SAFE_MAX, CoordType, Point, Rect};
 use crate::memchr::memchr2;
 use crate::ucd::Document;
@@ -1645,8 +1645,7 @@ impl TextBuffer {
                     bottom: top + 1,
                 };
 
-                fb.blend_bg(rect, fb.indexed(IndexedColor::Foreground));
-                fb.blend_fg(rect, fb.indexed(IndexedColor::Background));
+                fb.flip_attr(rect, Attributes::Reverse);
             }
 
             cursor = cursor_end;

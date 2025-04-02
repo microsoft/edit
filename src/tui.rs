@@ -508,6 +508,7 @@ impl Tui {
                 );
             }
         } else if node.attributes.float.is_some() {
+            // Floaters are opaque.
             let mut fill = String::new();
             helpers::string_append_repeat(
                 &mut fill,
@@ -521,31 +522,25 @@ impl Tui {
             }
         }
 
-        if node.attributes.focus_brackets {
-            let has_focus = self.is_node_focused(node.id);
-            let center_y = (node.inner_clipped.top + node.inner_clipped.bottom) / 2;
-            self.framebuffer.replace_text(
-                center_y,
-                node.inner.left - 1,
-                node.inner.left,
-                if has_focus { ">" } else { "[" },
-            );
-            self.framebuffer.replace_text(
-                center_y,
-                node.inner.right,
-                node.inner.right + 1,
-                if has_focus { "<" } else { "]" },
-            );
+        // Floaters are opaque.
+        if node.attributes.float.is_some() {
+            self.framebuffer
+                .replace_attr(outer_clipped, Attributes::All, Attributes::None);
         }
 
         {
-            let mut rect = outer_clipped;
-            if node.attributes.focus_brackets {
-                rect.left += 1;
-                rect.right -= 1;
+            let rect = outer_clipped;
+            let mut bg = node.attributes.bg;
+            let mut fg = node.attributes.fg;
+
+            // Floaters are opaque, i.e. a text selection behind it should not affect it.
+            if node.attributes.float.is_some() {
+                bg |= 0xff000000;
+                fg |= 0xff000000;
             }
-            self.framebuffer.blend_bg(rect, node.attributes.bg);
-            self.framebuffer.blend_fg(rect, node.attributes.fg);
+
+            self.framebuffer.blend_bg(rect, bg);
+            self.framebuffer.blend_fg(rect, fg);
         }
 
         let inner = node.inner;
@@ -621,7 +616,8 @@ impl Tui {
                             &modified,
                         );
                         self.framebuffer.blend_fg(rect, chunk.fg);
-                        self.framebuffer.replace_attr(rect, chunk.attr);
+                        self.framebuffer
+                            .replace_attr(rect, chunk.attr_mask, chunk.attr);
                     } else {
                         let mut beg_x = inner.left;
                         for chunk in &content.chunks {
@@ -632,7 +628,8 @@ impl Tui {
                                 &chunk.text,
                             );
                             self.framebuffer.blend_fg(rect, chunk.fg);
-                            self.framebuffer.replace_attr(rect, chunk.attr);
+                            self.framebuffer
+                                .replace_attr(rect, chunk.attr_mask, chunk.attr);
                             beg_x = rect.right;
                         }
                     }
@@ -659,7 +656,11 @@ impl Tui {
                     &mut self.framebuffer,
                 );
 
-                if !tc.single_line {
+                if tc.single_line {
+                    if tc.has_focus {
+                        self.framebuffer.flip_attr(destination, Attributes::Reverse);
+                    }
+                } else {
                     // Render the scrollbar.
                     let track = Rect {
                         left: inner_clipped.right - 1,
@@ -1354,8 +1355,9 @@ impl Context<'_, '_> {
         }
     }
 
-    pub fn styled_label_set_attributes(&mut self, attr: Attributes) {
+    pub fn styled_label_set_attributes(&mut self, mask: Attributes, attr: Attributes) {
         if let Some(chunk) = self.styled_label_get_last_chunk(true) {
+            chunk.attr_mask = mask;
             chunk.attr = attr;
         }
     }
@@ -1378,6 +1380,7 @@ impl Context<'_, '_> {
             content.chunks.push(StyledTextChunk {
                 text: String::new(),
                 fg: 0,
+                attr_mask: Attributes::default(),
                 attr: Attributes::default(),
             });
         }
@@ -1403,11 +1406,15 @@ impl Context<'_, '_> {
     }
 
     pub fn button(&mut self, classname: &'static str, overflow: Overflow, text: &str) -> bool {
-        self.label(classname, overflow, text);
-
-        let last_node = self.tree.last_node_mut();
-        last_node.attributes.focusable = true;
-        last_node.attributes.focus_brackets = true;
+        self.styled_label_begin(classname, overflow);
+        self.attr_focusable();
+        if self.is_focused() {
+            self.styled_label_set_attributes(Attributes::Reverse, Attributes::Reverse);
+        }
+        self.styled_label_add_text("[");
+        self.styled_label_add_text(text);
+        self.styled_label_add_text("]");
+        self.styled_label_end();
 
         self.button_activated()
     }
@@ -1420,13 +1427,14 @@ impl Context<'_, '_> {
         checked: &mut bool,
     ) -> bool {
         self.styled_label_begin(classname, overflow);
-        self.styled_label_add_text(if *checked { "▣ " } else { "☐ " });
+        self.attr_focusable();
+        if self.is_focused() {
+            self.styled_label_set_attributes(Attributes::Reverse, Attributes::Reverse);
+        }
+        self.styled_label_add_text(if *checked { "[▣ " } else { "[☐ " });
         self.styled_label_add_text(text);
+        self.styled_label_add_text("]");
         self.styled_label_end();
-
-        let last_node = self.tree.last_node_mut();
-        last_node.attributes.focusable = true;
-        last_node.attributes.focus_brackets = true;
 
         let activated = self.button_activated();
         if activated {
@@ -1456,7 +1464,10 @@ impl Context<'_, '_> {
     ) -> bool {
         self.block_begin(classname);
 
-        let node = self.tree.current_node_mut();
+        let node = self.tree.last_node_mut();
+        node.attributes.bg = self.indexed(IndexedColor::Cyan);
+        node.attributes.fg = self.contrasted(self.indexed(IndexedColor::Cyan));
+
         let cached;
         if let Some(buffer) = self
             .tui
@@ -1496,12 +1507,7 @@ impl Context<'_, '_> {
     }
 
     fn textarea_internal(&mut self, buffer: RcTextBuffer, single_line: bool) {
-        self.attr_focusable();
-
         let node = self.tree.last_node_mut();
-        node.attributes.bg = self.indexed(IndexedColor::Background);
-        node.attributes.fg = self.indexed(IndexedColor::Foreground);
-        node.attributes.focus_brackets = single_line;
 
         let mut content = TextareaContent {
             buffer,
@@ -1541,6 +1547,7 @@ impl Context<'_, '_> {
 
         self.textarea_adjust_scroll_offset(&mut content);
 
+        node.attributes.focusable = true;
         node.intrinsic_size.height = content.buffer.get_visual_line_count();
         node.intrinsic_size_set = true;
         node.content = NodeContent::Textarea(content);
@@ -2227,6 +2234,7 @@ impl Context<'_, '_> {
 
     pub fn menubar_begin(&mut self) {
         self.table_begin("menubar");
+        self.attr_focus_well();
         self.table_next_row();
     }
 
@@ -2382,18 +2390,18 @@ impl Context<'_, '_> {
         if off < text.len() {
             // Highlight the accelerator in red.
             self.styled_label_add_text(&text[..off]);
-            self.styled_label_set_attributes(Attributes::Underlined);
+            self.styled_label_set_attributes(Attributes::Underlined, Attributes::Underlined);
             self.styled_label_add_text(&text[off..off + 1]);
-            self.styled_label_set_attributes(Attributes::None);
+            self.styled_label_set_attributes(Attributes::Underlined, Attributes::None);
             self.styled_label_add_text(&text[off + 1..]);
         } else {
             // Add the accelerator in parentheses (still in red).
             let ch = accelerator as u8;
             self.styled_label_add_text(text);
             self.styled_label_add_text("(");
-            self.styled_label_set_attributes(Attributes::Underlined);
+            self.styled_label_set_attributes(Attributes::Underlined, Attributes::Underlined);
             self.styled_label_add_text(unsafe { helpers::str_from_raw_parts(&ch, 1) });
-            self.styled_label_set_attributes(Attributes::None);
+            self.styled_label_set_attributes(Attributes::Underlined, Attributes::None);
             self.styled_label_add_text(")");
         }
 
@@ -2688,7 +2696,6 @@ struct NodeAttributes {
     focusable: bool,
     focus_well: bool, // Prevents focus from leaving via Tab
     focus_void: bool, // Prevents focus from entering via Tab
-    focus_brackets: bool,
 }
 
 struct ListContent {
@@ -2704,6 +2711,7 @@ struct TableContent {
 struct StyledTextChunk {
     text: String,
     fg: u32,
+    attr_mask: Attributes,
     attr: Attributes,
 }
 
@@ -2857,11 +2865,9 @@ impl Default for Node {
 
 impl Node {
     fn outer_to_inner(&self, mut outer: Rect) -> Rect {
-        let l = self.attributes.bordered || self.attributes.focus_brackets;
+        let l = self.attributes.bordered;
         let t = self.attributes.bordered;
-        let r = self.attributes.bordered
-            || self.attributes.focus_brackets
-            || matches!(self.content, NodeContent::Scrollarea(..));
+        let r = self.attributes.bordered || matches!(self.content, NodeContent::Scrollarea(..));
         let b = self.attributes.bordered;
 
         outer.left += self.attributes.padding.left + l as CoordType;
@@ -2872,11 +2878,9 @@ impl Node {
     }
 
     fn intrinsic_to_outer(&self) -> Size {
-        let l = self.attributes.bordered || self.attributes.focus_brackets;
+        let l = self.attributes.bordered;
         let t = self.attributes.bordered;
-        let r = self.attributes.bordered
-            || self.attributes.focus_brackets
-            || matches!(self.content, NodeContent::Scrollarea(..));
+        let r = self.attributes.bordered || matches!(self.content, NodeContent::Scrollarea(..));
         let b = self.attributes.bordered;
 
         let mut size = self.intrinsic_size;

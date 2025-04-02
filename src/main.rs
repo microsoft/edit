@@ -303,7 +303,7 @@ fn run() -> apperr::Result<()> {
             // To avoid moving the cursor, push and pop it onto the VT cursor stack.
             _ = write!(
                 output,
-                "\x1b7\x1b[1;{0}H{1:2$}{3}\x1b8",
+                "\x1b7\x1b[0;41;97m\x1b[1;{0}H{1:2$}{3}\x1b8",
                 tui.size().width - cols - padding + 1,
                 "",
                 padding as usize,

@@ -242,9 +242,13 @@ impl Framebuffer {
         back.fg_bitmap.blend(target, fg);
     }
 
-    pub fn replace_attr(&mut self, target: Rect, attr: Attributes) {
+    pub fn replace_attr(&mut self, target: Rect, mask: Attributes, attr: Attributes) {
         let back = &mut self.buffers[self.frame_counter & 1];
-        back.attributes.replace(target, attr);
+        back.attributes.replace(target, mask, attr);
+    }
+    pub fn flip_attr(&mut self, target: Rect, attr: Attributes) {
+        let back = &mut self.buffers[self.frame_counter & 1];
+        back.attributes.flip(target, attr);
     }
 
     pub fn set_cursor(&mut self, pos: Point, overtype: bool) {
@@ -273,8 +277,8 @@ impl Framebuffer {
         let mut back_attrs = back.attributes.iter();
 
         let mut result = String::with_capacity(256);
-        let mut last_bg = None;
-        let mut last_fg = None;
+        let mut last_bg = self.indexed(IndexedColor::Background);
+        let mut last_fg = self.indexed(IndexedColor::Foreground);
         let mut last_attr = Attributes::None;
 
         for y in 0..front.text.size.height {
@@ -323,8 +327,8 @@ impl Framebuffer {
                         && back_attr[chunk_end] == attr
                 } {}
 
-                if last_bg != Some(bg) {
-                    last_bg = Some(bg);
+                if last_bg != bg {
+                    last_bg = bg;
                     if bg == self.indexed_colors[IndexedColor::Background as usize] {
                         result.push_str("\x1b[49m");
                     } else {
@@ -338,8 +342,8 @@ impl Framebuffer {
                     }
                 }
 
-                if last_fg != Some(fg) {
-                    last_fg = Some(fg);
+                if last_fg != fg {
+                    last_fg = fg;
                     if fg == self.indexed_colors[IndexedColor::Foreground as usize] {
                         result.push_str("\x1b[39m");
                     } else {
@@ -360,6 +364,13 @@ impl Framebuffer {
                             result.push_str("\x1b[4m");
                         } else {
                             result.push_str("\x1b[24m");
+                        }
+                    }
+                    if diff.reverse() {
+                        if attr.reverse() {
+                            result.push_str("\x1b[7m");
+                        } else {
+                            result.push_str("\x1b[27m");
                         }
                     }
                     last_attr = attr;
@@ -664,9 +675,15 @@ pub struct Attributes(u8);
 impl Attributes {
     pub const None: Attributes = Attributes(0);
     pub const Underlined: Attributes = Attributes(0b1);
+    pub const Reverse: Attributes = Attributes(0b10);
+    pub const All: Attributes = Attributes(0b11);
 
     pub const fn underlined(self) -> bool {
         self.0 & Self::Underlined.0 != 0
+    }
+
+    pub const fn reverse(self) -> bool {
+        self.0 & Self::Reverse.0 != 0
     }
 }
 
@@ -704,7 +721,7 @@ impl AttributeBuffer {
         self.data.fill(Default::default());
     }
 
-    fn replace(&mut self, target: Rect, attr: Attributes) {
+    fn replace(&mut self, target: Rect, mask: Attributes, attr: Attributes) {
         let target = target.intersect(self.size.as_rect());
         if target.is_empty() {
             return;
@@ -719,8 +736,30 @@ impl AttributeBuffer {
         for y in top..bottom {
             let beg = y * stride + left;
             let end = y * stride + right;
-            let data = &mut self.data[beg..end];
-            data.fill(attr);
+            for a in &mut self.data[beg..end] {
+                *a = Attributes(a.0 & !mask.0 | attr.0);
+            }
+        }
+    }
+
+    fn flip(&mut self, target: Rect, attr: Attributes) {
+        let target = target.intersect(self.size.as_rect());
+        if target.is_empty() {
+            return;
+        }
+
+        let top = target.top as usize;
+        let bottom = target.bottom as usize;
+        let left = target.left as usize;
+        let right = target.right as usize;
+        let stride = self.size.width as usize;
+
+        for y in top..bottom {
+            let beg = y * stride + left;
+            let end = y * stride + right;
+            for a in &mut self.data[beg..end] {
+                *a = Attributes(a.0 ^ attr.0);
+            }
         }
     }
 
