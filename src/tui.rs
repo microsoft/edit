@@ -1,5 +1,5 @@
 use crate::buffer::{CursorMovement, RcTextBuffer};
-use crate::framebuffer::{Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
+use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::helpers::{CoordType, Point, Rect, Size, hash, hash_str, wymix};
 use crate::input::{InputKeyMod, kbmod, vk};
 use crate::ucd::Document;
@@ -26,6 +26,11 @@ struct CachedTextBuffer {
 pub struct Tui {
     framebuffer: Framebuffer,
     read_timeout: time::Duration,
+
+    floater_default_bg: u32,
+    floater_default_fg: u32,
+    modal_default_bg: u32,
+    modal_default_fg: u32,
 
     /// Last known terminal size.
     size: Size,
@@ -62,6 +67,11 @@ impl Tui {
         let mut tui = Self {
             framebuffer: Framebuffer::new(),
             read_timeout: time::Duration::MAX,
+
+            floater_default_bg: 0,
+            floater_default_fg: 0,
+            modal_default_bg: 0,
+            modal_default_fg: 0,
 
             size: Size {
                 width: 0,
@@ -106,8 +116,38 @@ impl Tui {
         self.framebuffer.set_indexed_colors(colors);
     }
 
+    pub fn set_floater_default_bg(&mut self, color: u32) {
+        self.floater_default_bg = color;
+    }
+
+    pub fn set_floater_default_fg(&mut self, color: u32) {
+        self.floater_default_fg = color;
+    }
+
+    pub fn set_modal_default_bg(&mut self, color: u32) {
+        self.modal_default_bg = color;
+    }
+
+    pub fn set_modal_default_fg(&mut self, color: u32) {
+        self.modal_default_fg = color;
+    }
+
     pub fn read_timeout(&mut self) -> time::Duration {
         mem::replace(&mut self.read_timeout, time::Duration::MAX)
+    }
+
+    #[inline]
+    pub fn indexed(&self, index: IndexedColor) -> u32 {
+        self.framebuffer.indexed(index)
+    }
+
+    #[inline]
+    pub fn indexed_alpha(&self, index: IndexedColor, alpha: u8) -> u32 {
+        self.framebuffer.indexed_alpha(index, alpha)
+    }
+
+    pub fn contrasted(&self, color: u32) -> u32 {
+        self.framebuffer.contrasted(color)
     }
 
     pub fn create_context<'tui, 'input>(
@@ -581,6 +621,7 @@ impl Tui {
                             &modified,
                         );
                         self.framebuffer.blend_fg(rect, chunk.fg);
+                        self.framebuffer.replace_attr(rect, chunk.attr);
                     } else {
                         let mut beg_x = inner.left;
                         for chunk in &content.chunks {
@@ -591,6 +632,7 @@ impl Tui {
                                 &chunk.text,
                             );
                             self.framebuffer.blend_fg(rect, chunk.fg);
+                            self.framebuffer.replace_attr(rect, chunk.attr);
                             beg_x = rect.right;
                         }
                     }
@@ -976,8 +1018,18 @@ impl Context<'_, '_> {
         self.tui.size
     }
 
+    #[inline]
     pub fn indexed(&self, index: IndexedColor) -> u32 {
-        self.tui.framebuffer.indexed(index)
+        self.tui.indexed(index)
+    }
+
+    #[inline]
+    pub fn indexed_alpha(&self, index: IndexedColor, alpha: u8) -> u32 {
+        self.tui.indexed_alpha(index, alpha)
+    }
+
+    pub fn contrasted(&self, color: u32) -> u32 {
+        self.tui.contrasted(color)
     }
 
     pub fn set_clipboard(&mut self, data: Vec<u8>) {
@@ -1125,6 +1177,8 @@ impl Context<'_, '_> {
                 y: spec.offset_y,
             },
         });
+        last_node.attributes.bg = self.tui.modal_default_bg;
+        last_node.attributes.fg = self.tui.modal_default_fg;
     }
 
     pub fn attr_border(&mut self) {
@@ -1199,8 +1253,8 @@ impl Context<'_, '_> {
         self.block_begin(classname);
         self.focus_on_first_present();
         self.attr_border();
-        self.attr_background_rgba(self.indexed(IndexedColor::White));
-        self.attr_foreground_rgba(self.indexed(IndexedColor::Black));
+        self.attr_background_rgba(self.tui.modal_default_bg);
+        self.attr_foreground_rgba(self.tui.modal_default_fg);
         self.attr_float(FloatSpec {
             anchor: Anchor::Root,
             gravity_x: 0.5,
@@ -1294,10 +1348,15 @@ impl Context<'_, '_> {
         });
     }
 
-    pub fn styled_label_set_foreground_indexed(&mut self, index: Option<IndexedColor>) {
-        let fg = index.map(|i| self.indexed(i)).unwrap_or(0);
+    pub fn styled_label_set_foreground(&mut self, color: u32) {
         if let Some(chunk) = self.styled_label_get_last_chunk(true) {
-            chunk.fg = fg;
+            chunk.fg = color;
+        }
+    }
+
+    pub fn styled_label_set_attributes(&mut self, attr: Attributes) {
+        if let Some(chunk) = self.styled_label_get_last_chunk(true) {
+            chunk.attr = attr;
         }
     }
 
@@ -1319,6 +1378,7 @@ impl Context<'_, '_> {
             content.chunks.push(StyledTextChunk {
                 text: String::new(),
                 fg: 0,
+                attr: Attributes::default(),
             });
         }
 
@@ -1439,8 +1499,8 @@ impl Context<'_, '_> {
         self.attr_focusable();
 
         let node = self.tree.last_node_mut();
-        node.attributes.bg = self.indexed(IndexedColor::DefaultBackground);
-        node.attributes.fg = self.indexed(IndexedColor::DefaultForeground);
+        node.attributes.bg = self.indexed(IndexedColor::Background);
+        node.attributes.fg = self.indexed(IndexedColor::Foreground);
         node.attributes.focus_brackets = single_line;
 
         let mut content = TextareaContent {
@@ -2160,6 +2220,7 @@ impl Context<'_, '_> {
         // If the list has focus, we also delegate focus to the selected item and colorize it.
         if has_focus {
             node.attributes.bg = self.indexed(IndexedColor::Green);
+            node.attributes.fg = self.contrasted(self.indexed(IndexedColor::Green));
             self.steal_focus_for(node);
         }
     }
@@ -2191,6 +2252,7 @@ impl Context<'_, '_> {
             }
 
             self.attr_background_rgba(self.indexed(IndexedColor::Green));
+            self.attr_foreground_rgba(self.contrasted(self.indexed(IndexedColor::Green)));
 
             self.table_begin("flyout");
             self.attr_float(FloatSpec {
@@ -2201,8 +2263,6 @@ impl Context<'_, '_> {
                 offset_y: 1,
             });
             self.attr_border();
-            self.attr_background_rgba(self.indexed(IndexedColor::White));
-            self.attr_foreground_rgba(self.indexed(IndexedColor::Black));
             return true;
         }
 
@@ -2214,6 +2274,7 @@ impl Context<'_, '_> {
         self.attr_focusable();
         if self.is_focused() {
             self.attr_background_rgba(self.indexed(IndexedColor::Green));
+            self.attr_foreground_rgba(self.contrasted(self.indexed(IndexedColor::Green)));
         }
 
         let clicked =
@@ -2321,18 +2382,18 @@ impl Context<'_, '_> {
         if off < text.len() {
             // Highlight the accelerator in red.
             self.styled_label_add_text(&text[..off]);
-            self.styled_label_set_foreground_indexed(Some(IndexedColor::BrightRed));
+            self.styled_label_set_attributes(Attributes::Underlined);
             self.styled_label_add_text(&text[off..off + 1]);
-            self.styled_label_set_foreground_indexed(None);
+            self.styled_label_set_attributes(Attributes::None);
             self.styled_label_add_text(&text[off + 1..]);
         } else {
             // Add the accelerator in parentheses (still in red).
             let ch = accelerator as u8;
             self.styled_label_add_text(text);
             self.styled_label_add_text("(");
-            self.styled_label_set_foreground_indexed(Some(IndexedColor::BrightRed));
+            self.styled_label_set_attributes(Attributes::Underlined);
             self.styled_label_add_text(unsafe { helpers::str_from_raw_parts(&ch, 1) });
-            self.styled_label_set_foreground_indexed(None);
+            self.styled_label_set_attributes(Attributes::None);
             self.styled_label_add_text(")");
         }
 
@@ -2386,7 +2447,7 @@ impl Tree {
         tree.append_child(Node {
             id: ROOT_ID,
             classname: "root",
-            attributes: Attributes {
+            attributes: NodeAttributes {
                 focus_well: true,
                 ..Default::default()
             },
@@ -2617,7 +2678,7 @@ pub enum Overflow {
 }
 
 #[derive(Default)]
-struct Attributes {
+struct NodeAttributes {
     float: Option<FloatAttributes>,
     position: Position,
     padding: Rect,
@@ -2643,6 +2704,7 @@ struct TableContent {
 struct StyledTextChunk {
     text: String,
     fg: u32,
+    attr: Attributes,
 }
 
 impl Document for Vec<StyledTextChunk> {
@@ -2749,7 +2811,7 @@ pub struct Node {
     children: NodeChildren,
     child_count: usize,
 
-    attributes: Attributes,
+    attributes: NodeAttributes,
     content: NodeContent,
 
     intrinsic_size: Size,

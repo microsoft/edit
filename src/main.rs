@@ -20,7 +20,7 @@
 // * For the focus path we can use the tree depth to O(1) check if the path contains the focus.
 
 use edit::buffer::{self, RcTextBuffer};
-use edit::framebuffer::{self, IndexedColor};
+use edit::framebuffer::{self, IndexedColor, mix};
 use edit::helpers::*;
 use edit::input::{self, kbmod, vk};
 use edit::loc::{LocId, loc};
@@ -69,6 +69,9 @@ enum StateEncodingChange {
 }
 
 struct State {
+    menubar_color_bg: u32,
+    menubar_color_fg: u32,
+
     path: Option<PathBuf>,
     filename: String,
     buffer: RcTextBuffer,
@@ -105,6 +108,9 @@ impl State {
         buffer.set_line_highlight_enabled(true);
 
         Ok(Self {
+            menubar_color_bg: 0,
+            menubar_color_fg: 0,
+
             path: None,
             filename: String::new(),
             buffer,
@@ -197,7 +203,25 @@ fn run() -> apperr::Result<()> {
     }
 
     let _restore_modes = set_modes();
+
     query_color_palette(&mut tui, &mut vt_parser);
+    state.menubar_color_bg = mix(
+        tui.indexed(IndexedColor::Background),
+        tui.indexed(IndexedColor::Blue),
+        0.5,
+    );
+    state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
+    let floater_bg = mix(
+        tui.indexed(IndexedColor::Background),
+        tui.indexed(IndexedColor::Foreground),
+        0.2,
+    );
+    let floater_fg = tui.contrasted(floater_bg);
+    tui.set_floater_default_bg(floater_bg);
+    tui.set_floater_default_fg(floater_fg);
+    tui.set_modal_default_bg(floater_bg);
+    tui.set_modal_default_fg(floater_fg);
+
     sys::inject_window_size_into_stdin();
 
     #[cfg(feature = "debug-latency")]
@@ -359,8 +383,8 @@ fn draw(ctx: &mut Context, state: &mut State) {
 
 fn draw_menubar(ctx: &mut Context, state: &mut State) {
     ctx.menubar_begin();
-    ctx.attr_background_rgba(ctx.indexed(IndexedColor::White));
-    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
+    ctx.attr_background_rgba(state.menubar_color_bg);
+    ctx.attr_foreground_rgba(state.menubar_color_fg);
     {
         if ctx.menubar_menu_begin(loc(LocId::File), 'F') {
             draw_menu_file(ctx, state);
@@ -631,8 +655,8 @@ fn draw_editor(ctx: &mut Context, state: &mut State) {
 
 fn draw_statusbar(ctx: &mut Context, state: &mut State) {
     ctx.table_begin("statusbar");
-    ctx.attr_background_rgba(ctx.indexed(IndexedColor::White));
-    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
+    ctx.attr_background_rgba(state.menubar_color_bg);
+    ctx.attr_foreground_rgba(state.menubar_color_fg);
     ctx.table_set_cell_gap(Size {
         width: 2,
         height: 0,
@@ -666,8 +690,6 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                     offset_x: 0,
                     offset_y: 0,
                 });
-                ctx.attr_background_rgba(ctx.indexed(IndexedColor::White));
-                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
                 ctx.attr_padding(Rect::two(0, 1));
                 ctx.attr_border();
                 {
@@ -720,8 +742,6 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 offset_x: 0,
                 offset_y: 0,
             });
-            ctx.attr_background_rgba(ctx.indexed(IndexedColor::White));
-            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
             ctx.attr_border();
             ctx.attr_padding(Rect::two(0, 1));
             ctx.table_set_cell_gap(Size {
@@ -929,7 +949,7 @@ fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 height: height - 3,
             },
         );
-        ctx.attr_background_rgba(ctx.indexed(IndexedColor::Cyan));
+        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 0x3f));
         ctx.next_block_id_mixin(state.file_picker_pending_dir.as_str().len() as u64);
         {
             ctx.list_begin("files");
@@ -1161,8 +1181,8 @@ fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
     );
     {
         ctx.scrollarea_begin("scrollarea", Size { width, height });
+        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 0x3f));
         ctx.inherit_focus();
-        ctx.attr_background_rgba(ctx.indexed(IndexedColor::Cyan));
         {
             let encodings = icu::get_available_encodings();
 
@@ -1429,9 +1449,9 @@ fn query_color_palette(tui: &mut Tui, vt_parser: &mut vt::Parser) {
                             _ => continue,
                         },
                         // The response is `10;rgb:<r>/<g>/<b>`.
-                        "10" => &mut indexed_colors[IndexedColor::DefaultForeground as usize],
+                        "10" => &mut indexed_colors[IndexedColor::Foreground as usize],
                         // The response is `11;rgb:<r>/<g>/<b>`.
-                        "11" => &mut indexed_colors[IndexedColor::DefaultBackground as usize],
+                        "11" => &mut indexed_colors[IndexedColor::Background as usize],
                         _ => continue,
                     };
 

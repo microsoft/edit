@@ -1,6 +1,7 @@
 use crate::helpers::{self, CoordType, Point, Rect, Size};
 use crate::ucd;
 use std::fmt::Write;
+use std::ops::{BitOr, BitXor};
 use std::slice::ChunksExact;
 
 #[derive(Clone, Copy)]
@@ -21,8 +22,8 @@ pub enum IndexedColor {
     BrightMagenta,
     BrightCyan,
     BrightWhite,
-    DefaultBackground,
-    DefaultForeground,
+    Background,
+    Foreground,
 }
 
 pub const INDEXED_COLORS_COUNT: usize = 18;
@@ -72,6 +73,7 @@ impl Framebuffer {
                 buffer.text = LineBuffer::new(size);
                 buffer.bg_bitmap = Bitmap::new(size);
                 buffer.fg_bitmap = Bitmap::new(size);
+                buffer.attributes = AttributeBuffer::new(size);
             }
 
             // Trigger a full redraw. (Yes, it's a hack.)
@@ -85,10 +87,11 @@ impl Framebuffer {
         let buffer = &mut self.buffers[self.frame_counter & 1];
         buffer
             .bg_bitmap
-            .fill(self.indexed_colors[IndexedColor::DefaultBackground as usize]);
+            .fill(self.indexed_colors[IndexedColor::Background as usize]);
         buffer
             .fg_bitmap
-            .fill(self.indexed_colors[IndexedColor::DefaultForeground as usize]);
+            .fill(self.indexed_colors[IndexedColor::Foreground as usize]);
+        buffer.attributes.reset();
         buffer.text.fill_whitespace();
     }
 
@@ -223,16 +226,28 @@ impl Framebuffer {
         self.indexed_colors[index as usize]
     }
 
-    /// Blends a background color over the given rectangular area.
+    #[inline]
+    pub fn indexed_alpha(&self, index: IndexedColor, alpha: u8) -> u32 {
+        self.indexed_colors[index as usize] & ((alpha as u32) << 24 | 0xffffff)
+    }
+
+    pub fn contrasted(&self, color: u32) -> u32 {
+        self.auto_colors[Self::quick_is_dark(color) as usize]
+    }
+
     pub fn blend_bg(&mut self, target: Rect, bg: u32) {
         let buffer = &mut self.buffers[self.frame_counter & 1];
         buffer.bg_bitmap.blend(target, bg);
     }
 
-    /// Blends a foreground color over the given rectangular area.
     pub fn blend_fg(&mut self, target: Rect, fg: u32) {
         let buffer = &mut self.buffers[self.frame_counter & 1];
         buffer.fg_bitmap.blend(target, fg);
+    }
+
+    pub fn replace_attr(&mut self, target: Rect, attr: Attributes) {
+        let buffer = &mut self.buffers[self.frame_counter & 1];
+        buffer.attributes.replace(target, attr);
     }
 
     fn quick_is_dark(c: u32) -> bool {
@@ -261,14 +276,17 @@ impl Framebuffer {
         let mut front_lines = front.text.lines.iter(); // hahaha
         let mut front_bgs = front.bg_bitmap.iter();
         let mut front_fgs = front.fg_bitmap.iter();
+        let mut front_attrs = front.attributes.iter();
 
         let mut back_lines = back.text.lines.iter();
         let mut back_bgs = back.bg_bitmap.iter();
         let mut back_fgs = back.fg_bitmap.iter();
+        let mut back_attrs = back.attributes.iter();
 
         let mut result = String::with_capacity(256);
         let mut last_bg = None;
         let mut last_fg = None;
+        let mut last_attr = Attributes::None;
 
         for y in 0..front.text.size.height {
             // SAFETY: The only thing that changes the size of these containers,
@@ -276,14 +294,20 @@ impl Framebuffer {
             let front_line = unsafe { front_lines.next().unwrap_unchecked() };
             let front_bg = unsafe { front_bgs.next().unwrap_unchecked() };
             let front_fg = unsafe { front_fgs.next().unwrap_unchecked() };
+            let front_attr = unsafe { front_attrs.next().unwrap_unchecked() };
 
             let back_line = unsafe { back_lines.next().unwrap_unchecked() };
             let back_bg = unsafe { back_bgs.next().unwrap_unchecked() };
             let back_fg = unsafe { back_fgs.next().unwrap_unchecked() };
+            let back_attr = unsafe { back_attrs.next().unwrap_unchecked() };
 
             // TODO: Ideally, we should properly diff the contents and so if
             // only parts of a line change, we should only update those parts.
-            if front_line == back_line && front_bg == back_bg && front_fg == back_fg {
+            if front_line == back_line
+                && front_bg == back_bg
+                && front_fg == back_fg
+                && front_attr == back_attr
+            {
                 continue;
             }
 
@@ -296,6 +320,7 @@ impl Framebuffer {
             while {
                 let bg = back_bg[chunk_end];
                 let fg = back_fg[chunk_end];
+                let attr = back_attr[chunk_end];
 
                 // Chunk into runs of the same color.
                 while {
@@ -303,11 +328,12 @@ impl Framebuffer {
                     chunk_end < back_bg.len()
                         && back_bg[chunk_end] == bg
                         && back_fg[chunk_end] == fg
+                        && back_attr[chunk_end] == attr
                 } {}
 
                 if last_bg != Some(bg) {
                     last_bg = Some(bg);
-                    if bg == self.indexed_colors[IndexedColor::DefaultBackground as usize] {
+                    if bg == self.indexed_colors[IndexedColor::Background as usize] {
                         result.push_str("\x1b[49m");
                     } else {
                         _ = write!(
@@ -322,7 +348,7 @@ impl Framebuffer {
 
                 if last_fg != Some(fg) {
                     last_fg = Some(fg);
-                    if fg == self.indexed_colors[IndexedColor::DefaultForeground as usize] {
+                    if fg == self.indexed_colors[IndexedColor::Foreground as usize] {
                         result.push_str("\x1b[39m");
                     } else {
                         _ = write!(
@@ -333,6 +359,18 @@ impl Framebuffer {
                             (fg >> 16) & 0xff
                         );
                     }
+                }
+
+                if last_attr != attr {
+                    let diff = last_attr ^ attr;
+                    if diff.underlined() {
+                        if attr.underlined() {
+                            result.push_str("\x1b[4m");
+                        } else {
+                            result.push_str("\x1b[24m");
+                        }
+                    }
+                    last_attr = attr;
                 }
 
                 let beg = cfg.cursor().offset;
@@ -369,7 +407,7 @@ impl Framebuffer {
 }
 
 pub fn mix(dst: u32, src: u32, balance: f32) -> u32 {
-    Bitmap::mix(dst, src, 1.0 - balance, balance)
+    Bitmap::mix(dst, src, balance, 1.0 - balance)
 }
 
 #[derive(Default)]
@@ -377,6 +415,7 @@ struct Buffer {
     text: LineBuffer,
     bg_bitmap: Bitmap,
     fg_bitmap: Bitmap,
+    attributes: AttributeBuffer,
 }
 
 #[derive(Default)]
@@ -520,8 +559,7 @@ impl Bitmap {
         self.data.fill(color);
     }
 
-    /// Blends a background color over the given rectangular area.
-    pub fn blend(&mut self, target: Rect, color: u32) {
+    fn blend(&mut self, target: Rect, color: u32) {
         if (color & 0xff000000) == 0x00000000 {
             return;
         }
@@ -610,6 +648,80 @@ impl Bitmap {
 
     /// Iterates over each row in the bitmap.
     fn iter(&self) -> ChunksExact<u32> {
+        self.data.chunks_exact(self.size.width as usize)
+    }
+}
+
+#[repr(transparent)]
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub struct Attributes(u8);
+
+#[allow(non_upper_case_globals)] // Mimics an enum, but it's actually a bitfield. Allows simple diffing.
+impl Attributes {
+    pub const None: Attributes = Attributes(0);
+    pub const Underlined: Attributes = Attributes(0b1);
+
+    pub const fn underlined(self) -> bool {
+        self.0 & Self::Underlined.0 != 0
+    }
+}
+
+impl BitOr for Attributes {
+    type Output = Attributes;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Attributes(self.0 | rhs.0)
+    }
+}
+
+impl BitXor for Attributes {
+    type Output = Attributes;
+
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        Attributes(self.0 ^ rhs.0)
+    }
+}
+
+#[derive(Default)]
+struct AttributeBuffer {
+    data: Vec<Attributes>,
+    size: Size,
+}
+
+impl AttributeBuffer {
+    fn new(size: Size) -> Self {
+        Self {
+            data: vec![Default::default(); (size.width * size.height) as usize],
+            size,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.data.fill(Default::default());
+    }
+
+    fn replace(&mut self, target: Rect, attr: Attributes) {
+        let target = target.intersect(self.size.as_rect());
+        if target.is_empty() {
+            return;
+        }
+
+        let top = target.top as usize;
+        let bottom = target.bottom as usize;
+        let left = target.left as usize;
+        let right = target.right as usize;
+        let stride = self.size.width as usize;
+
+        for y in top..bottom {
+            let beg = y * stride + left;
+            let end = y * stride + right;
+            let data = &mut self.data[beg..end];
+            data.fill(attr);
+        }
+    }
+
+    /// Iterates over each row in the bitmap.
+    fn iter(&self) -> ChunksExact<Attributes> {
         self.data.chunks_exact(self.size.width as usize)
     }
 }

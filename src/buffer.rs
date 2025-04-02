@@ -1513,7 +1513,7 @@ impl TextBuffer {
                             right: line_number_width as i32,
                             bottom: y + 2,
                         },
-                        fb.indexed(IndexedColor::DefaultBackground),
+                        fb.indexed(IndexedColor::Background),
                     );
                 }
             }
@@ -1645,8 +1645,8 @@ impl TextBuffer {
                     bottom: top + 1,
                 };
 
-                fb.blend_bg(rect, fb.indexed(IndexedColor::DefaultForeground));
-                fb.blend_fg(rect, fb.indexed(IndexedColor::DefaultBackground));
+                fb.blend_bg(rect, fb.indexed(IndexedColor::Foreground));
+                fb.blend_fg(rect, fb.indexed(IndexedColor::Background));
             }
 
             cursor = cursor_end;
@@ -1674,7 +1674,7 @@ impl TextBuffer {
                         right,
                         bottom: destination.bottom,
                     },
-                    fb.indexed(IndexedColor::BrightRed) & 0x1fffffff,
+                    fb.indexed_alpha(IndexedColor::BrightRed, 0x1f),
                 );
             }
         }
