@@ -17,14 +17,6 @@ type InputText<'input> = input::InputText<'input>;
 type InputKey = input::InputKey;
 type InputMouseState = input::InputMouseState;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum InputMouseGesture {
-    None,
-    Click,
-    DoubleClick,
-    Drag,
-}
-
 struct CachedTextBuffer {
     node_id: u64,
     editor: RcTextBuffer,
@@ -44,7 +36,7 @@ pub struct Tui {
     mouse_down_position: Point,
     /// Last known mouse state.
     mouse_state: InputMouseState,
-    mouse_gesture: InputMouseGesture,
+    mouse_is_drag: bool,
     last_click: std::time::Instant,
     last_click_target: u64,
     last_click_position: Point,
@@ -78,7 +70,7 @@ impl Tui {
             mouse_position: Point::MIN,
             mouse_down_position: Point::MIN,
             mouse_state: InputMouseState::None,
-            mouse_gesture: InputMouseGesture::None,
+            mouse_is_drag: false,
             last_click: std::time::Instant::now(),
             last_click_target: 0,
             last_click_position: Point::MIN,
@@ -126,9 +118,9 @@ impl Tui {
         // Now, a frame later, we must reset it back to none, to stop it from triggering things.
         // Same for Scroll events.
         if self.mouse_state > InputMouseState::Right {
-            self.mouse_state = InputMouseState::None;
-            self.mouse_gesture = InputMouseGesture::None;
             self.mouse_down_position = Point::MIN;
+            self.mouse_state = InputMouseState::None;
+            self.mouse_is_drag = false;
         }
 
         helpers::vec_replace_all_reuse(
@@ -144,7 +136,8 @@ impl Tui {
         let mut input_text = None;
         let mut input_keyboard = None;
         let mut input_mouse_modifiers = kbmod::NONE;
-        let mut input_mouse_gesture = self.mouse_gesture;
+        let mut input_mouse_is_click = false;
+        let mut input_mouse_is_double_click = false;
         let mut input_scroll_delta = Point { x: 0, y: 0 };
         let input_consumed = self.needs_settling();
 
@@ -214,41 +207,27 @@ impl Tui {
                     self.needs_more_settling(); // See `needs_more_settling()`.
                 }
 
-                let next_gesture = if next_state == InputMouseState::Release
-                    && next_position == self.mouse_position
-                {
-                    // Mouse down and up happened at the same position = Click.
-                    // TODO: This should instead check if the focus stack is the same as on mouse-down.
-                    // TODO: This should check if the last action was a Click as well (and not keyboard input).
+                if next_state == InputMouseState::Release && next_position == self.mouse_position {
                     let click_target = unsafe { focused_node.as_ref() }.map(|n| n.id).unwrap_or(0);
-                    let action = if (now - self.last_click) <= std::time::Duration::from_millis(500)
-                        && click_target == self.last_click_target
-                        && next_position == self.last_click_position
-                    {
-                        InputMouseGesture::DoubleClick
-                    } else {
-                        InputMouseGesture::Click
-                    };
+                    input_mouse_is_click = true;
+                    input_mouse_is_double_click = (now - self.last_click)
+                        <= std::time::Duration::from_millis(500)
+                        && self.last_click_target == click_target
+                        && self.last_click_position == next_position;
                     self.last_click = now;
                     self.last_click_target = click_target;
                     self.last_click_position = next_position;
-                    action
                 } else if self.mouse_state == InputMouseState::Left
                     && next_state == InputMouseState::Left
                     && next_position != self.mouse_position
                 {
-                    // Mouse down and moved = Drag.
-                    InputMouseGesture::Drag
-                } else {
-                    InputMouseGesture::None
-                };
+                    self.mouse_is_drag = true;
+                }
 
                 input_mouse_modifiers = mouse.modifiers;
-                input_mouse_gesture = next_gesture;
                 input_scroll_delta = next_scroll;
                 self.mouse_position = next_position;
                 self.mouse_state = next_state;
-                self.mouse_gesture = next_gesture;
             }
         }
 
@@ -264,7 +243,8 @@ impl Tui {
             input_text,
             input_keyboard,
             input_mouse_modifiers,
-            input_mouse_gesture,
+            input_mouse_is_click,
+            input_mouse_is_double_click,
             input_scroll_delta,
             input_consumed,
 
@@ -971,7 +951,8 @@ pub struct Context<'tui, 'input> {
     /// Current keyboard input, if any.
     input_keyboard: Option<InputKey>,
     input_mouse_modifiers: InputKeyMod,
-    input_mouse_gesture: InputMouseGesture,
+    input_mouse_is_click: bool,
+    input_mouse_is_double_click: bool,
     /// By how much the mouse wheel was scrolled since the last frame.
     input_scroll_delta: Point,
     input_consumed: bool,
@@ -1392,7 +1373,7 @@ impl Context<'_, '_> {
 
     fn button_activated(&mut self) -> bool {
         if !self.input_consumed
-            && ((self.input_mouse_gesture == InputMouseGesture::Click && self.contains_hover())
+            && ((self.input_mouse_is_click && self.contains_hover())
                 || self.input_keyboard == Some(vk::RETURN)
                 || self.input_keyboard == Some(vk::SPACE))
             && self.is_focused()
@@ -1536,91 +1517,87 @@ impl Context<'_, '_> {
                 y: mouse.y - inner.top + tc.scroll_offset.y,
             };
 
-            match self.input_mouse_gesture {
-                InputMouseGesture::DoubleClick => {
-                    tb.select_word();
+            if self.input_mouse_is_double_click {
+                tb.select_word();
+            } else if self.tui.mouse_is_drag {
+                let track_rect = Rect {
+                    left: inner.right - 1,
+                    top: inner.top,
+                    right: inner.right,
+                    bottom: inner.bottom,
+                };
+                if track_rect.contains(self.tui.mouse_down_position) {
+                    if tc.scroll_offset_y_drag_start == CoordType::MIN {
+                        tc.scroll_offset_y_drag_start = tc.scroll_offset.y;
+                    }
+
+                    // The textarea supports 1 height worth of "scrolling beyond the end".
+                    // `track_height` is the same as the viewport height.
+                    let scrollable_height = tb.get_visual_line_count() - 1;
+
+                    if scrollable_height > 0 {
+                        let trackable = track_rect.height() - tc.thumb_height;
+                        let delta_y = mouse.y - self.tui.mouse_down_position.y;
+                        tc.scroll_offset.y = tc.scroll_offset_y_drag_start
+                            + ((delta_y * scrollable_height) / trackable);
+                    }
+                } else {
+                    tb.selection_update_visual(pos);
+                    tc.preferred_column = tb.get_cursor_visual_pos().x;
+
+                    let height = inner.height();
+
+                    // If the editor is only 1 line tall we can't possibly scroll up or down.
+                    if height >= 2 {
+                        fn calc(min: CoordType, max: CoordType, mouse: CoordType) -> CoordType {
+                            // Otherwise, the scroll zone is up to 3 lines at the top/bottom.
+                            let zone_height = ((max - min) / 2).min(3);
+
+                            // The .y positions where the scroll zones begin:
+                            // Mouse coordinates above top and below bottom respectively.
+                            let scroll_min = min + zone_height;
+                            let scroll_max = max - zone_height - 1;
+
+                            // Calculate the delta for scrolling up or down.
+                            let delta_min = (mouse - scroll_min).clamp(-zone_height, 0);
+                            let delta_max = (mouse - scroll_max).clamp(0, zone_height);
+
+                            // If I didn't mess up my logic here, only one of the two values can possibly be !=0.
+                            let idx = 3 + delta_min + delta_max;
+
+                            const SPEEDS: [CoordType; 7] = [-9, -3, -1, 0, 1, 3, 9];
+                            let idx = idx.clamp(0, SPEEDS.len() as CoordType) as usize;
+                            SPEEDS[idx]
+                        }
+
+                        let delta_x = calc(text.left, text.right, mouse.x);
+                        let delta_y = calc(text.top, text.bottom, mouse.y);
+
+                        tc.scroll_offset.x += delta_x;
+                        tc.scroll_offset.y += delta_y;
+
+                        if delta_x != 0 || delta_y != 0 {
+                            self.tui.read_timeout = time::Duration::from_millis(25);
+                        }
+                    }
                 }
-                InputMouseGesture::Drag => {
-                    let track_rect = Rect {
-                        left: inner.right - 1,
-                        top: inner.top,
-                        right: inner.right,
-                        bottom: inner.bottom,
-                    };
-                    if track_rect.contains(self.tui.mouse_down_position) {
-                        if tc.scroll_offset_y_drag_start == CoordType::MIN {
-                            tc.scroll_offset_y_drag_start = tc.scroll_offset.y;
+            } else {
+                match self.tui.mouse_state {
+                    InputMouseState::Left => {
+                        if self.input_mouse_modifiers.contains(kbmod::SHIFT) {
+                            // TODO: Untested because Windows Terminal surprisingly doesn't support Shift+Click.
+                            tb.selection_update_visual(pos);
+                        } else {
+                            tb.cursor_move_to_visual(pos);
                         }
-
-                        // The textarea supports 1 height worth of "scrolling beyond the end".
-                        // `track_height` is the same as the viewport height.
-                        let scrollable_height = tb.get_visual_line_count() - 1;
-
-                        if scrollable_height > 0 {
-                            let trackable = track_rect.height() - tc.thumb_height;
-                            let delta_y = mouse.y - self.tui.mouse_down_position.y;
-                            tc.scroll_offset.y = tc.scroll_offset_y_drag_start
-                                + ((delta_y * scrollable_height) / trackable);
-                        }
-                    } else {
-                        tb.selection_update_visual(pos);
                         tc.preferred_column = tb.get_cursor_visual_pos().x;
-
-                        let height = inner.height();
-
-                        // If the editor is only 1 line tall we can't possibly scroll up or down.
-                        if height >= 2 {
-                            fn calc(min: CoordType, max: CoordType, mouse: CoordType) -> CoordType {
-                                // Otherwise, the scroll zone is up to 3 lines at the top/bottom.
-                                let zone_height = ((max - min) / 2).min(3);
-
-                                // The .y positions where the scroll zones begin:
-                                // Mouse coordinates above top and below bottom respectively.
-                                let scroll_min = min + zone_height;
-                                let scroll_max = max - zone_height - 1;
-
-                                // Calculate the delta for scrolling up or down.
-                                let delta_min = (mouse - scroll_min).clamp(-zone_height, 0);
-                                let delta_max = (mouse - scroll_max).clamp(0, zone_height);
-
-                                // If I didn't mess up my logic here, only one of the two values can possibly be !=0.
-                                let idx = 3 + delta_min + delta_max;
-
-                                const SPEEDS: [CoordType; 7] = [-9, -3, -1, 0, 1, 3, 9];
-                                let idx = idx.clamp(0, SPEEDS.len() as CoordType) as usize;
-                                SPEEDS[idx]
-                            }
-
-                            let delta_x = calc(text.left, text.right, mouse.x);
-                            let delta_y = calc(text.top, text.bottom, mouse.y);
-
-                            tc.scroll_offset.x += delta_x;
-                            tc.scroll_offset.y += delta_y;
-
-                            if delta_x != 0 || delta_y != 0 {
-                                self.tui.read_timeout = time::Duration::from_millis(25);
-                            }
-                        }
+                        make_cursor_visible = true;
                     }
-                }
-                _ => {
-                    match self.tui.mouse_state {
-                        InputMouseState::Left => {
-                            if self.input_mouse_modifiers.contains(kbmod::SHIFT) {
-                                // TODO: Untested because Windows Terminal surprisingly doesn't support Shift+Click.
-                                tb.selection_update_visual(pos);
-                            } else {
-                                tb.cursor_move_to_visual(pos);
-                            }
-                            tc.preferred_column = tb.get_cursor_visual_pos().x;
-                            make_cursor_visible = true;
-                        }
-                        InputMouseState::Release => {
-                            tc.scroll_offset_y_drag_start = CoordType::MIN;
-                            tb.selection_finalize();
-                        }
-                        _ => return false,
+                    InputMouseState::Release => {
+                        tc.scroll_offset_y_drag_start = CoordType::MIN;
+                        tb.selection_finalize();
                     }
+                    _ => return false,
                 }
             }
 
@@ -1999,39 +1976,38 @@ impl Context<'_, '_> {
             if !self.input_consumed && self.tui.mouse_state != InputMouseState::None {
                 let container_rect = prev_container.inner;
 
-                match self.input_mouse_gesture {
-                    InputMouseGesture::Drag => {
-                        // We don't need to look up the previous track node,
-                        // since it has a fixed size based on the container size.
-                        let track_rect = Rect {
-                            left: container_rect.right,
-                            top: container_rect.top,
-                            right: container_rect.right + 1,
-                            bottom: container_rect.bottom,
-                        };
-                        if track_rect.contains(self.tui.mouse_down_position) {
-                            if sc.scroll_offset_y_drag_start == CoordType::MIN {
-                                sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
-                            }
-
-                            let content = Tree::node_ref(prev_container.children.first).unwrap();
-                            let content_rect = content.inner;
-                            let content_height = content_rect.height();
-                            let track_height = track_rect.height();
-
-                            if content_height > track_height {
-                                let trackable = track_height - sc.thumb_height;
-                                let scrollable_height = content_height - track_height;
-                                let delta_y =
-                                    self.tui.mouse_position.y - self.tui.mouse_down_position.y;
-                                sc.scroll_offset.y = sc.scroll_offset_y_drag_start
-                                    + ((delta_y * scrollable_height) / trackable);
-                            }
-
-                            self.set_input_consumed();
+                if self.tui.mouse_is_drag {
+                    // We don't need to look up the previous track node,
+                    // since it has a fixed size based on the container size.
+                    let track_rect = Rect {
+                        left: container_rect.right,
+                        top: container_rect.top,
+                        right: container_rect.right + 1,
+                        bottom: container_rect.bottom,
+                    };
+                    if track_rect.contains(self.tui.mouse_down_position) {
+                        if sc.scroll_offset_y_drag_start == CoordType::MIN {
+                            sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
                         }
+
+                        let content = Tree::node_ref(prev_container.children.first).unwrap();
+                        let content_rect = content.inner;
+                        let content_height = content_rect.height();
+                        let track_height = track_rect.height();
+
+                        if content_height > track_height {
+                            let trackable = track_height - sc.thumb_height;
+                            let scrollable_height = content_height - track_height;
+                            let delta_y =
+                                self.tui.mouse_position.y - self.tui.mouse_down_position.y;
+                            sc.scroll_offset.y = sc.scroll_offset_y_drag_start
+                                + ((delta_y * scrollable_height) / trackable);
+                        }
+
+                        self.set_input_consumed();
                     }
-                    _ => match self.tui.mouse_state {
+                } else {
+                    match self.tui.mouse_state {
                         InputMouseState::Release => {
                             sc.scroll_offset_y_drag_start = CoordType::MIN;
                         }
@@ -2043,7 +2019,7 @@ impl Context<'_, '_> {
                             }
                         }
                         _ => {}
-                    },
+                    }
                 }
             }
         }
@@ -2109,8 +2085,8 @@ impl Context<'_, '_> {
         self.styled_label_end();
 
         // Clicking an item activates it
-        let clicked = !self.input_consumed
-            && (self.input_mouse_gesture == InputMouseGesture::DoubleClick && self.is_hovering());
+        let clicked =
+            !self.input_consumed && (self.input_mouse_is_double_click && self.is_hovering());
         // Pressing Enter on a selected item activates it as well
         let entered = focused
             && selected_before
