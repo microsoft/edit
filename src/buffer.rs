@@ -166,6 +166,7 @@ pub struct TextBuffer {
     word_wrap_enabled: bool,
     tab_size: CoordType,
     indent_with_tabs: bool,
+    line_highlight_enabled: bool,
     ruler: CoordType,
     encoding: &'static str,
     newlines_are_crlf: bool,
@@ -205,6 +206,7 @@ impl TextBuffer {
             word_wrap_enabled: false,
             tab_size: 4,
             indent_with_tabs: false,
+            line_highlight_enabled: false,
             ruler: 0,
             encoding: "UTF-8",
             newlines_are_crlf: cfg!(windows), // Unfortunately Windows users insist on CRLF
@@ -397,6 +399,10 @@ impl TextBuffer {
         self.tab_size = width;
         self.reflow(true);
         true
+    }
+
+    pub fn set_line_highlight_enabled(&mut self, enabled: bool) {
+        self.line_highlight_enabled = enabled;
     }
 
     pub fn set_ruler(&mut self, column: CoordType) {
@@ -1698,15 +1704,18 @@ impl TextBuffer {
 
             if text.contains(cursor) {
                 fb.set_cursor(cursor, self.overtype);
-                fb.blend_bg(
-                    Rect {
-                        left: destination.left,
-                        top: cursor.y,
-                        right: destination.right,
-                        bottom: cursor.y + 1,
-                    },
-                    0x1f7f7f7f,
-                );
+
+                if self.line_highlight_enabled {
+                    fb.blend_bg(
+                        Rect {
+                            left: destination.left,
+                            top: cursor.y,
+                            right: destination.right,
+                            bottom: cursor.y + 1,
+                        },
+                        0x1f7f7f7f,
+                    );
+                }
             }
         }
     }

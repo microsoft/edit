@@ -97,6 +97,7 @@ impl State {
     fn new() -> apperr::Result<Self> {
         let mut buffer = RcTextBuffer::new(false)?;
         buffer.set_margin_enabled(true);
+        buffer.set_line_highlight_enabled(true);
 
         Ok(Self {
             path: None,
