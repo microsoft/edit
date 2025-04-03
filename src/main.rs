@@ -157,12 +157,12 @@ fn main() -> process::ExitCode {
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             drop(RestoreModes);
-            sys::deinit();
+            drop(sys::Deinit);
             hook(info);
         }));
     }
 
-    let code = match run() {
+    match run() {
         Ok(()) => process::ExitCode::SUCCESS,
         Err(err) => {
             let mut msg = err.message();
@@ -170,18 +170,12 @@ fn main() -> process::ExitCode {
             sys::write_stdout(&msg);
             process::ExitCode::FAILURE
         }
-    };
-    sys::deinit();
-    code
+    }
 }
 
 fn run() -> apperr::Result<()> {
-    sys::init()?;
-
+    let _sys_deinit = sys::init()?;
     let mut state = State::new()?;
-    let mut vt_parser = vt::Parser::new();
-    let mut input_parser = input::Parser::new();
-    let mut tui = Tui::new();
 
     if let Some(path) = std::env::args_os()
         .nth(1)
@@ -205,7 +199,16 @@ fn run() -> apperr::Result<()> {
         }
     }
 
-    let _restore_modes = set_modes();
+    // sys::init() will switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
+    // Since the `read_file` call may hang for some reason, we must only call this afterwards.
+    // `set_modes()` will enable mouse mode which is equally annoying to switch out for users
+    // and so we do it afterwards, for similar reasons.
+    sys::switch_modes()?;
+    let _restore_vt_modes = set_vt_modes();
+
+    let mut vt_parser = vt::Parser::new();
+    let mut input_parser = input::Parser::new();
+    let mut tui = Tui::new();
 
     query_color_palette(&mut tui, &mut vt_parser);
     state.menubar_color_bg = mix(
@@ -1390,7 +1393,7 @@ fn get_filename_from_path(path: &Path) -> String {
         .into_owned()
 }
 
-fn set_modes() -> RestoreModes {
+fn set_vt_modes() -> RestoreModes {
     // 1049: Alternative Screen Buffer
     //   I put the ASB switch in the beginning, just in case the terminal performs
     //   some additional state tracking beyond the modes we enable/disable.

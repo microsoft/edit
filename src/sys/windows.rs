@@ -39,6 +39,8 @@ unsafe extern "system" fn read_console_input_ex_placeholder(
 
 const CONSOLE_READ_NOWAIT: u16 = 0x0002;
 
+const INVALID_CONSOLE_MODE: u32 = u32::MAX;
+
 struct State {
     read_console_input_ex: ReadConsoleInputExW,
     stdin: Foundation::HANDLE,
@@ -58,8 +60,8 @@ static mut STATE: State = State {
     stdout: null_mut(),
     stdin_cp_old: 0,
     stdout_cp_old: 0,
-    stdin_mode_old: 0,
-    stdout_mode_old: 0,
+    stdin_mode_old: INVALID_CONSOLE_MODE,
+    stdout_mode_old: INVALID_CONSOLE_MODE,
     leading_surrogate: 0,
     inject_resize: false,
     wants_exit: false,
@@ -73,15 +75,10 @@ extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> Foundation::BOOL {
     1
 }
 
-pub fn init() -> apperr::Result<()> {
+pub fn init() -> apperr::Result<Deinit> {
     unsafe {
         let kernel32 = LibraryLoader::GetModuleHandleW(w!("kernel32.dll"));
         STATE.read_console_input_ex = get_proc_address(kernel32, c"ReadConsoleInputExW")?;
-
-        check_bool_return(Console::SetConsoleCtrlHandler(
-            Some(console_ctrl_handler),
-            1,
-        ))?;
 
         STATE.stdin = FileSystem::CreateFileW(
             w!("CONIN$"),
@@ -106,6 +103,42 @@ pub fn init() -> apperr::Result<()> {
         {
             return Err(get_last_error());
         }
+
+        Ok(Deinit)
+    }
+}
+
+pub struct Deinit;
+
+impl Drop for Deinit {
+    fn drop(&mut self) {
+        unsafe {
+            if STATE.stdin_cp_old != 0 {
+                Console::SetConsoleCP(STATE.stdin_cp_old);
+                STATE.stdin_cp_old = 0;
+            }
+            if STATE.stdout_cp_old != 0 {
+                Console::SetConsoleOutputCP(STATE.stdout_cp_old);
+                STATE.stdout_cp_old = 0;
+            }
+            if STATE.stdin_mode_old != INVALID_CONSOLE_MODE {
+                Console::SetConsoleMode(STATE.stdin, STATE.stdin_mode_old);
+                STATE.stdin_mode_old = INVALID_CONSOLE_MODE;
+            }
+            if STATE.stdout_mode_old != INVALID_CONSOLE_MODE {
+                Console::SetConsoleMode(STATE.stdout, STATE.stdout_mode_old);
+                STATE.stdout_mode_old = INVALID_CONSOLE_MODE;
+            }
+        }
+    }
+}
+
+pub fn switch_modes() -> apperr::Result<()> {
+    unsafe {
+        check_bool_return(Console::SetConsoleCtrlHandler(
+            Some(console_ctrl_handler),
+            1,
+        ))?;
 
         STATE.stdin_cp_old = Console::GetConsoleCP();
         STATE.stdout_cp_old = Console::GetConsoleOutputCP();
@@ -135,15 +168,6 @@ pub fn init() -> apperr::Result<()> {
         ))?;
 
         Ok(())
-    }
-}
-
-pub fn deinit() {
-    unsafe {
-        Console::SetConsoleCP(STATE.stdin_cp_old);
-        Console::SetConsoleOutputCP(STATE.stdout_cp_old);
-        Console::SetConsoleMode(STATE.stdin, STATE.stdin_mode_old);
-        Console::SetConsoleMode(STATE.stdout, STATE.stdout_mode_old);
     }
 }
 

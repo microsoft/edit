@@ -5,6 +5,7 @@ use std::ffi::{CStr, CString, c_int, c_void};
 use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::mem;
+use std::mem::MaybeUninit;
 use std::os::fd::FromRawFd;
 use std::ptr;
 use std::ptr::{null, null_mut};
@@ -15,7 +16,7 @@ struct State {
     stdin: libc::c_int,
     stdin_flags: libc::c_int,
     stdout: libc::c_int,
-    stdout_initial_termios: libc::termios,
+    stdout_initial_termios: Option<libc::termios>,
     inject_resize: bool,
     // Buffer for incomplete UTF-8 sequences (max 4 bytes needed)
     utf8_buf: [u8; 4],
@@ -26,7 +27,7 @@ static mut STATE: State = State {
     stdin: libc::STDIN_FILENO,
     stdin_flags: 0,
     stdout: libc::STDOUT_FILENO,
-    stdout_initial_termios: unsafe { mem::zeroed() },
+    stdout_initial_termios: None,
     inject_resize: false,
     utf8_buf: [0; 4],
     utf8_len: 0,
@@ -38,9 +39,9 @@ extern "C" fn sigwinch_handler(_: libc::c_int) {
     }
 }
 
-pub fn init() -> apperr::Result<()> {
+pub fn init() -> apperr::Result<Deinit> {
     unsafe {
-        // Reopen stdin/stdout if they're redirected.
+        // Reopen stdin if it's redirected (= piped input).
         if libc::isatty(STATE.stdin) == 0 {
             STATE.stdin = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_RDONLY))?;
         }
@@ -48,17 +49,29 @@ pub fn init() -> apperr::Result<()> {
             STATE.stdout = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_WRONLY))?;
         }
 
+        // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
         STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
 
-        check_int_return(libc::tcgetattr(
-            STATE.stdout,
-            &raw mut STATE.stdout_initial_termios,
-        ))?;
+        Ok(Deinit)
+    }
+}
 
-        let mut termios = STATE.stdout_initial_termios;
-        termios.c_lflag &= !(libc::ICANON | libc::ECHO);
-        check_int_return(libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios))?;
+pub struct Deinit;
 
+impl Drop for Deinit {
+    fn drop(&mut self) {
+        unsafe {
+            #[allow(static_mut_refs)]
+            if let Some(termios) = STATE.stdout_initial_termios.take() {
+                // Restore the original terminal modes.
+                libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios);
+            }
+        }
+    }
+}
+
+pub fn switch_modes() -> apperr::Result<()> {
+    unsafe {
         // Set STATE.inject_resize to true whenever we get a SIGWINCH.
         let mut sigwinch_action: libc::sigaction = mem::zeroed();
         sigwinch_action.sa_sigaction = sigwinch_handler as libc::sighandler_t;
@@ -68,17 +81,17 @@ pub fn init() -> apperr::Result<()> {
             null_mut(),
         ))?;
 
-        Ok(())
-    }
-}
+        // Get the original terminal modes so we can disable raw mode on exit.
+        let mut termios = MaybeUninit::<libc::termios>::uninit();
+        check_int_return(libc::tcgetattr(STATE.stdout, termios.as_mut_ptr()))?;
+        let mut termios = termios.assume_init();
+        STATE.stdout_initial_termios = Some(termios);
 
-pub fn deinit() {
-    unsafe {
-        libc::tcsetattr(
-            STATE.stdout,
-            libc::TCSANOW,
-            &raw mut STATE.stdout_initial_termios,
-        );
+        // Set the terminal to raw mode.
+        termios.c_lflag &= !(libc::ICANON | libc::ECHO);
+        check_int_return(libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios))?;
+
+        Ok(())
     }
 }
 
