@@ -1743,17 +1743,9 @@ impl TextBuffer {
         let mut newline_buffer = String::new();
 
         loop {
-            let (offset_next, _) = ucd::newlines_forward(text, offset, 0, 1);
-
-            let mut line = &text[offset..offset_next];
-            // Trim trailing LF or CRLF, if any.
-            if line.ends_with(b"\n") {
-                line = &line[..line.len() - 1]
-            }
-            if line.ends_with(b"\r") {
-                line = &line[..line.len() - 1]
-            }
-
+            // Can't use `ucd::newlines_forward` because bracketed paste uses CR instead of LF/CRLF.
+            let offset_next = memchr2(b'\r', b'\n', text, offset);
+            let line = &text[offset..offset_next];
             let column_before = self.cursor.logical_pos.x;
 
             // Write the contents of the line into the buffer.
@@ -1843,7 +1835,19 @@ impl TextBuffer {
 
             self.edit_write(newline_buffer.as_bytes());
 
-            offset = offset_next;
+            // Skip one CR(LF).
+            if offset >= text.len() {
+                break;
+            }
+            if text[offset] == b'\r' {
+                offset += 1;
+            }
+            if offset >= text.len() {
+                break;
+            }
+            if text[offset] == b'\n' {
+                offset += 1;
+            }
             if offset >= text.len() {
                 break;
             }
