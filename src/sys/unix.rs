@@ -1,13 +1,15 @@
-use crate::{apperr, helpers};
+use crate::apperr;
+use crate::helpers;
 use std::borrow::Cow;
 use std::ffi::{CStr, CString, c_int, c_void};
 use std::fmt::Write as _;
 use std::fs::{self, File};
+use std::mem;
 use std::os::fd::FromRawFd;
+use std::ptr;
 use std::ptr::{null, null_mut};
 use std::thread;
 use std::time;
-use std::{mem, ptr};
 
 struct State {
     stdin: libc::c_int,
@@ -123,52 +125,79 @@ fn get_window_size() -> (u16, u16) {
 /// Otherwise, it returns the read, non-empty string.
 pub fn read_stdin(timeout: time::Duration) -> Option<String> {
     unsafe {
-        let mut read_more = true;
-        let mut read_poll = false;
-
-        if STATE.inject_resize {
-            read_poll = true;
-        }
-
-        if timeout != time::Duration::MAX {
-            let mut pollfd = libc::pollfd {
-                fd: STATE.stdin,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            let ts = libc::timespec {
-                tv_sec: timeout.as_secs() as libc::time_t,
-                tv_nsec: timeout.subsec_nanos() as libc::c_long,
-            };
-            let ret = libc::ppoll(&mut pollfd, 1, &ts, null());
-            if ret < 0 {
-                return None;
-            }
-
-            read_poll = true; // there is a timeout -> don't block in read()
-            if ret == 0 {
-                read_more = false; // if timeout -> don't read
-            }
+        let mut read_poll = timeout != time::Duration::MAX; // there is a timeout -> don't block in read()
+        let deadline = if timeout != time::Duration::MAX {
+            Some(time::Instant::now() + timeout)
+        } else {
+            None
         };
 
-        let mut input = String::new();
+        // It is important that we allocate the string with an explicit capacity,
+        // because we later use `spare_capacity_mut` to access it.
+        let mut input = String::with_capacity(1024);
 
-        if read_more {
-            let mut buf = Vec::with_capacity(1024);
+        // We received a SIGWINCH? Inject a fake sequence for our input parser.
+        // It's impossible to know whether to inject it at the start or end of the input,
+        // because neither SIGWINCH nor the input itself includes timing information.
+        if STATE.inject_resize {
+            STATE.inject_resize = false;
+            read_poll = true;
+            let (w, h) = get_window_size();
+            _ = write!(input, "\x1b[8;{};{}t", h, w);
+        }
 
-            if STATE.utf8_len != 0 {
-                buf.extend_from_slice(&STATE.utf8_buf[..STATE.utf8_len]);
-                STATE.utf8_len = 0;
-            }
+        // We don't know if the input is valid UTF8, so we first use a Vec and then
+        // later turn it into UTF8 using `helpers::string_from_utf8_lossy_owned`.
+        let mut buf = input.into_bytes();
 
+        // Track the length of the buffer with the `inject_resize` in there, but without any actual
+        // stdin that we read. That way we can easily check if something was actually read.
+        let buf_len_before_read = buf.len();
+
+        // We got some leftover broken UTF8 from a previous read? Prepend it.
+        if STATE.utf8_len != 0 {
+            buf.extend_from_slice(&STATE.utf8_buf[..STATE.utf8_len]);
+        }
+
+        loop {
+            if let Some(deadline) = deadline {
+                let Some(timeout) = deadline.checked_duration_since(time::Instant::now()) else {
+                    break; // Timeout? We can stop reading.
+                };
+
+                let mut pollfd = libc::pollfd {
+                    fd: STATE.stdin,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let ts = libc::timespec {
+                    tv_sec: timeout.as_secs() as libc::time_t,
+                    tv_nsec: timeout.subsec_nanos() as libc::c_long,
+                };
+                let ret = libc::ppoll(&mut pollfd, 1, &ts, null());
+                if ret < 0 {
+                    return None; // Error? Let's assume it's an EOF.
+                }
+                if ret == 0 {
+                    break; // Timeout? We can stop reading.
+                }
+            };
+
+            // If we're asked for a non-blocking read we need to manipulate `O_NONBLOCK` and vice versa.
+            // This uses `STATE.stdin_flags` to track and skip unnecessary `fcntl` calls.
             let is_nonblock = (STATE.stdin_flags & libc::O_NONBLOCK) != 0;
             if read_poll != is_nonblock {
                 STATE.stdin_flags ^= libc::O_NONBLOCK;
                 let _ = libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
             }
 
+            // Read from stdin. Looped to handle interrupts.
             loop {
                 let spare = buf.spare_capacity_mut();
+                if spare.is_empty() {
+                    break;
+                }
+
                 let ret = libc::read(STATE.stdin, spare.as_mut_ptr() as *mut _, spare.len());
                 if ret > 0 {
                     buf.set_len(buf.len() + ret as usize);
@@ -178,51 +207,49 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
                     return None;
                 }
                 match *libc::__errno_location() {
-                    libc::EINTR => continue,
-                    libc::EAGAIN => break,
+                    libc::EINTR => continue, // An interrupt occurred, let's try again.
+                    libc::EAGAIN => break,   // A read timeout occurred under `read_poll`.
                     _ => return None,
                 }
             }
 
-            if !buf.is_empty() {
-                // We only need to check the last 3 bytes for UTF-8 continuation bytes,
-                // because we should be able to assume that any 4 byte sequence is complete.
-                let lim = buf.len().saturating_sub(3);
-                let mut off = buf.len() - 1;
+            if buf.len() > buf_len_before_read {
+                break;
+            }
+        }
 
-                // Find the start of the last potentially incomplete UTF-8 sequence.
-                while off > lim && buf[off] & 0b1100_0000 == 0b1000_0000 {
-                    off -= 1;
-                }
+        if buf.len() > buf_len_before_read {
+            STATE.utf8_len = 0;
 
-                let seq_len = match buf[off] {
-                    b if b & 0b1000_0000 == 0 => 1,
-                    b if b & 0b1110_0000 == 0b1100_0000 => 2,
-                    b if b & 0b1111_0000 == 0b1110_0000 => 3,
-                    b if b & 0b1111_1000 == 0b1111_0000 => 4,
-                    // If the lead byte we found isn't actually one, we don't cache it.
-                    // `string_from_utf8_lossy_owned` will replace it with U+FFFD.
-                    _ => 0,
-                };
+            // We only need to check the last 3 bytes for UTF-8 continuation bytes,
+            // because we should be able to assume that any 4 byte sequence is complete.
+            let lim = buf.len().saturating_sub(3);
+            let mut off = buf.len() - 1;
 
-                // Cache incomplete sequence if any.
-                if off + seq_len > buf.len() {
-                    STATE.utf8_len = buf.len() - off;
-                    STATE.utf8_buf[..STATE.utf8_len].copy_from_slice(&buf[off..]);
-                    buf.truncate(off);
-                }
+            // Find the start of the last potentially incomplete UTF-8 sequence.
+            while off > lim && buf[off] & 0b1100_0000 == 0b1000_0000 {
+                off -= 1;
             }
 
-            input = helpers::string_from_utf8_lossy_owned(buf);
+            let seq_len = match buf[off] {
+                b if b & 0b1000_0000 == 0 => 1,
+                b if b & 0b1110_0000 == 0b1100_0000 => 2,
+                b if b & 0b1111_0000 == 0b1110_0000 => 3,
+                b if b & 0b1111_1000 == 0b1111_0000 => 4,
+                // If the lead byte we found isn't actually one, we don't cache it.
+                // `string_from_utf8_lossy_owned` will replace it with U+FFFD.
+                _ => 0,
+            };
+
+            // Cache incomplete sequence if any.
+            if off + seq_len > buf.len() {
+                STATE.utf8_len = buf.len() - off;
+                STATE.utf8_buf[..STATE.utf8_len].copy_from_slice(&buf[off..]);
+                buf.truncate(off);
+            }
         }
 
-        if STATE.inject_resize {
-            STATE.inject_resize = false;
-            let (w, h) = get_window_size();
-            _ = write!(input, "\x1b[8;{};{}t", h, w);
-        }
-
-        Some(input)
+        Some(helpers::string_from_utf8_lossy_owned(buf))
     }
 }
 

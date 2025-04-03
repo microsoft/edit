@@ -181,40 +181,50 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
     let mut utf16_buf = [const { MaybeUninit::<u16>::uninit() }; 1024];
     let mut utf16_buf_len = 0;
     let mut resize_event = None;
-    let mut read_more = true;
-    let mut read_poll = false;
+    let mut read_poll = timeout != time::Duration::MAX; // there is a timeout -> don't block in read()
+    let deadline = if timeout != time::Duration::MAX {
+        Some(time::Instant::now() + timeout)
+    } else {
+        None
+    };
 
+    // On startup we're asked to inject a window size so that the UI system can layout the elements.
+    // --> Inject a fake sequence for our input parser.
     if unsafe { STATE.inject_resize } {
         resize_event = get_console_size();
         read_poll = true;
         unsafe { STATE.inject_resize = false };
     }
 
-    if timeout != time::Duration::MAX {
-        read_poll = true;
-        let wait_result =
-            unsafe { Threading::WaitForSingleObject(STATE.stdin, timeout.as_millis() as u32) };
-        match wait_result {
-            // Ready to read? Continue with reading below.
-            // `read_more` is already true to ensure we don't block.
-            Foundation::WAIT_OBJECT_0 => {}
-            // Timeout? Skip reading entirely.
-            Foundation::WAIT_TIMEOUT => read_more = false,
-            // Error? Tell the caller stdin is broken.
-            _ => return None,
-        }
+    // If there was a leftover leading surrogate from the last read, we prepend it to the buffer.
+    if unsafe { STATE.leading_surrogate } != 0 {
+        utf16_buf[0] = MaybeUninit::new(unsafe { STATE.leading_surrogate });
+        utf16_buf_len = 1;
+        input_buf_cap -= 1;
+        unsafe { STATE.leading_surrogate = 0 };
     }
 
-    // This loops exists, just in case there's events in the input buffer that we aren't interested in.
-    // It should be rare for this to loop.
-    while read_more {
-        if unsafe { STATE.leading_surrogate } != 0 {
-            utf16_buf[0] = MaybeUninit::new(unsafe { STATE.leading_surrogate });
-            utf16_buf_len = 1;
-            input_buf_cap -= 1;
-            unsafe { STATE.leading_surrogate = 0 };
+    // Read until there's either a timeout or we have something to process.
+    loop {
+        if let Some(deadline) = deadline {
+            let remaining = deadline
+                .saturating_duration_since(time::Instant::now())
+                .as_millis() as u32;
+            if remaining == 0 {
+                break; // Timeout? We can stop reading.
+            }
+
+            match unsafe { Threading::WaitForSingleObject(STATE.stdin, remaining) } {
+                // Ready to read? Continue with reading below.
+                Foundation::WAIT_OBJECT_0 => {}
+                // Timeout? Skip reading entirely.
+                Foundation::WAIT_TIMEOUT => break,
+                // Error? Tell the caller stdin is broken.
+                _ => return None,
+            }
         }
 
+        // Read from stdin.
         let input = unsafe {
             // If we had a `inject_resize`, we don't want to block indefinitely for other pending input on startup,
             // but are still interested in any other pending input that may be waiting for us.
@@ -233,6 +243,7 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
             helpers::slice_assume_init_ref(&input_buf[..read as usize])
         };
 
+        // Convert Win32 input records into UTF16.
         for inp in input {
             match inp.EventType as u32 {
                 Console::KEY_EVENT => {
@@ -260,7 +271,9 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
             }
         }
 
-        read_more = resize_event.is_none() && utf16_buf_len == 0;
+        if resize_event.is_some() || utf16_buf_len != 0 {
+            break;
+        }
     }
 
     const RESIZE_EVENT_FMT_MAX_LEN: usize = 16; // "\x1b[8;65535;65535t"
@@ -273,6 +286,7 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
     let utf8_max_len = (utf16_buf_len + 1) * 3;
     let mut text = String::with_capacity(utf8_max_len + resize_event_len);
 
+    // Now prepend our previously extracted resize event.
     if let Some(resize_event) = resize_event {
         // If I read xterm's documentation correctly, CSI 18 t reports the window size in characters.
         // CSI 8 ; height ; width t is the response. Of course, we didn't send the request,
