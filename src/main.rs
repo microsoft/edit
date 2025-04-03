@@ -173,17 +173,38 @@ fn main() -> process::ExitCode {
     }
 }
 
+fn print_help() {
+    sys::write_stdout(concat!(
+        "Usage: edit [OPTIONS] [FILE]\r\n",
+        "Options:\r\n",
+        "    -h, --help       Print this help message\r\n",
+        "    -v, --version    Print the version number\r\n",
+    ));
+}
+
+fn print_version() {
+    sys::write_stdout(concat!("edit version ", env!("CARGO_PKG_VERSION"), "\r\n"));
+}
+
 fn run() -> apperr::Result<()> {
     let _sys_deinit = sys::init()?;
     let mut state = State::new()?;
 
-    if let Some(path) = std::env::args_os()
-        .nth(1)
-        .and_then(|p| if p == "-" { None } else { Some(p) })
-        .map(PathBuf::from)
-    {
-        let filename = get_filename_from_path(&path);
-        state.set_path(path, filename);
+    // The best CLI argument parser in the world.
+    if let Some(path) = std::env::args_os().nth(1) {
+        if path == "-" {
+            // We'll check for a redirected stdin no matter what, so we can just ignore "-".
+        } else if path == "-h" || path == "--help" || (cfg!(windows) && path == "/?") {
+            print_help();
+            return Ok(());
+        } else if path == "-v" || path == "--version" {
+            print_version();
+            return Ok(());
+        } else {
+            let path = PathBuf::from(path);
+            let filename = get_filename_from_path(&path);
+            state.set_path(path, filename);
+        }
     }
 
     if let Some(mut file) = sys::open_stdin_if_redirected() {
