@@ -77,9 +77,8 @@ extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> Foundation::BOOL {
 
 pub fn init() -> apperr::Result<Deinit> {
     unsafe {
-        let kernel32 = LibraryLoader::GetModuleHandleW(w!("kernel32.dll"));
-        STATE.read_console_input_ex = get_proc_address(kernel32, c"ReadConsoleInputExW")?;
-
+        // Get the stdin and stdout handles first, so that if this function fails,
+        // we at least got something to use for `write_stdout`.
         STATE.stdin = Console::GetStdHandle(Console::STD_INPUT_HANDLE);
         STATE.stdout = Console::GetStdHandle(Console::STD_OUTPUT_HANDLE);
 
@@ -106,6 +105,14 @@ pub fn init() -> apperr::Result<Deinit> {
         {
             return Err(get_last_error());
         }
+
+        let mut kernel32 = LibraryLoader::GetModuleHandleW(w!("kernel32.dll"));
+        if kernel32.is_null() {
+            // `kernel32.dll` doesn't exist on OneCore variants of Windows.
+            // NOTE: `kernelbase.dll` is NOT a stable API to rely on. In our case it's the best option though.
+            kernel32 = LibraryLoader::GetModuleHandleW(w!("kernelbase.dll"));
+        }
+        STATE.read_console_input_ex = get_proc_address(kernel32, c"ReadConsoleInputExW")?;
 
         Ok(Deinit)
     }
