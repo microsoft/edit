@@ -871,41 +871,13 @@ impl Tui {
     }
 
     fn move_focus(&mut self, input: InputKey) -> bool {
+        if !matches!(input, vk::TAB | SHIFT_TAB | vk::LEFT | vk::RIGHT) {
+            return false;
+        }
+
         let Some(focused) = self.get_prev_node(self.focused_node_path[0]) else {
             debug_assert!(false); // The caller should've cleaned up the focus path.
             return false;
-        };
-
-        if input == vk::LEFT || input == vk::RIGHT {
-            if let Some(row) = Tree::node_ref(focused.parent) {
-                if let Some(table) = Tree::node_ref(row.parent) {
-                    if matches!(table.content, NodeContent::Table(..)) {
-                        let mut next = if input == vk::LEFT {
-                            focused.siblings.prev
-                        } else {
-                            focused.siblings.next
-                        };
-                        if next.is_null() {
-                            next = if input == vk::LEFT {
-                                row.children.last
-                            } else {
-                                row.children.first
-                            };
-                        }
-                        let next = Tree::node_ref(next).unwrap();
-                        if !ptr::eq(next, focused) {
-                            Tui::build_node_path(Some(next), &mut self.focused_node_path);
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-
-        let forward = match input {
-            SHIFT_TAB => false,
-            vk::TAB => true,
-            _ => return false,
         };
 
         let mut focused_start = focused;
@@ -928,6 +900,69 @@ impl Tui {
             }
             root = Tree::node_ref(root.parent).unwrap();
         }
+
+        if input == vk::LEFT || input == vk::RIGHT {
+            // Find the cell within a row within a table that we're in.
+            // To do so we'll use a circular buffer of the last 3 nodes while we travel up.
+            let mut buf = [null(); 3];
+            let mut idx = buf.len() - 1;
+            let mut node = focused_start;
+
+            loop {
+                idx = (idx + 1) % buf.len();
+                buf[idx] = node;
+                if let NodeContent::Table(..) = &node.content {
+                    break;
+                }
+                if ptr::eq(node, root) {
+                    return false;
+                }
+                node = match Tree::node_ref(node.parent) {
+                    Some(parent) => parent,
+                    None => return false,
+                }
+            }
+
+            // The current `idx` points to the table.
+            // The last item is the row.
+            // The 2nd to last item is the cell.
+            let row = buf[(idx + 3 - 1) % buf.len()];
+            let cell = buf[(idx + 3 - 2) % buf.len()];
+            let Some(row) = Tree::node_ref(row) else {
+                return false;
+            };
+            let Some(cell) = Tree::node_ref(cell) else {
+                return false;
+            };
+
+            let mut next = if input == vk::LEFT {
+                cell.siblings.prev
+            } else {
+                cell.siblings.next
+            };
+            if next.is_null() {
+                next = if input == vk::LEFT {
+                    row.children.last
+                } else {
+                    row.children.first
+                };
+            }
+
+            if let Some(next) = Tree::node_ref(next) {
+                if !ptr::eq(next, cell) {
+                    Tui::build_node_path(Some(next), &mut self.focused_node_path);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        let forward = match input {
+            SHIFT_TAB => false,
+            vk::TAB => true,
+            _ => return false,
+        };
 
         // If the window doesn't contain any nodes, there's nothing to focus.
         // This also protects against infinite loops below.
