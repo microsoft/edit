@@ -189,17 +189,20 @@ fn run() -> apperr::Result<()> {
         .map(PathBuf::from)
     {
         let filename = get_filename_from_path(&path);
-        if !filename.is_empty() {
-            match file_open(&path) {
+        state.set_path(path, filename);
+    }
+
+    if let Some(mut file) = sys::open_stdin_if_redirected() {
+        state.buffer.read_file(&mut file, None)?;
+        state.buffer.mark_as_dirty();
+    } else if let Some(path) = &state.path {
+        if !state.filename.is_empty() {
+            match file_open(path) {
                 Ok(mut file) => state.buffer.read_file(&mut file, None)?,
                 Err(err) if sys::apperr_is_not_found(err) => {}
                 Err(err) => return Err(err),
             }
         }
-        state.set_path(path, filename);
-    } else if let Some(mut file) = sys::open_stdin_if_redirected() {
-        state.buffer.read_file(&mut file, None)?;
-        state.buffer.mark_as_dirty();
     }
 
     let _restore_modes = set_modes();
