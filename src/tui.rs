@@ -1144,11 +1144,11 @@ impl Context<'_, '_> {
     }
 
     pub fn toss_focus_up(&mut self) {
-        let current_node = self.tree.current_node_ref();
+        let node = self.tree.last_node_ref();
         // Check the path length to avoid popping the root node and scheduling a rerender for no reason.
-        if current_node.attributes.focusable
+        if node.attributes.focusable
             && self.tui.focused_node_path.len() >= 2
-            && self.tui.is_node_focused(current_node.id)
+            && self.tui.is_node_focused(node.id)
         {
             self.tui.pop_focusable_node(1);
             self.needs_rerender();
