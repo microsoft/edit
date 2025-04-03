@@ -45,9 +45,6 @@ pub fn init() -> apperr::Result<Deinit> {
         if libc::isatty(STATE.stdin) == 0 {
             STATE.stdin = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_RDONLY))?;
         }
-        if libc::isatty(STATE.stdout) == 0 {
-            STATE.stdout = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_WRONLY))?;
-        }
 
         // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
         STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
@@ -288,7 +285,8 @@ pub fn write_stdout(text: &str) {
 
 pub fn open_stdin_if_redirected() -> Option<File> {
     unsafe {
-        if libc::isatty(libc::STDIN_FILENO) == 0 {
+        // Did we reopen stdin during `init()`?
+        if STATE.stdin != libc::STDIN_FILENO {
             Some(File::from_raw_fd(libc::STDIN_FILENO))
         } else {
             None
