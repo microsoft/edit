@@ -1959,6 +1959,10 @@ impl Context<'_, '_> {
                     kbmod::CTRL => tb.select_all(),
                     _ => return false,
                 },
+                vk::H => match modifiers {
+                    kbmod::CTRL => tb.delete(CursorMovement::Word, -1),
+                    _ => return false,
+                },
                 vk::X => match modifiers {
                     kbmod::CTRL => self.tui.clipboard = tb.extract_selection(true),
                     _ => return false,
@@ -1969,10 +1973,6 @@ impl Context<'_, '_> {
                 },
                 vk::V => match modifiers {
                     kbmod::CTRL => tb.write(&self.tui.clipboard, true),
-                    _ => return false,
-                },
-                vk::W => match modifiers {
-                    kbmod::CTRL => tb.delete(CursorMovement::Word, -1),
                     _ => return false,
                 },
                 vk::Y => match modifiers {

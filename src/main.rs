@@ -405,7 +405,7 @@ fn draw(ctx: &mut Context, state: &mut State) {
                 state.wants_search.kind = StateSearchKind::Search;
                 state.wants_search.focus = true;
             }
-            if ctx.consume_shortcut(kbmod::CTRL | vk::H) {
+            if ctx.consume_shortcut(kbmod::CTRL | vk::R) {
                 state.wants_search.kind = StateSearchKind::Replace;
                 state.wants_search.focus = true;
             }
@@ -474,7 +474,7 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
             state.wants_search.kind = StateSearchKind::Search;
             state.wants_search.focus = true;
         }
-        if ctx.menubar_menu_item(loc(LocId::EditReplace), 'R', kbmod::CTRL | vk::H) {
+        if ctx.menubar_menu_item(loc(LocId::EditReplace), 'R', kbmod::CTRL | vk::R) {
             state.wants_search.kind = StateSearchKind::Replace;
             state.wants_search.focus = true;
         }
