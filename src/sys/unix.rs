@@ -160,14 +160,15 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
         // later turn it into UTF8 using `helpers::string_from_utf8_lossy_owned`.
         let mut buf = input.into_bytes();
 
+        // We got some leftover broken UTF8 from a previous read? Prepend it.
+        let leftover_utf8_len = STATE.utf8_len;
+        if leftover_utf8_len != 0 {
+            buf.extend_from_slice(&STATE.utf8_buf[..leftover_utf8_len]);
+        }
+
         // Track the length of the buffer with the `inject_resize` in there, but without any actual
         // stdin that we read. That way we can easily check if something was actually read.
         let buf_len_before_read = buf.len();
-
-        // We got some leftover broken UTF8 from a previous read? Prepend it.
-        if STATE.utf8_len != 0 {
-            buf.extend_from_slice(&STATE.utf8_buf[..STATE.utf8_len]);
-        }
 
         loop {
             if let Some(deadline) = deadline {
@@ -223,12 +224,17 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
                 }
             }
 
-            if buf.len() > buf_len_before_read {
+            // If we either had an injected resize or we read something we're done.
+            if buf.len() > leftover_utf8_len {
                 break;
             }
         }
 
-        if buf.len() > buf_len_before_read {
+        if buf.len() <= buf_len_before_read {
+            // If we didn't read anything, remove the leftover UTF8 that we added in the beginning again.
+            buf.truncate(buf.len() - leftover_utf8_len);
+        } else {
+            // Otherwise, we did read something and now need to rebuild the `STATE.utf8_buf`.
             STATE.utf8_len = 0;
 
             // We only need to check the last 3 bytes for UTF-8 continuation bytes,
@@ -388,7 +394,7 @@ pub fn load_libicuuc() -> apperr::Result<*mut c_void> {
     unsafe { load_library(c"libicuuc.so") }
 }
 
-pub fn load_libicui18n() -> apperr::Result<*mut c_void> {
+pub fn load_libicui18n(_libicuuc: *mut c_void) -> apperr::Result<*mut c_void> {
     unsafe { load_library(c"libicui18n.so") }
 }
 
