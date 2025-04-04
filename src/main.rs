@@ -177,7 +177,9 @@ fn run() -> apperr::Result<()> {
     let _sys_deinit = sys::init()?;
     let mut state = State::new()?;
 
-    handle_args(&mut state)?;
+    if handle_args(&mut state)? {
+        return Ok(());
+    }
 
     // sys::init() will switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // Since the `read_file` call may hang for some reason, we must only call this afterwards.
@@ -309,17 +311,18 @@ fn run() -> apperr::Result<()> {
     Ok(())
 }
 
-fn handle_args(state: &mut State) -> apperr::Result<()> {
+// Returns true if the application should exit early.
+fn handle_args(state: &mut State) -> apperr::Result<bool> {
     let cwd = std::env::current_dir()?;
 
     // The best CLI argument parser in the world.
     if let Some(path) = std::env::args_os().nth(1) {
         if path == "-h" || path == "--help" || (cfg!(windows) && path == "/?") {
             print_help();
-            return Ok(());
+            return Ok(true);
         } else if path == "-v" || path == "--version" {
             print_version();
-            return Ok(());
+            return Ok(true);
         } else if path == "-" {
             // We'll check for a redirected stdin no matter what, so we can just ignore "-".
         } else {
@@ -362,7 +365,7 @@ fn handle_args(state: &mut State) -> apperr::Result<()> {
         }
     }
 
-    Ok(())
+    Ok(false)
 }
 
 fn print_help() {
