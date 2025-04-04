@@ -389,7 +389,10 @@ impl Framebuffer {
             } {}
         }
 
-        if back.cursor != front.cursor {
+        // If the cursor has changed since the last frame we naturally need to update it,
+        // but this also applies if the code above wrote to the screen,
+        // as it uses CUP sequences to reposition the cursor for writing.
+        if !result.is_empty() || back.cursor != front.cursor {
             if back.cursor.pos.x >= 0 && back.cursor.pos.y >= 0 {
                 // CUP to the cursor position.
                 // DECSCUSR to set the cursor style.
