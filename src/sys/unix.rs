@@ -388,7 +388,7 @@ pub fn load_libicuuc() -> apperr::Result<*mut c_void> {
     unsafe { load_library(c"libicuuc.so") }
 }
 
-pub fn load_libicui18n(_libicuuc: *mut c_void) -> apperr::Result<*mut c_void> {
+pub fn load_libicui18n() -> apperr::Result<*mut c_void> {
     unsafe { load_library(c"libicui18n.so") }
 }
 

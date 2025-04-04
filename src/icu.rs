@@ -760,8 +760,8 @@ struct LibraryFunctions {
     ucol_strcollUTF8: icu_ffi::ucol_strcollUTF8,
 }
 
-const LIBICUUC_PROC_NAMES: [&CStr; 18] = [
-    // Found in libicuuc.so on UNIX, icu.dll on Windows.
+const LIBICUUC_PROC_NAMES: [&CStr; 9] = [
+    // Found in libicuuc.so on UNIX, icuuc.dll/icu.dll on Windows.
     c"u_errorName",
     c"ucnv_getAvailableName",
     c"ucnv_open",
@@ -771,6 +771,10 @@ const LIBICUUC_PROC_NAMES: [&CStr; 18] = [
     c"ucasemap_utf8FoldCase",
     c"utext_setup",
     c"utext_close",
+];
+
+const LIBICUI18N_PROC_NAMES: [&CStr; 11] = [
+    // Found in libicui18n.so on UNIX, icuin.dll/icu.dll on Windows.
     c"uregex_open",
     c"uregex_close",
     c"uregex_setTimeLimit",
@@ -780,10 +784,6 @@ const LIBICUUC_PROC_NAMES: [&CStr; 18] = [
     c"uregex_findNext",
     c"uregex_start64",
     c"uregex_end64",
-];
-
-const LIBICUI18N_PROC_NAMES: [&CStr; 2] = [
-    // Found in libicui18n.so on UNIX, icu.dll on Windows.
     c"ucol_open",
     c"ucol_strcollUTF8",
 ];
@@ -811,7 +811,7 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
             let Ok(libicuuc) = sys::load_libicuuc() else {
                 return;
             };
-            let Ok(libicui18n) = sys::load_libicui18n(libicuuc) else {
+            let Ok(libicui18n) = sys::load_libicui18n() else {
                 return;
             };
 
@@ -838,12 +838,15 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
             #[cfg(unix)]
             let suffix = sys::icu_proc_suffix(libicuuc);
 
-            for names in [&LIBICUUC_PROC_NAMES[..], &LIBICUI18N_PROC_NAMES[..]] {
+            for (handle, names) in [
+                (libicuuc, &LIBICUUC_PROC_NAMES[..]),
+                (libicui18n, &LIBICUI18N_PROC_NAMES[..]),
+            ] {
                 for name in names {
                     #[cfg(unix)]
                     let name = &sys::add_icu_proc_suffix(name, &suffix);
 
-                    let Ok(func) = sys::get_proc_address(libicui18n, name) else {
+                    let Ok(func) = sys::get_proc_address(handle, name) else {
                         debug_assert!(
                             false,
                             "Failed to load ICU function: {}",

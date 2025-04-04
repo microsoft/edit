@@ -501,11 +501,11 @@ pub unsafe fn get_proc_address<T>(handle: Foundation::HMODULE, name: &CStr) -> a
 }
 
 pub fn load_libicuuc() -> apperr::Result<Foundation::HMODULE> {
-    unsafe { load_library(w!("icu.dll")) }
+    unsafe { load_library(w!("icuuc.dll")) }
 }
 
-pub fn load_libicui18n(libicuuc: Foundation::HMODULE) -> apperr::Result<Foundation::HMODULE> {
-    Ok(libicuuc)
+pub fn load_libicui18n() -> apperr::Result<Foundation::HMODULE> {
+    unsafe { load_library(w!("icuin.dll")) }
 }
 
 pub fn preferred_languages() -> Vec<String> {
