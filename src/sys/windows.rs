@@ -106,13 +106,23 @@ pub fn init() -> apperr::Result<Deinit> {
             return Err(get_last_error());
         }
 
-        let mut kernel32 = LibraryLoader::GetModuleHandleW(w!("kernel32.dll"));
-        if kernel32.is_null() {
-            // `kernel32.dll` doesn't exist on OneCore variants of Windows.
-            // NOTE: `kernelbase.dll` is NOT a stable API to rely on. In our case it's the best option though.
-            kernel32 = LibraryLoader::GetModuleHandleW(w!("kernelbase.dll"));
+        unsafe fn load_read_func(module: *const u16) -> apperr::Result<ReadConsoleInputExW> {
+            unsafe { get_module(module).and_then(|m| get_proc_address(m, c"ReadConsoleInputExW")) }
         }
-        STATE.read_console_input_ex = get_proc_address(kernel32, c"ReadConsoleInputExW")?;
+
+        // `kernel32.dll` doesn't exist on OneCore variants of Windows.
+        // NOTE: `kernelbase.dll` is NOT a stable API to rely on. In our case it's the best option though.
+        //
+        // This is written as two nested `match` statements so that we can return the error from the first
+        // `load_read_func` call if it fails. The kernel32.dll lookup may contain some valid information,
+        // while the kernelbase.dll lookup may not, since it's not a stable API.
+        STATE.read_console_input_ex = match load_read_func(w!("kernel32.dll")) {
+            Ok(func) => func,
+            Err(err) => match load_read_func(w!("kernelbase.dll")) {
+                Ok(func) => func,
+                Err(_) => return Err(err),
+            },
+        };
 
         Ok(Deinit)
     }
@@ -462,6 +472,10 @@ pub unsafe fn virtual_commit(base: *mut u8, size: usize) -> apperr::Result<()> {
         ))
         .map(|_| ())
     }
+}
+
+unsafe fn get_module(name: *const u16) -> apperr::Result<Foundation::HMODULE> {
+    unsafe { check_ptr_return(LibraryLoader::GetModuleHandleW(name)) }
 }
 
 unsafe fn load_library(name: *const u16) -> apperr::Result<Foundation::HMODULE> {
