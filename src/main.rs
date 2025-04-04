@@ -382,7 +382,10 @@ fn draw(ctx: &mut Context, state: &mut State) {
     let root_focused = ctx.contains_focus();
 
     draw_menubar(ctx, state);
-    if state.wants_search.kind != StateSearchKind::Hidden {
+    if !matches!(
+        state.wants_search.kind,
+        StateSearchKind::Hidden | StateSearchKind::Disabled
+    ) {
         draw_search(ctx, state);
     }
     draw_editor(ctx, state);
