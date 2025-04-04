@@ -120,8 +120,7 @@ impl State {
             error_log_count: 0,
 
             wants_file_picker: StateFilePicker::None,
-            // TODO: Ideally this would use the directory of the given file path.
-            file_picker_pending_dir: DisplayablePathBuf::new(std::env::current_dir()?),
+            file_picker_pending_dir: Default::default(),
             file_picker_pending_name: String::new(),
             file_picker_entries: None,
             file_picker_overwrite_warning: None,
@@ -145,6 +144,7 @@ impl State {
     }
 
     fn set_path(&mut self, path: PathBuf, filename: String) {
+        debug_assert!(!filename.is_empty());
         let ruler = if filename == "COMMIT_EDITMSG" { 72 } else { 0 };
         self.buffer.set_ruler(ruler);
         self.filename = filename;
@@ -173,52 +173,11 @@ fn main() -> process::ExitCode {
     }
 }
 
-fn print_help() {
-    sys::write_stdout(concat!(
-        "Usage: edit [OPTIONS] [FILE]\r\n",
-        "Options:\r\n",
-        "    -h, --help       Print this help message\r\n",
-        "    -v, --version    Print the version number\r\n",
-    ));
-}
-
-fn print_version() {
-    sys::write_stdout(concat!("edit version ", env!("CARGO_PKG_VERSION"), "\r\n"));
-}
-
 fn run() -> apperr::Result<()> {
     let _sys_deinit = sys::init()?;
     let mut state = State::new()?;
 
-    // The best CLI argument parser in the world.
-    if let Some(path) = std::env::args_os().nth(1) {
-        if path == "-" {
-            // We'll check for a redirected stdin no matter what, so we can just ignore "-".
-        } else if path == "-h" || path == "--help" || (cfg!(windows) && path == "/?") {
-            print_help();
-            return Ok(());
-        } else if path == "-v" || path == "--version" {
-            print_version();
-            return Ok(());
-        } else {
-            let path = PathBuf::from(path);
-            let filename = get_filename_from_path(&path);
-            state.set_path(path, filename);
-        }
-    }
-
-    if let Some(mut file) = sys::open_stdin_if_redirected() {
-        state.buffer.read_file(&mut file, None)?;
-        state.buffer.mark_as_dirty();
-    } else if let Some(path) = &state.path {
-        if !state.filename.is_empty() {
-            match file_open(path) {
-                Ok(mut file) => state.buffer.read_file(&mut file, None)?,
-                Err(err) if sys::apperr_is_not_found(err) => {}
-                Err(err) => return Err(err),
-            }
-        }
-    }
+    handle_args(&mut state)?;
 
     // sys::init() will switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // Since the `read_file` call may hang for some reason, we must only call this afterwards.
@@ -348,6 +307,75 @@ fn run() -> apperr::Result<()> {
     }
 
     Ok(())
+}
+
+fn handle_args(state: &mut State) -> apperr::Result<()> {
+    let cwd = std::env::current_dir()?;
+
+    // The best CLI argument parser in the world.
+    if let Some(path) = std::env::args_os().nth(1) {
+        if path == "-h" || path == "--help" || (cfg!(windows) && path == "/?") {
+            print_help();
+            return Ok(());
+        } else if path == "-v" || path == "--version" {
+            print_version();
+            return Ok(());
+        } else if path == "-" {
+            // We'll check for a redirected stdin no matter what, so we can just ignore "-".
+        } else {
+            let path = PathBuf::from(path);
+            let filename = get_filename_from_path(&path);
+
+            // If the user specified a path, try to figure out the directory
+            // normalize & check if it exists (= canonicalize),
+            // and if all that works out, use it as the file picker path.
+            let mut dir = cwd.join(&path);
+            if !filename.is_empty() {
+                dir.pop();
+            }
+            if let Ok(dir) = sys::canonicalize(dir) {
+                state.file_picker_pending_dir = DisplayablePathBuf::new(dir);
+            }
+
+            // Only set the text buffer path if the given path wasn't a directory.
+            if !filename.is_empty() {
+                state.set_path(path, filename);
+            }
+        }
+    }
+
+    // If the user didn't specify a path, use the current working directory.
+    if state.file_picker_pending_dir.as_bytes().is_empty() {
+        state.file_picker_pending_dir = DisplayablePathBuf::new(cwd);
+    }
+
+    if let Some(mut file) = sys::open_stdin_if_redirected() {
+        state.buffer.read_file(&mut file, None)?;
+        state.buffer.mark_as_dirty();
+    } else if let Some(path) = &state.path {
+        if !state.filename.is_empty() {
+            match file_open(path) {
+                Ok(mut file) => state.buffer.read_file(&mut file, None)?,
+                Err(err) if sys::apperr_is_not_found(err) => {}
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn print_help() {
+    sys::write_stdout(concat!(
+        "Usage: edit [OPTIONS] [FILE]\r\n",
+        "Options:\r\n",
+        "    -h, --help       Print this help message\r\n",
+        "    -v, --version    Print the version number\r\n",
+    ));
+}
+
+fn print_version() {
+    sys::write_stdout(concat!("edit version ", env!("CARGO_PKG_VERSION"), "\r\n"));
 }
 
 fn draw(ctx: &mut Context, state: &mut State) {
