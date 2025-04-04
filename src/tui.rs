@@ -1851,6 +1851,8 @@ impl Context<'_, '_> {
                     };
                     if modifiers.contains(kbmod::SHIFT) {
                         tb.selection_update_delta(granularity, -1);
+                    } else if let Some((beg, _)) = tb.selection_range() {
+                        unsafe { tb.set_cursor(beg) };
                     } else {
                         tb.cursor_move_delta(granularity, -1);
                     }
@@ -1858,16 +1860,24 @@ impl Context<'_, '_> {
                 vk::UP => {
                     match modifiers {
                         kbmod::NONE => {
+                            let mut x = tc.preferred_column;
+                            let mut y = tb.get_cursor_visual_pos().y - 1;
+
+                            // If there's a selection we the cursor above the start of the selection.
+                            if let Some((beg, _)) = tb.selection_range() {
+                                x = beg.visual_pos.x;
+                                y = beg.visual_pos.y - 1;
+                                tc.preferred_column = x;
+                            }
+
                             // If the cursor was already on the first line,
                             // move it to the start of the buffer.
-                            if tb.get_cursor_visual_pos().y == 0 {
+                            if y < 0 {
+                                x = 0;
                                 tc.preferred_column = 0;
                             }
 
-                            tb.cursor_move_to_visual(Point {
-                                x: tc.preferred_column,
-                                y: tb.get_cursor_visual_pos().y - 1,
-                            });
+                            tb.cursor_move_to_visual(Point { x, y });
                         }
                         kbmod::CTRL => {
                             tc.scroll_offset.y -= 1;
@@ -1899,24 +1909,35 @@ impl Context<'_, '_> {
                     };
                     if modifiers.contains(kbmod::SHIFT) {
                         tb.selection_update_delta(granularity, 1);
+                    } else if let Some((_, end)) = tb.selection_range() {
+                        unsafe { tb.set_cursor(end) };
                     } else {
                         tb.cursor_move_delta(granularity, 1);
                     }
                 }
                 vk::DOWN => match modifiers {
                     kbmod::NONE => {
-                        // If the cursor was already on the last line,
-                        // move it to the end of the buffer.
-                        if tb.get_cursor_visual_pos().y >= tb.get_visual_line_count() - 1 {
-                            tc.preferred_column = CoordType::MAX;
+                        let mut x = tc.preferred_column;
+                        let mut y = tb.get_cursor_visual_pos().y + 1;
+
+                        // If there's a selection we the cursor below the end of the selection.
+                        if let Some((_, end)) = tb.selection_range() {
+                            x = end.visual_pos.x;
+                            y = end.visual_pos.y + 1;
+                            tc.preferred_column = x;
                         }
 
-                        tb.cursor_move_to_visual(Point {
-                            x: tc.preferred_column,
-                            y: tb.get_cursor_visual_pos().y + 1,
-                        });
+                        // If the cursor was already on the last line,
+                        // move it to the end of the buffer.
+                        if y >= tb.get_visual_line_count() {
+                            x = CoordType::MAX;
+                        }
 
-                        if tc.preferred_column == CoordType::MAX {
+                        tb.cursor_move_to_visual(Point { x, y });
+
+                        // If we fell into the `if y >= tb.get_visual_line_count()` above, we wanted to
+                        // update the `preferred_column` but didn't know yet what it was. Now we know!
+                        if x == CoordType::MAX {
                             tc.preferred_column = tb.get_cursor_visual_pos().x;
                         }
                     }
@@ -2290,14 +2311,6 @@ impl Context<'_, '_> {
         }
 
         if self.contains_focus() {
-            if self.consume_shortcut(vk::ESCAPE) {
-                // TODO: This should reassign the previous focused path.
-                self.needs_rerender();
-                self.tui.focused_node_path.clear();
-                self.tui.focused_node_path.push(ROOT_ID);
-                return false;
-            }
-
             self.attr_background_rgba(self.indexed(IndexedColor::Green));
             self.attr_foreground_rgba(self.contrasted(self.indexed(IndexedColor::Green)));
 

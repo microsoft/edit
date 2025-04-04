@@ -1093,7 +1093,7 @@ impl TextBuffer {
             let beg = self.cursor_move_to_offset_internal(self.cursor, range.start);
             let end = self.cursor_move_to_offset_internal(beg, range.end);
 
-            self.set_cursor(end);
+            unsafe { self.set_cursor(end) };
             self.make_cursor_visible();
 
             self.set_selection(TextBufferSelection::Done {
@@ -1361,22 +1361,28 @@ impl TextBuffer {
     }
 
     pub fn cursor_move_to_offset(&mut self, offset: usize) {
-        self.set_cursor(self.cursor_move_to_offset_internal(self.cursor, offset))
+        unsafe { self.set_cursor(self.cursor_move_to_offset_internal(self.cursor, offset)) }
     }
 
     pub fn cursor_move_to_logical(&mut self, pos: Point) {
-        self.set_cursor(self.cursor_move_to_logical_internal(self.cursor, pos))
+        unsafe { self.set_cursor(self.cursor_move_to_logical_internal(self.cursor, pos)) }
     }
 
     pub fn cursor_move_to_visual(&mut self, pos: Point) {
-        self.set_cursor(self.cursor_move_to_visual_internal(self.cursor, pos))
+        unsafe { self.set_cursor(self.cursor_move_to_visual_internal(self.cursor, pos)) }
     }
 
     pub fn cursor_move_delta(&mut self, granularity: CursorMovement, delta: CoordType) {
-        self.set_cursor(self.cursor_move_delta_internal(self.cursor, granularity, delta))
+        unsafe { self.set_cursor(self.cursor_move_delta_internal(self.cursor, granularity, delta)) }
     }
 
-    fn set_cursor(&mut self, cursor: ucd::UcdCursor) {
+    /// Sets the cursor to the given position, and clears the selection.
+    ///
+    /// # Safety
+    ///
+    /// This function performs no checks that the cursor is valid. "Valid" in this case means
+    /// that the TextBuffer has not been modified since you received the cursor from this class.
+    pub unsafe fn set_cursor(&mut self, cursor: ucd::UcdCursor) {
         self.set_cursor_internal(cursor);
         self.last_history_type = HistoryType::Other;
         self.set_selection(TextBufferSelection::None);
@@ -1728,12 +1734,10 @@ impl TextBuffer {
             return;
         }
 
-        if self.selection.is_some() {
-            if let Some((beg, end)) = self.extract_selection_range() {
-                self.edit_begin(HistoryType::Write, beg);
-                self.edit_delete(end);
-                self.set_selection(TextBufferSelection::None);
-            }
+        if let Some((beg, end)) = self.selection_range_internal(false) {
+            self.edit_begin(HistoryType::Write, beg);
+            self.edit_delete(end);
+            self.set_selection(TextBufferSelection::None);
         }
         if self.active_edit_depth <= 0 {
             self.edit_begin(HistoryType::Write, self.cursor);
@@ -1867,11 +1871,8 @@ impl TextBuffer {
         let mut beg;
         let mut end;
 
-        if self.selection.is_some() {
-            (beg, end) = match self.extract_selection_range() {
-                Some(v) => v,
-                None => return,
-            };
+        if let Some(r) = self.selection_range_internal(false) {
+            (beg, end) = r;
             self.set_selection(TextBufferSelection::None);
         } else {
             if (delta == -1 && self.cursor.offset == 0)
@@ -1898,7 +1899,7 @@ impl TextBuffer {
 
     /// Extracts a chunk of text or a line if no selection is active. May optionally delete it.
     pub fn extract_selection(&mut self, delete: bool) -> Vec<u8> {
-        let Some((beg, end)) = self.extract_selection_range() else {
+        let Some((beg, end)) = self.selection_range_internal(true) else {
             return Vec::new();
         };
 
@@ -1915,23 +1916,28 @@ impl TextBuffer {
         out
     }
 
-    fn extract_selection_range(&self) -> Option<(ucd::UcdCursor, ucd::UcdCursor)> {
-        let (beg, end) = match self.selection {
-            TextBufferSelection::None => {
-                // If there's no selection, editors commonly copy the current line.
-                (
-                    Point {
-                        x: 0,
-                        y: self.cursor.logical_pos.y,
-                    },
-                    Point {
-                        x: 0,
-                        y: self.cursor.logical_pos.y + 1,
-                    },
-                )
-            }
+    pub fn selection_range(&self) -> Option<(ucd::UcdCursor, ucd::UcdCursor)> {
+        self.selection_range_internal(false)
+    }
+
+    fn selection_range_internal(
+        &self,
+        line_fallback: bool,
+    ) -> Option<(ucd::UcdCursor, ucd::UcdCursor)> {
+        let [beg, end] = match self.selection {
+            TextBufferSelection::None if !line_fallback => return None,
+            TextBufferSelection::None => [
+                Point {
+                    x: 0,
+                    y: self.cursor.logical_pos.y,
+                },
+                Point {
+                    x: 0,
+                    y: self.cursor.logical_pos.y + 1,
+                },
+            ],
             TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
-                (beg.min(end), beg.max(end))
+                helpers::minmax(beg, end)
             }
         };
 
