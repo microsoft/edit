@@ -209,26 +209,21 @@ fn get_console_size() -> Option<Size> {
 /// Returns `None` if there was an error reading from stdin.
 /// Returns `Some("")` if the given timeout was reached.
 /// Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(timeout: time::Duration) -> Option<String> {
+pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
+    // On startup we're asked to inject a window size so that the UI system can layout the elements.
+    // --> Inject a fake sequence for our input parser.
+    let mut resize_event = None;
+    if unsafe { STATE.inject_resize } {
+        unsafe { STATE.inject_resize = false };
+        timeout = time::Duration::ZERO;
+        resize_event = get_console_size();
+    }
+
+    let read_poll = timeout != time::Duration::MAX; // there is a timeout -> don't block in read()
     let mut input_buf = [const { MaybeUninit::<Console::INPUT_RECORD>::uninit() }; 1024];
     let mut input_buf_cap = input_buf.len();
     let mut utf16_buf = [const { MaybeUninit::<u16>::uninit() }; 1024];
     let mut utf16_buf_len = 0;
-    let mut resize_event = None;
-    let mut read_poll = timeout != time::Duration::MAX; // there is a timeout -> don't block in read()
-    let deadline = if timeout != time::Duration::MAX {
-        Some(time::Instant::now() + timeout)
-    } else {
-        None
-    };
-
-    // On startup we're asked to inject a window size so that the UI system can layout the elements.
-    // --> Inject a fake sequence for our input parser.
-    if unsafe { STATE.inject_resize } {
-        resize_event = get_console_size();
-        read_poll = true;
-        unsafe { STATE.inject_resize = false };
-    }
 
     // If there was a leftover leading surrogate from the last read, we prepend it to the buffer.
     if unsafe { STATE.leading_surrogate } != 0 {
@@ -240,15 +235,11 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
 
     // Read until there's either a timeout or we have something to process.
     loop {
-        if let Some(deadline) = deadline {
-            let remaining = deadline
-                .saturating_duration_since(time::Instant::now())
-                .as_millis() as u32;
-            if remaining == 0 {
-                break; // Timeout? We can stop reading.
-            }
+        if timeout != time::Duration::MAX {
+            let beg = time::Instant::now();
 
-            match unsafe { Threading::WaitForSingleObject(STATE.stdin, remaining) } {
+            match unsafe { Threading::WaitForSingleObject(STATE.stdin, timeout.as_millis() as u32) }
+            {
                 // Ready to read? Continue with reading below.
                 Foundation::WAIT_OBJECT_0 => {}
                 // Timeout? Skip reading entirely.
@@ -256,6 +247,8 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
                 // Error? Tell the caller stdin is broken.
                 _ => return None,
             }
+
+            timeout = timeout.saturating_sub(beg.elapsed());
         }
 
         // Read from stdin.

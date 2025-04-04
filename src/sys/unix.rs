@@ -2,7 +2,6 @@ use crate::apperr;
 use crate::helpers;
 use std::borrow::Cow;
 use std::ffi::{CStr, CString, c_int, c_void};
-use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::mem;
 use std::mem::MaybeUninit;
@@ -80,13 +79,56 @@ pub fn switch_modes() -> apperr::Result<()> {
 
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
-        check_int_return(libc::tcgetattr(STATE.stdout, termios.as_mut_ptr()))?;
+        check_int_return(libc::tcgetattr(STATE.stdin, termios.as_mut_ptr()))?;
         let mut termios = termios.assume_init();
         STATE.stdout_initial_termios = Some(termios);
 
+        termios.c_iflag &= !(
+            // When neither IGNBRK...
+            libc::IGNBRK
+            // ...nor BRKINT are set, a BREAK reads as a null byte ('\0'), ...
+            | libc::BRKINT
+            // ...except when PARMRK is set, in which case it reads as the sequence \377 \0 \0.
+            | libc::PARMRK
+            // Disable input parity checking.
+            | libc::INPCK
+            // Disable stripping of eighth bit.
+            | libc::ISTRIP
+            // Disable mapping of NL to CR on input.
+            | libc::INLCR
+            // Disable ignoring CR on input.
+            | libc::IGNCR
+            // Disable mapping of CR to NL on input.
+            | libc::ICRNL
+            // Disable software flow control.
+            | libc::IXON
+        );
+        // Disable output processing.
+        termios.c_oflag &= !libc::OPOST;
+        termios.c_cflag &= !(
+            // Reset character size mask.
+            libc::CSIZE
+            // Disable parity generation.
+            | libc::PARENB
+        );
+        // Set character size back to 8 bits.
+        termios.c_cflag |= libc::CS8;
+        termios.c_lflag &= !(
+            // Disable signal generation (SIGINT, SIGTSTP, SIGQUIT).
+            libc::ISIG
+            // Disable canonical mode (line buffering).
+            | libc::ICANON
+            // Disable echoing of input characters.
+            | libc::ECHO
+            // Disable echoing of NL.
+            | libc::ECHONL
+            // Disable extended input processing (e.g. Ctrl-V).
+            | libc::IEXTEN
+        );
+
         // Set the terminal to raw mode.
         termios.c_lflag &= !(libc::ICANON | libc::ECHO);
-        check_int_return(libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios))?;
+        check_int_return(libc::tcsetattr(STATE.stdin, libc::TCSANOW, &termios))?;
 
         Ok(())
     }
@@ -99,25 +141,17 @@ pub fn inject_window_size_into_stdin() {
 }
 
 fn get_window_size() -> (u16, u16) {
-    let mut w = 0;
-    let mut h = 0;
+    let mut winsz: libc::winsize = unsafe { mem::zeroed() };
 
     for attempt in 1.. {
-        let winsz = unsafe {
-            let mut winsz: libc::winsize = mem::zeroed();
-            libc::ioctl(STATE.stdout, libc::TIOCGWINSZ, &raw mut winsz);
-            winsz
-        };
-
-        w = winsz.ws_col;
-        h = winsz.ws_row;
-        if w != 0 && h != 0 {
+        let ret = unsafe { libc::ioctl(STATE.stdout, libc::TIOCGWINSZ, &raw mut winsz) };
+        if ret == -1 || (winsz.ws_col != 0 && winsz.ws_row != 0) {
             break;
         }
 
         if attempt == 10 {
-            w = 80;
-            h = 24;
+            winsz.ws_col = 80;
+            winsz.ws_row = 24;
             break;
         }
 
@@ -125,7 +159,7 @@ fn get_window_size() -> (u16, u16) {
         thread::sleep(time::Duration::from_millis(10 * attempt));
     }
 
-    (w, h)
+    (winsz.ws_col, winsz.ws_row)
 }
 
 /// Reads from stdin.
@@ -133,48 +167,29 @@ fn get_window_size() -> (u16, u16) {
 /// Returns `None` if there was an error reading from stdin.
 /// Returns `Some("")` if the given timeout was reached.
 /// Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(timeout: time::Duration) -> Option<String> {
+pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
     unsafe {
-        let mut read_poll = timeout != time::Duration::MAX; // there is a timeout -> don't block in read()
-        let deadline = if timeout != time::Duration::MAX {
-            Some(time::Instant::now() + timeout)
-        } else {
-            None
-        };
-
-        // It is important that we allocate the string with an explicit capacity,
-        // because we later use `spare_capacity_mut` to access it.
-        let mut input = String::with_capacity(1024);
-
-        // We received a SIGWINCH? Inject a fake sequence for our input parser.
-        // It's impossible to know whether to inject it at the start or end of the input,
-        // because neither SIGWINCH nor the input itself includes timing information.
         if STATE.inject_resize {
-            STATE.inject_resize = false;
-            read_poll = true;
-            let (w, h) = get_window_size();
-            _ = write!(input, "\x1b[8;{};{}t", h, w);
+            timeout = time::Duration::ZERO;
         }
+
+        let read_poll = timeout != time::Duration::MAX;
 
         // We don't know if the input is valid UTF8, so we first use a Vec and then
         // later turn it into UTF8 using `helpers::string_from_utf8_lossy_owned`.
-        let mut buf = input.into_bytes();
+        // It is important that we allocate the buffer with an explicit capacity,
+        // because we later use `spare_capacity_mut` to access it.
+        let mut buf = Vec::with_capacity(1024);
 
         // We got some leftover broken UTF8 from a previous read? Prepend it.
-        let leftover_utf8_len = STATE.utf8_len;
-        if leftover_utf8_len != 0 {
-            buf.extend_from_slice(&STATE.utf8_buf[..leftover_utf8_len]);
+        if STATE.utf8_len != 0 {
+            STATE.utf8_len = 0;
+            buf.extend_from_slice(&STATE.utf8_buf[..STATE.utf8_len]);
         }
 
-        // Track the length of the buffer with the `inject_resize` in there, but without any actual
-        // stdin that we read. That way we can easily check if something was actually read.
-        let buf_len_before_read = buf.len();
-
         loop {
-            if let Some(deadline) = deadline {
-                let Some(timeout) = deadline.checked_duration_since(time::Instant::now()) else {
-                    break; // Timeout? We can stop reading.
-                };
+            if timeout != time::Duration::MAX {
+                let beg = time::Instant::now();
 
                 let mut pollfd = libc::pollfd {
                     fd: STATE.stdin,
@@ -192,6 +207,8 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
                 if ret == 0 {
                     break; // Timeout? We can stop reading.
                 }
+
+                timeout = timeout.saturating_sub(beg.elapsed());
             };
 
             // If we're asked for a non-blocking read we need to manipulate `O_NONBLOCK` and vice versa.
@@ -202,41 +219,27 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
                 let _ = libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
             }
 
-            // Read from stdin. Looped to handle interrupts.
-            loop {
-                let spare = buf.spare_capacity_mut();
-                if spare.is_empty() {
-                    break;
-                }
-
-                let ret = libc::read(STATE.stdin, spare.as_mut_ptr() as *mut _, spare.len());
-                if ret > 0 {
-                    buf.set_len(buf.len() + ret as usize);
-                    break;
-                }
-                if ret == 0 {
-                    return None;
-                }
+            // Read from stdin.
+            let spare = buf.spare_capacity_mut();
+            let ret = libc::read(STATE.stdin, spare.as_mut_ptr() as *mut _, spare.len());
+            if ret > 0 {
+                buf.set_len(buf.len() + ret as usize);
+                break;
+            }
+            if ret == 0 {
+                return None; // EOF
+            }
+            if ret < 0 {
                 match *libc::__errno_location() {
-                    libc::EINTR => continue, // An interrupt occurred, let's try again.
-                    libc::EAGAIN => break,   // A read timeout occurred under `read_poll`.
+                    libc::EINTR if STATE.inject_resize => break,
+                    libc::EAGAIN if timeout == time::Duration::ZERO => break,
+                    libc::EINTR | libc::EAGAIN => {}
                     _ => return None,
                 }
             }
-
-            // If we either had an injected resize or we read something we're done.
-            if buf.len() > leftover_utf8_len {
-                break;
-            }
         }
 
-        if buf.len() <= buf_len_before_read {
-            // If we didn't read anything, remove the leftover UTF8 that we added in the beginning again.
-            buf.truncate(buf.len() - leftover_utf8_len);
-        } else {
-            // Otherwise, we did read something and now need to rebuild the `STATE.utf8_buf`.
-            STATE.utf8_len = 0;
-
+        if !buf.is_empty() {
             // We only need to check the last 3 bytes for UTF-8 continuation bytes,
             // because we should be able to assume that any 4 byte sequence is complete.
             let lim = buf.len().saturating_sub(3);
@@ -265,7 +268,19 @@ pub fn read_stdin(timeout: time::Duration) -> Option<String> {
             }
         }
 
-        Some(helpers::string_from_utf8_lossy_owned(buf))
+        let mut result = helpers::string_from_utf8_lossy_owned(buf);
+
+        // We received a SIGWINCH? Add a fake window size sequence for our input parser.
+        // I prepend it so that on startup, the TUI system gets first initialized with a size.
+        if STATE.inject_resize {
+            STATE.inject_resize = false;
+            let (w, h) = get_window_size();
+            if w > 0 && h > 0 {
+                result = format!("\x1b[8;{};{}t{}", h, w, result);
+            }
+        }
+
+        Some(result)
     }
 }
 
@@ -394,7 +409,7 @@ pub fn load_libicuuc() -> apperr::Result<*mut c_void> {
     unsafe { load_library(c"libicuuc.so") }
 }
 
-pub fn load_libicui18n(_libicuuc: *mut c_void) -> apperr::Result<*mut c_void> {
+pub fn load_libicui18n() -> apperr::Result<*mut c_void> {
     unsafe { load_library(c"libicui18n.so") }
 }
 
