@@ -225,7 +225,7 @@ impl Framebuffer {
 
     #[inline]
     pub fn indexed_alpha(&self, index: IndexedColor, alpha: u8) -> u32 {
-        self.indexed_colors[index as usize] & ((alpha as u32) << 24 | 0xffffff)
+        self.indexed_colors[index as usize] & 0x00ffffff | (alpha as u32) << 24
     }
 
     pub fn contrasted(&self, color: u32) -> u32 {
@@ -240,6 +240,29 @@ impl Framebuffer {
     pub fn blend_fg(&mut self, target: Rect, fg: u32) {
         let back = &mut self.buffers[self.frame_counter & 1];
         back.fg_bitmap.blend(target, fg);
+    }
+
+    pub fn reverse(&mut self, target: Rect) {
+        let back = &mut self.buffers[self.frame_counter & 1];
+
+        let target = target.intersect(back.bg_bitmap.size.as_rect());
+        if target.is_empty() {
+            return;
+        }
+
+        let top = target.top as usize;
+        let bottom = target.bottom as usize;
+        let left = target.left as usize;
+        let right = target.right as usize;
+        let stride = back.bg_bitmap.size.width as usize;
+
+        for y in top..bottom {
+            let beg = y * stride + left;
+            let end = y * stride + right;
+            let bg = &mut back.bg_bitmap.data[beg..end];
+            let fg = &mut back.fg_bitmap.data[beg..end];
+            bg.swap_with_slice(fg);
+        }
     }
 
     pub fn replace_attr(&mut self, target: Rect, mask: Attributes, attr: Attributes) {
@@ -366,13 +389,6 @@ impl Framebuffer {
                             result.push_str("\x1b[24m");
                         }
                     }
-                    if diff.reverse() {
-                        if attr.reverse() {
-                            result.push_str("\x1b[7m");
-                        } else {
-                            result.push_str("\x1b[27m");
-                        }
-                    }
                     last_attr = attr;
                 }
 
@@ -414,8 +430,8 @@ impl Framebuffer {
     }
 }
 
-pub fn mix(dst: u32, src: u32, balance: f32) -> u32 {
-    Bitmap::mix(dst, src, balance, 1.0 - balance)
+pub fn alpha_blend(dst: u32, src: u32) -> u32 {
+    Bitmap::alpha_blend(dst, src)
 }
 
 #[derive(Default)]
@@ -606,7 +622,7 @@ impl Bitmap {
                     } {}
                     let chunk_end = off;
 
-                    data[chunk_beg..chunk_end].fill(Self::mix(c, color, 1.0, 1.0));
+                    data[chunk_beg..chunk_end].fill(Self::alpha_blend(c, color));
 
                     off < end
                 } {}
@@ -614,18 +630,16 @@ impl Bitmap {
         }
     }
 
-    fn mix(dst: u32, src: u32, dst_balance: f32, src_balance: f32) -> u32 {
+    fn alpha_blend(dst: u32, src: u32) -> u32 {
         let src_r = Self::srgb_to_linear(src & 0xff);
         let src_g = Self::srgb_to_linear((src >> 8) & 0xff);
         let src_b = Self::srgb_to_linear((src >> 16) & 0xff);
         let src_a = (src >> 24) as f32 / 255.0f32;
-        let src_a = src_a * dst_balance;
 
         let dst_r = Self::srgb_to_linear(dst & 0xff);
         let dst_g = Self::srgb_to_linear((dst >> 8) & 0xff);
         let dst_b = Self::srgb_to_linear((dst >> 16) & 0xff);
         let dst_a = (dst >> 24) as f32 / 255.0f32;
-        let dst_a = dst_a * src_balance;
 
         let out_a = src_a + dst_a * (1.0f32 - src_a);
         let out_r = (src_r * src_a + dst_r * dst_a * (1.0f32 - src_a)) / out_a;
@@ -678,15 +692,10 @@ pub struct Attributes(u8);
 impl Attributes {
     pub const None: Attributes = Attributes(0);
     pub const Underlined: Attributes = Attributes(0b1);
-    pub const Reverse: Attributes = Attributes(0b10);
-    pub const All: Attributes = Attributes(0b11);
+    pub const All: Attributes = Attributes(0b1);
 
     pub const fn underlined(self) -> bool {
         self.0 & Self::Underlined.0 != 0
-    }
-
-    pub const fn reverse(self) -> bool {
-        self.0 & Self::Reverse.0 != 0
     }
 }
 

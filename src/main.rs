@@ -20,7 +20,7 @@
 // * For the focus path we can use the tree depth to O(1) check if the path contains the focus.
 
 use edit::buffer::{self, RcTextBuffer};
-use edit::framebuffer::{self, IndexedColor, mix};
+use edit::framebuffer::{self, IndexedColor, alpha_blend};
 use edit::helpers::*;
 use edit::input::{self, kbmod, vk};
 use edit::loc::{LocId, loc};
@@ -193,16 +193,14 @@ fn run() -> apperr::Result<()> {
     let mut tui = Tui::new();
 
     query_color_palette(&mut tui, &mut vt_parser);
-    state.menubar_color_bg = mix(
+    state.menubar_color_bg = alpha_blend(
         tui.indexed(IndexedColor::Background),
-        tui.indexed(IndexedColor::Blue),
-        0.5,
+        tui.indexed_alpha(IndexedColor::BrightBlue, 0x7f),
     );
     state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
-    let floater_bg = mix(
-        tui.indexed(IndexedColor::Background),
-        tui.indexed(IndexedColor::Foreground),
-        0.2,
+    let floater_bg = alpha_blend(
+        tui.indexed_alpha(IndexedColor::Background, 0xcc),
+        tui.indexed_alpha(IndexedColor::Foreground, 0x33),
     );
     let floater_fg = tui.contrasted(floater_bg);
     tui.set_floater_default_bg(floater_bg);

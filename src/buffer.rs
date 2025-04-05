@@ -13,7 +13,7 @@
 //! The solution to the former is to keep line caches, which further complicates the architecture.
 //! There's no solution for the latter. However, there's a chance that the performance will still be sufficient.
 
-use crate::framebuffer::{Attributes, Framebuffer, IndexedColor};
+use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::{self, COORD_TYPE_SAFE_MAX, CoordType, Point, Rect};
 use crate::memchr::memchr2;
 use crate::ucd::Document;
@@ -1436,7 +1436,7 @@ impl TextBuffer {
         &mut self,
         origin: Point,
         destination: Rect,
-        show_cursor: bool,
+        focused: bool,
         fb: &mut Framebuffer,
     ) {
         if destination.is_empty() {
@@ -1651,7 +1651,12 @@ impl TextBuffer {
                     bottom: top + 1,
                 };
 
-                fb.flip_attr(rect, Attributes::Reverse);
+                let bg = if focused {
+                    fb.indexed_alpha(IndexedColor::BrightBlue, 0x5f)
+                } else {
+                    fb.indexed_alpha(IndexedColor::BrightBlack, 0x3f)
+                };
+                fb.blend_bg(rect, bg);
             }
 
             cursor = cursor_end;
@@ -1684,7 +1689,7 @@ impl TextBuffer {
             }
         }
 
-        if show_cursor {
+        if focused {
             let mut x = self.cursor.visual_pos.x;
             let mut y = self.cursor.visual_pos.y;
 
