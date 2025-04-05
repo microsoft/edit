@@ -93,6 +93,7 @@ struct State {
     search_options: buffer::SearchOptions,
     search_success: bool,
 
+    wants_term_title_update: bool,
     wants_encoding_focus: bool,
     wants_encoding_change: StateEncodingChange,
     wants_indentation_focus: bool,
@@ -134,6 +135,7 @@ impl State {
             search_options: buffer::SearchOptions::default(),
             search_success: true,
 
+            wants_term_title_update: true,
             wants_encoding_focus: false,
             wants_encoding_change: StateEncodingChange::None,
             wants_indentation_focus: false,
@@ -149,6 +151,7 @@ impl State {
         self.buffer.set_ruler(ruler);
         self.filename = filename;
         self.path = Some(path);
+        self.wants_term_title_update = true;
     }
 }
 
@@ -266,10 +269,15 @@ fn run() -> apperr::Result<()> {
             break;
         }
 
+        let mut output = tui.render();
+
+        if state.wants_term_title_update {
+            state.wants_term_title_update = false;
+            write_terminal_title(&mut output, &state.filename);
+        }
+
         #[cfg(feature = "debug-latency")]
         {
-            let mut output = tui.render();
-
             // Print the number of passes and latency in the top right corner.
             let time_end = std::time::Instant::now();
             let status = time_end - time_beg;
@@ -299,11 +307,8 @@ fn run() -> apperr::Result<()> {
             last_latency_width = cols;
             sys::write_stdout(&output);
         }
-        #[cfg(not(feature = "debug-latency"))]
-        {
-            let output = tui.render();
-            sys::write_stdout(&output);
-        }
+
+        sys::write_stdout(&output);
     }
 
     Ok(())
@@ -1460,13 +1465,23 @@ fn set_vt_modes() -> RestoreModes {
     RestoreModes
 }
 
+#[cold]
+fn write_terminal_title(output: &mut String, filename: &str) {
+    output.push_str("\x1b]0;edit");
+    if !filename.is_empty() {
+        output.push(' ');
+        output.push_str(&sanitize_control_chars(filename));
+    }
+    output.push('\x07');
+}
+
 struct RestoreModes;
 
 impl Drop for RestoreModes {
     fn drop(&mut self) {
         // Same as in the beginning but in the reverse order.
         // It also includes DECSCUSR 0 to reset the cursor style and DECTCEM to show the cursor.
-        sys::write_stdout("\x1b[?1002;1006;2004l\x1b[?1049l\x1b[0 q\x1b[?25h");
+        sys::write_stdout("\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1002;1006;2004l\x1b[?1049l");
     }
 }
 

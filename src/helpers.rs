@@ -420,6 +420,26 @@ pub fn file_read_uninit<T: Read>(
     }
 }
 
+/// Strips all C0 control characters from the string an replaces them with "_".
+///
+/// Jury is still out on whether this should also strip C1 control characters.
+/// That requires parsing UTF8 codepoints, which is annoying.
+pub fn sanitize_control_chars(text: &str) -> Cow<'_, str> {
+    if let Some(off) = text.bytes().position(|b| (..0x20).contains(&b)) {
+        let mut sanitized = text.to_string();
+        // SAFETY: We only search for ASCII and replace it with ASCII.
+        let vec = unsafe { sanitized.as_bytes_mut() };
+
+        for i in &mut vec[off..] {
+            *i = if (..0x20).contains(i) { b'_' } else { *i }
+        }
+
+        Cow::Owned(sanitized)
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
 /// Turns a `&[MaybeUninit<T>]` into a `&[T]`.
 /// A copy of `MaybeUninit::assume_init_ref` which is unstable (yay).
 ///
