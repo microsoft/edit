@@ -1597,114 +1597,118 @@ impl Context<'_, '_> {
 
         let tb = &mut *tc.buffer;
 
-        if self.tui.mouse_state == InputMouseState::Scroll && self.tui.is_node_hovered(node_prev.id)
-        {
-            tc.scroll_offset.x += self.input_scroll_delta.x;
-            tc.scroll_offset.y += self.input_scroll_delta.y;
-            self.set_input_consumed();
-            return false;
-        }
-
-        if self.tui.mouse_state != InputMouseState::None && self.tui.is_node_focused(node_prev.id) {
+        if self.tui.mouse_state != InputMouseState::None && self.tui.is_node_hovered(node_prev.id) {
             let mut make_cursor_visible = false;
-            let mouse = self.tui.mouse_position;
-            let inner = node_prev.inner;
-            let text = Rect {
-                left: inner.left + tb.get_margin_width(),
-                top: inner.top,
-                right: inner.right - 1,
-                bottom: inner.bottom,
-            };
-            let pos = Point {
-                x: mouse.x - inner.left - tb.get_margin_width() + tc.scroll_offset.x,
-                y: mouse.y - inner.top + tc.scroll_offset.y,
-            };
 
-            if self.input_mouse_is_double_click {
-                tb.select_word();
-            } else if self.tui.mouse_is_drag {
+            // Scrolling works even if the node isn't focused.
+            if self.tui.mouse_state == InputMouseState::Scroll {
+                tc.scroll_offset.x += self.input_scroll_delta.x;
+                tc.scroll_offset.y += self.input_scroll_delta.y;
+                self.set_input_consumed();
+            } else if self.tui.is_node_focused(node_prev.id) {
+                let mouse = self.tui.mouse_position;
+                let inner = node_prev.inner;
+                let text_rect = Rect {
+                    left: inner.left + tb.get_margin_width(),
+                    top: inner.top,
+                    right: inner.right - !single_line as CoordType,
+                    bottom: inner.bottom,
+                };
                 let track_rect = Rect {
-                    left: inner.right - 1,
+                    left: text_rect.right,
                     top: inner.top,
                     right: inner.right,
                     bottom: inner.bottom,
                 };
-                if track_rect.contains(self.tui.mouse_down_position) {
-                    if tc.scroll_offset_y_drag_start == CoordType::MIN {
-                        tc.scroll_offset_y_drag_start = tc.scroll_offset.y;
-                    }
+                let pos = Point {
+                    x: mouse.x - inner.left - tb.get_margin_width() + tc.scroll_offset.x,
+                    y: mouse.y - inner.top + tc.scroll_offset.y,
+                };
 
-                    // The textarea supports 1 height worth of "scrolling beyond the end".
-                    // `track_height` is the same as the viewport height.
-                    let scrollable_height = tb.get_visual_line_count() - 1;
-
-                    if scrollable_height > 0 {
-                        let trackable = track_rect.height() - tc.thumb_height;
-                        let delta_y = mouse.y - self.tui.mouse_down_position.y;
-                        tc.scroll_offset.y = tc.scroll_offset_y_drag_start
-                            + ((delta_y * scrollable_height) / trackable);
-                    }
-                } else {
-                    tb.selection_update_visual(pos);
-                    tc.preferred_column = tb.get_cursor_visual_pos().x;
-
-                    let height = inner.height();
-
-                    // If the editor is only 1 line tall we can't possibly scroll up or down.
-                    if height >= 2 {
-                        fn calc(min: CoordType, max: CoordType, mouse: CoordType) -> CoordType {
-                            // Otherwise, the scroll zone is up to 3 lines at the top/bottom.
-                            let zone_height = ((max - min) / 2).min(3);
-
-                            // The .y positions where the scroll zones begin:
-                            // Mouse coordinates above top and below bottom respectively.
-                            let scroll_min = min + zone_height;
-                            let scroll_max = max - zone_height - 1;
-
-                            // Calculate the delta for scrolling up or down.
-                            let delta_min = (mouse - scroll_min).clamp(-zone_height, 0);
-                            let delta_max = (mouse - scroll_max).clamp(0, zone_height);
-
-                            // If I didn't mess up my logic here, only one of the two values can possibly be !=0.
-                            let idx = 3 + delta_min + delta_max;
-
-                            const SPEEDS: [CoordType; 7] = [-9, -3, -1, 0, 1, 3, 9];
-                            let idx = idx.clamp(0, SPEEDS.len() as CoordType) as usize;
-                            SPEEDS[idx]
-                        }
-
-                        let delta_x = calc(text.left, text.right, mouse.x);
-                        let delta_y = calc(text.top, text.bottom, mouse.y);
-
-                        tc.scroll_offset.x += delta_x;
-                        tc.scroll_offset.y += delta_y;
-
-                        if delta_x != 0 || delta_y != 0 {
-                            self.tui.read_timeout = time::Duration::from_millis(25);
-                        }
-                    }
-                }
-            } else {
-                match self.tui.mouse_state {
-                    InputMouseState::Left => {
-                        if self.input_mouse_modifiers.contains(kbmod::SHIFT) {
-                            // TODO: Untested because Windows Terminal surprisingly doesn't support Shift+Click.
-                            tb.selection_update_visual(pos);
-                        } else {
-                            tb.cursor_move_to_visual(pos);
-                        }
+                if text_rect.contains(self.tui.mouse_down_position) {
+                    if self.input_mouse_is_double_click {
+                        tb.select_word();
+                    } else if self.tui.mouse_is_drag {
+                        tb.selection_update_visual(pos);
                         tc.preferred_column = tb.get_cursor_visual_pos().x;
-                        make_cursor_visible = true;
+
+                        let height = inner.height();
+
+                        // If the editor is only 1 line tall we can't possibly scroll up or down.
+                        if height >= 2 {
+                            fn calc(min: CoordType, max: CoordType, mouse: CoordType) -> CoordType {
+                                // Otherwise, the scroll zone is up to 3 lines at the top/bottom.
+                                let zone_height = ((max - min) / 2).min(3);
+
+                                // The .y positions where the scroll zones begin:
+                                // Mouse coordinates above top and below bottom respectively.
+                                let scroll_min = min + zone_height;
+                                let scroll_max = max - zone_height - 1;
+
+                                // Calculate the delta for scrolling up or down.
+                                let delta_min = (mouse - scroll_min).clamp(-zone_height, 0);
+                                let delta_max = (mouse - scroll_max).clamp(0, zone_height);
+
+                                // If I didn't mess up my logic here, only one of the two values can possibly be !=0.
+                                let idx = 3 + delta_min + delta_max;
+
+                                const SPEEDS: [CoordType; 7] = [-9, -3, -1, 0, 1, 3, 9];
+                                let idx = idx.clamp(0, SPEEDS.len() as CoordType) as usize;
+                                SPEEDS[idx]
+                            }
+
+                            let delta_x = calc(text_rect.left, text_rect.right, mouse.x);
+                            let delta_y = calc(text_rect.top, text_rect.bottom, mouse.y);
+
+                            tc.scroll_offset.x += delta_x;
+                            tc.scroll_offset.y += delta_y;
+
+                            if delta_x != 0 || delta_y != 0 {
+                                self.tui.read_timeout = time::Duration::from_millis(25);
+                            }
+                        }
+                    } else {
+                        match self.tui.mouse_state {
+                            InputMouseState::Left => {
+                                if self.input_mouse_modifiers.contains(kbmod::SHIFT) {
+                                    // TODO: Untested because Windows Terminal surprisingly doesn't support Shift+Click.
+                                    tb.selection_update_visual(pos);
+                                } else {
+                                    tb.cursor_move_to_visual(pos);
+                                }
+                                tc.preferred_column = tb.get_cursor_visual_pos().x;
+                                make_cursor_visible = true;
+                            }
+                            InputMouseState::Release => {
+                                tb.selection_finalize();
+                            }
+                            _ => return false,
+                        }
                     }
-                    InputMouseState::Release => {
+                } else if track_rect.contains(self.tui.mouse_down_position) {
+                    if self.tui.mouse_state == InputMouseState::Release {
                         tc.scroll_offset_y_drag_start = CoordType::MIN;
-                        tb.selection_finalize();
+                    } else if self.tui.mouse_is_drag {
+                        if tc.scroll_offset_y_drag_start == CoordType::MIN {
+                            tc.scroll_offset_y_drag_start = tc.scroll_offset.y;
+                        }
+
+                        // The textarea supports 1 height worth of "scrolling beyond the end".
+                        // `track_height` is the same as the viewport height.
+                        let scrollable_height = tb.get_visual_line_count() - 1;
+
+                        if scrollable_height > 0 {
+                            let trackable = track_rect.height() - tc.thumb_height;
+                            let delta_y = mouse.y - self.tui.mouse_down_position.y;
+                            tc.scroll_offset.y = tc.scroll_offset_y_drag_start
+                                + ((delta_y * scrollable_height) / trackable);
+                        }
                     }
-                    _ => return false,
                 }
+
+                self.set_input_consumed();
             }
 
-            self.set_input_consumed();
             return make_cursor_visible;
         }
 
