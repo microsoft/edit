@@ -117,6 +117,10 @@ pub enum CursorMovement {
     Word,
 }
 
+pub struct RenderResult {
+    pub visual_pos_x_max: CoordType,
+}
+
 #[derive(Clone)]
 pub struct RcTextBuffer(Rc<UnsafeCell<TextBuffer>>);
 
@@ -1444,9 +1448,9 @@ impl TextBuffer {
         destination: Rect,
         focused: bool,
         fb: &mut Framebuffer,
-    ) {
+    ) -> Option<RenderResult> {
         if destination.is_empty() {
-            return;
+            return None;
         }
 
         let width = destination.width();
@@ -1456,6 +1460,7 @@ impl TextBuffer {
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut line = String::new();
         let mut cursor = self.cursor_for_rendering.unwrap_or(self.cursor);
+        let mut visual_pos_x_max = 0;
 
         let [selection_beg, selection_end] = match self.selection {
             TextBufferSelection::None => [Point::MIN, Point::MIN],
@@ -1615,6 +1620,8 @@ impl TextBuffer {
 
                     global_off += chunk.len();
                 }
+
+                visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
 
             fb.replace_text(
@@ -1734,6 +1741,8 @@ impl TextBuffer {
                 }
             }
         }
+
+        Some(RenderResult { visual_pos_x_max })
     }
 
     /// Inserts `text` at the current cursor position.

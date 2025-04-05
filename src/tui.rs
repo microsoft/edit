@@ -636,12 +636,14 @@ impl Tui {
                     destination.right -= 1;
                 }
 
-                tb.render(
+                if let Some(res) = tb.render(
                     tc.scroll_offset,
                     destination,
                     tc.has_focus,
                     &mut self.framebuffer,
-                );
+                ) {
+                    tc.scroll_offset_x_max = res.visual_pos_x_max;
+                }
 
                 if !tc.single_line {
                     // Render the scrollbar.
@@ -1544,6 +1546,7 @@ impl Context<'_, '_> {
             buffer,
             scroll_offset: Point::default(),
             scroll_offset_y_drag_start: CoordType::MIN,
+            scroll_offset_x_max: 0,
             thumb_height: 0,
             preferred_column: 0,
             single_line,
@@ -1554,6 +1557,7 @@ impl Context<'_, '_> {
             if let NodeContent::Textarea(content_prev) = &node_prev.content {
                 content.scroll_offset = content_prev.scroll_offset;
                 content.scroll_offset_y_drag_start = content_prev.scroll_offset_y_drag_start;
+                content.scroll_offset_x_max = content_prev.scroll_offset_x_max;
                 content.thumb_height = content_prev.thumb_height;
                 content.preferred_column = content_prev.preferred_column;
 
@@ -2034,8 +2038,8 @@ impl Context<'_, '_> {
 
         let text_width = tb.get_text_width();
         let cursor_x = tb.get_cursor_visual_pos().x;
-        scroll_x = scroll_x.min(cursor_x);
-        scroll_x = scroll_x.max(cursor_x - text_width + 1);
+        scroll_x = scroll_x.min(cursor_x - 10);
+        scroll_x = scroll_x.max(cursor_x - text_width + 10);
 
         let viewport_height = node_prev.inner.height();
         let cursor_y = tb.get_cursor_visual_pos().y;
@@ -2053,12 +2057,18 @@ impl Context<'_, '_> {
         let mut scroll_x = content.scroll_offset.x;
         let mut scroll_y = content.scroll_offset.y;
 
+        scroll_x = scroll_x.min(
+            content
+                .scroll_offset_x_max
+                .max(tb.get_cursor_visual_pos().x)
+                - 10,
+        );
+        scroll_x = scroll_x.max(0);
+        scroll_y = scroll_y.clamp(0, tb.get_visual_line_count() - 1);
+
         if tb.is_word_wrap_enabled() {
             scroll_x = 0;
         }
-
-        scroll_x = scroll_x.max(0);
-        scroll_y = scroll_y.clamp(0, tb.get_visual_line_count() - 1);
 
         content.scroll_offset.x = scroll_x;
         content.scroll_offset.y = scroll_y;
@@ -2805,6 +2815,7 @@ struct TextareaContent {
     buffer: RcTextBuffer,
     scroll_offset: Point,
     scroll_offset_y_drag_start: CoordType,
+    scroll_offset_x_max: CoordType,
     thumb_height: CoordType,
     preferred_column: CoordType,
     single_line: bool,
