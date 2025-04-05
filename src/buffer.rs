@@ -1936,6 +1936,21 @@ impl TextBuffer {
         out
     }
 
+    pub fn extract_user_selection(&mut self, delete: bool) -> Option<Vec<u8>> {
+        if !self.has_selection() {
+            return None;
+        }
+
+        if let Some(search) = &self.search {
+            let search = unsafe { &*search.get() };
+            if search.selection_generation == self.selection_generation {
+                return None;
+            }
+        }
+
+        Some(self.extract_selection(delete))
+    }
+
     pub fn selection_range(&self) -> Option<(ucd::UcdCursor, ucd::UcdCursor)> {
         self.selection_range_internal(false)
     }

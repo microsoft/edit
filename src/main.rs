@@ -563,10 +563,8 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 
         // If the selection is empty, focus the search input field.
         // Otherwise, focus the replace input field, if it exists.
-        if state.buffer.has_selection() {
-            let selection = state.buffer.extract_selection(false);
-            let selection = string_from_utf8_lossy_owned(selection);
-            state.search_needle = selection;
+        if let Some(selection) = state.buffer.extract_user_selection(false) {
+            state.search_needle = string_from_utf8_lossy_owned(selection);
             focus = state.wants_search.kind;
         }
     }
