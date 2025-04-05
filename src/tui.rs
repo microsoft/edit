@@ -500,21 +500,27 @@ impl Tui {
                     &fill,
                 );
             }
-        } else if node.attributes.float.is_some() {
-            let mut fill = String::new();
-            helpers::string_append_repeat(
-                &mut fill,
-                ' ',
-                (outer_clipped.right - outer_clipped.left) as usize,
-            );
-
-            for y in outer_clipped.top..outer_clipped.bottom {
-                self.framebuffer
-                    .replace_text(y, outer_clipped.left, outer_clipped.right, &fill);
-            }
         }
 
-        if node.attributes.float.is_some() {
+        if node.attributes.float.is_some() && node.attributes.bg & 0xff000000 == 0xff000000 {
+            if !node.attributes.bordered {
+                let mut fill = String::new();
+                helpers::string_append_repeat(
+                    &mut fill,
+                    ' ',
+                    (outer_clipped.right - outer_clipped.left) as usize,
+                );
+
+                for y in outer_clipped.top..outer_clipped.bottom {
+                    self.framebuffer.replace_text(
+                        y,
+                        outer_clipped.left,
+                        outer_clipped.right,
+                        &fill,
+                    );
+                }
+            }
+
             self.framebuffer
                 .replace_attr(outer_clipped, Attributes::All, Attributes::None);
         }
