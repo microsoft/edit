@@ -13,11 +13,14 @@
 //! The solution to the former is to keep line caches, which further complicates the architecture.
 //! There's no solution for the latter. However, there's a chance that the performance will still be sufficient.
 
+use crate::apperr;
 use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::{self, COORD_TYPE_SAFE_MAX, CoordType, Point, Rect};
+use crate::icu;
 use crate::memchr::memchr2;
-use crate::ucd::Document;
-use crate::{apperr, icu, sys, trust_me_bro, ucd};
+use crate::sys;
+use crate::trust_me_bro;
+use crate::ucd::{self, Document};
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
 use std::collections::LinkedList;
@@ -25,11 +28,13 @@ use std::fmt::Write as _;
 use std::fs::File;
 use std::io::Read as _;
 use std::io::Write as _;
-use std::mem::MaybeUninit;
-use std::ops::{Deref, DerefMut};
+use std::mem::{self, MaybeUninit};
+use std::ops::{Deref, DerefMut, Range};
 use std::path::Path;
+use std::ptr;
 use std::rc::Rc;
-use std::{mem, ptr, slice, str};
+use std::slice;
+use std::str;
 
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,
@@ -884,8 +889,9 @@ impl TextBuffer {
         // and double click on the "i" (= the cursor is in front of the "i").
         // It'll select "sup> in" but should only select 1 word of course.
         // Not sure what the issue is, but I think this approach is wrong in general.
-        let beg = self.cursor_move_delta_internal(self.cursor, CursorMovement::Word, -1);
-        let end = self.cursor_move_delta_internal(beg, CursorMovement::Word, 1);
+        let Range { start, end } = ucd::word_select(&self.buffer, self.cursor.offset);
+        let beg = self.cursor_move_to_offset_internal(self.cursor, start);
+        let end = self.cursor_move_to_offset_internal(beg, end);
         self.set_cursor_for_selection(end);
         self.set_selection(TextBufferSelection::Done {
             beg: beg.logical_pos,
