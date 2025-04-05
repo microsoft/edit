@@ -1632,21 +1632,23 @@ impl TextBuffer {
             );
 
             // Draw the selection on this line, if any.
-            if cursor_beg.logical_pos < selection_end && cursor_end.logical_pos > selection_beg {
+            if selection_beg <= cursor_end.logical_pos && selection_end >= cursor_beg.logical_pos {
                 // By default, we assume the entire line is selected.
                 let mut beg = 0;
                 let mut end = COORD_TYPE_SAFE_MAX;
                 let mut cursor = cursor_beg;
 
                 // The start of the selection is within this line. We need to update selection_beg.
-                if selection_beg > cursor_beg.logical_pos && selection_beg <= cursor_end.logical_pos
+                if selection_beg <= cursor_end.logical_pos
+                    && selection_beg >= cursor_beg.logical_pos
                 {
                     cursor = self.cursor_move_to_logical_internal(cursor, selection_beg);
                     beg = cursor.visual_pos.x;
                 }
 
                 // The end of the selection is within this line. We need to update selection_end.
-                if selection_end > cursor_beg.logical_pos && selection_end <= cursor_end.logical_pos
+                if selection_end <= cursor_end.logical_pos
+                    && selection_end >= cursor_beg.logical_pos
                 {
                     cursor = self.cursor_move_to_logical_internal(cursor, selection_end);
                     end = cursor.visual_pos.x;
