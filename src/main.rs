@@ -1073,6 +1073,7 @@ fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.attr_padding(Rect::three(1, 2, 1));
 
             ctx.table_begin("choices");
+            ctx.inherit_focus();
             ctx.attr_padding(Rect::three(0, 2, 1));
             ctx.attr_position(Position::Center);
             ctx.table_set_cell_gap(Size {
@@ -1081,9 +1082,11 @@ fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             });
             {
                 ctx.table_next_row();
+                ctx.inherit_focus();
 
                 save = ctx.button("yes", Overflow::Clip, loc(LocId::Yes));
-                ctx.focus_on_first_present();
+                ctx.inherit_focus();
+
                 if ctx.button("no", Overflow::Clip, loc(LocId::No)) {
                     state.file_picker_overwrite_warning = None;
                 }
@@ -1314,6 +1317,7 @@ fn draw_unsaved_changes_dialog(ctx: &mut Context) -> UnsavedChangesDialogResult 
         ctx.attr_padding(Rect::three(1, 2, 1));
 
         ctx.table_begin("choices");
+        ctx.inherit_focus();
         ctx.attr_padding(Rect::three(0, 2, 1));
         ctx.attr_position(Position::Center);
         ctx.table_set_cell_gap(Size {
@@ -1322,11 +1326,12 @@ fn draw_unsaved_changes_dialog(ctx: &mut Context) -> UnsavedChangesDialogResult 
         });
         {
             ctx.table_next_row();
+            ctx.inherit_focus();
 
             if ctx.button("yes", Overflow::Clip, loc(LocId::UnsavedChangesDialogYes)) {
                 result = UnsavedChangesDialogResult::Save;
             }
-            ctx.focus_on_first_present();
+            ctx.inherit_focus();
             if ctx.button("no", Overflow::Clip, loc(LocId::UnsavedChangesDialogNo)) {
                 result = UnsavedChangesDialogResult::Discard;
             }
@@ -1416,7 +1421,7 @@ fn draw_error_log(ctx: &mut Context, state: &mut State) {
         }
         ctx.attr_padding(Rect::three(1, 2, 1));
         ctx.attr_position(Position::Center);
-        ctx.focus_on_first_present();
+        ctx.inherit_focus();
     }
     if ctx.modal_end() {
         state.error_log_count = 0;

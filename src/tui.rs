@@ -289,6 +289,7 @@ impl Tui {
             input_consumed,
 
             tree: Tree::new(),
+            last_modal: null(),
             next_block_id_mixin: 0,
             needs_settling: false,
         }
@@ -303,6 +304,12 @@ impl Tui {
                 .unwrap_or(null())
                 .is_null()
         );
+
+        if let Some(node) = Tree::node_ref(ctx.last_modal) {
+            if !self.is_subtree_focused(node.id) {
+                ctx.steal_focus_for(node);
+            }
+        }
 
         // If nodes have appeared or disappeared, we need to re-render.
         // Same, if the focus has changed (= changes the highlight color, etc.).
@@ -1021,6 +1028,7 @@ pub struct Context<'tui, 'input> {
     input_consumed: bool,
 
     tree: Tree,
+    last_modal: *const Node,
     next_block_id_mixin: u64,
     needs_settling: bool,
 }
@@ -1304,12 +1312,13 @@ impl Context<'_, '_> {
 
         let last_node = self.tree.last_node_mut();
         last_node.content = NodeContent::Modal(format!(" {} ", title));
+        self.last_modal = last_node;
     }
 
     pub fn modal_end(&mut self) -> bool {
         self.block_end();
         self.block_end();
-        self.consume_shortcut(vk::ESCAPE)
+        self.contains_focus() && self.consume_shortcut(vk::ESCAPE)
     }
 
     pub fn table_begin(&mut self, classname: &'static str) {
