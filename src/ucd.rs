@@ -83,7 +83,7 @@ impl<'doc> MeasurementConfig<'doc> {
     }
 
     pub fn with_tab_size(mut self, tab_size: CoordType) -> Self {
-        self.tab_size = tab_size;
+        self.tab_size = tab_size.max(1);
         self
     }
 
@@ -376,6 +376,7 @@ impl<'doc> MeasurementConfig<'doc> {
 
                 loop {
                     let props_current_cluster = props_next_cluster;
+                    let mut props_last_char;
                     let mut offset_next_cluster;
                     let mut state = 0;
                     let mut width = 0;
@@ -395,6 +396,7 @@ impl<'doc> MeasurementConfig<'doc> {
                         // records the offset of the next character after the returned one, we need
                         // to save the offset of the previous `chunk_iter` before calling `next()`.
                         // Similar applies to the width.
+                        props_last_char = props_next_cluster;
                         offset_next_cluster = chunk_range.start + chunk_iter.offset();
                         width +=
                             ucd_grapheme_cluster_character_width(props_next_cluster) as CoordType;
@@ -428,6 +430,18 @@ impl<'doc> MeasurementConfig<'doc> {
 
                     // The max. width of a terminal cell is 2.
                     width = width.min(2);
+
+                    // Tabs require special handling because they can have a variable width.
+                    if props_last_char == ucd_tab_properties() {
+                        // `tab_size` is clamped to >= 1 at the start of this method.
+                        unsafe { std::hint::assert_unchecked(tab_size >= 1) };
+                        width = tab_size - (column % tab_size);
+                    }
+
+                    // Hard wrap: Both the logical and visual position advance by one line.
+                    if props_last_char == ucd_linefeed_properties() {
+                        break;
+                    }
 
                     visual_pos_x_lookahead += width;
 
