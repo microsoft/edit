@@ -1710,7 +1710,7 @@ impl TextBuffer {
             if text.contains(cursor) {
                 fb.set_cursor(cursor, self.overtype);
 
-                if self.line_highlight_enabled {
+                if self.line_highlight_enabled && selection_beg >= selection_end {
                     fb.blend_bg(
                         Rect {
                             left: destination.left,
