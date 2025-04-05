@@ -289,7 +289,6 @@ impl Tui {
             input_consumed,
 
             tree: Tree::new(),
-            last_modal: null(),
             next_block_id_mixin: 0,
             needs_settling: false,
         }
@@ -304,12 +303,6 @@ impl Tui {
                 .unwrap_or(null())
                 .is_null()
         );
-
-        if let Some(node) = Tree::node_ref(ctx.last_modal) {
-            if !self.is_subtree_focused(node.id) {
-                ctx.steal_focus_for(node);
-            }
-        }
 
         // If nodes have appeared or disappeared, we need to re-render.
         // Same, if the focus has changed (= changes the highlight color, etc.).
@@ -1036,7 +1029,6 @@ pub struct Context<'tui, 'input> {
     input_consumed: bool,
 
     tree: Tree,
-    last_modal: *const Node,
     next_block_id_mixin: u64,
     needs_settling: bool,
 }
@@ -1213,8 +1205,8 @@ impl Context<'_, '_> {
                 y: spec.offset_y,
             },
         });
-        last_node.attributes.bg = self.tui.modal_default_bg;
-        last_node.attributes.fg = self.tui.modal_default_fg;
+        last_node.attributes.bg = self.tui.floater_default_bg;
+        last_node.attributes.fg = self.tui.floater_default_fg;
     }
 
     pub fn attr_border(&mut self) {
@@ -1287,24 +1279,38 @@ impl Context<'_, '_> {
 
     pub fn modal_begin(&mut self, classname: &'static str, title: &str) {
         self.block_begin(classname);
-        self.focus_on_first_present();
-        self.attr_border();
-        self.attr_background_rgba(self.tui.modal_default_bg);
-        self.attr_foreground_rgba(self.tui.modal_default_fg);
         self.attr_float(FloatSpec {
             anchor: Anchor::Root,
+            ..Default::default()
+        });
+        self.attr_intrinsic_size(Size {
+            width: self.tui.size.width,
+            height: self.tui.size.height,
+        });
+        self.attr_background_rgba(self.indexed_alpha(IndexedColor::Background, 0xd6));
+        self.attr_foreground_rgba(self.indexed_alpha(IndexedColor::Background, 0xd6));
+        self.attr_focus_well();
+
+        self.block_begin("window");
+        self.attr_float(FloatSpec {
+            anchor: Anchor::Last,
             gravity_x: 0.5,
             gravity_y: 0.5,
             offset_x: self.tui.size.width / 2,
             offset_y: self.tui.size.height / 2,
         });
+        self.attr_border();
+        self.attr_background_rgba(self.tui.modal_default_bg);
+        self.attr_foreground_rgba(self.tui.modal_default_fg);
+        self.inherit_focus();
+        self.focus_on_first_present();
 
         let last_node = self.tree.last_node_mut();
         last_node.content = NodeContent::Modal(format!(" {} ", title));
-        self.last_modal = last_node;
     }
 
     pub fn modal_end(&mut self) -> bool {
+        self.block_end();
         self.block_end();
         self.consume_shortcut(vk::ESCAPE)
     }
