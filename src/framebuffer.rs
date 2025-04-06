@@ -115,78 +115,79 @@ impl Framebuffer {
         content_offset: CoordType,
         content_height: CoordType,
     ) -> CoordType {
-        if track.is_empty() {
+        let track_clipped = track.intersect(clip_rect);
+        if track_clipped.is_empty() {
             return 0;
         }
 
         let viewport_height = track.height();
         // The content height is at least the viewport height.
         let content_height = content_height.max(viewport_height);
+
+        // No need to draw a scrollbar if the content fits in the viewport.
+        let content_offset_max = content_height - viewport_height;
+        if content_offset_max == 0 {
+            return 0;
+        }
+
         // The content offset must be at least one viewport height from the bottom.
         // You don't want to scroll past the end after all...
-        let content_offset = content_offset.clamp(0, content_height - viewport_height);
+        let content_offset = content_offset.clamp(0, content_offset_max);
 
         // In order to increase the visual resolution of the scrollbar,
         // we'll use 1/8th blocks to represent the thumb.
         // First, scale the offsets to get that 1/8th resolution.
         let viewport_height = viewport_height as i64 * 8;
+        let content_offset_max = content_offset_max as i64 * 8;
         let content_offset = content_offset as i64 * 8;
         let content_height = content_height as i64 * 8;
 
         // The proportional thumb height (0-1) is the fraction of viewport and
         // content height. The taller the content, the smaller the thumb:
         // = viewport_height / content_height
-        //
         // We then scale that to the viewport height to get the height in 1/8th units.
         // = viewport_height * viewport_height / content_height
-        //
         // We add content_height/2 to round the integer division, which results in a numerator of:
         // = viewport_height * viewport_height + content_height / 2
-        //
-        // Finally we add +1 to round up the division if `content_height` is uneven. This ensures that
-        // in case of a rounding issue, we'll make the track too large and clamp it to the track size.
-        let thumb_numerator = viewport_height * viewport_height + content_height / 2 + 1;
-        let thumb_height = thumb_numerator / content_height;
+        let numerator = viewport_height * viewport_height + content_height / 2;
+        let thumb_height = numerator / content_height;
         // Ensure the thumb has a minimum size of 1 row.
         let thumb_height = thumb_height.max(8);
 
-        // The proportional thumb top position (0-1) is naturally:
-        // = content_offset / content_height
-        //
-        // The bottom position is 1 viewport-height below the top position:
-        // = (viewport_height + content_offset) / content_height
-        //
-        // Since everything must be scaled to the 1/8th units we must multiply by viewport_height:
-        // = viewport_height * (viewport_height + content_offset) / content_height
-        // = viewport_height * viewport_height + viewport_height * content_offset / content_height
-        //
-        // And we also want that rounded integer division as before. This transforms the
-        // `viewport_height * viewport_height` portion into the `thumb_enumerator` above.
-        // = thumb_numerator + viewport_height * content_offset / content_height
-        //
-        let thumb_bottom = (viewport_height * content_offset + thumb_numerator) / content_height;
-        // Now that the bottom is flush with the bottom of the track, we can calculate the top.
-        let thumb_top = (thumb_bottom - thumb_height).max(0);
+        // The proportional thumb top position (0-1) is:
+        // = content_offset / content_offset_max
+        // The maximum thumb top position is the viewport height minus the thumb height:
+        // = viewport_height - thumb_height
+        // To get the thumb top position in 1/8th units, we multiply both:
+        // = (viewport_height - thumb_height) * content_offset / content_offset_max
+        // We add content_offset_max/2 to round the integer division, which results in a numerator of:
+        // = (viewport_height - thumb_height) * content_offset + content_offset_max / 2
+        let numerator = (viewport_height - thumb_height) * content_offset + content_offset_max / 2;
+        let thumb_top = numerator / content_offset_max;
+        // The thumb bottom position is the thumb top position plus the thumb height.
+        let thumb_bottom = thumb_top + thumb_height;
+
+        // Shift to absolute coordinates.
+        let thumb_top = thumb_top + track.top as i64 * 8;
+        let thumb_bottom = thumb_bottom + track.top as i64 * 8;
+
+        // Clamp to the visible area.
+        let thumb_top = thumb_top.max(track_clipped.top as i64 * 8);
+        let thumb_bottom = thumb_bottom.min(track_clipped.bottom as i64 * 8);
 
         // Calculate the height of the top/bottom cell of the thumb.
         let top_fract = (thumb_top % 8) as CoordType;
         let bottom_fract = (thumb_bottom % 8) as CoordType;
 
         // Shift to absolute coordinates.
-        let thumb_top = ((thumb_top + 7) / 8) as CoordType + track.top;
-        let thumb_bottom = (thumb_bottom / 8) as CoordType + track.top;
-
-        let track_clipped = track.intersect(clip_rect);
-
-        // Clamp to the visible area.
-        let thumb_top_clipped = thumb_top.max(track_clipped.top);
-        let thumb_bottom_clipped = thumb_bottom.min(track_clipped.bottom);
+        let thumb_top = ((thumb_top + 7) / 8) as CoordType;
+        let thumb_bottom = (thumb_bottom / 8) as CoordType;
 
         self.blend_bg(track_clipped, self.indexed(IndexedColor::BrightBlack));
         self.blend_fg(track_clipped, self.indexed(IndexedColor::BrightWhite));
 
         // Draw the full blocks.
-        for y in thumb_top_clipped..thumb_bottom_clipped {
+        for y in thumb_top..thumb_bottom {
             self.replace_text(y, track_clipped.left, track_clipped.right, "█");
         }
 
@@ -197,7 +198,7 @@ impl Framebuffer {
         if top_fract != 0 {
             fract_buf[2] = (0x88 - top_fract) as u8;
             self.replace_text(
-                thumb_top_clipped - 1,
+                thumb_top - 1,
                 track_clipped.left,
                 track_clipped.right,
                 unsafe { std::str::from_utf8_unchecked(&fract_buf) },
@@ -206,7 +207,7 @@ impl Framebuffer {
         if bottom_fract != 0 {
             fract_buf[2] = (0x88 - bottom_fract) as u8;
             let rect = self.replace_text(
-                thumb_bottom_clipped,
+                thumb_bottom,
                 track_clipped.left,
                 track_clipped.right,
                 unsafe { std::str::from_utf8_unchecked(&fract_buf) },
