@@ -48,7 +48,7 @@ pub struct Tui {
 
     clipboard: Vec<u8>,
     cached_text_buffers: Vec<CachedTextBuffer>,
-    hovered_node_path: Vec<u64>,
+    mouse_down_node_path: Vec<u64>,
     focused_node_path: Vec<u64>,
     focused_node_path_previous_frame: Vec<u64>,
     focused_node_path_for_scrolling: Vec<u64>,
@@ -87,7 +87,7 @@ impl Tui {
 
             clipboard: Vec::new(),
             cached_text_buffers: Vec::with_capacity(16),
-            hovered_node_path: Vec::with_capacity(16),
+            mouse_down_node_path: Vec::with_capacity(16),
             focused_node_path: Vec::with_capacity(16),
             focused_node_path_previous_frame: Vec::with_capacity(16),
             focused_node_path_for_scrolling: Vec::with_capacity(16),
@@ -100,7 +100,7 @@ impl Tui {
             settling_have: 0,
             settling_want: 0,
         };
-        tui.hovered_node_path.push(ROOT_ID);
+        tui.mouse_down_node_path.push(ROOT_ID);
         tui.focused_node_path.push(ROOT_ID);
         tui.focused_node_path_previous_frame.push(ROOT_ID);
         tui.focused_node_path_for_scrolling.push(ROOT_ID);
@@ -207,48 +207,56 @@ impl Tui {
                 let mut next_state = mouse.state;
                 let next_position = mouse.position;
                 let next_scroll = mouse.scroll;
-
-                let mut hovered_node = null();
-                let mut focused_node = null();
-
-                for root in self.prev_tree.iterate_roots() {
-                    Tree::visit_all(root, root, 0, true, |_, node| {
-                        if !node.outer_clipped.contains(next_position) {
-                            // Skip the entire sub-tree, because it doesn't contain the cursor.
-                            return VisitControl::SkipChildren;
-                        }
-                        hovered_node = node;
-                        if node.attributes.focusable {
-                            focused_node = node;
-                        }
-                        VisitControl::Continue
-                    });
-                }
-
-                Self::build_node_path(
-                    unsafe { hovered_node.as_ref() },
-                    &mut self.hovered_node_path,
-                );
-
-                if self.mouse_state != InputMouseState::None && next_state == InputMouseState::None
-                {
-                    // When the input transitions from some mouse input to no mouse input,
-                    // we'll emit 1 InputMouseAction::Release event.
-                    next_state = InputMouseState::Release;
-                } else if self.mouse_state == InputMouseState::None
+                let mouse_down = self.mouse_state == InputMouseState::None
+                    && next_state != InputMouseState::None;
+                let mouse_up = self.mouse_state != InputMouseState::None
+                    && next_state == InputMouseState::None;
+                let is_click = mouse_up && next_position == self.mouse_position;
+                let is_drag = self.mouse_state == InputMouseState::Left
                     && next_state == InputMouseState::Left
-                {
-                    // On left-mouse-down we change focus.
-                    Self::build_node_path(
-                        unsafe { focused_node.as_ref() },
-                        &mut self.focused_node_path,
-                    );
-                    self.mouse_down_position = next_position;
-                    self.needs_more_settling(); // See `needs_more_settling()`.
+                    && next_position != self.mouse_position;
+
+                let mut hovered_node = null(); // Needed for `mouse_down`
+                let mut focused_node = null(); // Needed for `mouse_down` and `is_click`
+                if mouse_down || is_click {
+                    for root in self.prev_tree.iterate_roots() {
+                        Tree::visit_all(root, root, 0, true, |_, node| {
+                            if !node.outer_clipped.contains(next_position) {
+                                // Skip the entire sub-tree, because it doesn't contain the cursor.
+                                return VisitControl::SkipChildren;
+                            }
+                            hovered_node = node;
+                            if node.attributes.focusable {
+                                focused_node = node;
+                            }
+                            VisitControl::Continue
+                        });
+                    }
                 }
 
-                if next_state == InputMouseState::Release && next_position == self.mouse_position {
-                    let click_target = unsafe { focused_node.as_ref() }.map(|n| n.id).unwrap_or(0);
+                if mouse_down {
+                    // Transition from no mouse input to some mouse input --> Record the mouse down position.
+                    self.mouse_down_position = next_position; // Gets reset at the start of this function.
+                    Self::build_node_path(
+                        Tree::node_ref(hovered_node),
+                        &mut self.mouse_down_node_path,
+                    );
+
+                    // On left-mouse-down we change focus.
+                    if next_state == InputMouseState::Left {
+                        Self::build_node_path(
+                            Tree::node_ref(focused_node),
+                            &mut self.focused_node_path,
+                        );
+                        self.needs_more_settling(); // See `needs_more_settling()`.
+                    }
+                } else if mouse_up {
+                    // Transition from some mouse input to no mouse input --> The mouse button was released.
+                    next_state = InputMouseState::Release;
+                }
+
+                if is_click {
+                    let click_target = Tree::node_ref(focused_node).map(|n| n.id).unwrap_or(0);
                     input_mouse_is_click = true;
                     input_mouse_is_double_click = (now - self.last_click)
                         <= std::time::Duration::from_millis(500)
@@ -257,10 +265,7 @@ impl Tui {
                     self.last_click = now;
                     self.last_click_target = click_target;
                     self.last_click_position = next_position;
-                } else if self.mouse_state == InputMouseState::Left
-                    && next_state == InputMouseState::Left
-                    && next_position != self.mouse_position
-                {
+                } else if is_drag {
                     self.mouse_is_drag = true;
                 }
 
@@ -791,14 +796,14 @@ impl Tui {
     }
 
     /// Checks if the pointer is on the current node's boundary (hover).
-    pub fn is_node_hovered(&mut self, id: u64) -> bool {
+    pub fn was_mouse_down_on_node(&mut self, id: u64) -> bool {
         // We construct the hovered_node_path always with at least 1 element (the root id).
-        unsafe { *self.hovered_node_path.get_unchecked(0) == id }
+        unsafe { *self.mouse_down_node_path.get_unchecked(0) == id }
     }
 
     /// Checks if a node's subtree contains the hover path.
-    pub fn is_subtree_hovered(&mut self, id: u64) -> bool {
-        self.hovered_node_path.contains(&id)
+    pub fn was_mouse_down_on_subtree(&mut self, id: u64) -> bool {
+        self.mouse_down_node_path.contains(&id)
     }
 
     /// Checks if a node with the given ID has input focus.
@@ -1262,14 +1267,14 @@ impl Context<'_, '_> {
         self.input_consumed = true;
     }
 
-    pub fn is_hovering(&mut self) -> bool {
+    pub fn was_mouse_down(&mut self) -> bool {
         let last_node = self.tree.last_node_ref();
-        self.tui.is_node_hovered(last_node.id)
+        self.tui.was_mouse_down_on_node(last_node.id)
     }
 
-    pub fn contains_hover(&mut self) -> bool {
+    pub fn contains_mouse_down(&mut self) -> bool {
         let last_node = self.tree.last_node_ref();
-        self.tui.is_subtree_hovered(last_node.id)
+        self.tui.was_mouse_down_on_subtree(last_node.id)
     }
 
     pub fn is_focused(&mut self) -> bool {
@@ -1490,7 +1495,7 @@ impl Context<'_, '_> {
 
     fn button_activated(&mut self) -> bool {
         if !self.input_consumed
-            && ((self.input_mouse_is_click && self.contains_hover())
+            && ((self.input_mouse_is_click && self.contains_mouse_down())
                 || self.input_keyboard == Some(vk::RETURN)
                 || self.input_keyboard == Some(vk::SPACE))
             && self.is_focused()
@@ -1616,7 +1621,9 @@ impl Context<'_, '_> {
 
         let tb = &mut *tc.buffer;
 
-        if self.tui.mouse_state != InputMouseState::None && self.tui.is_node_hovered(node_prev.id) {
+        if self.tui.mouse_state != InputMouseState::None
+            && self.tui.was_mouse_down_on_node(node_prev.id)
+        {
             let mut make_cursor_visible = false;
 
             // Scrolling works even if the node isn't focused.
@@ -2243,7 +2250,7 @@ impl Context<'_, '_> {
 
         // Clicking an item activates it
         let clicked =
-            !self.input_consumed && (self.input_mouse_is_double_click && self.is_hovering());
+            !self.input_consumed && (self.input_mouse_is_double_click && self.was_mouse_down());
         // Pressing Enter on a selected item activates it as well
         let entered = focused
             && selected_before
