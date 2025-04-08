@@ -1,0 +1,7 @@
+{
+    "instanceUrl": "https://microsoft.visualstudio.com",
+    "projectName": "OS",
+    "areaPath": "OS\\Windows Client and Services\\WinPD\\DEEP-Developer Experience, Ecosystem and Partnerships\\SHINE\\Commandline Tooling",
+    "notificationAliases": ["condev@microsoft.com", "duhowett@microsoft.com"],
+    "template": "VSTS_Microsoft_OSGS"
+}
