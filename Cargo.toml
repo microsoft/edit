@@ -8,7 +8,8 @@ debug-layout = []
 debug-latency = []
 
 # `opt-level = "s"` may be useful in the future as it significantly reduces binary size.
-# The primary problem are the ucd and utf8 modules which take a 20% performance hit.
+# We could then use the `#[optimize(speed)]` attribute for spot optimizations.
+# Unfortunately, that attribute currently doesn't work on intrinsics such as memset.
 [profile.release]
 codegen-units = 1           # reduces binary size by ~2%
 debug = "full"              # No one needs an undebuggable release binary
