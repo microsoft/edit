@@ -483,6 +483,7 @@ impl<'doc> MeasurementConfig<'doc> {
         }
     }
 
+    #[inline]
     fn calc_target_x(target: Point, pos_y: CoordType) -> CoordType {
         match pos_y.cmp(&target.y) {
             std::cmp::Ordering::Less => CoordType::MAX,

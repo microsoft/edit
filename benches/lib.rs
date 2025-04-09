@@ -1,7 +1,7 @@
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
-use edit::ucd::MeasurementConfig;
-use std::hint::black_box;
+use edit::memchr;
+use edit::ucd;
 
 fn bench(c: &mut Criterion) {
     let reference = concat!(
@@ -13,20 +13,30 @@ fn bench(c: &mut Criterion) {
     let buffer = reference.repeat(10);
     let bytes = buffer.as_bytes();
 
-    let mut group = c.benchmark_group("ucd");
+    let mut group = c.benchmark_group("ucd::MeasurementConfig::goto_logical");
     group.throughput(Throughput::Bytes(bytes.len() as u64));
-    group.bench_function("MeasurementConfig::goto_logical", |b| {
-        b.iter(|| black_box(MeasurementConfig::new(&bytes).goto_logical(Point::MAX)))
+    group.bench_function("basic", |b| {
+        b.iter(|| ucd::MeasurementConfig::new(&bytes).goto_logical(Point::MAX))
     });
-    group.bench_function("MeasurementConfig::goto_logical with word wrap", |b| {
+    group.bench_function("word_wrap", |b| {
         b.iter(|| {
-            black_box(
-                MeasurementConfig::new(&bytes)
-                    .with_word_wrap_column(50)
-                    .goto_logical(Point::MAX),
-            )
+            ucd::MeasurementConfig::new(&bytes)
+                .with_word_wrap_column(50)
+                .goto_logical(Point::MAX)
         })
     });
+    group.finish();
+
+    let mut group = c.benchmark_group("memchr::memchr2");
+    let mut buffer = [0u8; 8192];
+    for &size in &[0usize, 8, 64, 4096] {
+        group.throughput(Throughput::Bytes(size as u64 + 1));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
+            buffer.fill(b'a');
+            buffer[size] = b'\n';
+            b.iter(|| memchr::memchr2(b'\n', b'\r', &buffer[..size], 0));
+        });
+    }
     group.finish();
 }
 

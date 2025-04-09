@@ -35,6 +35,8 @@ impl<'a> Utf8Chars<'a> {
         self.offset < self.source.len()
     }
 
+    // I found that on mixed 50/50 English/Non-English text,
+    // performance actually suffers when this gets inlined.
     #[cold]
     fn next_slow(&mut self, c: u8) -> char {
         // See: https://datatracker.ietf.org/doc/html/rfc3629
@@ -197,6 +199,9 @@ impl<'a> Utf8Chars<'a> {
 impl Iterator for Utf8Chars<'_> {
     type Item = char;
 
+    // At opt-level="s", this function doesn't get inlined,
+    // but performance greatly suffers in that case.
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.offset >= self.source.len() {
             return None;
