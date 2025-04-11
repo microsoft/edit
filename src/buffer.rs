@@ -1523,12 +1523,14 @@ impl TextBuffer {
                         number_width
                     );
                     // Blending in the background color will "dim" the indicator dots.
+                    let left = destination.left;
+                    let top = destination.top + y;
                     fb.blend_fg(
                         Rect {
-                            left: 0,
-                            top: y + 1,
-                            right: line_number_width as i32,
-                            bottom: y + 2,
+                            left,
+                            top,
+                            right: left + line_number_width as i32,
+                            bottom: top + 1,
                         },
                         fb.indexed(IndexedColor::Background),
                     );
