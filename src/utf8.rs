@@ -171,6 +171,8 @@ impl<'a> Utf8Chars<'a> {
             }
         }
 
+        // SAFETY: All branches above check for `if self.offset >= self.source.len()`
+        // one way or another. This is here because the compiler doesn't get it otherwise.
         unsafe { hint::assert_unchecked(self.offset < self.source.len()) };
 
         // UTF8-tail = %x80-BF
@@ -182,6 +184,7 @@ impl<'a> Utf8Chars<'a> {
 
         self.offset += 1;
 
+        // SAFETY: If `cp` wasn't a valid codepoint, we already returned U+FFFD above.
         #[allow(clippy::transmute_int_to_char)]
         unsafe {
             mem::transmute(cp)

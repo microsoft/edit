@@ -28,13 +28,13 @@ fn bench(c: &mut Criterion) {
     group.finish();
 
     let mut group = c.benchmark_group("memchr::memchr2");
-    let mut buffer = [0u8; 8192];
-    for &size in &[0usize, 8, 64, 4096] {
+    let mut buffer = [0u8; 4096];
+    for &size in &[0usize, 4, 36, 68, 1028] {
         group.throughput(Throughput::Bytes(size as u64 + 1));
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             buffer.fill(b'a');
             buffer[size] = b'\n';
-            b.iter(|| memchr::memchr2(b'\n', b'\r', &buffer[..size], 0));
+            b.iter(|| memchr::memchr2(b'\n', b'\r', &buffer, 0));
         });
     }
     group.finish();

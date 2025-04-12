@@ -283,6 +283,8 @@ impl Framebuffer {
 
     pub fn render(&mut self) -> String {
         let idx = self.frame_counter & 1;
+        // Borrows the front/back buffers without letting Rust know that we have a reference to self.
+        // SAFETY: Well this is certainly correct, but whether Rust and its strict rules likes it is another question.
         let (back, front) = unsafe {
             let ptr = self.buffers.as_mut_ptr();
             let back = &mut *ptr.add(idx);
