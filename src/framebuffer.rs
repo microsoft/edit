@@ -2,6 +2,7 @@ use crate::helpers::{self, CoordType, Point, Rect, Size};
 use crate::ucd;
 use std::fmt::Write;
 use std::ops::{BitOr, BitXor};
+use std::ptr;
 use std::slice::ChunksExact;
 
 #[derive(Clone, Copy)]
@@ -543,22 +544,62 @@ impl LineBuffer {
         }
 
         // If we intersect a wide glyph, we need to pad the new text with spaces.
-        let mut str_new = &text[..res_new.offset];
-        let mut str_buf = String::new();
-        let overlap_beg = left - res_old_beg.visual_pos.x;
-        let overlap_end = res_old_end.visual_pos.x - right;
-        if overlap_beg > 0 || overlap_end > 0 {
-            if overlap_beg > 0 {
-                helpers::string_append_repeat(&mut str_buf, ' ', overlap_beg as usize);
-            }
-            str_buf.push_str(str_new);
-            if overlap_end > 0 {
-                helpers::string_append_repeat(&mut str_buf, ' ', overlap_end as usize);
-            }
-            str_new = &str_buf;
-        }
+        let src = &text[..res_new.offset];
+        let overlap_beg = (left - res_old_beg.visual_pos.x).max(0) as usize;
+        let overlap_end = (res_old_end.visual_pos.x - right).max(0) as usize;
+        let total_add = src.len() + overlap_beg + overlap_end;
+        let total_del = res_old_end.offset - res_old_beg.offset;
 
-        (*line).replace_range(res_old_beg.offset..res_old_end.offset, str_new);
+        // This is basically a hand-written version of `Vec::splice()`,
+        // but for strings under the assumption that all inputs are valid.
+        // It also takes care of `overlap_beg` and `overlap_end` by inserting spaces.
+        unsafe {
+            // SAFETY: Our ucd code only returns valid UTF-8 offsets.
+            // If it didn't that'd be a priority -9000 bug for any text editor.
+            // And apart from that, all inputs are &str (= UTF8).
+            let dst = line.as_mut_vec();
+
+            let dst_len = dst.len();
+            let src_len = src.len();
+
+            // Make room for the new elements. NOTE that this must be done before
+            // we call as_mut_ptr, or else we risk accessing a stale pointer.
+            // We only need to reserve as much as the string actually grows by.
+            dst.reserve(total_add.saturating_sub(total_del));
+
+            // Move the pointer to the start of the insert.
+            let mut ptr = dst.as_mut_ptr().add(res_old_beg.offset);
+
+            // Move the tail end of the string by `total_add - total_del`-many bytes.
+            // This both effectively deletes the old text and makes room for the new text.
+            if total_add != total_del {
+                // Move the tail of the vector to make room for the new elements.
+                ptr::copy(
+                    ptr.add(total_del),
+                    ptr.add(total_add),
+                    dst_len - total_del - res_old_beg.offset,
+                );
+            }
+
+            // Pad left.
+            for _ in 0..overlap_beg {
+                ptr.write(b' ');
+                ptr = ptr.add(1);
+            }
+
+            // Copy the new elements into the vector.
+            ptr::copy_nonoverlapping(src.as_ptr(), ptr, src_len);
+            ptr = ptr.add(src_len);
+
+            // Pad right.
+            for _ in 0..overlap_end {
+                ptr.write(b' ');
+                ptr = ptr.add(1);
+            }
+
+            // Update the length of the vector.
+            dst.set_len(dst_len - total_del + total_add);
+        }
 
         Rect {
             left,
