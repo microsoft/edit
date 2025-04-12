@@ -184,6 +184,8 @@ fn run() -> apperr::Result<()> {
         return Ok(());
     }
 
+    loc::init();
+
     // sys::init() will switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // Since the `read_file` call may hang for some reason, we must only call this afterwards.
     // `set_modes()` will enable mouse mode which is equally annoying to switch out for users
