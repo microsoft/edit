@@ -474,7 +474,7 @@ mod tests {
             // 3 pages: uncommitted, committed, uncommitted
             let ptr = sys::virtual_reserve(page_size * 3).unwrap();
             sys::virtual_commit(ptr.add(page_size), page_size).unwrap();
-            slice::from_raw_parts_mut(ptr.add(page_size), page_size)
+            slice::from_raw_parts_mut(ptr.add(page_size).as_ptr(), page_size)
         };
 
         page.fill(b'a');

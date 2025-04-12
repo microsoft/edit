@@ -31,7 +31,7 @@ use std::io::Write as _;
 use std::mem::{self, MaybeUninit};
 use std::ops::{Deref, DerefMut, Range};
 use std::path::Path;
-use std::ptr;
+use std::ptr::{self, NonNull};
 use std::rc::Rc;
 use std::slice;
 use std::str;
@@ -2250,7 +2250,7 @@ impl TextBuffer {
 }
 
 enum BackingBuffer {
-    VirtualMemory(*mut u8, usize),
+    VirtualMemory(NonNull<u8>, usize),
     Vec(Vec<u8>),
 }
 
@@ -2270,7 +2270,7 @@ impl Drop for BackingBuffer {
 /// This variant is optimized for large buffers and uses virtual memory.
 pub struct GapBuffer {
     /// Pointer to the buffer.
-    text: *mut u8,
+    text: NonNull<u8>,
     /// Maximum size of the buffer, including gap.
     reserve: usize,
     /// Size of the buffer, including gap.
@@ -2296,9 +2296,8 @@ impl GapBuffer {
         let text;
 
         if small {
-            let mut v = Vec::new();
-            text = v.as_mut_ptr();
-            buffer = BackingBuffer::Vec(v);
+            text = NonNull::dangling();
+            buffer = BackingBuffer::Vec(Vec::new());
         } else {
             text = unsafe { sys::virtual_reserve(RESERVE)? };
             buffer = BackingBuffer::VirtualMemory(text, RESERVE);
@@ -2355,10 +2354,15 @@ impl GapBuffer {
                 let move_dst = if left { off + gap_len } else { gap_off };
                 let move_len = if left { gap_off - off } else { off - gap_off };
 
-                unsafe { ptr::copy(data.add(move_src), data.add(move_dst), move_len) };
+                unsafe {
+                    data.add(move_src)
+                        .copy_to_nonoverlapping(data.add(move_dst), move_len)
+                };
 
                 if cfg!(debug_assertions) {
-                    unsafe { slice::from_raw_parts_mut(data.add(off), gap_len).fill(0xCD) };
+                    unsafe {
+                        slice::from_raw_parts_mut(data.add(off).as_ptr(), gap_len).fill(0xCD)
+                    };
                 }
             }
 
@@ -2368,7 +2372,8 @@ impl GapBuffer {
         // Delete the text
         if cfg!(debug_assertions) {
             unsafe {
-                slice::from_raw_parts_mut(self.text.add(off + self.gap_len), delete).fill(0xCD)
+                slice::from_raw_parts_mut(self.text.add(off + self.gap_len).as_ptr(), delete)
+                    .fill(0xCD)
             };
         }
         self.gap_len += delete;
@@ -2402,7 +2407,7 @@ impl GapBuffer {
                     },
                     BackingBuffer::Vec(v) => {
                         v.resize(bytes_new, 0);
-                        self.text = v.as_mut_ptr();
+                        self.text = unsafe { NonNull::new_unchecked(v.as_mut_ptr()) };
                     }
                 }
 
@@ -2412,16 +2417,19 @@ impl GapBuffer {
             let gap_beg = unsafe { self.text.add(off) };
             unsafe {
                 ptr::copy(
-                    gap_beg.add(gap_len_old),
-                    gap_beg.add(gap_len_new),
+                    gap_beg.add(gap_len_old).as_ptr(),
+                    gap_beg.add(gap_len_new).as_ptr(),
                     self.text_length - off,
                 )
             };
 
             if cfg!(debug_assertions) {
                 unsafe {
-                    slice::from_raw_parts_mut(gap_beg.add(gap_len_old), gap_len_new - gap_len_old)
-                        .fill(0xCD)
+                    slice::from_raw_parts_mut(
+                        gap_beg.add(gap_len_old).as_ptr(),
+                        gap_len_new - gap_len_old,
+                    )
+                    .fill(0xCD)
                 };
             }
 
@@ -2429,7 +2437,7 @@ impl GapBuffer {
         }
 
         self.generation = self.generation.wrapping_add(1);
-        unsafe { slice::from_raw_parts_mut(self.text.add(off), len) }
+        unsafe { slice::from_raw_parts_mut(self.text.add(off).as_ptr(), len) }
     }
 
     fn commit_gap(&mut self, len: usize) {
@@ -2514,7 +2522,7 @@ impl Document for GapBuffer {
             len = self.text_length - off;
         }
 
-        unsafe { slice::from_raw_parts(self.text.add(beg), len) }
+        unsafe { slice::from_raw_parts(self.text.add(beg).as_ptr(), len) }
     }
 
     fn read_backward(&self, off: usize) -> &[u8] {
@@ -2534,7 +2542,7 @@ impl Document for GapBuffer {
             len = off - self.gap_off;
         }
 
-        unsafe { slice::from_raw_parts(self.text.add(beg), len) }
+        unsafe { slice::from_raw_parts(self.text.add(beg).as_ptr(), len) }
     }
 }
 

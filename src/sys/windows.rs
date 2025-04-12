@@ -1,12 +1,12 @@
 use crate::helpers::{CoordType, Size};
 use crate::{apperr, helpers};
-use std::ffi::{CStr, OsString};
+use std::ffi::{CStr, OsString, c_void};
 use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::mem::MaybeUninit;
 use std::os::windows::io::FromRawHandle;
 use std::path::{Path, PathBuf};
-use std::ptr::{self, null, null_mut};
+use std::ptr::{self, NonNull, null, null_mut};
 use std::{mem, time};
 use windows_sys::Win32::Foundation;
 use windows_sys::Win32::Globalization;
@@ -424,7 +424,7 @@ pub fn canonicalize<P: AsRef<Path>>(path: P) -> apperr::Result<PathBuf> {
 ///
 /// This function is unsafe because it uses raw pointers.
 /// Don't forget to release the memory when you're done with it or you'll leak it.
-pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<*mut u8> {
+pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
     unsafe {
         let mut base = null_mut();
 
@@ -449,9 +449,9 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<*mut u8> {
 ///
 /// This function is unsafe because it uses raw pointers.
 /// Make sure to only pass pointers acquired from `virtual_reserve`.
-pub unsafe fn virtual_release(base: *mut u8, size: usize) {
+pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
     unsafe {
-        Memory::VirtualFree(base as *mut _, size, Memory::MEM_RELEASE);
+        Memory::VirtualFree(base.as_ptr() as *mut _, size, Memory::MEM_RELEASE);
     }
 }
 
@@ -462,10 +462,10 @@ pub unsafe fn virtual_release(base: *mut u8, size: usize) {
 /// This function is unsafe because it uses raw pointers.
 /// Make sure to only pass pointers acquired from `virtual_reserve`
 /// and to pass a size less than or equal to the size passed to `virtual_reserve`.
-pub unsafe fn virtual_commit(base: *mut u8, size: usize) -> apperr::Result<()> {
+pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> apperr::Result<()> {
     unsafe {
         check_ptr_return(Memory::VirtualAlloc(
-            base as *mut _,
+            base.as_ptr() as *mut _,
             size,
             Memory::MEM_COMMIT,
             Memory::PAGE_READWRITE,
@@ -474,11 +474,11 @@ pub unsafe fn virtual_commit(base: *mut u8, size: usize) -> apperr::Result<()> {
     }
 }
 
-unsafe fn get_module(name: *const u16) -> apperr::Result<Foundation::HMODULE> {
+unsafe fn get_module(name: *const u16) -> apperr::Result<NonNull<c_void>> {
     unsafe { check_ptr_return(LibraryLoader::GetModuleHandleW(name)) }
 }
 
-unsafe fn load_library(name: *const u16) -> apperr::Result<Foundation::HMODULE> {
+unsafe fn load_library(name: *const u16) -> apperr::Result<NonNull<c_void>> {
     unsafe {
         check_ptr_return(LibraryLoader::LoadLibraryExW(
             name,
@@ -496,9 +496,9 @@ unsafe fn load_library(name: *const u16) -> apperr::Result<Foundation::HMODULE> 
 /// of the function you're loading. No type checks whatsoever are performed.
 //
 // It'd be nice to constrain T to std::marker::FnPtr, but that's unstable.
-pub unsafe fn get_proc_address<T>(handle: Foundation::HMODULE, name: &CStr) -> apperr::Result<T> {
+pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apperr::Result<T> {
     unsafe {
-        let ptr = LibraryLoader::GetProcAddress(handle, name.as_ptr() as *const u8);
+        let ptr = LibraryLoader::GetProcAddress(handle.as_ptr(), name.as_ptr() as *const u8);
         if let Some(ptr) = ptr {
             Ok(mem::transmute_copy(&ptr))
         } else {
@@ -507,11 +507,11 @@ pub unsafe fn get_proc_address<T>(handle: Foundation::HMODULE, name: &CStr) -> a
     }
 }
 
-pub fn load_libicuuc() -> apperr::Result<Foundation::HMODULE> {
+pub fn load_libicuuc() -> apperr::Result<NonNull<c_void>> {
     unsafe { load_library(w!("icuuc.dll")) }
 }
 
-pub fn load_libicui18n() -> apperr::Result<Foundation::HMODULE> {
+pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
     unsafe { load_library(w!("icuin.dll")) }
 }
 
@@ -621,10 +621,6 @@ fn check_bool_return(ret: Foundation::BOOL) -> apperr::Result<()> {
     }
 }
 
-fn check_ptr_return<T>(ret: *mut T) -> apperr::Result<*mut T> {
-    if ret.is_null() {
-        Err(get_last_error())
-    } else {
-        Ok(ret)
-    }
+fn check_ptr_return<T>(ret: *mut T) -> apperr::Result<NonNull<T>> {
+    NonNull::new(ret).ok_or_else(get_last_error)
 }

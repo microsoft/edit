@@ -3,11 +3,9 @@ use crate::helpers;
 use std::borrow::Cow;
 use std::ffi::{CStr, CString, c_int, c_void};
 use std::fs::{self, File};
-use std::mem;
-use std::mem::MaybeUninit;
+use std::mem::{self, MaybeUninit};
 use std::os::fd::FromRawFd;
-use std::ptr;
-use std::ptr::{null, null_mut};
+use std::ptr::{self, NonNull, null, null_mut};
 use std::thread;
 use std::time;
 
@@ -323,7 +321,7 @@ pub fn open_stdin_if_redirected() -> Option<File> {
 ///
 /// This function is unsafe because it uses raw pointers.
 /// Don't forget to release the memory when you're done with it or you'll leak it.
-pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<*mut u8> {
+pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
     unsafe {
         let ptr = libc::mmap(
             null_mut(),
@@ -333,10 +331,10 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<*mut u8> {
             -1,
             0,
         );
-        if ptr::eq(ptr, libc::MAP_FAILED) {
+        if ptr.is_null() || ptr::eq(ptr, libc::MAP_FAILED) {
             Err(errno_to_apperr(libc::ENOMEM))
         } else {
-            Ok(ptr as *mut u8)
+            Ok(NonNull::new_unchecked(ptr as *mut u8))
         }
     }
 }
@@ -347,9 +345,9 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<*mut u8> {
 ///
 /// This function is unsafe because it uses raw pointers.
 /// Make sure to only pass pointers acquired from `virtual_reserve`.
-pub unsafe fn virtual_release(base: *mut u8, size: usize) {
+pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
     unsafe {
-        libc::munmap(base as *mut libc::c_void, size);
+        libc::munmap(base.cast().as_ptr(), size);
     }
 }
 
@@ -360,10 +358,10 @@ pub unsafe fn virtual_release(base: *mut u8, size: usize) {
 /// This function is unsafe because it uses raw pointers.
 /// Make sure to only pass pointers acquired from `virtual_reserve`
 /// and to pass a size less than or equal to the size passed to `virtual_reserve`.
-pub unsafe fn virtual_commit(base: *mut u8, size: usize) -> apperr::Result<()> {
+pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> apperr::Result<()> {
     unsafe {
         let status = libc::mprotect(
-            base as *mut libc::c_void,
+            base.cast().as_ptr(),
             size,
             libc::PROT_READ | libc::PROT_WRITE,
         );
@@ -375,14 +373,10 @@ pub unsafe fn virtual_commit(base: *mut u8, size: usize) -> apperr::Result<()> {
     }
 }
 
-unsafe fn load_library(name: &CStr) -> apperr::Result<*mut c_void> {
+unsafe fn load_library(name: &CStr) -> apperr::Result<NonNull<c_void>> {
     unsafe {
-        let handle = libc::dlopen(name.as_ptr(), libc::RTLD_LAZY);
-        if handle.is_null() {
-            Err(errno_to_apperr(libc::ELIBACC))
-        } else {
-            Ok(handle)
-        }
+        NonNull::new(libc::dlopen(name.as_ptr(), libc::RTLD_LAZY))
+            .ok_or_else(|| errno_to_apperr(libc::ELIBACC))
     }
 }
 
@@ -394,9 +388,9 @@ unsafe fn load_library(name: &CStr) -> apperr::Result<*mut c_void> {
 /// of the function you're loading. No type checks whatsoever are performed.
 //
 // It'd be nice to constrain T to std::marker::FnPtr, but that's unstable.
-pub unsafe fn get_proc_address<T>(handle: *mut c_void, name: &CStr) -> apperr::Result<T> {
+pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apperr::Result<T> {
     unsafe {
-        let sym = libc::dlsym(handle, name.as_ptr());
+        let sym = libc::dlsym(handle.as_ptr(), name.as_ptr());
         if sym.is_null() {
             Err(errno_to_apperr(libc::ELIBACC))
         } else {
@@ -405,11 +399,11 @@ pub unsafe fn get_proc_address<T>(handle: *mut c_void, name: &CStr) -> apperr::R
     }
 }
 
-pub fn load_libicuuc() -> apperr::Result<*mut c_void> {
+pub fn load_libicuuc() -> apperr::Result<NonNull<c_void>> {
     unsafe { load_library(c"libicuuc.so") }
 }
 
-pub fn load_libicui18n() -> apperr::Result<*mut c_void> {
+pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
     unsafe { load_library(c"libicui18n.so") }
 }
 
