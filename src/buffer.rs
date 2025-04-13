@@ -1634,7 +1634,12 @@ impl TextBuffer {
             );
 
             // Draw the selection on this line, if any.
-            if selection_beg <= cursor_end.logical_pos && selection_end >= cursor_beg.logical_pos {
+            // FYI: `cursor_beg.visual_pos.y == visual_line` is necessary as the `visual_line`
+            // may be past the end of the document, and so it may not receive a highlight.
+            if cursor_beg.visual_pos.y == visual_line
+                && selection_beg <= cursor_end.logical_pos
+                && selection_end >= cursor_beg.logical_pos
+            {
                 // By default, we assume the entire line is selected.
                 let mut beg = 0;
                 let mut end = COORD_TYPE_SAFE_MAX;
