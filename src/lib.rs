@@ -15,7 +15,6 @@ pub mod input;
 pub mod loc;
 pub mod memchr;
 pub mod sys;
-pub mod trust_me_bro;
 pub mod tui;
 pub mod ucd;
 pub mod ucd_gen;

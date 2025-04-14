@@ -1,5 +1,5 @@
 use crate::arena::{Arena, ArenaString};
-use crate::buffer::{CursorMovement, RcTextBuffer, TextBuffer};
+use crate::buffer::{CursorMovement, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::helpers::{CoordType, Point, Rect, Size, hash, hash_str, opt_ptr_eq, wymix};
@@ -652,7 +652,7 @@ impl Tui {
                 }
             }
             NodeContent::Textarea(tc) => {
-                let tb = &mut *tc.buffer;
+                let mut tb = tc.buffer.borrow_mut();
                 let mut destination = Rect {
                     left: inner_clipped.left,
                     top: inner_clipped.top,
@@ -797,7 +797,8 @@ impl Tui {
                         );
                     }
                     NodeContent::Textarea(content) => {
-                        let tb = &*content.buffer;
+                        let tb = content.buffer.borrow();
+                        let tb = &*tb;
                         helpers::string_append_repeat(&mut result, ' ', depth * 2);
                         _ = write!(result, "  textarea:     {tb:p}\r\n");
                     }
@@ -1580,7 +1581,7 @@ impl<'a> Context<'a, '_> {
                     buffers.push(CachedTextBuffer {
                         node_id: node.id,
                         editor: match &payload {
-                            TextBufferPayload::Editline(_) => RcTextBuffer::new(true).unwrap(),
+                            TextBufferPayload::Editline(_) => TextBuffer::new_rc(true).unwrap(),
                             TextBufferPayload::Textarea(tb) => tb.clone(),
                         },
                         seen: true,
@@ -1592,7 +1593,7 @@ impl<'a> Context<'a, '_> {
             // SAFETY: *Assuming* that there are no duplicate node IDs in the tree that
             // would cause this cache slot to be overwritten, then this operation is safe.
             // The text buffer cache will keep the buffer alive for us long enough.
-            unsafe { mem::transmute::<&'_ mut TextBuffer, &'a mut TextBuffer>(&mut cached.editor) }
+            unsafe { mem::transmute(&*cached.editor) }
         };
 
         node.content = NodeContent::Textarea(TextareaContent {
@@ -1612,7 +1613,7 @@ impl<'a> Context<'a, '_> {
         };
 
         if let TextBufferPayload::Editline(text) = &payload {
-            content.buffer.copy_from_str(text);
+            content.buffer.borrow_mut().copy_from_str(text);
         }
 
         if let Some(node_prev) = self.tui.prev_node_map.get(node.id) {
@@ -1630,8 +1631,13 @@ impl<'a> Context<'a, '_> {
                     text_width -= 1;
                 }
 
-                let mut make_cursor_visible = content.buffer.take_cursor_visibility_request();
-                make_cursor_visible |= content.buffer.set_width(text_width);
+                let mut make_cursor_visible;
+                {
+                    let mut tb = content.buffer.borrow_mut();
+                    make_cursor_visible = tb.take_cursor_visibility_request();
+                    make_cursor_visible |= tb.set_width(text_width);
+                }
+
                 make_cursor_visible |= self.textarea_handle_input(content, &node_prev, single_line);
 
                 if make_cursor_visible {
@@ -1642,10 +1648,14 @@ impl<'a> Context<'a, '_> {
             }
         }
 
-        let dirty = content.buffer.is_dirty();
-        if dirty {
-            if let TextBufferPayload::Editline(text) = payload {
-                content.buffer.save_as_string(text);
+        let dirty;
+        {
+            let mut tb = content.buffer.borrow_mut();
+            dirty = tb.is_dirty();
+            if dirty {
+                if let TextBufferPayload::Editline(text) = payload {
+                    tb.save_as_string(text);
+                }
             }
         }
 
@@ -1659,8 +1669,9 @@ impl<'a> Context<'a, '_> {
         }
 
         node.attributes.focusable = true;
-        node.intrinsic_size.height = content.buffer.get_visual_line_count();
+        node.intrinsic_size.height = content.buffer.borrow().get_visual_line_count();
         node.intrinsic_size_set = true;
+
         dirty
     }
 
@@ -1674,7 +1685,8 @@ impl<'a> Context<'a, '_> {
             return false;
         }
 
-        let tb = &mut *tc.buffer;
+        let mut tb = tc.buffer.borrow_mut();
+        let tb = &mut *tb;
 
         if self.tui.mouse_state != InputMouseState::None
             && self.tui.was_mouse_down_on_node(node_prev.id)
@@ -2102,10 +2114,10 @@ impl<'a> Context<'a, '_> {
         false
     }
 
-    fn textarea_make_cursor_visible(&self, content: &mut TextareaContent, node_prev: &Node) {
-        let tb = &mut *content.buffer;
-        let mut scroll_x = content.scroll_offset.x;
-        let mut scroll_y = content.scroll_offset.y;
+    fn textarea_make_cursor_visible(&self, tc: &mut TextareaContent, node_prev: &Node) {
+        let tb = tc.buffer.borrow();
+        let mut scroll_x = tc.scroll_offset.x;
+        let mut scroll_y = tc.scroll_offset.y;
 
         let text_width = tb.get_text_width();
         let cursor_x = tb.get_cursor_visual_pos().x;
@@ -2119,21 +2131,16 @@ impl<'a> Context<'a, '_> {
         // Scroll down if the cursor is below the visible area.
         scroll_y = scroll_y.max(cursor_y - viewport_height + 1);
 
-        content.scroll_offset.x = scroll_x;
-        content.scroll_offset.y = scroll_y;
+        tc.scroll_offset.x = scroll_x;
+        tc.scroll_offset.y = scroll_y;
     }
 
-    fn textarea_adjust_scroll_offset(&self, content: &mut TextareaContent) {
-        let tb = &mut *content.buffer;
-        let mut scroll_x = content.scroll_offset.x;
-        let mut scroll_y = content.scroll_offset.y;
+    fn textarea_adjust_scroll_offset(&self, tc: &mut TextareaContent) {
+        let tb = tc.buffer.borrow();
+        let mut scroll_x = tc.scroll_offset.x;
+        let mut scroll_y = tc.scroll_offset.y;
 
-        scroll_x = scroll_x.min(
-            content
-                .scroll_offset_x_max
-                .max(tb.get_cursor_visual_pos().x)
-                - 10,
-        );
+        scroll_x = scroll_x.min(tc.scroll_offset_x_max.max(tb.get_cursor_visual_pos().x) - 10);
         scroll_x = scroll_x.max(0);
         scroll_y = scroll_y.clamp(0, tb.get_visual_line_count() - 1);
 
@@ -2141,8 +2148,8 @@ impl<'a> Context<'a, '_> {
             scroll_x = 0;
         }
 
-        content.scroll_offset.x = scroll_x;
-        content.scroll_offset.y = scroll_y;
+        tc.scroll_offset.x = scroll_x;
+        tc.scroll_offset.y = scroll_y;
     }
 
     pub fn scrollarea_begin(&mut self, classname: &'static str, intrinsic_size: Size) {
@@ -2946,13 +2953,15 @@ impl Document for Vec<StyledTextChunk<'_>, &'_ Arena> {
     }
 }
 
+// NOTE: Must not contain items that require drop().
 struct TextContent<'a> {
     chunks: Vec<StyledTextChunk<'a>, &'a Arena>,
     overflow: Overflow,
 }
 
+// NOTE: Must not contain items that require drop().
 struct TextareaContent<'a> {
-    buffer: &'a mut TextBuffer,
+    buffer: &'a TextBufferCell,
 
     // Carries over between frames.
     scroll_offset: Point,
@@ -2965,13 +2974,15 @@ struct TextareaContent<'a> {
     has_focus: bool,
 }
 
-#[derive(Default, Clone)]
+// NOTE: Must not contain items that require drop().
+#[derive(Clone)]
 struct ScrollareaContent {
     scroll_offset: Point,
     scroll_offset_y_drag_start: CoordType,
     thumb_height: CoordType,
 }
 
+// NOTE: Must not contain items that require drop().
 #[derive(Default)]
 enum NodeContent<'a> {
     #[default]
@@ -2984,6 +2995,7 @@ enum NodeContent<'a> {
     Scrollarea(ScrollareaContent),
 }
 
+// NOTE: Must not contain items that require drop().
 #[derive(Default)]
 struct NodeSiblings<'a> {
     prev: Option<&'a NodeCell<'a>>,
@@ -3003,6 +3015,7 @@ impl<'a> NodeSiblings<'a> {
     }
 }
 
+// NOTE: Must not contain items that require drop().
 #[derive(Default)]
 struct NodeChildren<'a> {
     first: Option<&'a NodeCell<'a>>,
@@ -3024,6 +3037,7 @@ impl<'a> NodeChildren<'a> {
 
 type NodeCell<'a> = SemiRefCell<Node<'a>>;
 
+// NOTE: Must not contain items that require drop().
 #[derive(Default)]
 pub struct Node<'a> {
     prev: Option<&'a NodeCell<'a>>,
