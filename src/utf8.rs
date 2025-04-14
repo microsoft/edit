@@ -222,6 +222,14 @@ impl Iterator for Utf8Chars<'_> {
             Some(self.next_slow(c))
         }
     }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        // Lower bound: All remaining bytes are 4-byte sequences.
+        // Upper bound: All remaining bytes are ASCII.
+        let remaining = self.source.len() - self.offset;
+        (remaining / 4, Some(remaining))
+    }
 }
 
 impl iter::FusedIterator for Utf8Chars<'_> {}
