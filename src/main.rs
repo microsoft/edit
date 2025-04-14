@@ -19,18 +19,20 @@
 // * Multi-Cursor
 // * For the focus path we can use the tree depth to O(1) check if the path contains the focus.
 
+use edit::apperr;
 use edit::buffer::{self, RcTextBuffer};
 use edit::framebuffer::{self, IndexedColor, alpha_blend};
 use edit::helpers::*;
+use edit::icu;
 use edit::input::{self, kbmod, vk};
-use edit::loc::{LocId, loc};
+use edit::loc::{self, LocId, loc};
 use edit::sys;
 use edit::tui::*;
 use edit::vt::{self, Token};
-use edit::{apperr, icu};
+use std::cmp;
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
-use std::{cmp, process};
+use std::process;
 
 #[cfg(feature = "debug-latency")]
 use std::fmt::Write;
@@ -195,7 +197,7 @@ fn run() -> apperr::Result<()> {
 
     let mut vt_parser = vt::Parser::new();
     let mut input_parser = input::Parser::new();
-    let mut tui = Tui::new();
+    let mut tui = Tui::new()?;
 
     query_color_palette(&mut tui, &mut vt_parser);
     state.menubar_color_bg = alpha_blend(

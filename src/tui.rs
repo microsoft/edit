@@ -1,14 +1,19 @@
-use crate::buffer::{CursorMovement, RcTextBuffer};
+use crate::arena::{Arena, ArenaString};
+use crate::buffer::{CursorMovement, RcTextBuffer, TextBuffer};
+use crate::cell::*;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
-use crate::helpers::{CoordType, Point, Rect, Size, hash, hash_str, wymix};
+use crate::helpers::{CoordType, Point, Rect, Size, hash, hash_str, opt_ptr_eq, wymix};
 use crate::input::{InputKeyMod, kbmod, vk};
 use crate::ucd::Document;
-use crate::{helpers, input, trust_me_bro, ucd};
+use crate::{apperr, helpers, input, ucd};
 use std::fmt::Write as _;
 use std::iter;
 use std::mem;
-use std::ptr::{self, null};
+use std::ptr;
 use std::time;
+
+#[cfg(debug_assertions)]
+use std::collections::HashSet;
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
@@ -21,6 +26,11 @@ struct CachedTextBuffer {
     node_id: u64,
     editor: RcTextBuffer,
     seen: bool,
+}
+
+enum TextBufferPayload<'a> {
+    Editline(&'a mut String),
+    Textarea(RcTextBuffer),
 }
 
 pub struct Tui {
@@ -53,17 +63,24 @@ pub struct Tui {
     focused_node_path_previous_frame: Vec<u64>,
     focused_node_path_for_scrolling: Vec<u64>,
 
-    prev_tree: Tree,
-    prev_node_map: Vec<*const Node>,
-    prev_node_map_shift: usize,
-    prev_node_map_mask: u64,
+    arena_prev: Arena,
+    arena_next: Arena,
+
+    prev_tree: Tree<'static>,
+    prev_node_map: NodeMap<'static>,
 
     settling_have: i32,
     settling_want: i32,
 }
 
 impl Tui {
-    pub fn new() -> Self {
+    pub fn new() -> apperr::Result<Self> {
+        let arena_prev = Arena::new(128 * 1024 * 1024)?;
+        let arena_next = Arena::new(128 * 1024 * 1024)?;
+        // SAFETY: Since `prev_tree` refers to `arena_prev`/`arena_next`, from its POV the lifetime
+        // is `'static`, requiring us to use `transmute` to circumvent the borrow checker.
+        let prev_tree = Tree::new(unsafe { mem::transmute::<&Arena, &Arena>(&arena_next) });
+
         let mut tui = Self {
             framebuffer: Framebuffer::new(),
             read_timeout: time::Duration::MAX,
@@ -92,10 +109,11 @@ impl Tui {
             focused_node_path_previous_frame: Vec::with_capacity(16),
             focused_node_path_for_scrolling: Vec::with_capacity(16),
 
-            prev_tree: Tree::new(),
-            prev_node_map: vec![null(); 1],
-            prev_node_map_shift: 0,
-            prev_node_map_mask: 0,
+            arena_prev,
+            arena_next,
+
+            prev_tree,
+            prev_node_map: Default::default(),
 
             settling_have: 0,
             settling_want: 0,
@@ -104,7 +122,7 @@ impl Tui {
         tui.focused_node_path.push(ROOT_ID);
         tui.focused_node_path_previous_frame.push(ROOT_ID);
         tui.focused_node_path_for_scrolling.push(ROOT_ID);
-        tui
+        Ok(tui)
     }
 
     pub fn size(&self) -> Size {
@@ -150,10 +168,15 @@ impl Tui {
         self.framebuffer.contrasted(color)
     }
 
-    pub fn create_context<'tui, 'input>(
-        &'tui mut self,
+    pub fn create_context<'a, 'input>(
+        &'a mut self,
         input: Option<input::Input<'input>>,
-    ) -> Context<'tui, 'input> {
+    ) -> Context<'a, 'input> {
+        // SAFETY: Since we have a unique `&mut self`, nothing is holding onto `arena_prev`,
+        // which will become `arena_next` and get reset. It's safe to reset and reuse its memory.
+        mem::swap(&mut self.arena_prev, &mut self.arena_next);
+        unsafe { self.arena_next.reset(0) };
+
         // In the input handler below we transformed a mouse up into a release event.
         // Now, a frame later, we must reset it back to none, to stop it from triggering things.
         // Same for Scroll events.
@@ -216,18 +239,19 @@ impl Tui {
                     && next_state == InputMouseState::Left
                     && next_position != self.mouse_position;
 
-                let mut hovered_node = null(); // Needed for `mouse_down`
-                let mut focused_node = null(); // Needed for `mouse_down` and `is_click`
+                let mut hovered_node = None; // Needed for `mouse_down`
+                let mut focused_node = None; // Needed for `mouse_down` and `is_click`
                 if mouse_down || is_click {
                     for root in self.prev_tree.iterate_roots() {
                         Tree::visit_all(root, root, 0, true, |_, node| {
-                            if !node.outer_clipped.contains(next_position) {
+                            let n = node.borrow();
+                            if !n.outer_clipped.contains(next_position) {
                                 // Skip the entire sub-tree, because it doesn't contain the cursor.
                                 return VisitControl::SkipChildren;
                             }
-                            hovered_node = node;
-                            if node.attributes.focusable {
-                                focused_node = node;
+                            hovered_node = Some(node);
+                            if n.attributes.focusable {
+                                focused_node = Some(node);
                             }
                             VisitControl::Continue
                         });
@@ -237,17 +261,11 @@ impl Tui {
                 if mouse_down {
                     // Transition from no mouse input to some mouse input --> Record the mouse down position.
                     self.mouse_down_position = next_position; // Gets reset at the start of this function.
-                    Self::build_node_path(
-                        Tree::node_ref(hovered_node),
-                        &mut self.mouse_down_node_path,
-                    );
+                    Self::build_node_path(hovered_node, &mut self.mouse_down_node_path);
 
                     // On left-mouse-down we change focus.
                     if next_state == InputMouseState::Left {
-                        Self::build_node_path(
-                            Tree::node_ref(focused_node),
-                            &mut self.focused_node_path,
-                        );
+                        Self::build_node_path(focused_node, &mut self.focused_node_path);
                         self.needs_more_settling(); // See `needs_more_settling()`.
                     }
                 } else if mouse_up {
@@ -256,7 +274,7 @@ impl Tui {
                 }
 
                 if is_click {
-                    let click_target = Tree::node_ref(focused_node).map(|n| n.id).unwrap_or(0);
+                    let click_target = focused_node.map_or(0, |n| n.borrow().id);
                     input_mouse_is_click = true;
                     input_mouse_is_double_click = (now - self.last_click)
                         <= std::time::Duration::from_millis(500)
@@ -282,6 +300,11 @@ impl Tui {
             self.settling_want = 1;
         }
 
+        // TODO: There should be a way to do this without unsafe.
+        // Allocating from the arena borrows the arena, and so allocating the tree here borrows self.
+        // This conflicts with us passing a mutable reference to `self` into the struct below.
+        let tree = Tree::new(unsafe { mem::transmute::<&Arena, &Arena>(&self.arena_next) });
+
         Context {
             tui: self,
 
@@ -293,25 +316,23 @@ impl Tui {
             input_scroll_delta,
             input_consumed,
 
-            tree: Tree::new(),
-            last_modal: null(),
+            tree,
+            last_modal: None,
             next_block_id_mixin: 0,
             needs_settling: false,
+
+            #[cfg(debug_assertions)]
+            seen_ids: HashSet::new(),
         }
     }
 
     fn report_context_completion(&mut self, ctx: &mut Context) {
         // If this hits, you forgot to block_end() somewhere. The best way to figure
         // out where is to do a binary search of commenting out code in main.rs.
-        debug_assert!(
-            Tree::node_ref(ctx.tree.current_node)
-                .map(|r| r.stack_parent)
-                .unwrap_or(null())
-                .is_null()
-        );
+        debug_assert!(ctx.tree.current_node.borrow().stack_parent.is_none());
 
-        if let Some(node) = Tree::node_ref(ctx.last_modal) {
-            if !self.is_subtree_focused(node.id) {
+        if let Some(node) = ctx.last_modal {
+            if !self.is_subtree_focused(node.borrow().id) {
                 ctx.steal_focus_for(node);
             }
         }
@@ -322,37 +343,12 @@ impl Tui {
         needs_settling |= self.prev_tree.checksum != ctx.tree.checksum;
 
         // Adopt the new tree and recalculate the node hashmap.
-        self.prev_tree = mem::take(&mut ctx.tree);
-        {
-            let width = (4 * self.prev_tree.count + 1).ilog2().max(1) as usize;
-            let shift = std::mem::size_of::<usize>() * 8 - width;
-            let slots = 1 << width;
-            let mask = slots - 1;
-            let node_map = &mut self.prev_node_map;
-
-            if slots != node_map.len() {
-                *node_map = vec![null(); slots];
-            } else {
-                node_map.fill(null());
-            }
-
-            let mut node = self.prev_tree.root_first;
-            while !node.is_null() {
-                let n = unsafe { &*node };
-                let mut slot = (n.id >> shift) as usize;
-                loop {
-                    if node_map[slot].is_null() {
-                        node_map[slot] = n;
-                        break;
-                    }
-                    slot = (slot + 1) & mask;
-                }
-                node = n.next;
-            }
-
-            self.prev_node_map_shift = shift;
-            self.prev_node_map_mask = mask as u64;
-        }
+        //
+        // SAFETY: The memory used by the tree is owned by the `self.arena_next` right now.
+        // Stealing the tree here thus doesn't need to copy any memory unless someone resets the arena.
+        // (The arena is reset in `reset()` above.)
+        self.prev_tree = unsafe { mem::transmute_copy(&ctx.tree) };
+        self.prev_node_map.reset(&self.prev_tree);
 
         let mut focus_path_pop_min = 0;
         // If the user pressed Escape, we move the focus to a parent node.
@@ -381,17 +377,27 @@ impl Tui {
         // Remove cached text editors that are no longer in use.
         self.cached_text_buffers.retain(|c| c.seen);
 
-        for root in Tree::iterate_siblings(self.prev_tree.root_first) {
+        for root in Tree::iterate_siblings(Some(self.prev_tree.root_first)) {
+            let mut root = root.borrow_mut();
             root.compute_intrinsic_size();
         }
 
         let viewport = self.size.as_rect();
 
-        for root in Tree::iterate_siblings(self.prev_tree.root_first) {
+        for root in Tree::iterate_siblings(Some(self.prev_tree.root_first)) {
+            let mut root = root.borrow_mut();
+            let root = &mut *root;
+
             if let Some(float) = &root.attributes.float {
-                let (mut x, mut y) = Tree::node_ref(root.parent)
-                    .map(|parent| (parent.outer.left, parent.outer.top))
-                    .unwrap_or((0, 0));
+                let mut x = 0;
+                let mut y = 0;
+
+                if let Some(node) = root.parent {
+                    let node = node.borrow();
+                    x = node.outer.left;
+                    y = node.outer.top;
+                }
+
                 let size = root.intrinsic_to_outer();
 
                 x += float.offset.x;
@@ -411,16 +417,24 @@ impl Tui {
             root.inner = root.outer_to_inner(root.outer);
             root.outer_clipped = root.outer;
             root.inner_clipped = root.inner;
-            root.layout_children(root.outer);
+
+            let outer = root.outer;
+            root.layout_children(outer);
         }
     }
 
-    fn build_node_path(node: Option<&Node>, path: &mut Vec<u64>) {
+    fn build_node_path<'a>(node: Option<&NodeCell<'a>>, path: &mut Vec<u64>) {
         path.clear();
-        iter::successors(node, |&node| Tree::node_ref(node.parent)).for_each(|node| {
-            path.push(node.id);
-        });
-        if path.is_empty() {
+        if let Some(mut node) = node {
+            loop {
+                let n = node.borrow();
+                path.push(n.id);
+                node = match n.parent {
+                    Some(parent) => parent,
+                    None => break,
+                };
+            }
+        } else {
             path.push(ROOT_ID);
         }
     }
@@ -442,7 +456,8 @@ impl Tui {
     pub fn render(&mut self) -> String {
         self.framebuffer.reset(self.size);
         for child in self.prev_tree.iterate_roots() {
-            self.render_node(child);
+            let mut child = child.borrow_mut();
+            self.render_node(&mut child);
         }
         self.framebuffer.render()
     }
@@ -571,8 +586,10 @@ impl Tui {
                         let chunk = &content.chunks[0];
                         let text = &chunk.text[..];
                         let bytes = text.as_bytes();
-                        let mut modified = String::with_capacity(text.len());
+                        let mut modified = String::new();
                         let mut cfg = ucd::MeasurementConfig::new(&bytes);
+
+                        modified.reserve(text.len());
 
                         match content.overflow {
                             Overflow::Clip => unreachable!(),
@@ -674,7 +691,7 @@ impl Tui {
                 }
             }
             NodeContent::Scrollarea(sc) => {
-                let content = Tree::node_ref(node.children.first).unwrap();
+                let content = node.children.first.unwrap().borrow();
                 let track = Rect {
                     left: inner.right,
                     top: inner.top,
@@ -692,7 +709,8 @@ impl Tui {
         }
 
         for child in Tree::iterate_siblings(node.children.first) {
-            self.render_node(child);
+            let mut child = child.borrow_mut();
+            self.render_node(&mut child);
         }
     }
 
@@ -709,6 +727,7 @@ impl Tui {
 
         for root in self.prev_tree.iterate_roots() {
             Tree::visit_all(root, root, 0, true, |depth, node| {
+                let node = node.borrow();
                 helpers::string_append_repeat(&mut result, ' ', depth * 2);
                 _ = write!(result, "- id: {:016x}\r\n", node.id);
 
@@ -716,7 +735,8 @@ impl Tui {
                 _ = write!(result, "  classname:    {}\r\n", node.classname);
 
                 if depth == 0 {
-                    if let Some(parent) = Tree::node_ref(node.parent) {
+                    if let Some(parent) = node.parent {
+                        let parent = parent.borrow();
                         helpers::string_append_repeat(&mut result, ' ', depth * 2);
                         _ = write!(result, "  parent:       {:016x}\r\n", parent.id);
                     }
@@ -817,39 +837,18 @@ impl Tui {
         self.focused_node_path.contains(&id)
     }
 
-    fn get_prev_node<'b>(&mut self, id: u64) -> Option<&'b Node> {
-        let node_map = &self.prev_node_map[..];
-        let shift = self.prev_node_map_shift;
-        let mask = self.prev_node_map_mask;
-        let mut slot = (id >> shift) & mask;
-
-        loop {
-            let node = node_map[slot as usize];
-            if node.is_null() {
-                return None;
-            }
-            if unsafe { &*node }.id == id {
-                return Some(unsafe { &*(node as *const _) });
-            }
-            slot = (slot + 1) & mask;
-        }
-    }
-
     fn pop_focusable_node(&mut self, pop_minimum: usize) -> bool {
         let pop_minimum = pop_minimum.min(self.focused_node_path.len());
         let path = &self.focused_node_path[pop_minimum..self.focused_node_path.len()];
-
-        // TODO: This is only needed because get_prev_node doesn't live on a property of `self`.
-        // That would fix the borrow checker issue.
-        let path = trust_me_bro::this_lifetime_change_is_totally_safe(path);
 
         // Find the next focusable node upwards in the hierarchy.
         let focusable_idx = path
             .iter()
             .skip(pop_minimum)
             .position(|&id| {
-                self.get_prev_node(id)
-                    .is_some_and(|node| node.attributes.focusable)
+                self.prev_node_map
+                    .get(id)
+                    .is_some_and(|node| node.borrow().attributes.focusable)
             })
             .map(|idx| idx + pop_minimum)
             .unwrap_or(path.len());
@@ -872,7 +871,7 @@ impl Tui {
             return false;
         }
 
-        let Some(focused) = self.get_prev_node(self.focused_node_path[0]) else {
+        let Some(focused) = self.prev_node_map.get(self.focused_node_path[0]) else {
             debug_assert!(false); // The caller should've cleaned up the focus path.
             return false;
         };
@@ -888,33 +887,37 @@ impl Tui {
         // This way, tab/shift-tab only moves within the same window.
         // The ROOT_ID node has no parent, and the others have a float attribute.
         // If the root is the focused node, it should of course not move upward.
-        while !root.attributes.focus_well {
-            if root.attributes.focus_void {
-                focused_start = root;
-            }
-            if root.parent.is_null() {
+        loop {
+            let root_node = root.borrow();
+            if root_node.attributes.focus_well {
                 break;
             }
-            root = Tree::node_ref(root.parent).unwrap();
+            if root_node.attributes.focus_void {
+                focused_start = root;
+            }
+            root = match root_node.parent {
+                Some(parent) => parent,
+                None => break,
+            }
         }
 
         if input == vk::LEFT || input == vk::RIGHT {
             // Find the cell within a row within a table that we're in.
             // To do so we'll use a circular buffer of the last 3 nodes while we travel up.
-            let mut buf = [null(); 3];
+            let mut buf = [None; 3];
             let mut idx = buf.len() - 1;
             let mut node = focused_start;
 
             loop {
                 idx = (idx + 1) % buf.len();
-                buf[idx] = node;
-                if let NodeContent::Table(..) = &node.content {
+                buf[idx] = Some(node);
+                if let NodeContent::Table(..) = &node.borrow().content {
                     break;
                 }
                 if ptr::eq(node, root) {
                     return false;
                 }
-                node = match Tree::node_ref(node.parent) {
+                node = match node.borrow().parent {
                     Some(parent) => parent,
                     None => return false,
                 }
@@ -923,21 +926,21 @@ impl Tui {
             // The current `idx` points to the table.
             // The last item is the row.
             // The 2nd to last item is the cell.
-            let row = buf[(idx + 3 - 1) % buf.len()];
-            let cell = buf[(idx + 3 - 2) % buf.len()];
-            let Some(row) = Tree::node_ref(row) else {
+            let Some(row) = buf[(idx + 3 - 1) % buf.len()] else {
                 return false;
             };
-            let Some(cell) = Tree::node_ref(cell) else {
+            let Some(cell) = buf[(idx + 3 - 2) % buf.len()] else {
                 return false;
             };
 
+            let row = row.borrow();
+            let cell = cell.borrow();
             let mut next = if input == vk::LEFT {
                 cell.siblings.prev
             } else {
                 cell.siblings.next
             };
-            if next.is_null() {
+            if next.is_none() {
                 next = if input == vk::LEFT {
                     row.children.last
                 } else {
@@ -945,8 +948,8 @@ impl Tui {
                 };
             }
 
-            if let Some(next) = Tree::node_ref(next) {
-                if !ptr::eq(next, cell) {
+            if let Some(next) = next {
+                if !ptr::eq(&*next.borrow(), &*cell) {
                     Tui::build_node_path(Some(next), &mut self.focused_node_path);
                     return true;
                 }
@@ -963,15 +966,16 @@ impl Tui {
 
         // If the window doesn't contain any nodes, there's nothing to focus.
         // This also protects against infinite loops below.
-        if root.children.first.is_null() {
+        if root.borrow().children.first.is_none() {
             return false;
         }
 
         Tree::visit_all(root, focused_start, usize::MAX / 2, forward, |_, node| {
-            if node.attributes.focusable && !ptr::eq(node, root) && !ptr::eq(node, focused_start) {
-                focused_next = trust_me_bro::this_lifetime_change_is_totally_safe(node);
+            let n = node.borrow();
+            if n.attributes.focusable && !ptr::eq(node, root) && !ptr::eq(node, focused_start) {
+                focused_next = node;
                 VisitControl::Stop
-            } else if node.attributes.focus_void {
+            } else if n.attributes.focus_void {
                 VisitControl::SkipChildren
             } else {
                 VisitControl::Continue
@@ -992,25 +996,26 @@ impl Tui {
             return false;
         }
 
-        let Some(focused) = self.get_prev_node(self.focused_node_path[0]) else {
+        let Some(node) = self.prev_node_map.get(self.focused_node_path[0]) else {
             // Node not found because we're using the old layout tree.
             // Retry in the next rendering loop.
             return true;
         };
 
-        let mut scrollarea = Tree::node_mut(focused).unwrap();
-        let mut scroll_to = focused.outer;
+        let mut node = node.borrow_mut();
+        let mut scroll_to = node.outer;
 
-        while !scrollarea.parent.is_null() && scrollarea.attributes.float.is_none() {
-            if let NodeContent::Scrollarea(sc) = &mut scrollarea.content {
+        while node.parent.is_some() && node.attributes.float.is_none() {
+            let n = &mut *node;
+            if let NodeContent::Scrollarea(sc) = &mut n.content {
                 let off_y = sc.scroll_offset.y.max(0);
                 let mut y = off_y;
-                y = y.min(scroll_to.top - scrollarea.inner.top + off_y);
-                y = y.max(scroll_to.bottom - scrollarea.inner.bottom + off_y);
+                y = y.min(scroll_to.top - n.inner.top + off_y);
+                y = y.max(scroll_to.bottom - n.inner.bottom + off_y);
                 sc.scroll_offset.y = y;
-                scroll_to = scrollarea.outer;
+                scroll_to = n.outer;
             }
-            scrollarea = Tree::node_mut(scrollarea.parent).unwrap();
+            node = node.parent.unwrap().borrow_mut();
         }
 
         self.focused_node_path_for_scrolling = self.focused_node_path.clone();
@@ -1018,8 +1023,8 @@ impl Tui {
     }
 }
 
-pub struct Context<'tui, 'input> {
-    tui: &'tui mut Tui,
+pub struct Context<'a, 'input> {
+    tui: &'a mut Tui,
 
     /// Current text input, if any.
     input_text: Option<InputText<'input>>,
@@ -1032,10 +1037,13 @@ pub struct Context<'tui, 'input> {
     input_scroll_delta: Point,
     input_consumed: bool,
 
-    tree: Tree,
-    last_modal: *const Node,
+    tree: Tree<'a>,
+    last_modal: Option<&'a NodeCell<'a>>,
     next_block_id_mixin: u64,
     needs_settling: bool,
+
+    #[cfg(debug_assertions)]
+    seen_ids: HashSet<u64>,
 }
 
 impl Drop for Context<'_, '_> {
@@ -1045,7 +1053,7 @@ impl Drop for Context<'_, '_> {
     }
 }
 
-impl Context<'_, '_> {
+impl<'a> Context<'a, '_> {
     /// Returns the current terminal size.
     pub fn size(&self) -> Size {
         self.tui.size
@@ -1082,9 +1090,9 @@ impl Context<'_, '_> {
 
     /// Begins a new UI block (container) with a unique ID.
     pub fn block_begin(&mut self, classname: &'static str) {
-        let parent = self.tree.current_node_mut();
+        let parent = self.tree.current_node;
 
-        let mut id = hash_str(parent.id, classname);
+        let mut id = hash_str(parent.borrow().id, classname);
         if self.next_block_id_mixin != 0 {
             id = hash(id, &self.next_block_id_mixin.to_ne_bytes());
             self.next_block_id_mixin = 0;
@@ -1092,18 +1100,21 @@ impl Context<'_, '_> {
 
         // If this hits, you have tried to create a block with the same ID as a previous one
         // somewhere up this call stack. Change the classname, or use next_block_id_mixin().
+        // TODO: HashMap
         #[cfg(debug_assertions)]
-        for child in Tree::iterate_siblings(parent.children.first) {
-            debug_assert_ne!(child.id, id);
+        if !self.seen_ids.insert(id) {
+            panic!("Duplicate node ID: {id:x}");
         }
 
-        self.tree.append_child(Node {
-            stack_parent: parent,
-            id,
-            classname,
-            parent,
-            ..Default::default()
-        });
+        let node: &mut NodeCell = self.arena().alloc_default();
+        {
+            let mut n = node.borrow_mut();
+            n.parent = Some(parent);
+            n.stack_parent = Some(parent);
+            n.id = id;
+            n.classname = classname;
+        }
+        self.tree.append_child(node);
     }
 
     /// Ends the current UI block, returning to its parent container.
@@ -1117,31 +1128,34 @@ impl Context<'_, '_> {
     }
 
     fn attr_focusable(&mut self) {
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.focusable = true;
     }
 
     pub fn focus_on_first_present(&mut self) {
-        let last_node = self.tree.last_node_mut();
-        last_node.attributes.focusable = true;
-        if self.tui.get_prev_node(last_node.id).is_none() {
+        let steal = {
+            let mut last_node = self.tree.last_node.borrow_mut();
+            last_node.attributes.focusable = true;
+            self.tui.prev_node_map.get(last_node.id).is_none()
+        };
+        if steal {
             self.steal_focus();
         }
     }
 
     pub fn steal_focus(&mut self) {
-        self.steal_focus_for(self.tree.last_node_ref());
+        self.steal_focus_for(self.tree.last_node);
     }
 
-    fn steal_focus_for(&mut self, node: &Node) {
-        if !self.tui.is_node_focused(node.id) {
+    fn steal_focus_for(&mut self, node: &NodeCell<'a>) {
+        if !self.tui.is_node_focused(node.borrow().id) {
             Tui::build_node_path(Some(node), &mut self.tui.focused_node_path);
             self.needs_rerender();
         }
     }
 
     pub fn toss_focus_up(&mut self) {
-        let node = self.tree.last_node_ref();
+        let node = self.tree.last_node.borrow();
         // Check the path length to avoid popping the root node and scheduling a rerender for no reason.
         if node.attributes.focusable
             && self.tui.focused_node_path.len() >= 2
@@ -1153,15 +1167,17 @@ impl Context<'_, '_> {
     }
 
     pub fn inherit_focus(&mut self) {
-        let last_node = self.tree.last_node_mut();
-        let Some(parent) = Tree::node_mut(last_node.parent) else {
+        let mut last_node = self.tree.last_node.borrow_mut();
+        let Some(parent) = last_node.parent else {
             return;
         };
 
         last_node.attributes.focusable = true;
+
         // Mark the parent as focusable, so that if the user presses Escape,
         // and `block_end` bubbles the focus up the tree, it'll stop on our parent,
         // which will then focus us on the next iteration.
+        let mut parent = parent.borrow_mut();
         parent.attributes.focusable = true;
 
         if self.tui.is_node_focused(parent.id) {
@@ -1171,38 +1187,45 @@ impl Context<'_, '_> {
     }
 
     pub fn attr_focus_well(&mut self) {
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.focus_well = true;
     }
 
     pub fn attr_intrinsic_size(&mut self, size: Size) {
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         last_node.intrinsic_size = size;
         last_node.intrinsic_size_set = true;
     }
 
     pub fn attr_float(&mut self, spec: FloatSpec) {
-        let last_node = self.tree.last_node_mut();
-        let anchor = match spec.anchor {
-            Anchor::Last if !last_node.siblings.prev.is_null() => last_node.siblings.prev,
-            Anchor::Last | Anchor::Parent => last_node.parent,
-            // By not giving such floats a parent, they get the same origin as the original root node,
-            // but they also gain their own "root id" in the tree. That way, their focus path is totally unique,
-            // which means that we can easily check if a modal is open by calling `is_focused()` on the original root.
-            Anchor::Root => null(),
+        let last_node = self.tree.last_node;
+        let anchor = {
+            let ln = last_node.borrow();
+            match spec.anchor {
+                Anchor::Last if ln.siblings.prev.is_some() => ln.siblings.prev,
+                Anchor::Last | Anchor::Parent => ln.parent,
+                // By not giving such floats a parent, they get the same origin as the original root node,
+                // but they also gain their own "root id" in the tree. That way, their focus path is totally unique,
+                // which means that we can easily check if a modal is open by calling `is_focused()` on the original root.
+                Anchor::Root => None,
+            }
         };
 
         // Remove the node from the UI tree and insert it into the floater list.
-        last_node.remove_from_parent();
-        last_node.siblings.prev = self.tree.root_last;
-        if let Some(root) = Tree::node_mut(self.tree.root_last) {
-            root.siblings.next = last_node;
+        self.tree.remove_from_parent(last_node);
+
+        let mut ln = last_node.borrow_mut();
+        ln.siblings.prev = Some(self.tree.root_last);
+
+        {
+            let mut root = self.tree.root_last.borrow_mut();
+            root.siblings.next = Some(last_node);
             self.tree.root_last = last_node;
         }
 
-        last_node.parent = anchor;
-        last_node.attributes.focus_well = true;
-        last_node.attributes.float = Some(FloatAttributes {
+        ln.parent = anchor;
+        ln.attributes.focus_well = true;
+        ln.attributes.float = Some(FloatAttributes {
             gravity_x: spec.gravity_x.clamp(0.0, 1.0),
             gravity_y: spec.gravity_y.clamp(0.0, 1.0),
             offset: Point {
@@ -1210,22 +1233,22 @@ impl Context<'_, '_> {
                 y: spec.offset_y,
             },
         });
-        last_node.attributes.bg = self.tui.floater_default_bg;
-        last_node.attributes.fg = self.tui.floater_default_fg;
+        ln.attributes.bg = self.tui.floater_default_bg;
+        ln.attributes.fg = self.tui.floater_default_fg;
     }
 
     pub fn attr_border(&mut self) {
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.bordered = true;
     }
 
     pub fn attr_position(&mut self, align: Position) {
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.position = align;
     }
 
     pub fn attr_padding(&mut self, padding: Rect) {
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.padding = Self::normalize_rect(padding);
     }
 
@@ -1239,17 +1262,17 @@ impl Context<'_, '_> {
     }
 
     pub fn attr_background_rgba(&mut self, bg: u32) {
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.bg = bg;
     }
 
     pub fn attr_foreground_rgba(&mut self, fg: u32) {
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.fg = fg;
     }
 
     pub fn attr_reverse(&mut self) {
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.reverse = true;
     }
 
@@ -1268,22 +1291,22 @@ impl Context<'_, '_> {
     }
 
     pub fn was_mouse_down(&mut self) -> bool {
-        let last_node = self.tree.last_node_ref();
+        let last_node = self.tree.last_node.borrow();
         self.tui.was_mouse_down_on_node(last_node.id)
     }
 
     pub fn contains_mouse_down(&mut self) -> bool {
-        let last_node = self.tree.last_node_ref();
+        let last_node = self.tree.last_node.borrow();
         self.tui.was_mouse_down_on_subtree(last_node.id)
     }
 
     pub fn is_focused(&mut self) -> bool {
-        let last_node = self.tree.last_node_ref();
+        let last_node = self.tree.last_node.borrow();
         self.tui.is_node_focused(last_node.id)
     }
 
     pub fn contains_focus(&mut self) -> bool {
-        let last_node = self.tree.last_node_ref();
+        let last_node = self.tree.last_node.borrow();
         self.tui.is_subtree_focused(last_node.id)
     }
 
@@ -1315,9 +1338,9 @@ impl Context<'_, '_> {
         self.inherit_focus();
         self.focus_on_first_present();
 
-        let last_node = self.tree.last_node_mut();
-        last_node.content = NodeContent::Modal(format!(" {} ", title));
-        self.last_modal = last_node;
+        let mut last_node = self.tree.last_node.borrow_mut();
+        last_node.content = NodeContent::Modal(arena_format!(self.arena(), " {} ", title));
+        self.last_modal = Some(self.tree.last_node);
     }
 
     pub fn modal_end(&mut self) -> bool {
@@ -1329,24 +1352,25 @@ impl Context<'_, '_> {
     pub fn table_begin(&mut self, classname: &'static str) {
         self.block_begin(classname);
 
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         last_node.content = NodeContent::Table(TableContent {
-            columns: Vec::new(),
+            columns: Vec::new_in(self.arena()),
             cell_gap: Size::default(),
         });
     }
 
     pub fn table_set_columns(&mut self, columns: &[i32]) {
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         if let NodeContent::Table(spec) = &mut last_node.content {
-            spec.columns = columns.to_vec();
+            spec.columns.clear();
+            spec.columns.extend_from_slice(columns);
         } else {
             debug_assert!(false);
         }
     }
 
     pub fn table_set_cell_gap(&mut self, cell_gap: Size) {
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         if let NodeContent::Table(spec) = &mut last_node.content {
             spec.cell_gap = cell_gap;
         } else {
@@ -1355,28 +1379,31 @@ impl Context<'_, '_> {
     }
 
     pub fn table_next_row(&mut self) {
-        let current_node = self.tree.current_node_ref();
+        {
+            let current_node = self.tree.current_node.borrow();
 
-        // If this is the first call to table_next_row() inside a new table, the
-        // current_node will refer to the table. Otherwise, it'll refer to the current row.
-        if !matches!(current_node.content, NodeContent::Table(_)) {
-            let Some(parent) = Tree::node_ref(current_node.parent) else {
-                return;
-            };
+            // If this is the first call to table_next_row() inside a new table, the
+            // current_node will refer to the table. Otherwise, it'll refer to the current row.
+            if !matches!(current_node.content, NodeContent::Table(_)) {
+                let Some(parent) = current_node.parent else {
+                    return;
+                };
 
-            // Neither the current nor its parent nodes are a table?
-            // You definitely called this outside of a table block.
-            debug_assert!(matches!(parent.content, NodeContent::Table(_)));
+                let parent = parent.borrow();
+                // Neither the current nor its parent nodes are a table?
+                // You definitely called this outside of a table block.
+                debug_assert!(matches!(parent.content, NodeContent::Table(_)));
 
-            self.block_end();
-            self.next_block_id_mixin(parent.child_count as u64);
+                self.block_end();
+                self.next_block_id_mixin(parent.child_count as u64);
+            }
         }
 
         self.block_begin("row");
     }
 
     pub fn table_end(&mut self) {
-        let current_node = self.tree.current_node_ref();
+        let current_node = self.tree.current_node.borrow();
 
         // If this is the first call to table_next_row() inside a new table, the
         // current_node will refer to the table. Otherwise, it'll refer to the current row.
@@ -1395,62 +1422,69 @@ impl Context<'_, '_> {
 
     pub fn styled_label_begin(&mut self, classname: &'static str, overflow: Overflow) {
         self.block_begin(classname);
-        self.tree.last_node_mut().content = NodeContent::Text(TextContent {
-            chunks: Vec::new(),
+        self.tree.last_node.borrow_mut().content = NodeContent::Text(TextContent {
+            chunks: Vec::new_in(self.arena()),
             overflow,
         });
     }
 
     pub fn styled_label_set_foreground(&mut self, color: u32) {
-        if let Some(chunk) = self.styled_label_get_last_chunk(true) {
-            chunk.fg = color;
-        }
+        let mut last_node = self.tree.last_node.borrow_mut();
+        let chunk = self.styled_label_get_last_chunk(&mut last_node, true);
+        chunk.fg = color;
     }
 
     pub fn styled_label_set_attributes(&mut self, attr: Attributes) {
-        if let Some(chunk) = self.styled_label_get_last_chunk(true) {
-            chunk.attr = attr;
-        }
+        let mut last_node = self.tree.last_node.borrow_mut();
+        let chunk = self.styled_label_get_last_chunk(&mut last_node, true);
+        chunk.attr = attr;
     }
 
     pub fn styled_label_add_text(&mut self, text: &str) {
-        if let Some(chunk) = self.styled_label_get_last_chunk(false) {
-            chunk.text.push_str(text);
-        }
+        let mut last_node = self.tree.last_node.borrow_mut();
+        let chunk = self.styled_label_get_last_chunk(&mut last_node, false);
+        chunk.text.push_str(text);
     }
 
-    fn styled_label_get_last_chunk(&mut self, flush: bool) -> Option<&mut StyledTextChunk> {
-        let last_node = self.tree.last_node_mut();
-        let NodeContent::Text(content) = &mut last_node.content else {
-            // You called styled_label_*() outside an styled_label_*() block.
-            debug_assert!(false);
-            return None;
+    fn styled_label_get_last_chunk<'n, 'm>(
+        &mut self,
+        node: &'n mut Node<'m>,
+        flush: bool,
+    ) -> &'n mut StyledTextChunk<'m>
+    where
+        'a: 'n,
+        'a: 'm,
+    {
+        let NodeContent::Text(content) = &mut node.content else {
+            unreachable!();
         };
 
         if content.chunks.is_empty() || (flush && !content.chunks.last().unwrap().text.is_empty()) {
             content.chunks.push(StyledTextChunk {
-                text: String::new(),
+                text: self.arena().new_string(),
                 fg: 0,
                 attr: Attributes::default(),
             });
         }
 
-        content.chunks.last_mut()
+        content.chunks.last_mut().unwrap()
     }
 
     pub fn styled_label_end(&mut self) {
-        let last_node = self.tree.last_node_mut();
-        let NodeContent::Text(content) = &last_node.content else {
-            return;
-        };
+        {
+            let mut last_node = self.tree.last_node.borrow_mut();
+            let NodeContent::Text(content) = &last_node.content else {
+                return;
+            };
 
-        let cursor = ucd::MeasurementConfig::new(&content.chunks).goto_visual(Point {
-            x: CoordType::MAX,
-            y: 0,
-        });
-        last_node.intrinsic_size.width = cursor.visual_pos.x;
-        last_node.intrinsic_size.height = 1;
-        last_node.intrinsic_size_set = true;
+            let cursor = ucd::MeasurementConfig::new(&content.chunks).goto_visual(Point {
+                x: CoordType::MAX,
+                y: 0,
+            });
+            last_node.intrinsic_size.width = cursor.visual_pos.x;
+            last_node.intrinsic_size.height = 1;
+            last_node.intrinsic_size_set = true;
+        }
 
         self.block_end();
     }
@@ -1507,56 +1541,61 @@ impl Context<'_, '_> {
         }
     }
 
-    pub fn editline<'a, 'b: 'a>(
-        &'a mut self,
+    pub fn editline<'s, 'b: 's>(
+        &'s mut self,
         classname: &'static str,
         text: &'b mut String,
     ) -> bool {
-        self.block_begin(classname);
-
-        let node = self.tree.last_node_mut();
-        let cached;
-        if let Some(buffer) = self
-            .tui
-            .cached_text_buffers
-            .iter_mut()
-            .find(|t| t.node_id == node.id)
-        {
-            cached = buffer;
-            cached.seen = true;
-        } else {
-            self.tui.cached_text_buffers.push(CachedTextBuffer {
-                node_id: node.id,
-                editor: RcTextBuffer::new(true).unwrap(),
-                seen: true,
-            });
-            cached = self.tui.cached_text_buffers.last_mut().unwrap();
-        }
-
-        let mut buffer = cached.editor.clone();
-        buffer.copy_from_str(text);
-
-        self.textarea_internal(buffer.clone(), true);
-
-        let changed = buffer.is_dirty();
-        if changed {
-            buffer.save_as_string(text);
-        }
-
-        self.block_end();
-        changed
+        self.textarea_internal(classname, TextBufferPayload::Editline(text))
     }
 
     pub fn textarea(&mut self, classname: &'static str, tb: RcTextBuffer) {
-        self.block_begin(classname);
-        self.textarea_internal(tb, false);
-        self.block_end();
+        self.textarea_internal(classname, TextBufferPayload::Textarea(tb));
     }
 
-    fn textarea_internal(&mut self, buffer: RcTextBuffer, single_line: bool) {
-        let node = self.tree.last_node_mut();
+    fn textarea_internal(&mut self, classname: &'static str, payload: TextBufferPayload) -> bool {
+        self.block_begin(classname);
+        self.block_end();
 
-        let mut content = TextareaContent {
+        let mut node = self.tree.last_node.borrow_mut();
+        let node = &mut *node;
+        let single_line = match &payload {
+            TextBufferPayload::Editline(_) => true,
+            TextBufferPayload::Textarea(_) => false,
+        };
+
+        let buffer = {
+            let buffers = &mut self.tui.cached_text_buffers;
+
+            let cached = match buffers.iter_mut().find(|t| t.node_id == node.id) {
+                Some(cached) => {
+                    if let TextBufferPayload::Textarea(tb) = &payload {
+                        cached.editor = tb.clone();
+                    };
+                    cached.seen = true;
+                    cached
+                }
+                None => {
+                    // If the node is not in the cache, we need to create a new one.
+                    buffers.push(CachedTextBuffer {
+                        node_id: node.id,
+                        editor: match &payload {
+                            TextBufferPayload::Editline(_) => RcTextBuffer::new(true).unwrap(),
+                            TextBufferPayload::Textarea(tb) => tb.clone(),
+                        },
+                        seen: true,
+                    });
+                    buffers.last_mut().unwrap()
+                }
+            };
+
+            // SAFETY: *Assuming* that there are no duplicate node IDs in the tree that
+            // would cause this cache slot to be overwritten, then this operation is safe.
+            // The text buffer cache will keep the buffer alive for us long enough.
+            unsafe { mem::transmute::<&'_ mut TextBuffer, &'a mut TextBuffer>(&mut cached.editor) }
+        };
+
+        node.content = NodeContent::Textarea(TextareaContent {
             buffer,
             scroll_offset: Point::default(),
             scroll_offset_y_drag_start: CoordType::MIN,
@@ -1565,9 +1604,19 @@ impl Context<'_, '_> {
             preferred_column: 0,
             single_line,
             has_focus: self.tui.is_node_focused(node.id),
+        });
+
+        let content = match node.content {
+            NodeContent::Textarea(ref mut content) => content,
+            _ => unreachable!(),
         };
 
-        if let Some(node_prev) = self.tui.get_prev_node(node.id) {
+        if let TextBufferPayload::Editline(text) = &payload {
+            content.buffer.copy_from_str(text);
+        }
+
+        if let Some(node_prev) = self.tui.prev_node_map.get(node.id) {
+            let node_prev = node_prev.borrow();
             if let NodeContent::Textarea(content_prev) = &node_prev.content {
                 content.scroll_offset = content_prev.scroll_offset;
                 content.scroll_offset_y_drag_start = content_prev.scroll_offset_y_drag_start;
@@ -1583,18 +1632,24 @@ impl Context<'_, '_> {
 
                 let mut make_cursor_visible = content.buffer.take_cursor_visibility_request();
                 make_cursor_visible |= content.buffer.set_width(text_width);
-                make_cursor_visible |=
-                    self.textarea_handle_input(&mut content, node_prev, single_line);
+                make_cursor_visible |= self.textarea_handle_input(content, &node_prev, single_line);
 
                 if make_cursor_visible {
-                    self.textarea_make_cursor_visible(&mut content, node_prev);
+                    self.textarea_make_cursor_visible(content, &node_prev);
                 }
             } else {
                 debug_assert!(false);
             }
         }
 
-        self.textarea_adjust_scroll_offset(&mut content);
+        let dirty = content.buffer.is_dirty();
+        if dirty {
+            if let TextBufferPayload::Editline(text) = payload {
+                content.buffer.save_as_string(text);
+            }
+        }
+
+        self.textarea_adjust_scroll_offset(content);
 
         node.attributes.bg = self.indexed(IndexedColor::Background);
         node.attributes.fg = self.indexed(IndexedColor::Foreground);
@@ -1606,7 +1661,7 @@ impl Context<'_, '_> {
         node.attributes.focusable = true;
         node.intrinsic_size.height = content.buffer.get_visual_line_count();
         node.intrinsic_size_set = true;
-        node.content = NodeContent::Textarea(content);
+        dirty
     }
 
     fn textarea_handle_input(
@@ -2093,28 +2148,31 @@ impl Context<'_, '_> {
     pub fn scrollarea_begin(&mut self, classname: &'static str, intrinsic_size: Size) {
         self.block_begin(classname);
 
-        let container = self.tree.last_node_mut();
-        container.content = NodeContent::Scrollarea(ScrollareaContent {
-            scroll_offset: Point::MIN,
-            scroll_offset_y_drag_start: CoordType::MIN,
-            thumb_height: 0,
-        });
+        let container_node = self.tree.last_node;
+        {
+            let mut container = self.tree.last_node.borrow_mut();
+            container.content = NodeContent::Scrollarea(ScrollareaContent {
+                scroll_offset: Point::MIN,
+                scroll_offset_y_drag_start: CoordType::MIN,
+                thumb_height: 0,
+            });
 
-        if intrinsic_size.width > 0 || intrinsic_size.height > 0 {
-            container.intrinsic_size.width = intrinsic_size.width.max(0);
-            container.intrinsic_size.height = intrinsic_size.height.max(0);
-            container.intrinsic_size_set = true;
+            if intrinsic_size.width > 0 || intrinsic_size.height > 0 {
+                container.intrinsic_size.width = intrinsic_size.width.max(0);
+                container.intrinsic_size.height = intrinsic_size.height.max(0);
+                container.intrinsic_size_set = true;
+            }
         }
 
         self.block_begin("content");
         self.inherit_focus();
 
         // Ensure that attribute modifications apply to the outer container.
-        self.tree.last_node = container;
+        self.tree.last_node = container_node;
     }
 
     pub fn scrollarea_scroll_to(&mut self, pos: Point) {
-        let container = self.tree.last_node_mut();
+        let mut container = self.tree.last_node.borrow_mut();
         if let NodeContent::Scrollarea(sc) = &mut container.content {
             sc.scroll_offset = pos;
         } else {
@@ -2124,13 +2182,16 @@ impl Context<'_, '_> {
 
     pub fn scrollarea_end(&mut self) {
         self.block_end(); // content block
+        self.block_end(); // outer container
 
-        let container = self.tree.current_node_mut();
+        let mut container = self.tree.last_node.borrow_mut();
+        let container_id = container.id;
         let NodeContent::Scrollarea(sc) = &mut container.content else {
-            panic!();
+            unreachable!();
         };
 
-        if let Some(prev_container) = self.tui.get_prev_node(container.id) {
+        if let Some(prev_container) = self.tui.prev_node_map.get(container_id) {
+            let prev_container = prev_container.borrow();
             if sc.scroll_offset == Point::MIN {
                 if let NodeContent::Scrollarea(sc_prev) = &prev_container.content {
                     *sc = sc_prev.clone();
@@ -2154,7 +2215,7 @@ impl Context<'_, '_> {
                             sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
                         }
 
-                        let content = Tree::node_ref(prev_container.children.first).unwrap();
+                        let content = prev_container.children.first.unwrap().borrow();
                         let content_rect = content.inner;
                         let content_height = content_rect.height();
                         let track_height = track_rect.height();
@@ -2187,28 +2248,27 @@ impl Context<'_, '_> {
                 }
             }
         }
-
-        self.block_end(); // outer container
     }
 
     pub fn list_begin(&mut self, classname: &'static str) {
         self.block_begin(classname);
         self.attr_focusable();
 
-        let last_node = self.tree.last_node_mut();
+        let mut last_node = self.tree.last_node.borrow_mut();
         let content = self
             .tui
-            .get_prev_node(last_node.id)
-            .and_then(|n| match &n.content {
+            .prev_node_map
+            .get(last_node.id)
+            .and_then(|node| match &node.borrow().content {
                 NodeContent::List(content) => Some(ListContent {
                     selected: content.selected,
-                    selected_node: ptr::null(),
+                    selected_node: None,
                 }),
                 _ => None,
             })
             .unwrap_or(ListContent {
                 selected: 0,
-                selected_node: ptr::null(),
+                selected_node: None,
             });
 
         last_node.attributes.focus_void = true;
@@ -2216,31 +2276,38 @@ impl Context<'_, '_> {
     }
 
     pub fn list_item(&mut self, select: bool, overflow: Overflow, text: &str) -> ListSelection {
-        let list = self.tree.current_node_mut();
-        let content = match &mut list.content {
-            NodeContent::List(content) => content,
-            _ => panic!(),
-        };
-        let idx = list.child_count;
+        let list = self.tree.current_node;
 
+        let idx = list.borrow().child_count;
         self.next_block_id_mixin(hash_str(idx as u64, text));
         self.styled_label_begin("item", overflow);
         self.attr_focusable();
 
-        let item = self.tree.last_node_ref();
-        let item_id = item.id;
-        let selected_before = content.selected == item_id;
-        let focused = self.is_focused();
+        let selected_before;
+        let selected_now;
+        let focused;
+        {
+            let mut list = list.borrow_mut();
+            let content = match &mut list.content {
+                NodeContent::List(content) => content,
+                _ => unreachable!(),
+            };
 
-        // Inherit the default selection & Click changes selection
-        let selected_now = selected_before || (select && content.selected == 0) || focused;
+            let item = self.tree.last_node.borrow();
+            let item_id = item.id;
+            selected_before = content.selected == item_id;
+            focused = self.is_focused();
 
-        // Note down the selected node for keyboard navigation.
-        if selected_now {
-            content.selected_node = item;
-            if !selected_before {
-                content.selected = item_id;
-                self.needs_rerender();
+            // Inherit the default selection & Click changes selection
+            selected_now = selected_before || (select && content.selected == 0) || focused;
+
+            // Note down the selected node for keyboard navigation.
+            if selected_now {
+                content.selected_node = Some(self.tree.last_node);
+                if !selected_before {
+                    content.selected = item_id;
+                    self.needs_rerender();
+                }
             }
         }
 
@@ -2273,45 +2340,50 @@ impl Context<'_, '_> {
     pub fn list_end(&mut self) {
         self.block_end();
 
-        let list = self.tree.last_node_mut();
-        let content = match &mut list.content {
-            NodeContent::List(content) => content,
-            _ => panic!(),
-        };
-
-        let mut selected_next = content.selected_node;
-
-        if content.selected_node.is_null() && !list.children.first.is_null() {
-            selected_next = list.children.first;
-        } else if !content.selected_node.is_null()
-            && !self.input_consumed
-            && (self.input_keyboard == Some(vk::UP) || self.input_keyboard == Some(vk::DOWN))
-            && self.contains_focus()
+        let selected_next;
+        let has_focus;
         {
-            let selected = Tree::node_ref(content.selected_node).unwrap();
-            let forward = self.input_keyboard == Some(vk::DOWN);
-            let mut node = if forward {
-                selected.siblings.next
-            } else {
-                selected.siblings.prev
+            let list = self.tree.last_node.borrow();
+            let selected_node = match &list.content {
+                NodeContent::List(content) => content.selected_node,
+                _ => unreachable!(),
             };
-            if node.is_null() {
-                node = if forward {
-                    list.children.first
+
+            if selected_node.is_none() && list.children.first.is_some() {
+                selected_next = list.children.first;
+            } else if selected_node.is_some()
+                && !self.input_consumed
+                && (self.input_keyboard == Some(vk::UP) || self.input_keyboard == Some(vk::DOWN))
+                && self.contains_focus()
+            {
+                let selected = selected_node.unwrap().borrow();
+                let forward = self.input_keyboard == Some(vk::DOWN);
+                let mut node = if forward {
+                    selected.siblings.next
                 } else {
-                    list.children.last
+                    selected.siblings.prev
                 };
+                if node.is_none() {
+                    node = if forward {
+                        list.children.first
+                    } else {
+                        list.children.last
+                    };
+                }
+                selected_next = node;
+            } else {
+                selected_next = selected_node;
             }
-            selected_next = node;
+
+            has_focus = self.tui.is_subtree_focused(list.id);
         }
 
-        let has_focus = self.tui.is_subtree_focused(list.id);
-        let Some(node) = Tree::node_mut(selected_next) else {
+        let Some(node) = selected_next else {
             return;
         };
 
         // Now that we know which item is selected we can mark it as such.
-        if let NodeContent::Text(content) = &mut node.content {
+        if let NodeContent::Text(content) = &mut node.borrow_mut().content {
             unsafe {
                 content.chunks[0].text.as_bytes_mut()[0] = b'>';
             }
@@ -2319,8 +2391,11 @@ impl Context<'_, '_> {
 
         // If the list has focus, we also delegate focus to the selected item and colorize it.
         if has_focus {
-            node.attributes.bg = self.indexed(IndexedColor::Green);
-            node.attributes.fg = self.contrasted(self.indexed(IndexedColor::Green));
+            {
+                let mut node = node.borrow_mut();
+                node.attributes.bg = self.indexed(IndexedColor::Green);
+                node.attributes.fg = self.contrasted(self.indexed(IndexedColor::Green));
+            }
             self.steal_focus_for(node);
         }
     }
@@ -2332,9 +2407,7 @@ impl Context<'_, '_> {
     }
 
     pub fn menubar_menu_begin(&mut self, text: &str, accelerator: char) -> bool {
-        let row = self.tree.current_node_ref();
-
-        self.next_block_id_mixin(row.child_count as u64);
+        self.next_block_id_mixin(self.tree.current_node.borrow().child_count as u64);
         self.menubar_label(text, accelerator);
         self.attr_focusable();
         self.attr_padding(Rect::two(0, 1));
@@ -2391,7 +2464,7 @@ impl Context<'_, '_> {
     }
 
     pub fn menubar_end(&mut self) {
-        let menu_row = self.tree.current_node_ref();
+        let menu_row = self.tree.current_node.borrow();
         self.table_end();
 
         let focus_path = &self.tui.focused_node_path[..];
@@ -2415,36 +2488,36 @@ impl Context<'_, '_> {
             container = menu_row;
             element_id = focus_path[focus_path.len() - 4];
         } else {
-            let flyout = unsafe { self.tree.root_last.as_ref().unwrap() };
-            container = flyout;
-            element_id = if focus_path.len() == 6 && focus_path[focus_path.len() - 5] == flyout.id {
-                focus_path[focus_path.len() - 6]
-            } else {
-                0
-            };
+            container = self.tree.root_last.borrow();
+            element_id =
+                if focus_path.len() == 6 && focus_path[focus_path.len() - 5] == container.id {
+                    focus_path[focus_path.len() - 6]
+                } else {
+                    0
+                };
         }
 
         // In an unnested menu like ours, going up/left and down/right respectively is the same.
         // The only thing that changes is the layout direction, which we don't care about.
         let focused_node = Tree::iterate_siblings(container.children.first)
+            .map(|node| node.borrow())
             .find(|node| node.id == element_id)
             .and_then(|node| {
                 if input == vk::LEFT || input == vk::UP {
-                    Tree::node_ref(node.siblings.prev)
+                    node.siblings.prev
                 } else {
-                    Tree::node_ref(node.siblings.next)
+                    node.siblings.next
                 }
             })
             .or_else(|| {
                 if input == vk::LEFT || input == vk::UP {
-                    Tree::node_ref(container.children.last)
+                    container.children.last
                 } else {
-                    Tree::node_ref(container.children.first)
+                    container.children.first
                 }
-            })
-            .unwrap();
+            });
 
-        Tui::build_node_path(Some(focused_node), &mut self.tui.focused_node_path);
+        Tui::build_node_path(focused_node, &mut self.tui.focused_node_path);
         self.needs_rerender();
 
         self.set_input_consumed();
@@ -2497,7 +2570,7 @@ impl Context<'_, '_> {
     fn menubar_shortcut(&mut self, shortcut: InputKey) {
         let shortcut_letter = shortcut.value() as u8 as char;
         if shortcut_letter.is_ascii_uppercase() {
-            let mut shortcut_text = String::new();
+            let mut shortcut_text = self.arena().new_string();
             if shortcut.modifiers_contains(kbmod::CTRL) {
                 shortcut_text.push_str("Ctrl+");
             }
@@ -2516,6 +2589,16 @@ impl Context<'_, '_> {
             self.block_end();
         }
     }
+
+    fn arena(&self) -> &'a Arena {
+        // TODO:
+        // `Context` borrows `Tui` for lifetime 'a, so `self.tui` should be `&'a Tui`, right?
+        // And if I do `&self.tui.arena` then that should be 'a too, right?
+        // Searching for and failing to find a workaround for this was _very_ annoying.
+        //
+        // SAFETY: Both the returned reference and its allocations outlive &self.
+        unsafe { mem::transmute::<&'_ Arena, &'a Arena>(&self.tui.arena_next) }
+    }
 }
 
 enum VisitControl {
@@ -2524,45 +2607,60 @@ enum VisitControl {
     Stop,
 }
 
-struct Tree {
-    tail: *const Node,
-    root_first: *const Node,
-    root_last: *const Node,
-    last_node: *const Node,
-    current_node: *const Node,
+struct Tree<'a> {
+    tail: &'a NodeCell<'a>,
+    root_first: &'a NodeCell<'a>,
+    root_last: &'a NodeCell<'a>,
+    last_node: &'a NodeCell<'a>,
+    current_node: &'a NodeCell<'a>,
+
     count: usize,
     checksum: u64,
 }
 
-impl Tree {
-    fn new() -> Self {
-        let mut tree = Self::default();
-        tree.append_child(Node {
-            id: ROOT_ID,
-            classname: "root",
-            attributes: NodeAttributes {
-                focus_well: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-        tree.root_first = tree.tail;
-        tree.root_last = tree.tail;
-        tree.last_node = tree.tail;
-        tree.current_node = tree.tail;
-        tree
+impl<'a> Tree<'a> {
+    fn new(arena: &'a Arena) -> Self {
+        let root: &mut NodeCell = arena.alloc_default();
+        {
+            let mut r = root.borrow_mut();
+            r.id = ROOT_ID;
+            r.classname = "root";
+            r.attributes.focus_well = true;
+        }
+        Self {
+            tail: root,
+            root_first: root,
+            root_last: root,
+            last_node: root,
+            current_node: root,
+            count: 1,
+            checksum: ROOT_ID,
+        }
     }
 
-    fn append_child(&mut self, node: Node) {
-        let node = Box::leak(Box::new(node));
+    fn append_child(&mut self, node: &'a NodeCell<'a>) {
+        let mut n = node.borrow_mut();
 
-        if let Some(parent) = Tree::node_mut(self.current_node) {
-            parent.append_child(node);
+        {
+            let mut p = self.current_node.borrow_mut();
+            n.parent = Some(self.current_node);
+            n.siblings.prev = p.children.last;
+
+            if let Some(child_last) = p.children.last {
+                let mut child_last = child_last.borrow_mut();
+                child_last.siblings.next = Some(node);
+            }
+            if p.children.first.is_none() {
+                p.children.first = Some(node);
+            }
+            p.children.last = Some(node);
+            p.child_count += 1;
         }
 
-        node.prev = self.tail;
-        if let Some(tail) = Tree::node_mut(self.tail) {
-            tail.next = node;
+        n.prev = Some(self.tail);
+        {
+            let mut tail = self.tail.borrow_mut();
+            tail.next = Some(node);
         }
         self.tail = node;
 
@@ -2570,79 +2668,70 @@ impl Tree {
         self.current_node = node;
         self.count += 1;
         // wymix is weak, but both checksum and node.id are proper random, so... it's not *that* bad.
-        self.checksum = wymix(self.checksum, node.id);
+        self.checksum = wymix(self.checksum, n.id);
+    }
+
+    fn remove_from_parent(&self, node: &NodeCell<'a>) {
+        let mut n = node.borrow_mut();
+        let Some(parent) = n.parent else {
+            return;
+        };
+        let mut p = parent.borrow_mut();
+
+        if let Some(sibling_prev) = n.siblings.prev {
+            let mut sibling_prev = sibling_prev.borrow_mut();
+            sibling_prev.siblings.next = n.siblings.next;
+        }
+        if let Some(sibling_next) = n.siblings.next {
+            let mut sibling_next = sibling_next.borrow_mut();
+            sibling_next.siblings.prev = n.siblings.prev;
+        }
+        if opt_ptr_eq(p.children.first, Some(node)) {
+            p.children.first = n.siblings.next;
+        }
+        if opt_ptr_eq(p.children.last, Some(node)) {
+            p.children.last = n.siblings.prev;
+        }
+        p.child_count -= 1;
+
+        n.parent = None;
+        n.siblings.prev = None;
+        n.siblings.next = None;
     }
 
     fn pop_stack(&mut self) {
-        let current_node = self.current_node_ref();
-        self.last_node = current_node;
-        self.current_node = current_node.stack_parent;
+        let current_node = self.current_node.borrow();
+        let stack_parent = current_node.stack_parent.unwrap();
+        self.last_node = self.current_node;
+        self.current_node = stack_parent;
     }
 
-    fn last_node_ref<'a>(&self) -> &'a Node {
-        debug_assert!(!self.last_node.is_null());
-        unsafe { &*(self.last_node as *const _) }
-    }
-
-    fn last_node_mut<'a>(&self) -> &'a mut Node {
-        debug_assert!(!self.last_node.is_null());
-        unsafe { &mut *(self.last_node as *mut _) }
-    }
-
-    fn current_node_ref<'a>(&self) -> &'a Node {
-        debug_assert!(!self.current_node.is_null());
-        unsafe { &*(self.current_node as *const _) }
-    }
-
-    fn current_node_mut<'a>(&self) -> &'a mut Node {
-        debug_assert!(!self.current_node.is_null());
-        unsafe { &mut *(self.current_node as *mut _) }
-    }
-
-    fn node_ref<'a>(node: *const Node) -> Option<&'a Node> {
-        unsafe { node.as_ref() }
-    }
-
-    // This (and node_ref) are unsafe, unsound, and whatever else you want to call it.
-    // But there was major time crunch and Rust is such a pain in the ass when it comes to building trees.
-    // I used RefCell first and that was just absolutely awful.
-    fn node_mut<'a>(node: *const Node) -> Option<&'a mut Node> {
-        unsafe { (node as *mut Node).as_mut() }
-    }
-
-    fn iterate_siblings<'a>(mut node: *const Node) -> impl Iterator<Item = &'a mut Node> {
+    fn iterate_siblings(
+        mut node: Option<&'a NodeCell<'a>>,
+    ) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
         iter::from_fn(move || {
-            if node.is_null() {
-                None
-            } else {
-                let n = unsafe { &mut *(node as *mut Node) };
-                node = n.siblings.next;
-                Some(n)
-            }
+            let n = node?;
+            node = n.borrow().siblings.next;
+            Some(n)
         })
     }
 
-    fn iterate_roots<'a>(&self) -> impl Iterator<Item = &'a mut Node> + use<'a> {
-        Self::iterate_siblings(self.root_first)
+    fn iterate_roots(&self) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
+        Self::iterate_siblings(Some(self.root_first))
     }
 
     /// Visits all nodes under and including `root` in depth order.
     /// Starts with node `start`.
     ///
     /// WARNING: Breaks in hilarious ways if `start` is not within `root`.
-    #[inline]
-    fn visit_all<T: FnMut(usize, &Node) -> VisitControl>(
-        root: *const Node,
-        start: *const Node,
+    fn visit_all<T: FnMut(usize, &'a NodeCell<'a>) -> VisitControl>(
+        root: &'a NodeCell<'a>,
+        start: &'a NodeCell<'a>,
         mut depth: usize,
         forward: bool,
         mut cb: T,
     ) {
-        if root.is_null() || start.is_null() {
-            return;
-        }
-
-        let mut node = unsafe { &*start };
+        let mut node = start;
         let children_idx = if forward {
             NodeChildren::FIRST
         } else {
@@ -2659,8 +2748,8 @@ impl Tree {
                 match cb(depth, node) {
                     VisitControl::Continue => {
                         // Depth first search: It has a child? Go there.
-                        if !node.children.get(children_idx).is_null() {
-                            node = unsafe { &*node.children.get(children_idx) };
+                        if let Some(child) = node.borrow().children.get(children_idx) {
+                            node = child;
                             depth += 1;
                             break 'traverse;
                         }
@@ -2669,20 +2758,24 @@ impl Tree {
                     VisitControl::Stop => return,
                 }
 
-                // Out of children? Go back to the parent.
-                while node.siblings.get(siblings_idx).is_null() && !ptr::eq(node, root) {
-                    node = unsafe { &*node.parent };
+                loop {
+                    // If `start != root`, this ensures we restart the traversal at `root` until we hit `start` again.
+                    // Otherwise, this will continue above, hit the if condition, and break out of the loop.
+                    if ptr::eq(node, root) {
+                        break 'traverse;
+                    }
+
+                    // Go to the parent's next sibling. --> Next subtree.
+                    let n = node.borrow();
+                    if let Some(sibling) = n.siblings.get(siblings_idx) {
+                        node = sibling;
+                        break;
+                    }
+
+                    // Out of children? Go back to the parent.
+                    node = n.parent.unwrap();
                     depth -= 1;
                 }
-
-                // If `start != root`, this ensures we restart the traversal at `root` until we hit `start` again.
-                // Otherwise, this will continue above, hit the if condition, and break out of the loop.
-                if ptr::eq(node, root) {
-                    break 'traverse;
-                }
-
-                // Go to the parent's next sibling. --> Next subtree.
-                node = unsafe { &*node.siblings.get(siblings_idx) };
             }
 
             // We're done once we wrapped around to the `start`.
@@ -2691,34 +2784,64 @@ impl Tree {
     }
 }
 
-impl Drop for Tree {
-    fn drop(&mut self) {
-        let mut node = self.root_first;
-        while !node.is_null() {
-            let next = unsafe { (*node).next };
-            unsafe {
-                let _ = Box::from_raw(node as *mut Node);
-            }
-            node = next;
-        }
-    }
+struct NodeMap<'a> {
+    slots: Vec<Option<&'a NodeCell<'a>>>,
+    shift: usize,
+    mask: u64,
 }
 
-impl Default for Tree {
+impl Default for NodeMap<'_> {
     fn default() -> Self {
         Self {
-            tail: null(),
-            root_first: null(),
-            root_last: null(),
-            last_node: null(),
-            current_node: null(),
-            count: 0,
-            checksum: 0,
+            slots: vec![None; 1],
+            shift: 0,
+            mask: 0,
         }
     }
 }
 
-#[derive(Default)]
+impl<'a> NodeMap<'a> {
+    fn reset(&mut self, tree: &Tree<'a>) {
+        let width = (4 * tree.count + 1).ilog2().max(1) as usize;
+        let slots = 1 << width;
+
+        self.shift = std::mem::size_of::<usize>() * 8 - width;
+        self.mask = (slots - 1) as u64;
+
+        if slots != self.slots.len() {
+            self.slots = vec![None; slots];
+        } else {
+            self.slots.fill(None);
+        }
+
+        for node in iter::successors(Some(tree.root_first), |&node| node.borrow().next) {
+            let mut slot = node.borrow().id >> self.shift;
+            loop {
+                if self.slots[slot as usize].is_none() {
+                    self.slots[slot as usize] = Some(node);
+                    break;
+                }
+                slot = (slot + 1) & self.mask;
+            }
+        }
+    }
+
+    fn get(&mut self, id: u64) -> Option<&'a NodeCell<'a>> {
+        let shift = self.shift;
+        let mask = self.mask;
+        let mut slot = (id >> shift) & mask;
+
+        loop {
+            let node = self.slots[slot as usize]?;
+            if node.borrow().id == id {
+                return Some(node);
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+}
+
+#[derive(Clone, Default)]
 pub enum Anchor {
     #[default]
     Last,
@@ -2784,23 +2907,24 @@ struct NodeAttributes {
     focus_void: bool, // Prevents focus from entering via Tab
 }
 
-struct ListContent {
+struct ListContent<'a> {
     selected: u64,
-    selected_node: *const Node, // Points to the Node that holds this ListContent instance, if any.
+    // Points to the Node that holds this ListContent instance, if any>.
+    selected_node: Option<&'a NodeCell<'a>>,
 }
 
-struct TableContent {
-    columns: Vec<CoordType>,
+struct TableContent<'a> {
+    columns: Vec<CoordType, &'a Arena>,
     cell_gap: Size,
 }
 
-struct StyledTextChunk {
-    text: String,
+struct StyledTextChunk<'a> {
+    text: ArenaString<'a>,
     fg: u32,
     attr: Attributes,
 }
 
-impl Document for Vec<StyledTextChunk> {
+impl Document for Vec<StyledTextChunk<'_>, &'_ Arena> {
     fn read_backward(&self, mut off: usize) -> &[u8] {
         for chunk in self.iter().rev() {
             if off < chunk.text.len() {
@@ -2822,23 +2946,26 @@ impl Document for Vec<StyledTextChunk> {
     }
 }
 
-struct TextContent {
-    chunks: Vec<StyledTextChunk>,
+struct TextContent<'a> {
+    chunks: Vec<StyledTextChunk<'a>, &'a Arena>,
     overflow: Overflow,
 }
 
-struct TextareaContent {
-    buffer: RcTextBuffer,
+struct TextareaContent<'a> {
+    buffer: &'a mut TextBuffer,
+
+    // Carries over between frames.
     scroll_offset: Point,
     scroll_offset_y_drag_start: CoordType,
     scroll_offset_x_max: CoordType,
     thumb_height: CoordType,
     preferred_column: CoordType,
+
     single_line: bool,
     has_focus: bool,
 }
 
-#[derive(Clone)]
+#[derive(Default, Clone)]
 struct ScrollareaContent {
     scroll_offset: Point,
     scroll_offset_y_drag_start: CoordType,
@@ -2846,27 +2973,28 @@ struct ScrollareaContent {
 }
 
 #[derive(Default)]
-enum NodeContent {
+enum NodeContent<'a> {
     #[default]
     None,
-    List(ListContent),
-    Modal(String), // title
-    Table(TableContent),
-    Text(TextContent),
-    Textarea(TextareaContent),
+    List(ListContent<'a>),
+    Modal(ArenaString<'a>), // title
+    Table(TableContent<'a>),
+    Text(TextContent<'a>),
+    Textarea(TextareaContent<'a>),
     Scrollarea(ScrollareaContent),
 }
 
-struct NodeSiblings {
-    prev: *const Node,
-    next: *const Node,
+#[derive(Default)]
+struct NodeSiblings<'a> {
+    prev: Option<&'a NodeCell<'a>>,
+    next: Option<&'a NodeCell<'a>>,
 }
 
-impl NodeSiblings {
+impl<'a> NodeSiblings<'a> {
     const PREV: usize = 0;
     const NEXT: usize = 1;
 
-    fn get(&self, off: usize) -> *const Node {
+    fn get(&self, off: usize) -> Option<&'a NodeCell<'a>> {
         match off & 1 {
             0 => self.prev,
             1 => self.next,
@@ -2875,16 +3003,17 @@ impl NodeSiblings {
     }
 }
 
-struct NodeChildren {
-    first: *const Node,
-    last: *const Node,
+#[derive(Default)]
+struct NodeChildren<'a> {
+    first: Option<&'a NodeCell<'a>>,
+    last: Option<&'a NodeCell<'a>>,
 }
 
-impl NodeChildren {
+impl<'a> NodeChildren<'a> {
     const FIRST: usize = 0;
     const LAST: usize = 1;
 
-    fn get(&self, off: usize) -> *const Node {
+    fn get(&self, off: usize) -> Option<&'a NodeCell<'a>> {
         match off & 1 {
             0 => self.first,
             1 => self.last,
@@ -2893,20 +3022,23 @@ impl NodeChildren {
     }
 }
 
-pub struct Node {
-    prev: *const Node,
-    next: *const Node,
-    stack_parent: *const Node,
+type NodeCell<'a> = SemiRefCell<Node<'a>>;
+
+#[derive(Default)]
+pub struct Node<'a> {
+    prev: Option<&'a NodeCell<'a>>,
+    next: Option<&'a NodeCell<'a>>,
+    stack_parent: Option<&'a NodeCell<'a>>,
 
     id: u64,
     classname: &'static str,
-    parent: *const Node,
-    siblings: NodeSiblings,
-    children: NodeChildren,
+    parent: Option<&'a NodeCell<'a>>,
+    siblings: NodeSiblings<'a>,
+    children: NodeChildren<'a>,
     child_count: usize,
 
     attributes: NodeAttributes,
-    content: NodeContent,
+    content: NodeContent<'a>,
 
     intrinsic_size: Size,
     intrinsic_size_set: bool,
@@ -2916,40 +3048,7 @@ pub struct Node {
     inner_clipped: Rect, // in screen-space, calculated during layout, restricted to the viewport
 }
 
-impl Default for Node {
-    fn default() -> Self {
-        Node {
-            prev: null(),
-            next: null(),
-            stack_parent: null(),
-
-            id: 0,
-            classname: "",
-            parent: null(),
-            siblings: NodeSiblings {
-                prev: null(),
-                next: null(),
-            },
-            children: NodeChildren {
-                first: null(),
-                last: null(),
-            },
-            child_count: 0,
-
-            attributes: Default::default(),
-            content: Default::default(),
-
-            intrinsic_size: Default::default(),
-            intrinsic_size_set: false,
-            outer: Default::default(),
-            inner: Default::default(),
-            outer_clipped: Default::default(),
-            inner_clipped: Default::default(),
-        }
-    }
-}
-
-impl Node {
+impl Node<'_> {
     fn outer_to_inner(&self, mut outer: Rect) -> Rect {
         let l = self.attributes.bordered;
         let t = self.attributes.bordered;
@@ -2986,9 +3085,11 @@ impl Node {
             NodeContent::Table(spec) => {
                 // Calculate each row's height and the maximum width of each of its columns.
                 for row in Tree::iterate_siblings(self.children.first) {
+                    let mut row = row.borrow_mut();
                     let mut row_height = 0;
 
                     for (column, cell) in Tree::iterate_siblings(row.children.first).enumerate() {
+                        let mut cell = cell.borrow_mut();
                         cell.compute_intrinsic_size();
 
                         let size = cell.intrinsic_to_outer();
@@ -3023,6 +3124,7 @@ impl Node {
 
                 // Assign the total width to each row.
                 for row in Tree::iterate_siblings(self.children.first) {
+                    let mut row = row.borrow_mut();
                     row.intrinsic_size.width = total_inner_width;
                     row.intrinsic_size_set = true;
 
@@ -3045,6 +3147,7 @@ impl Node {
                 let mut total_height = 0;
 
                 for child in Tree::iterate_siblings(self.children.first) {
+                    let mut child = child.borrow_mut();
                     child.compute_intrinsic_size();
 
                     let size = child.intrinsic_to_outer();
@@ -3103,7 +3206,7 @@ impl Node {
     }
 
     fn layout_children(&mut self, clip: Rect) {
-        if self.children.first.is_null() || self.inner.is_empty() {
+        if self.children.first.is_none() || self.inner.is_empty() {
             return;
         }
 
@@ -3114,6 +3217,7 @@ impl Node {
                 let mut y = self.inner.top;
 
                 for row in Tree::iterate_siblings(self.children.first) {
+                    let mut row = row.borrow_mut();
                     let mut size = row.intrinsic_to_outer();
                     size.width = width;
                     row.outer.left = x;
@@ -3128,6 +3232,7 @@ impl Node {
                     let mut row_height = 0;
 
                     for (column, cell) in Tree::iterate_siblings(row.children.first).enumerate() {
+                        let mut cell = cell.borrow_mut();
                         let mut size = cell.intrinsic_to_outer();
                         size.width = spec.columns[column];
                         cell.outer.left = x;
@@ -3150,9 +3255,7 @@ impl Node {
                 }
             }
             NodeContent::Scrollarea(sc) => {
-                let Some(content) = Tree::node_mut(self.children.first) else {
-                    unreachable!();
-                };
+                let mut content = self.children.first.unwrap().borrow_mut();
 
                 // content available viewport size (-1 for the track)
                 let sx = self.inner.right - self.inner.left;
@@ -3175,7 +3278,8 @@ impl Node {
                 content.outer_clipped = content.outer.intersect(self.inner_clipped);
                 content.inner_clipped = content.inner.intersect(self.inner_clipped);
 
-                content.layout_children(content.inner_clipped);
+                let clip = content.inner_clipped;
+                content.layout_children(clip);
             }
             _ => {
                 let width = self.inner.right - self.inner.left;
@@ -3183,6 +3287,7 @@ impl Node {
                 let mut y = self.inner.top;
 
                 for child in Tree::iterate_siblings(self.children.first) {
+                    let mut child = child.borrow_mut();
                     let size = child.intrinsic_to_outer();
                     let remaining = (width - size.width).max(0);
 
@@ -3208,6 +3313,7 @@ impl Node {
                 }
 
                 for child in Tree::iterate_siblings(self.children.first) {
+                    let mut child = child.borrow_mut();
                     child.layout_children(clip);
                 }
 
@@ -3298,46 +3404,5 @@ impl Node {
                 */
             }
         }
-    }
-
-    fn append_child(&mut self, child: &mut Self) {
-        // The child node is supposed to not be part of any tree.
-        assert!(child.siblings.prev.is_null() && child.siblings.next.is_null());
-
-        child.parent = self;
-        child.siblings.prev = self.children.last;
-
-        if let Some(child_last) = Tree::node_mut(self.children.last) {
-            child_last.siblings.next = child;
-        }
-        if self.children.first.is_null() {
-            self.children.first = child;
-        }
-        self.children.last = child;
-        self.child_count += 1;
-    }
-
-    fn remove_from_parent(&mut self) {
-        let Some(parent) = Tree::node_mut(self.parent) else {
-            return;
-        };
-
-        if let Some(sibling_prev) = Tree::node_mut(self.siblings.prev) {
-            sibling_prev.siblings.next = self.siblings.next;
-        }
-        if let Some(sibling_next) = Tree::node_mut(self.siblings.next) {
-            sibling_next.siblings.prev = self.siblings.prev;
-        }
-        if ptr::eq(parent.children.first, self) {
-            parent.children.first = self.siblings.next;
-        }
-        if ptr::eq(parent.children.last, self) {
-            parent.children.last = self.siblings.prev;
-        }
-        parent.child_count -= 1;
-
-        self.parent = null();
-        self.siblings.prev = null();
-        self.siblings.next = null();
     }
 }

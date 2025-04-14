@@ -2359,10 +2359,7 @@ impl GapBuffer {
                 let move_dst = if left { off + gap_len } else { gap_off };
                 let move_len = if left { gap_off - off } else { off - gap_off };
 
-                unsafe {
-                    data.add(move_src)
-                        .copy_to_nonoverlapping(data.add(move_dst), move_len)
-                };
+                unsafe { data.add(move_src).copy_to(data.add(move_dst), move_len) };
 
                 if cfg!(debug_assertions) {
                     unsafe {

@@ -1,7 +1,12 @@
+#![feature(allocator_api)]
 #![allow(clippy::missing_transmute_annotations, clippy::new_without_default)]
+
+#[macro_use]
+pub mod arena;
 
 pub mod apperr;
 pub mod buffer;
+pub mod cell;
 pub mod framebuffer;
 pub mod fuzzy;
 pub mod helpers;
