@@ -640,7 +640,7 @@ impl TextBuffer {
                 tab_size
             };
 
-            // If the file has more than 100 lines, figure out how many are remaining.
+            // If the file has more than 1000 lines, figure out how many are remaining.
             if offset < chunk.len() {
                 (_, lines) = ucd::newlines_forward(chunk, offset, lines, CoordType::MAX);
             }
@@ -1266,7 +1266,7 @@ impl TextBuffer {
             // goto_line_start() is very fast for seeking across lines. But we don't need that
             // of course if the `y` didn't actually change. The only exception is if we're
             // moving leftward in the same line as there's no read_backward() for that.
-            if y < cursor.visual_pos.y || (y == cursor.visual_pos.y && x < cursor.visual_pos.x) {
+            if y != cursor.logical_pos.y || x < cursor.logical_pos.x {
                 cursor = self.goto_line_start(cursor, y);
             }
         } else {
@@ -1421,6 +1421,7 @@ impl TextBuffer {
     /// Extracts a rectangular region of the text buffer and writes it to the framebuffer.
     /// The `destination` rect is framebuffer coordinates. The extracted region within this
     /// text buffer has the given `origin` and the same size as the `destination` rect.
+    #[inline(never)]
     pub fn render(
         &mut self,
         origin: Point,
@@ -1438,8 +1439,16 @@ impl TextBuffer {
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut line = String::new();
-        let mut cursor = self.cursor_for_rendering.unwrap_or(self.cursor);
         let mut visual_pos_x_max = 0;
+
+        // Pick the cursor closer to the `origin.y`.
+        let mut cursor = {
+            let a = self.cursor;
+            let b = self.cursor_for_rendering.unwrap_or_default();
+            let da = (a.visual_pos.y - origin.y).abs();
+            let db = (b.visual_pos.y - origin.y).abs();
+            if da < db { a } else { b }
+        };
 
         let [selection_beg, selection_end] = match self.selection {
             TextBufferSelection::None => [Point::MIN, Point::MIN],
