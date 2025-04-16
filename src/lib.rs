@@ -13,7 +13,7 @@ pub mod helpers;
 pub mod icu;
 pub mod input;
 pub mod loc;
-pub mod memchr;
+pub mod simd;
 pub mod sys;
 pub mod tui;
 pub mod ucd;

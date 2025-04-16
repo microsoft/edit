@@ -1,4 +1,5 @@
 use crate::helpers::{self, CoordType, Point, Rect, Size};
+use crate::simd::{MemsetSafe, memset};
 use crate::ucd;
 use std::fmt::Write;
 use std::ops::{BitOr, BitXor};
@@ -64,6 +65,7 @@ impl Framebuffer {
         }
     }
 
+    #[inline(never)]
     pub fn reset(&mut self, size: Size) {
         if size != self.buffers[0].bg_bitmap.size {
             for buffer in &mut self.buffers {
@@ -625,7 +627,7 @@ impl Bitmap {
     }
 
     fn fill(&mut self, color: u32) {
-        self.data.fill(color);
+        memset(&mut self.data, color);
     }
 
     fn blend(&mut self, target: Rect, color: u32) {
@@ -650,7 +652,7 @@ impl Bitmap {
             let data = &mut self.data[beg..end];
 
             if (color & 0xff000000) == 0xff000000 {
-                data.fill(color);
+                memset(data, color);
             } else {
                 let end = data.len();
                 let mut off = 0;
@@ -666,7 +668,8 @@ impl Bitmap {
                     } {}
                     let chunk_end = off;
 
-                    data[chunk_beg..chunk_end].fill(Self::alpha_blend(c, color));
+                    let c = Self::alpha_blend(c, color);
+                    memset(&mut data[chunk_beg..chunk_end], c);
 
                     off < end
                 } {}
@@ -776,6 +779,8 @@ impl Attributes {
     }
 }
 
+unsafe impl MemsetSafe for Attributes {}
+
 impl BitOr for Attributes {
     type Output = Attributes;
 
@@ -807,7 +812,7 @@ impl AttributeBuffer {
     }
 
     fn reset(&mut self) {
-        self.data.fill(Default::default());
+        memset(&mut self.data, Default::default());
     }
 
     fn replace(&mut self, target: Rect, mask: Attributes, attr: Attributes) {
@@ -825,8 +830,14 @@ impl AttributeBuffer {
         for y in top..bottom {
             let beg = y * stride + left;
             let end = y * stride + right;
-            for a in &mut self.data[beg..end] {
-                *a = Attributes(a.0 & !mask.0 | attr.0);
+            let dst = &mut self.data[beg..end];
+
+            if mask == Attributes::All {
+                memset(dst, attr);
+            } else {
+                for a in dst {
+                    *a = Attributes(a.0 & !mask.0 | attr.0);
+                }
             }
         }
     }

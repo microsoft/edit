@@ -1,7 +1,7 @@
 use std::mem;
 use std::time;
 
-use crate::memchr::memchr2;
+use crate::simd::memchr2;
 
 pub enum Token<'parser, 'input> {
     Text(&'input str),

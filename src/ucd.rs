@@ -1,5 +1,5 @@
 use crate::helpers::{self, CoordType, Point};
-use crate::memchr::{memchr2, memrchr2};
+use crate::simd::{memchr2, memrchr2};
 use crate::ucd_gen::*;
 use crate::utf8::Utf8Chars;
 use std::ops::Range;

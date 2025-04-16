@@ -18,7 +18,7 @@ use crate::cell::SemiRefCell;
 use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::{self, COORD_TYPE_SAFE_MAX, CoordType, Point, Rect};
 use crate::icu;
-use crate::memchr::memchr2;
+use crate::simd::memchr2;
 use crate::sys;
 use crate::ucd::{self, Document};
 use std::borrow::Cow;

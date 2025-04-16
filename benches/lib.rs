@@ -1,9 +1,12 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
-use edit::memchr;
+use edit::simd;
 use edit::ucd;
 
 fn bench(c: &mut Criterion) {
+    let mut buffer1 = [0u8; 2048];
+    let mut buffer4 = [0u32; 2048];
+
     let reference = concat!(
         "In the quiet twilight, dreams unfold, soft whispers of a story untold.\n",
         "月明かりが静かに照らし出し、夢を見る心の奥で詩が静かに囁かれる\n",
@@ -27,14 +30,31 @@ fn bench(c: &mut Criterion) {
     });
     group.finish();
 
-    let mut group = c.benchmark_group("memchr::memchr2");
-    let mut buffer = [0u8; 4096];
-    for &size in &[0usize, 4, 36, 68, 1028] {
+    let mut group = c.benchmark_group("simd::memchr2");
+    for &size in &[8usize, 40, 72, 1032] {
         group.throughput(Throughput::Bytes(size as u64 + 1));
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
-            buffer.fill(b'a');
-            buffer[size] = b'\n';
-            b.iter(|| memchr::memchr2(b'\n', b'\r', &buffer, 0));
+            buffer1.fill(b'a');
+            buffer1[size] = b'\n';
+            b.iter(|| simd::memchr2(b'\n', b'\r', &buffer1, 0));
+        });
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("simd::memset::<u8>");
+    for &size in &[8usize, 40, 72, 1032] {
+        group.throughput(Throughput::Bytes(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
+            b.iter(|| simd::memset(&mut buffer1[..size], 0));
+        });
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("simd::memset::<u32>");
+    for &size in &[8usize, 40, 72, 1032] {
+        group.throughput(Throughput::Bytes(size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
+            b.iter(|| simd::memset(&mut buffer4[..size / 4], 0));
         });
     }
     group.finish();
