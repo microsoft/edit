@@ -1653,11 +1653,13 @@ impl TextBuffer {
                 };
 
                 let bg = if focused {
-                    fb.indexed_alpha(IndexedColor::BrightBlue, 0x5f)
+                    fb.indexed(IndexedColor::BrightBlue)
                 } else {
-                    fb.indexed_alpha(IndexedColor::BrightBlack, 0x3f)
+                    fb.indexed(IndexedColor::Blue)
                 };
+                let fg = fb.contrasted(bg);
                 fb.blend_bg(rect, bg);
+                fb.blend_fg(rect, fg);
             }
 
             cursor = cursor_end;
