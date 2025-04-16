@@ -19,6 +19,8 @@
 // * Multi-Cursor
 // * For the focus path we can use the tree depth to O(1) check if the path contains the focus.
 
+#![feature(os_string_truncate)]
+
 use edit::apperr;
 use edit::buffer::{self, RcTextBuffer, TextBuffer};
 use edit::framebuffer::{self, IndexedColor, alpha_blend};
@@ -26,6 +28,7 @@ use edit::helpers::*;
 use edit::icu;
 use edit::input::{self, kbmod, vk};
 use edit::loc::{self, LocId, loc};
+use edit::simd::memrchr2;
 use edit::sys;
 use edit::tui::*;
 use edit::vt::{self, Token};
@@ -324,6 +327,7 @@ fn run() -> apperr::Result<()> {
 // Returns true if the application should exit early.
 fn handle_args(state: &mut State) -> apperr::Result<bool> {
     let cwd = std::env::current_dir()?;
+    let mut goto = Point::default();
 
     // The best CLI argument parser in the world.
     if let Some(path) = std::env::args_os().nth(1) {
@@ -336,8 +340,15 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         } else if path == "-" {
             // We'll check for a redirected stdin no matter what, so we can just ignore "-".
         } else {
-            let path = PathBuf::from(path);
-            let filename = get_filename_from_path(&path);
+            let mut path = PathBuf::from(path);
+            let mut filename = get_filename_from_path(&path);
+
+            if let Some((len, pos)) = parse_filename_goto(&filename) {
+                let path = path.as_mut_os_string();
+                path.truncate(path.len() - filename.len() + len);
+                filename.truncate(len);
+                goto = pos;
+            }
 
             // If the user specified a path, try to figure out the directory
             // normalize & check if it exists (= canonicalize),
@@ -376,7 +387,37 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         }
     }
 
+    if goto != Point::default() {
+        state.buffer.borrow_mut().cursor_move_to_logical(goto);
+    }
+
     Ok(false)
+}
+
+fn parse_filename_goto(str: &str) -> Option<(usize, Point)> {
+    let bytes = str.as_bytes();
+    let colend = memrchr2(b':', b':', bytes, bytes.len())?;
+
+    // Reject filenames that would result in an empty filename after stripping off the :line:char suffix.
+    // For instance, a filename like ":123:456" will not be processed by this function.
+    if colend == 0 {
+        return None;
+    }
+
+    let last = str[colend + 1..].parse::<CoordType>().ok()?;
+    let last = (last - 1).max(0);
+
+    if let Some(colbeg) = memrchr2(b':', b':', bytes, colend) {
+        // Same here: Don't allow empty filenames.
+        if colbeg != 0 {
+            if let Ok(first) = str[colbeg + 1..colend].parse::<CoordType>() {
+                let first = (first - 1).max(0);
+                return Some((colbeg, Point { x: last, y: first }));
+            }
+        }
+    }
+
+    Some((colend, Point { x: 0, y: last }))
 }
 
 fn print_help() {
@@ -1576,4 +1617,55 @@ fn query_color_palette(tui: &mut Tui, vt_parser: &mut vt::Parser) {
     }
 
     tui.setup_indexed_colors(indexed_colors);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_last_numbers() {
+        assert_eq!(parse_filename_goto("123"), None);
+        assert_eq!(parse_filename_goto("abc"), None);
+        assert_eq!(parse_filename_goto(":123"), None);
+        assert_eq!(
+            parse_filename_goto("abc:123"),
+            Some((3, Point { x: 0, y: 122 }))
+        );
+        assert_eq!(
+            parse_filename_goto("45:123"),
+            Some((2, Point { x: 0, y: 122 }))
+        );
+        assert_eq!(
+            parse_filename_goto(":45:123"),
+            Some((3, Point { x: 0, y: 122 }))
+        );
+        assert_eq!(
+            parse_filename_goto("abc:45:123"),
+            Some((3, Point { x: 122, y: 44 }))
+        );
+        assert_eq!(
+            parse_filename_goto("abc:def:123"),
+            Some((7, Point { x: 0, y: 122 }))
+        );
+        assert_eq!(
+            parse_filename_goto("1:2:3"),
+            Some((1, Point { x: 2, y: 1 }))
+        );
+        assert_eq!(parse_filename_goto("::3"), Some((1, Point { x: 0, y: 2 })));
+        assert_eq!(parse_filename_goto("1::3"), Some((2, Point { x: 0, y: 2 })));
+        assert_eq!(parse_filename_goto(""), None);
+        assert_eq!(parse_filename_goto(":"), None);
+        assert_eq!(parse_filename_goto("::"), None);
+        assert_eq!(parse_filename_goto("a:1"), Some((1, Point { x: 0, y: 0 })));
+        assert_eq!(parse_filename_goto("1:a"), None);
+        assert_eq!(
+            parse_filename_goto("file.txt:10"),
+            Some((8, Point { x: 0, y: 9 }))
+        );
+        assert_eq!(
+            parse_filename_goto("file.txt:10:5"),
+            Some((8, Point { x: 4, y: 9 }))
+        );
+    }
 }
