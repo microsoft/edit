@@ -24,9 +24,6 @@ unsafe fn memchr2_raw(needle1: u8, needle2: u8, beg: *const u8, end: *const u8) 
 
     #[cfg(target_arch = "aarch64")]
     return unsafe { memchr2_neon(needle1, needle2, beg, end) };
-
-    #[allow(unreachable_code)]
-    return unsafe { memchr2_fallback(needle1, needle2, beg, end) };
 }
 
 unsafe fn memchr2_fallback(
@@ -97,10 +94,6 @@ unsafe fn memchr2_avx2(needle1: u8, needle2: u8, mut beg: *const u8, end: *const
             remaining -= 32;
         }
 
-        memchr2_fallback(needle1, needle2, beg, end)
-
-        // TODO: This code probably works correctly but requires more testing.
-        /*
         // Handle the remaining <32 bytes by reading 32 bytes and masking out the irrelevant data.
         // This works, because x86 does not care about slice boundaries. It does care about page boundaries, however.
         if remaining > 0 {
@@ -139,7 +132,6 @@ unsafe fn memchr2_avx2(needle1: u8, needle2: u8, mut beg: *const u8, end: *const
         }
 
         end
-        */
     }
 }
 
