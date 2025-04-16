@@ -99,9 +99,10 @@ struct State {
     search_success: bool,
 
     wants_term_title_update: bool,
-    wants_encoding_focus: bool,
+    wants_statusbar_focus: bool,
+    wants_encoding_picker: bool,
     wants_encoding_change: StateEncodingChange,
-    wants_indentation_focus: bool,
+    wants_indentation_picker: bool,
     wants_about: bool,
     wants_exit: bool,
     exit: bool,
@@ -144,9 +145,10 @@ impl State {
             search_success: true,
 
             wants_term_title_update: true,
-            wants_encoding_focus: false,
+            wants_statusbar_focus: false,
+            wants_encoding_picker: false,
             wants_encoding_change: StateEncodingChange::None,
-            wants_indentation_focus: false,
+            wants_indentation_picker: false,
             wants_about: false,
             wants_exit: false,
             exit: false,
@@ -565,22 +567,13 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
             state.wants_search.focus = true;
         }
     }
-    if ctx.menubar_menu_item(loc(LocId::EditChangeNewlineSequence), 'N', vk::NULL) {
-        let mut tb = state.buffer.borrow_mut();
-        let crlf = tb.is_crlf();
-        tb.normalize_newlines(!crlf);
-        ctx.needs_rerender();
-    }
-    if ctx.menubar_menu_item(loc(LocId::EditChangeEncoding), 'E', vk::NULL) {
-        state.wants_encoding_focus = true;
-    }
-    if ctx.menubar_menu_item(loc(LocId::EditChangeIndentation), 'I', vk::NULL) {
-        state.wants_indentation_focus = true;
-    }
     ctx.menubar_menu_end();
 }
 
 fn draw_menu_view(ctx: &mut Context, state: &mut State) {
+    if ctx.menubar_menu_item(loc(LocId::ViewFocusStatusbar), 'S', vk::NULL) {
+        state.wants_statusbar_focus = true;
+    }
     if ctx.menubar_menu_item(loc(LocId::ViewWordWrap), 'W', kbmod::ALT | vk::Z) {
         state.buffer.borrow_mut().toggle_word_wrap();
         ctx.needs_rerender();
@@ -792,15 +785,14 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
         ) {
             let is_crlf = tb.is_crlf();
             tb.normalize_newlines(!is_crlf);
-            ctx.toss_focus_up();
         }
-
-        ctx.button("encoding", Overflow::Clip, tb.encoding());
-        if state.wants_encoding_focus {
-            state.wants_encoding_focus = false;
+        if state.wants_statusbar_focus {
+            state.wants_statusbar_focus = false;
             ctx.steal_focus();
         }
-        if ctx.contains_focus() {
+
+        state.wants_encoding_picker |= ctx.button("encoding", Overflow::Clip, tb.encoding());
+        if state.wants_encoding_picker {
             if state.path.is_some() {
                 ctx.block_begin("frame");
                 ctx.attr_float(FloatSpec {
@@ -834,9 +826,14 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 // Can't reopen a file that doesn't exist.
                 state.wants_encoding_change = StateEncodingChange::Convert;
             }
+
+            if !ctx.contains_focus() {
+                state.wants_encoding_picker = false;
+                ctx.needs_rerender();
+            }
         }
 
-        ctx.button(
+        state.wants_indentation_picker |= ctx.button(
             "indentation",
             Overflow::Clip,
             &format!(
@@ -849,11 +846,7 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 tb.tab_size(),
             ),
         );
-        if state.wants_indentation_focus {
-            state.wants_indentation_focus = false;
-            ctx.steal_focus();
-        }
-        if ctx.contains_focus() {
+        if state.wants_indentation_picker {
             ctx.table_begin("indentation-picker");
             ctx.attr_float(FloatSpec {
                 anchor: Anchor::Last,
@@ -869,6 +862,10 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 height: 0,
             });
             {
+                if ctx.consume_shortcut(vk::RETURN) {
+                    ctx.toss_focus_up();
+                }
+
                 ctx.table_next_row();
 
                 ctx.list_begin("type");
@@ -914,6 +911,11 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 ctx.list_end();
             }
             ctx.table_end();
+
+            if !ctx.contains_focus() {
+                state.wants_indentation_picker = false;
+                ctx.needs_rerender();
+            }
         }
 
         ctx.label(
