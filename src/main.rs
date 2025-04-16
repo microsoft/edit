@@ -1476,12 +1476,12 @@ fn set_vt_modes() -> RestoreModes {
 
 #[cold]
 fn write_terminal_title(output: &mut String, filename: &str) {
-    output.push_str("\x1b]0;edit");
+    output.push_str("\x1b]0;");
     if !filename.is_empty() {
-        output.push(' ');
         output.push_str(&sanitize_control_chars(filename));
+        output.push_str(" - ");
     }
-    output.push('\x07');
+    output.push_str("edit\x1b\\");
 }
 
 struct RestoreModes;
