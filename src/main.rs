@@ -22,6 +22,7 @@
 #![feature(os_string_truncate)]
 
 use edit::apperr;
+use edit::base64;
 use edit::buffer::{self, RcTextBuffer, TextBuffer};
 use edit::framebuffer::{self, IndexedColor, alpha_blend};
 use edit::helpers::*;
@@ -105,6 +106,8 @@ struct State {
     wants_indentation_picker: bool,
     wants_about: bool,
     wants_exit: bool,
+
+    osc_clipboard_generation: u32,
     exit: bool,
 }
 
@@ -151,6 +154,8 @@ impl State {
             wants_indentation_picker: false,
             wants_about: false,
             wants_exit: false,
+
+            osc_clipboard_generation: 0,
             exit: false,
         })
     }
@@ -284,8 +289,11 @@ fn run() -> apperr::Result<()> {
         let mut output = tui.render();
 
         if state.wants_term_title_update {
-            state.wants_term_title_update = false;
-            write_terminal_title(&mut output, &state.filename);
+            write_terminal_title(&mut output, &mut state);
+        }
+
+        if state.osc_clipboard_generation != tui.get_clipboard_generation() {
+            write_osc_clipboard(&mut output, &mut state, &tui);
         }
 
         #[cfg(feature = "debug-latency")]
@@ -1518,13 +1526,28 @@ fn set_vt_modes() -> RestoreModes {
 }
 
 #[cold]
-fn write_terminal_title(output: &mut String, filename: &str) {
+fn write_terminal_title(output: &mut String, state: &mut State) {
     output.push_str("\x1b]0;");
-    if !filename.is_empty() {
-        output.push_str(&sanitize_control_chars(filename));
+    if !state.filename.is_empty() {
+        output.push_str(&sanitize_control_chars(&state.filename));
         output.push_str(" - ");
     }
     output.push_str("edit\x1b\\");
+
+    state.wants_term_title_update = false;
+}
+
+#[cold]
+fn write_osc_clipboard(output: &mut String, state: &mut State, tui: &Tui) {
+    let clipboard = tui.get_clipboard();
+
+    if (1..128 * 1024).contains(&clipboard.len()) {
+        output.push_str("\x1b]52;c;");
+        output.push_str(&base64::encode(clipboard));
+        output.push_str("\x1b\\");
+    }
+
+    state.osc_clipboard_generation = tui.get_clipboard_generation();
 }
 
 struct RestoreModes;

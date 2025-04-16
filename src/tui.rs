@@ -57,6 +57,7 @@ pub struct Tui {
     last_click_position: Point,
 
     clipboard: Vec<u8>,
+    clipboard_generation: u32,
     cached_text_buffers: Vec<CachedTextBuffer>,
     mouse_down_node_path: Vec<u64>,
     focused_node_path: Vec<u64>,
@@ -103,6 +104,7 @@ impl Tui {
             last_click_position: Point::MIN,
 
             clipboard: Vec::new(),
+            clipboard_generation: 0,
             cached_text_buffers: Vec::with_capacity(16),
             mouse_down_node_path: Vec::with_capacity(16),
             focused_node_path: Vec::with_capacity(16),
@@ -166,6 +168,14 @@ impl Tui {
 
     pub fn contrasted(&self, color: u32) -> u32 {
         self.framebuffer.contrasted(color)
+    }
+
+    pub fn get_clipboard(&self) -> &[u8] {
+        &self.clipboard
+    }
+
+    pub fn get_clipboard_generation(&self) -> u32 {
+        self.clipboard_generation
     }
 
     pub fn create_context<'a, 'input>(
@@ -1076,11 +1086,16 @@ impl<'a> Context<'a, '_> {
 
     pub fn set_clipboard(&mut self, data: Vec<u8>) {
         self.tui.clipboard = data;
+        self.tui.clipboard_generation = self.tui.clipboard_generation.wrapping_add(1);
         self.needs_rerender();
     }
 
     pub fn get_clipboard(&self) -> &[u8] {
-        &self.tui.clipboard
+        self.tui.get_clipboard()
+    }
+
+    pub fn get_clipboard_generation(&self) -> u32 {
+        self.tui.get_clipboard_generation()
     }
 
     pub fn needs_rerender(&mut self) {
@@ -2056,11 +2071,11 @@ impl<'a> Context<'a, '_> {
                 },
                 vk::INSERT => match modifiers {
                     kbmod::SHIFT => tb.write(&self.tui.clipboard, true),
-                    kbmod::CTRL => self.tui.clipboard = tb.extract_selection(false),
+                    kbmod::CTRL => self.set_clipboard(tb.extract_selection(false)),
                     _ => tb.set_overtype(!tb.is_overtype()),
                 },
                 vk::DELETE => match modifiers {
-                    kbmod::SHIFT => self.tui.clipboard = tb.extract_selection(true),
+                    kbmod::SHIFT => self.set_clipboard(tb.extract_selection(true)),
                     kbmod::CTRL => tb.delete(CursorMovement::Word, 1),
                     _ => tb.delete(CursorMovement::Grapheme, 1),
                 },
@@ -2073,11 +2088,11 @@ impl<'a> Context<'a, '_> {
                     _ => return false,
                 },
                 vk::X => match modifiers {
-                    kbmod::CTRL => self.tui.clipboard = tb.extract_selection(true),
+                    kbmod::CTRL => self.set_clipboard(tb.extract_selection(true)),
                     _ => return false,
                 },
                 vk::C => match modifiers {
-                    kbmod::CTRL => self.tui.clipboard = tb.extract_selection(false),
+                    kbmod::CTRL => self.set_clipboard(tb.extract_selection(false)),
                     _ => return false,
                 },
                 vk::V => match modifiers {

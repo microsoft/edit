@@ -5,6 +5,7 @@
 pub mod arena;
 
 pub mod apperr;
+pub mod base64;
 pub mod buffer;
 pub mod cell;
 pub mod framebuffer;
