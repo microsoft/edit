@@ -567,14 +567,6 @@ impl TextBuffer {
             let mut space_indentation_sizes = [0; 7];
 
             loop {
-                (offset, lines) = ucd::newlines_forward(chunk, offset, lines, lines + 1);
-                assert!(offset <= chunk.len());
-
-                // Check if the preceding line ended in CRLF.
-                if offset >= 2 && &chunk[offset - 2..offset] == b"\r\n" {
-                    crlf_count += 1;
-                }
-
                 // Check if the line starts with a tab.
                 if offset < chunk.len() && chunk[offset] == b'\t' {
                     tab_indentations += 1;
@@ -586,16 +578,41 @@ impl TextBuffer {
                         .take(9)
                         .take_while(|&&c| c == b' ')
                         .count();
+
                     // We'll also reject lines starting with 1 space, because that's too fickle as a heuristic.
                     if (2..=8).contains(&space_indentation) {
                         space_indentations += 1;
+
+                        // If we encounter an indentation depth of 6, it may either be a 6-space indentation,
+                        // two 3-space indentation or 3 2-space indentations. To make this work, we increment
+                        // all 3 possible histogram slots.
+                        //   2 -> 2
+                        //   3 -> 3
+                        //   4 -> 4 2
+                        //   5 -> 5
+                        //   6 -> 6 3 2
+                        //   7 -> 7
+                        //   8 -> 8 4 2
                         space_indentation_sizes[space_indentation - 2] += 1;
+                        if space_indentation & 4 != 0 {
+                            space_indentation_sizes[0] += 1;
+                        }
+                        if space_indentation == 6 || space_indentation == 8 {
+                            space_indentation_sizes[space_indentation / 2 - 2] += 1;
+                        }
                     }
                 }
 
-                // We'll limit our heuristics to the first 100 lines.
+                (offset, lines) = ucd::newlines_forward(chunk, offset, lines, lines + 1);
+
+                // Check if the preceding line ended in CRLF.
+                if offset >= 2 && &chunk[offset - 2..offset] == b"\r\n" {
+                    crlf_count += 1;
+                }
+
+                // We'll limit our heuristics to the first 1000 lines.
                 // That should hopefully be enough in practice.
-                if offset >= chunk.len() || lines >= 100 {
+                if offset >= chunk.len() || lines >= 1000 {
                     break;
                 }
             }
@@ -610,12 +627,12 @@ impl TextBuffer {
                 4
             } else {
                 // Otherwise, we'll assume the most common indentation depth.
-                // We can't use `max_by_key`, because that will return the largest index and we
-                // want the smallest (= prefer 2 over 4 over 8 if they're all equally common).
-                let mut max = 0;
+                // If there are conflicting indentation depths, we'll prefer the maximum, because in the loop
+                // above we incremented the histogram slot for 2-spaces when encountering 4-spaces and so on.
+                let mut max = 1;
                 let mut tab_size = 4;
                 for (i, &count) in space_indentation_sizes.iter().enumerate() {
-                    if count > max {
+                    if count >= max {
                         max = count;
                         tab_size = i as CoordType + 2;
                     }
