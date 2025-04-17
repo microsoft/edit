@@ -1,3 +1,9 @@
+# The following is not used by default via .cargo/config.toml,
+# because `build-std-features` cannot be keyed by profile.
+# This breaks the bench profile which doesn't support panic=abort.
+# See: https://github.com/rust-lang/cargo/issues/11214
+# See: https://github.com/rust-lang/cargo/issues/13894
+
 # Avoid linking with vcruntime140.dll by statically linking everything,
 # and then explicitly linking with ucrtbase.dll dynamically.
 # We do this, because vcruntime140.dll is an optional Windows component.

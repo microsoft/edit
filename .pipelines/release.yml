@@ -100,6 +100,9 @@ extends:
               # For details on this cargo_target_dir setting, see:
               # https://eng.ms/docs/more/rust/topics/onebranch-workaround
               CARGO_TARGET_DIR: C:\cargo_target_dir
+              # msrustup only supports stable toolchains, but this project requires nightly.
+              # We were told RUSTC_BOOTSTRAP=1 is a supported workaround.
+              RUSTC_BOOTSTRAP: 1
             steps:
               # NOTE: Step objects have ordered keys and you MUST have "task" as the first key.
               # Objects with ordered keys... lol

@@ -35,6 +35,8 @@ impl<'a> Utf8Chars<'a> {
         self.offset < self.source.len()
     }
 
+    // I found that on mixed 50/50 English/Non-English text,
+    // performance actually suffers when this gets inlined.
     #[cold]
     fn next_slow(&mut self, c: u8) -> char {
         // See: https://datatracker.ietf.org/doc/html/rfc3629
@@ -169,6 +171,8 @@ impl<'a> Utf8Chars<'a> {
             }
         }
 
+        // SAFETY: All branches above check for `if self.offset >= self.source.len()`
+        // one way or another. This is here because the compiler doesn't get it otherwise.
         unsafe { hint::assert_unchecked(self.offset < self.source.len()) };
 
         // UTF8-tail = %x80-BF
@@ -180,6 +184,7 @@ impl<'a> Utf8Chars<'a> {
 
         self.offset += 1;
 
+        // SAFETY: If `cp` wasn't a valid codepoint, we already returned U+FFFD above.
         #[allow(clippy::transmute_int_to_char)]
         unsafe {
             mem::transmute(cp)
@@ -197,6 +202,9 @@ impl<'a> Utf8Chars<'a> {
 impl Iterator for Utf8Chars<'_> {
     type Item = char;
 
+    // At opt-level="s", this function doesn't get inlined,
+    // but performance greatly suffers in that case.
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.offset >= self.source.len() {
             return None;
@@ -213,6 +221,14 @@ impl Iterator for Utf8Chars<'_> {
         } else {
             Some(self.next_slow(c))
         }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        // Lower bound: All remaining bytes are 4-byte sequences.
+        // Upper bound: All remaining bytes are ASCII.
+        let remaining = self.source.len() - self.offset;
+        (remaining / 4, Some(remaining))
     }
 }
 

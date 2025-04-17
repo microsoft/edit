@@ -21,19 +21,25 @@
 // * Multi-Cursor
 // * For the focus path we can use the tree depth to O(1) check if the path contains the focus.
 
-use edit::buffer::{self, RcTextBuffer};
+#![feature(os_string_truncate)]
+
+use edit::apperr;
+use edit::base64;
+use edit::buffer::{self, RcTextBuffer, TextBuffer};
 use edit::framebuffer::{self, IndexedColor, alpha_blend};
 use edit::helpers::*;
+use edit::icu;
 use edit::input::{self, kbmod, vk};
-use edit::loc::{LocId, loc};
+use edit::loc::{self, LocId, loc};
+use edit::simd::memrchr2;
 use edit::sys;
 use edit::tui::*;
 use edit::vt::{self, Token};
-use edit::{apperr, icu};
 use std::ffi::CString;
+use std::cmp;
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
-use std::{cmp, process};
+use std::process;
 
 #[cfg(feature = "debug-latency")]
 use std::fmt::Write;
@@ -97,19 +103,25 @@ struct State {
     search_success: bool,
 
     wants_term_title_update: bool,
-    wants_encoding_focus: bool,
+    wants_statusbar_focus: bool,
+    wants_encoding_picker: bool,
     wants_encoding_change: StateEncodingChange,
-    wants_indentation_focus: bool,
+    wants_indentation_picker: bool,
     wants_about: bool,
     wants_exit: bool,
+
+    osc_clipboard_generation: u32,
     exit: bool,
 }
 
 impl State {
     fn new() -> apperr::Result<Self> {
-        let mut buffer = RcTextBuffer::new(false)?;
-        buffer.set_margin_enabled(true);
-        buffer.set_line_highlight_enabled(true);
+        let buffer = TextBuffer::new_rc(false)?;
+        {
+            let mut tb = buffer.borrow_mut();
+            tb.set_margin_enabled(true);
+            tb.set_line_highlight_enabled(true);
+        }
 
         Ok(Self {
             menubar_color_bg: 0,
@@ -139,11 +151,14 @@ impl State {
             search_success: true,
 
             wants_term_title_update: true,
-            wants_encoding_focus: false,
+            wants_statusbar_focus: false,
+            wants_encoding_picker: false,
             wants_encoding_change: StateEncodingChange::None,
-            wants_indentation_focus: false,
+            wants_indentation_picker: false,
             wants_about: false,
             wants_exit: false,
+
+            osc_clipboard_generation: 0,
             exit: false,
         })
     }
@@ -151,7 +166,7 @@ impl State {
     fn set_path(&mut self, path: PathBuf, filename: String) {
         debug_assert!(!filename.is_empty());
         let ruler = if filename == "COMMIT_EDITMSG" { 72 } else { 0 };
-        self.buffer.set_ruler(ruler);
+        self.buffer.borrow_mut().set_ruler(ruler);
         self.filename = filename;
         self.path = Some(path);
         self.wants_term_title_update = true;
@@ -189,6 +204,8 @@ fn run() -> apperr::Result<()> {
         return Ok(());
     }
 
+    loc::init();
+
     // sys::init() will switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // Since the `read_file` call may hang for some reason, we must only call this afterwards.
     // `set_modes()` will enable mouse mode which is equally annoying to switch out for users
@@ -198,7 +215,7 @@ fn run() -> apperr::Result<()> {
 
     let mut vt_parser = vt::Parser::new();
     let mut input_parser = input::Parser::new();
-    let mut tui = Tui::new();
+    let mut tui = Tui::new()?;
 
     state.menubar_color_bg = alpha_blend(
         tui.indexed(IndexedColor::Background),
@@ -279,8 +296,11 @@ fn run() -> apperr::Result<()> {
             let mut output = tui.render();
 
             if state.wants_term_title_update {
-                state.wants_term_title_update = false;
-                write_terminal_title(&mut output, &state.filename);
+                write_terminal_title(&mut output, &mut state);
+            }
+
+            if state.osc_clipboard_generation != tui.get_clipboard_generation() {
+                write_osc_clipboard(&mut output, &mut state, &tui);
             }
 
             #[cfg(feature = "debug-latency")]
@@ -328,6 +348,7 @@ fn run() -> apperr::Result<()> {
 // Returns true if the application should exit early.
 fn handle_args(state: &mut State) -> apperr::Result<bool> {
     let cwd = std::env::current_dir()?;
+    let mut goto = Point::default();
 
     // The best CLI argument parser in the world.
     if let Some(path) = std::env::args_os().nth(1) {
@@ -340,8 +361,15 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         } else if path == "-" {
             // We'll check for a redirected stdin no matter what, so we can just ignore "-".
         } else {
-            let path = PathBuf::from(path);
-            let filename = get_filename_from_path(&path);
+            let mut path = PathBuf::from(path);
+            let mut filename = get_filename_from_path(&path);
+
+            if let Some((len, pos)) = parse_filename_goto(&filename) {
+                let path = path.as_mut_os_string();
+                path.truncate(path.len() - filename.len() + len);
+                filename.truncate(len);
+                goto = pos;
+            }
 
             // If the user specified a path, try to figure out the directory
             // normalize & check if it exists (= canonicalize),
@@ -367,19 +395,50 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     }
 
     if let Some(mut file) = sys::open_stdin_if_redirected() {
-        state.buffer.read_file(&mut file, None)?;
-        state.buffer.mark_as_dirty();
+        let mut tb = state.buffer.borrow_mut();
+        tb.read_file(&mut file, None)?;
+        tb.mark_as_dirty();
     } else if let Some(path) = &state.path {
         if !state.filename.is_empty() {
             match file_open(path) {
-                Ok(mut file) => state.buffer.read_file(&mut file, None)?,
+                Ok(mut file) => state.buffer.borrow_mut().read_file(&mut file, None)?,
                 Err(err) if sys::apperr_is_not_found(err) => {}
                 Err(err) => return Err(err),
             }
         }
     }
 
+    if goto != Point::default() {
+        state.buffer.borrow_mut().cursor_move_to_logical(goto);
+    }
+
     Ok(false)
+}
+
+fn parse_filename_goto(str: &str) -> Option<(usize, Point)> {
+    let bytes = str.as_bytes();
+    let colend = memrchr2(b':', b':', bytes, bytes.len())?;
+
+    // Reject filenames that would result in an empty filename after stripping off the :line:char suffix.
+    // For instance, a filename like ":123:456" will not be processed by this function.
+    if colend == 0 {
+        return None;
+    }
+
+    let last = str[colend + 1..].parse::<CoordType>().ok()?;
+    let last = (last - 1).max(0);
+
+    if let Some(colbeg) = memrchr2(b':', b':', bytes, colend) {
+        // Same here: Don't allow empty filenames.
+        if colbeg != 0 {
+            if let Ok(first) = str[colbeg + 1..colend].parse::<CoordType>() {
+                let first = (first - 1).max(0);
+                return Some((colbeg, Point { x: last, y: first }));
+            }
+        }
+    }
+
+    Some((colend, Point { x: 0, y: last }))
 }
 
 fn print_help() {
@@ -500,21 +559,21 @@ fn draw_menu_file(ctx: &mut Context, state: &mut State) {
 
 fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
     if ctx.menubar_menu_item(loc(LocId::EditUndo), 'U', kbmod::CTRL | vk::Z) {
-        state.buffer.undo();
+        state.buffer.borrow_mut().undo();
         ctx.needs_rerender();
     }
     if ctx.menubar_menu_item(loc(LocId::EditRedo), 'R', kbmod::CTRL | vk::Y) {
-        state.buffer.redo();
+        state.buffer.borrow_mut().redo();
         ctx.needs_rerender();
     }
     if ctx.menubar_menu_item(loc(LocId::EditCut), 'T', kbmod::CTRL | vk::X) {
-        ctx.set_clipboard(state.buffer.extract_selection(true));
+        ctx.set_clipboard(state.buffer.borrow_mut().extract_selection(true));
     }
     if ctx.menubar_menu_item(loc(LocId::EditCopy), 'C', kbmod::CTRL | vk::C) {
-        ctx.set_clipboard(state.buffer.extract_selection(false));
+        ctx.set_clipboard(state.buffer.borrow_mut().extract_selection(false));
     }
     if ctx.menubar_menu_item(loc(LocId::EditPaste), 'P', kbmod::CTRL | vk::V) {
-        state.buffer.write(ctx.get_clipboard(), true);
+        state.buffer.borrow_mut().write(ctx.get_clipboard(), true);
         ctx.needs_rerender();
     }
     if state.wants_search.kind != StateSearchKind::Disabled {
@@ -527,23 +586,15 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
             state.wants_search.focus = true;
         }
     }
-    if ctx.menubar_menu_item(loc(LocId::EditChangeNewlineSequence), 'N', vk::NULL) {
-        let crlf = state.buffer.is_crlf();
-        state.buffer.normalize_newlines(!crlf);
-        ctx.needs_rerender();
-    }
-    if ctx.menubar_menu_item(loc(LocId::EditChangeEncoding), 'E', vk::NULL) {
-        state.wants_encoding_focus = true;
-    }
-    if ctx.menubar_menu_item(loc(LocId::EditChangeIndentation), 'I', vk::NULL) {
-        state.wants_indentation_focus = true;
-    }
     ctx.menubar_menu_end();
 }
 
 fn draw_menu_view(ctx: &mut Context, state: &mut State) {
+    if ctx.menubar_menu_item(loc(LocId::ViewFocusStatusbar), 'S', vk::NULL) {
+        state.wants_statusbar_focus = true;
+    }
     if ctx.menubar_menu_item(loc(LocId::ViewWordWrap), 'W', kbmod::ALT | vk::Z) {
-        state.buffer.toggle_word_wrap();
+        state.buffer.borrow_mut().toggle_word_wrap();
         ctx.needs_rerender();
     }
     ctx.menubar_menu_end();
@@ -579,7 +630,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 
         // If the selection is empty, focus the search input field.
         // Otherwise, focus the replace input field, if it exists.
-        if let Some(selection) = state.buffer.extract_user_selection(false) {
+        if let Some(selection) = state.buffer.borrow_mut().extract_user_selection(false) {
             state.search_needle = string_from_utf8_lossy_owned(selection);
             focus = state.wants_search.kind;
         }
@@ -697,13 +748,14 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         SearchAction::None => return,
         SearchAction::Search => state
             .buffer
+            .borrow_mut()
             .find_and_select(&state.search_needle, state.search_options),
-        SearchAction::Replace => state.buffer.find_and_replace(
+        SearchAction::Replace => state.buffer.borrow_mut().find_and_replace(
             &state.search_needle,
             state.search_options,
             &state.search_replacement,
         ),
-        SearchAction::ReplaceAll => state.buffer.find_and_replace_all(
+        SearchAction::ReplaceAll => state.buffer.borrow_mut().find_and_replace_all(
             &state.search_needle,
             state.search_options,
             &state.search_replacement,
@@ -743,22 +795,23 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
     {
         ctx.table_next_row();
 
+        let mut tb = state.buffer.borrow_mut();
+
         if ctx.button(
             "newline",
             Overflow::Clip,
-            if state.buffer.is_crlf() { "CRLF" } else { "LF" },
+            if tb.is_crlf() { "CRLF" } else { "LF" },
         ) {
-            let is_crlf = state.buffer.is_crlf();
-            state.buffer.normalize_newlines(!is_crlf);
-            ctx.toss_focus_up();
+            let is_crlf = tb.is_crlf();
+            tb.normalize_newlines(!is_crlf);
         }
-
-        ctx.button("encoding", Overflow::Clip, state.buffer.encoding());
-        if state.wants_encoding_focus {
-            state.wants_encoding_focus = false;
+        if state.wants_statusbar_focus {
+            state.wants_statusbar_focus = false;
             ctx.steal_focus();
         }
-        if ctx.contains_focus() {
+
+        state.wants_encoding_picker |= ctx.button("encoding", Overflow::Clip, tb.encoding());
+        if state.wants_encoding_picker {
             if state.path.is_some() {
                 ctx.block_begin("frame");
                 ctx.attr_float(FloatSpec {
@@ -792,26 +845,27 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 // Can't reopen a file that doesn't exist.
                 state.wants_encoding_change = StateEncodingChange::Convert;
             }
+
+            if !ctx.contains_focus() {
+                state.wants_encoding_picker = false;
+                ctx.needs_rerender();
+            }
         }
 
-        ctx.button(
+        state.wants_indentation_picker |= ctx.button(
             "indentation",
             Overflow::Clip,
             &format!(
                 "{}:{}",
-                loc(if state.buffer.indent_with_tabs() {
+                loc(if tb.indent_with_tabs() {
                     LocId::IndentationTabs
                 } else {
                     LocId::IndentationSpaces
                 }),
-                state.buffer.tab_size(),
+                tb.tab_size(),
             ),
         );
-        if state.wants_indentation_focus {
-            state.wants_indentation_focus = false;
-            ctx.steal_focus();
-        }
-        if ctx.contains_focus() {
+        if state.wants_indentation_picker {
             ctx.table_begin("indentation-picker");
             ctx.attr_float(FloatSpec {
                 anchor: Anchor::Last,
@@ -827,6 +881,10 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 height: 0,
             });
             {
+                if ctx.consume_shortcut(vk::RETURN) {
+                    ctx.toss_focus_up();
+                }
+
                 ctx.table_next_row();
 
                 ctx.list_begin("type");
@@ -834,21 +892,21 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 ctx.attr_padding(Rect::two(0, 1));
                 {
                     if ctx.list_item(
-                        state.buffer.indent_with_tabs(),
+                        tb.indent_with_tabs(),
                         Overflow::Clip,
                         loc(LocId::IndentationTabs),
                     ) != ListSelection::Unchanged
                     {
-                        state.buffer.set_indent_with_tabs(true);
+                        tb.set_indent_with_tabs(true);
                         ctx.needs_rerender();
                     }
                     if ctx.list_item(
-                        !state.buffer.indent_with_tabs(),
+                        !tb.indent_with_tabs(),
                         Overflow::Clip,
                         loc(LocId::IndentationSpaces),
                     ) != ListSelection::Unchanged
                     {
-                        state.buffer.set_indent_with_tabs(false);
+                        tb.set_indent_with_tabs(false);
                         ctx.needs_rerender();
                     }
                 }
@@ -861,13 +919,10 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                         let ch = [b'0' + width];
                         let label = unsafe { std::str::from_utf8_unchecked(&ch) };
 
-                        if ctx.list_item(
-                            state.buffer.tab_size() == width as i32,
-                            Overflow::Clip,
-                            label,
-                        ) != ListSelection::Unchanged
+                        if ctx.list_item(tb.tab_size() == width as i32, Overflow::Clip, label)
+                            != ListSelection::Unchanged
                         {
-                            state.buffer.set_tab_size(width as i32);
+                            tb.set_tab_size(width as i32);
                             ctx.needs_rerender();
                         }
                     }
@@ -875,6 +930,11 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 ctx.list_end();
             }
             ctx.table_end();
+
+            if !ctx.contains_focus() {
+                state.wants_indentation_picker = false;
+                ctx.needs_rerender();
+            }
         }
 
         ctx.label(
@@ -882,8 +942,8 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             Overflow::Clip,
             &format!(
                 "{}:{}",
-                state.buffer.get_cursor_logical_pos().y + 1,
-                state.buffer.get_cursor_logical_pos().x + 1
+                tb.get_cursor_logical_pos().y + 1,
+                tb.get_cursor_logical_pos().x + 1
             ),
         );
 
@@ -893,17 +953,17 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             Overflow::Clip,
             &format!(
                 "{}/{}",
-                state.buffer.get_logical_line_count(),
-                state.buffer.get_visual_line_count(),
+                tb.get_logical_line_count(),
+                tb.get_visual_line_count(),
             ),
         );
 
-        if state.buffer.is_overtype() && ctx.button("overtype", Overflow::Clip, "OVR") {
-            state.buffer.set_overtype(false);
+        if tb.is_overtype() && ctx.button("overtype", Overflow::Clip, "OVR") {
+            tb.set_overtype(false);
             ctx.needs_rerender();
         }
 
-        if state.buffer.is_dirty() {
+        if tb.is_dirty() {
             ctx.label("dirty", Overflow::Clip, "*");
         }
 
@@ -923,7 +983,7 @@ fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 
 fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     if state.wants_file_picker == StateFilePicker::Open {
-        state.wants_file_picker = if state.buffer.is_dirty() {
+        state.wants_file_picker = if state.buffer.borrow().is_dirty() {
             StateFilePicker::OpenUnsavedChanges
         } else {
             StateFilePicker::OpenForce
@@ -1216,8 +1276,8 @@ fn draw_handle_load_impl(
         return false;
     };
 
-    if let Err(err) =
-        file_open(path).and_then(|mut file| state.buffer.read_file(&mut file, encoding))
+    if let Err(err) = file_open(path)
+        .and_then(|mut file| state.buffer.borrow_mut().read_file(&mut file, encoding))
     {
         error_log_add(ctx, state, err);
         return false;
@@ -1238,7 +1298,7 @@ fn draw_handle_save_impl(ctx: &mut Context, state: &mut State, path: Option<&Pat
         return false;
     };
 
-    if let Err(err) = state.buffer.write_file(path) {
+    if let Err(err) = { state.buffer.borrow_mut().write_file(path) } {
         error_log_add(ctx, state, err);
         return false;
     }
@@ -1289,19 +1349,19 @@ fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
             ctx.inherit_focus();
             for encoding in encodings {
                 if ctx.list_item(
-                    encoding.as_str() == state.buffer.encoding(),
+                    encoding.as_str() == state.buffer.borrow().encoding(),
                     Overflow::Clip,
                     encoding.as_str(),
                 ) == ListSelection::Activated
                 {
                     state.wants_encoding_change = StateEncodingChange::None;
                     if reopen && state.path.is_some() {
-                        if state.buffer.is_dirty() {
+                        if state.buffer.borrow().is_dirty() {
                             draw_handle_save_impl(ctx, state, None);
                         }
                         draw_handle_load_impl(ctx, state, None, Some(encoding.as_str()));
                     } else {
-                        state.buffer.set_encoding(encoding.as_str());
+                        state.buffer.borrow_mut().set_encoding(encoding.as_str());
                         ctx.needs_rerender();
                     }
                 }
@@ -1316,7 +1376,7 @@ fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
 }
 
 fn draw_handle_wants_exit(ctx: &mut Context, state: &mut State) {
-    if !state.buffer.is_dirty() {
+    if !state.buffer.borrow().is_dirty() {
         state.exit = true;
         return;
     }
@@ -1495,13 +1555,28 @@ fn set_vt_modes() -> RestoreModes {
 }
 
 #[cold]
-fn write_terminal_title(output: &mut String, filename: &str) {
-    output.push_str("\x1b]0;edit");
-    if !filename.is_empty() {
-        output.push(' ');
-        output.push_str(&sanitize_control_chars(filename));
+fn write_terminal_title(output: &mut String, state: &mut State) {
+    output.push_str("\x1b]0;");
+    if !state.filename.is_empty() {
+        output.push_str(&sanitize_control_chars(&state.filename));
+        output.push_str(" - ");
     }
-    output.push('\x07');
+    output.push_str("edit\x1b\\");
+
+    state.wants_term_title_update = false;
+}
+
+#[cold]
+fn write_osc_clipboard(output: &mut String, state: &mut State, tui: &Tui) {
+    let clipboard = tui.get_clipboard();
+
+    if (1..128 * 1024).contains(&clipboard.len()) {
+        output.push_str("\x1b]52;c;");
+        output.push_str(&base64::encode(clipboard));
+        output.push_str("\x1b\\");
+    }
+
+    state.osc_clipboard_generation = tui.get_clipboard_generation();
 }
 
 struct RestoreModes;
@@ -1596,4 +1671,55 @@ fn query_color_palette(tui: &mut Tui, vt_parser: &mut vt::Parser) {
     }
 
     tui.setup_indexed_colors(indexed_colors);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_last_numbers() {
+        assert_eq!(parse_filename_goto("123"), None);
+        assert_eq!(parse_filename_goto("abc"), None);
+        assert_eq!(parse_filename_goto(":123"), None);
+        assert_eq!(
+            parse_filename_goto("abc:123"),
+            Some((3, Point { x: 0, y: 122 }))
+        );
+        assert_eq!(
+            parse_filename_goto("45:123"),
+            Some((2, Point { x: 0, y: 122 }))
+        );
+        assert_eq!(
+            parse_filename_goto(":45:123"),
+            Some((3, Point { x: 0, y: 122 }))
+        );
+        assert_eq!(
+            parse_filename_goto("abc:45:123"),
+            Some((3, Point { x: 122, y: 44 }))
+        );
+        assert_eq!(
+            parse_filename_goto("abc:def:123"),
+            Some((7, Point { x: 0, y: 122 }))
+        );
+        assert_eq!(
+            parse_filename_goto("1:2:3"),
+            Some((1, Point { x: 2, y: 1 }))
+        );
+        assert_eq!(parse_filename_goto("::3"), Some((1, Point { x: 0, y: 2 })));
+        assert_eq!(parse_filename_goto("1::3"), Some((2, Point { x: 0, y: 2 })));
+        assert_eq!(parse_filename_goto(""), None);
+        assert_eq!(parse_filename_goto(":"), None);
+        assert_eq!(parse_filename_goto("::"), None);
+        assert_eq!(parse_filename_goto("a:1"), Some((1, Point { x: 0, y: 0 })));
+        assert_eq!(parse_filename_goto("1:a"), None);
+        assert_eq!(
+            parse_filename_goto("file.txt:10"),
+            Some((8, Point { x: 0, y: 9 }))
+        );
+        assert_eq!(
+            parse_filename_goto("file.txt:10:5"),
+            Some((8, Point { x: 4, y: 9 }))
+        );
+    }
 }

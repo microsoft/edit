@@ -1,5 +1,5 @@
 use crate::helpers::{self, CoordType, Point};
-use crate::memchr::{memchr2, memrchr2};
+use crate::simd::{memchr2, memrchr2};
 use crate::ucd_gen::*;
 use crate::utf8::Utf8Chars;
 use std::ops::Range;
@@ -253,7 +253,8 @@ impl<'doc> MeasurementConfig<'doc> {
 
             // Tabs require special handling because they can have a variable width.
             if props_last_char == ucd_tab_properties() {
-                // `tab_size` is clamped to >= 1 at the start of this method.
+                // SAFETY: `tab_size` is clamped to >= 1 at the start of this method.
+                // This assert ensures that Rust doesn't insert panicking null checks.
                 unsafe { std::hint::assert_unchecked(tab_size >= 1) };
                 width = tab_size - (column % tab_size);
             }
@@ -433,7 +434,8 @@ impl<'doc> MeasurementConfig<'doc> {
 
                     // Tabs require special handling because they can have a variable width.
                     if props_last_char == ucd_tab_properties() {
-                        // `tab_size` is clamped to >= 1 at the start of this method.
+                        // SAFETY: `tab_size` is clamped to >= 1 at the start of this method.
+                        // This assert ensures that Rust doesn't insert panicking null checks.
                         unsafe { std::hint::assert_unchecked(tab_size >= 1) };
                         width = tab_size - (column % tab_size);
                     }
@@ -483,6 +485,7 @@ impl<'doc> MeasurementConfig<'doc> {
         }
     }
 
+    #[inline]
     fn calc_target_x(target: Point, pos_y: CoordType) -> CoordType {
         match pos_y.cmp(&target.y) {
             std::cmp::Ordering::Less => CoordType::MAX,

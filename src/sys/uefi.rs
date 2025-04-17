@@ -285,38 +285,32 @@ pub fn open_stdin_if_redirected() -> Option<File> {
     None
 }
 
-pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<*mut u8> {
-    let ptr = uefi::boot::allocate_pool(uefi::boot::MemoryType::BOOT_SERVICES_DATA, size).unwrap();
-    Ok(ptr.as_ptr())
+pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
+    Ok(uefi::boot::allocate_pool(uefi::boot::MemoryType::BOOT_SERVICES_DATA, size).unwrap())
 }
 
-pub unsafe fn virtual_release(base: *mut u8, _size: usize) {
-    if !base.is_null() {
-        unsafe {
-            let _ = uefi::boot::free_pool(NonNull::new_unchecked(base)).unwrap();
-            //dealloc(base, Layout::from_size_align(size, 8).unwrap_unchecked());
-        }
-    }
+pub unsafe fn virtual_release(base: NonNull<u8>, _size: usize) {
+    let _ = unsafe { uefi::boot::free_pool(base) }.unwrap();
 }
 
-pub unsafe fn virtual_commit(_base: *mut u8, _size: usize) -> apperr::Result<()> {
+pub unsafe fn virtual_commit(_base: NonNull<u8>, _size: usize) -> apperr::Result<()> {
     Ok({})
 }
 
 // It'd be nice to constrain T to std::marker::FnPtr, but that's unstable.
-pub fn get_proc_address<T>(_handle: *mut c_void, _name: &CStr) -> apperr::Result<T> {
+pub fn get_proc_address<T>(_handle: NonNull<c_void>, _name: &CStr) -> apperr::Result<T> {
     Err(apperr::Error::new_sys(
         efi::Status::NOT_FOUND.as_usize() as u32
     ))
 }
 
-pub fn load_libicuuc() -> apperr::Result<*mut c_void> {
+pub fn load_libicuuc() -> apperr::Result<NonNull<c_void>> {
     Err(apperr::Error::new_sys(
         efi::Status::NOT_FOUND.as_usize() as u32
     ))
 }
 
-pub fn load_libicui18n() -> apperr::Result<*mut c_void> {
+pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
     Err(apperr::Error::new_sys(
         efi::Status::NOT_FOUND.as_usize() as u32
     ))

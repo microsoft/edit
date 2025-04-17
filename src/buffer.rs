@@ -14,12 +14,12 @@
 //! There's no solution for the latter. However, there's a chance that the performance will still be sufficient.
 
 use crate::apperr;
+use crate::cell::SemiRefCell;
 use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::{self, COORD_TYPE_SAFE_MAX, CoordType, Point, Rect};
 use crate::icu;
-use crate::memchr::memchr2;
+use crate::simd::memchr2;
 use crate::sys;
-use crate::trust_me_bro;
 use crate::ucd::{self, Document};
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
@@ -29,9 +29,9 @@ use std::fs::File;
 use std::io::Read as _;
 use std::io::Write as _;
 use std::mem::{self, MaybeUninit};
-use std::ops::{Deref, DerefMut, Range};
+use std::ops::Range;
 use std::path::Path;
-use std::ptr;
+use std::ptr::{self, NonNull};
 use std::rc::Rc;
 use std::slice;
 use std::str;
@@ -121,35 +121,14 @@ pub struct RenderResult {
     pub visual_pos_x_max: CoordType,
 }
 
-#[derive(Clone)]
-pub struct RcTextBuffer(Rc<UnsafeCell<TextBuffer>>);
-
-impl RcTextBuffer {
-    pub fn new(small: bool) -> apperr::Result<Self> {
-        let tb = TextBuffer::new(small)?;
-        Ok(Self(Rc::new(UnsafeCell::new(tb))))
-    }
-}
-
-impl Deref for RcTextBuffer {
-    type Target = TextBuffer;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*self.0.get() }
-    }
-}
-
-impl DerefMut for RcTextBuffer {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.0.get() }
-    }
-}
+pub type TextBufferCell = SemiRefCell<TextBuffer>;
+pub type RcTextBuffer = Rc<TextBufferCell>;
 
 pub struct TextBuffer {
     buffer: GapBuffer,
 
-    undo_stack: LinkedList<HistoryEntry>,
-    redo_stack: LinkedList<HistoryEntry>,
+    undo_stack: LinkedList<SemiRefCell<HistoryEntry>>,
+    redo_stack: LinkedList<SemiRefCell<HistoryEntry>>,
     last_history_type: HistoryType,
     last_save_generation: u32,
 
@@ -185,6 +164,11 @@ pub struct TextBuffer {
 }
 
 impl TextBuffer {
+    pub fn new_rc(small: bool) -> apperr::Result<RcTextBuffer> {
+        let buffer = TextBuffer::new(small)?;
+        Ok(Rc::new(SemiRefCell::new(buffer)))
+    }
+
     pub fn new(small: bool) -> apperr::Result<Self> {
         Ok(Self {
             buffer: GapBuffer::new(small)?,
@@ -583,14 +567,6 @@ impl TextBuffer {
             let mut space_indentation_sizes = [0; 7];
 
             loop {
-                (offset, lines) = ucd::newlines_forward(chunk, offset, lines, lines + 1);
-                assert!(offset <= chunk.len());
-
-                // Check if the preceding line ended in CRLF.
-                if offset >= 2 && &chunk[offset - 2..offset] == b"\r\n" {
-                    crlf_count += 1;
-                }
-
                 // Check if the line starts with a tab.
                 if offset < chunk.len() && chunk[offset] == b'\t' {
                     tab_indentations += 1;
@@ -602,16 +578,41 @@ impl TextBuffer {
                         .take(9)
                         .take_while(|&&c| c == b' ')
                         .count();
+
                     // We'll also reject lines starting with 1 space, because that's too fickle as a heuristic.
                     if (2..=8).contains(&space_indentation) {
                         space_indentations += 1;
+
+                        // If we encounter an indentation depth of 6, it may either be a 6-space indentation,
+                        // two 3-space indentation or 3 2-space indentations. To make this work, we increment
+                        // all 3 possible histogram slots.
+                        //   2 -> 2
+                        //   3 -> 3
+                        //   4 -> 4 2
+                        //   5 -> 5
+                        //   6 -> 6 3 2
+                        //   7 -> 7
+                        //   8 -> 8 4 2
                         space_indentation_sizes[space_indentation - 2] += 1;
+                        if space_indentation & 4 != 0 {
+                            space_indentation_sizes[0] += 1;
+                        }
+                        if space_indentation == 6 || space_indentation == 8 {
+                            space_indentation_sizes[space_indentation / 2 - 2] += 1;
+                        }
                     }
                 }
 
-                // We'll limit our heuristics to the first 100 lines.
+                (offset, lines) = ucd::newlines_forward(chunk, offset, lines, lines + 1);
+
+                // Check if the preceding line ended in CRLF.
+                if offset >= 2 && &chunk[offset - 2..offset] == b"\r\n" {
+                    crlf_count += 1;
+                }
+
+                // We'll limit our heuristics to the first 1000 lines.
                 // That should hopefully be enough in practice.
-                if offset >= chunk.len() || lines >= 100 {
+                if offset >= chunk.len() || lines >= 1000 {
                     break;
                 }
             }
@@ -626,12 +627,12 @@ impl TextBuffer {
                 4
             } else {
                 // Otherwise, we'll assume the most common indentation depth.
-                // We can't use `max_by_key`, because that will return the largest index and we
-                // want the smallest (= prefer 2 over 4 over 8 if they're all equally common).
-                let mut max = 0;
+                // If there are conflicting indentation depths, we'll prefer the maximum, because in the loop
+                // above we incremented the histogram slot for 2-spaces when encountering 4-spaces and so on.
+                let mut max = 1;
                 let mut tab_size = 4;
                 for (i, &count) in space_indentation_sizes.iter().enumerate() {
-                    if count > max {
+                    if count >= max {
                         max = count;
                         tab_size = i as CoordType + 2;
                     }
@@ -639,7 +640,7 @@ impl TextBuffer {
                 tab_size
             };
 
-            // If the file has more than 100 lines, figure out how many are remaining.
+            // If the file has more than 1000 lines, figure out how many are remaining.
             if offset < chunk.len() {
                 (_, lines) = ucd::newlines_forward(chunk, offset, lines, CoordType::MAX);
             }
@@ -1265,7 +1266,7 @@ impl TextBuffer {
             // goto_line_start() is very fast for seeking across lines. But we don't need that
             // of course if the `y` didn't actually change. The only exception is if we're
             // moving leftward in the same line as there's no read_backward() for that.
-            if y < cursor.visual_pos.y || (y == cursor.visual_pos.y && x < cursor.visual_pos.x) {
+            if y != cursor.logical_pos.y || x < cursor.logical_pos.x {
                 cursor = self.goto_line_start(cursor, y);
             }
         } else {
@@ -1417,31 +1418,10 @@ impl TextBuffer {
         self.cursor = cursor;
     }
 
-    fn extract_raw(&self, mut beg: usize, mut end: usize, out: &mut Vec<u8>, mut out_off: usize) {
-        debug_assert!(beg <= end && end <= self.text_length());
-
-        end = end.min(self.text_length());
-        beg = beg.min(end);
-        out_off = out_off.min(out.len());
-
-        if beg >= end {
-            return;
-        }
-
-        out.reserve(end - beg);
-
-        while beg < end {
-            let chunk = self.read_forward(beg);
-            let chunk = &chunk[..chunk.len().min(end - beg)];
-            helpers::vec_insert_at(out, out_off, chunk);
-            beg += chunk.len();
-            out_off += chunk.len();
-        }
-    }
-
     /// Extracts a rectangular region of the text buffer and writes it to the framebuffer.
     /// The `destination` rect is framebuffer coordinates. The extracted region within this
     /// text buffer has the given `origin` and the same size as the `destination` rect.
+    #[inline(never)]
     pub fn render(
         &mut self,
         origin: Point,
@@ -1459,8 +1439,16 @@ impl TextBuffer {
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut line = String::new();
-        let mut cursor = self.cursor_for_rendering.unwrap_or(self.cursor);
         let mut visual_pos_x_max = 0;
+
+        // Pick the cursor closer to the `origin.y`.
+        let mut cursor = {
+            let a = self.cursor;
+            let b = self.cursor_for_rendering.unwrap_or_default();
+            let da = (a.visual_pos.y - origin.y).abs();
+            let db = (b.visual_pos.y - origin.y).abs();
+            if da < db { a } else { b }
+        };
 
         let [selection_beg, selection_end] = match self.selection {
             TextBufferSelection::None => [Point::MIN, Point::MIN],
@@ -1523,12 +1511,14 @@ impl TextBuffer {
                         number_width
                     );
                     // Blending in the background color will "dim" the indicator dots.
+                    let left = destination.left;
+                    let top = destination.top + y;
                     fb.blend_fg(
                         Rect {
-                            left: 0,
-                            top: y + 1,
-                            right: line_number_width as i32,
-                            bottom: y + 2,
+                            left,
+                            top,
+                            right: left + line_number_width as i32,
+                            bottom: top + 1,
                         },
                         fb.indexed(IndexedColor::Background),
                     );
@@ -1632,7 +1622,12 @@ impl TextBuffer {
             );
 
             // Draw the selection on this line, if any.
-            if selection_beg <= cursor_end.logical_pos && selection_end >= cursor_beg.logical_pos {
+            // FYI: `cursor_beg.visual_pos.y == visual_line` is necessary as the `visual_line`
+            // may be past the end of the document, and so it may not receive a highlight.
+            if cursor_beg.visual_pos.y == visual_line
+                && selection_beg <= cursor_end.logical_pos
+                && selection_end >= cursor_beg.logical_pos
+            {
                 // By default, we assume the entire line is selected.
                 let mut beg = 0;
                 let mut end = COORD_TYPE_SAFE_MAX;
@@ -1667,11 +1662,13 @@ impl TextBuffer {
                 };
 
                 let bg = if focused {
-                    fb.indexed_alpha(IndexedColor::BrightBlue, 0x5f)
+                    fb.indexed(IndexedColor::BrightBlue)
                 } else {
-                    fb.indexed_alpha(IndexedColor::BrightBlack, 0x3f)
+                    fb.indexed(IndexedColor::Blue)
                 };
+                let fg = fb.contrasted(bg);
                 fb.blend_bg(rect, bg);
+                fb.blend_fg(rect, fg);
             }
 
             cursor = cursor_end;
@@ -1926,7 +1923,7 @@ impl TextBuffer {
         };
 
         let mut out = Vec::new();
-        self.extract_raw(beg.offset, end.offset, &mut out, 0);
+        self.buffer.extract_raw(beg.offset, end.offset, &mut out, 0);
 
         if delete && !out.is_empty() {
             self.edit_begin(HistoryType::Delete, beg);
@@ -2007,7 +2004,7 @@ impl TextBuffer {
             }
 
             self.last_history_type = history_type;
-            self.undo_stack.push_back(HistoryEntry {
+            self.undo_stack.push_back(SemiRefCell::new(HistoryEntry {
                 cursor_before: cursor_before.logical_pos,
                 selection_before: self.selection,
                 stats_before: self.stats,
@@ -2015,7 +2012,7 @@ impl TextBuffer {
                 cursor: cursor.logical_pos,
                 deleted: Vec::new(),
                 added: Vec::new(),
-            });
+            }));
         }
 
         self.active_edit_off = cursor.offset;
@@ -2046,7 +2043,7 @@ impl TextBuffer {
 
         // Copy the written portion into the undo entry.
         {
-            let undo = self.get_last_undo_mut();
+            let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
             undo.added.extend_from_slice(text);
         }
 
@@ -2069,11 +2066,11 @@ impl TextBuffer {
     fn edit_delete(&mut self, to: ucd::UcdCursor) {
         debug_assert!(to.offset >= self.active_edit_off);
 
-        let undo = trust_me_bro::this_lifetime_change_is_totally_safe_mut(self.get_last_undo_mut());
         let logical_y_before = self.cursor.logical_pos.y;
         let off = self.active_edit_off;
         let mut out_off = usize::MAX;
 
+        let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
         if self.cursor.logical_pos < undo.cursor {
             out_off = 0; // Prepend the deleted portion.
             undo.cursor = self.cursor.logical_pos; // Note the start of the deleted portion.
@@ -2081,7 +2078,7 @@ impl TextBuffer {
 
         // Copy the deleted portion into the undo entry.
         let deleted = &mut undo.deleted;
-        self.extract_raw(off, to.offset, deleted, out_off);
+        self.buffer.extract_raw(off, to.offset, deleted, out_off);
 
         // Delete the portion from the buffer by enlarging the gap.
         let count = to.offset - off;
@@ -2100,23 +2097,18 @@ impl TextBuffer {
 
         #[cfg(debug_assertions)]
         {
-            let entry = self.get_last_undo_mut();
-            if entry.deleted.is_empty() && entry.added.is_empty() {
-                // This should never occur _if_ the calling code was written correctly.
-                debug_assert!(false);
-
-                self.undo_stack.pop_back();
-                if self.undo_stack.is_empty() {
-                    self.last_history_type = HistoryType::Other;
-                }
-
-                return;
-            }
+            let entry = self.undo_stack.back_mut().unwrap().borrow_mut();
+            debug_assert!(!entry.deleted.is_empty() || !entry.added.is_empty());
         }
 
         if let Some(info) = self.active_edit_line_info.take() {
-            let entry = self.get_last_undo_mut();
-            let deleted_count = entry.deleted.len();
+            let deleted_count = self
+                .undo_stack
+                .back_mut()
+                .unwrap()
+                .borrow_mut()
+                .deleted
+                .len();
             let target = self.cursor.logical_pos;
 
             // From our safe position we can measure the actual visual position of the cursor.
@@ -2157,44 +2149,40 @@ impl TextBuffer {
     }
 
     pub fn undo(&mut self) {
-        let undo_stack =
-            trust_me_bro::this_lifetime_change_is_totally_safe_mut(&mut self.undo_stack);
-        let redo_stack =
-            trust_me_bro::this_lifetime_change_is_totally_safe_mut(&mut self.redo_stack);
-        self.undo_redo(undo_stack, redo_stack);
+        self.undo_redo(true);
     }
 
     pub fn redo(&mut self) {
-        let redo_stack =
-            trust_me_bro::this_lifetime_change_is_totally_safe_mut(&mut self.redo_stack);
-        let undo_stack =
-            trust_me_bro::this_lifetime_change_is_totally_safe_mut(&mut self.undo_stack);
-        self.undo_redo(redo_stack, undo_stack);
+        self.undo_redo(false);
     }
 
-    fn get_last_undo_mut(&mut self) -> &mut HistoryEntry {
-        self.undo_stack.back_mut().expect("undo_stack is empty")
-    }
+    fn undo_redo(&mut self, undo: bool) {
+        {
+            let (from, to) = if undo {
+                (&mut self.undo_stack, &mut self.redo_stack)
+            } else {
+                (&mut self.redo_stack, &mut self.undo_stack)
+            };
 
-    fn undo_redo(
-        &mut self,
-        from: &mut LinkedList<HistoryEntry>,
-        to: &mut LinkedList<HistoryEntry>,
-    ) {
-        let len = from.len();
-        if len == 0 {
-            return;
+            let len = from.len();
+            if len == 0 {
+                return;
+            }
+
+            to.append(&mut from.split_off(len - 1));
         }
 
-        let mut tail = from.split_off(len - 1);
-        to.append(&mut tail);
-        let change = to.back_mut().unwrap();
-
-        // Undo: Whatever was deleted is now added and vice versa.
-        mem::swap(&mut change.deleted, &mut change.added);
+        let change = {
+            let to = if undo {
+                &self.redo_stack
+            } else {
+                &self.undo_stack
+            };
+            to.back().unwrap()
+        };
 
         // Move to the point where the modification took place.
-        let cursor = self.cursor_move_to_logical_internal(self.cursor, change.cursor);
+        let cursor = self.cursor_move_to_logical_internal(self.cursor, change.borrow().cursor);
 
         let safe_cursor = if self.word_wrap_column > 0 {
             // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
@@ -2204,8 +2192,14 @@ impl TextBuffer {
             cursor
         };
 
-        // Delete the inserted portion and reinsert the deleted portion.
         {
+            let mut change = change.borrow_mut();
+            let change = &mut *change;
+
+            // Undo: Whatever was deleted is now added and vice versa.
+            mem::swap(&mut change.deleted, &mut change.added);
+
+            // Delete the inserted portion and reinsert the deleted portion.
             let deleted = change.deleted.len();
             let added = &change.added[..];
             let gap = self
@@ -2213,25 +2207,26 @@ impl TextBuffer {
                 .allocate_gap(cursor.offset, added.len(), deleted);
             gap.copy_from_slice(added);
             self.buffer.commit_gap(added.len());
-        }
 
-        // Restore the previous line statistics.
-        mem::swap(&mut self.stats, &mut change.stats_before);
+            // Restore the previous line statistics.
+            mem::swap(&mut self.stats, &mut change.stats_before);
 
-        // Restore the previous selection.
-        mem::swap(&mut self.selection, &mut change.selection_before);
+            // Restore the previous selection.
+            mem::swap(&mut self.selection, &mut change.selection_before);
 
-        // Pretend as if the buffer was never modified.
-        mem::swap(&mut self.buffer.generation, &mut change.generation_before);
+            // Pretend as if the buffer was never modified.
+            mem::swap(&mut self.buffer.generation, &mut change.generation_before);
 
-        // Restore the previous cursor.
-        let cursor_before = self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
-        change.cursor_before = self.cursor.logical_pos;
-        // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
-        self.cursor = cursor_before;
+            // Restore the previous cursor.
+            let cursor_before =
+                self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
+            change.cursor_before = self.cursor.logical_pos;
+            // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
+            self.cursor = cursor_before;
 
-        if self.undo_stack.is_empty() {
-            self.last_history_type = HistoryType::Other;
+            if self.undo_stack.is_empty() {
+                self.last_history_type = HistoryType::Other;
+            }
         }
 
         // Also takes care of clearing `cursor_for_rendering`.
@@ -2248,7 +2243,7 @@ impl TextBuffer {
 }
 
 enum BackingBuffer {
-    VirtualMemory(*mut u8, usize),
+    VirtualMemory(NonNull<u8>, usize),
     Vec(Vec<u8>),
 }
 
@@ -2268,7 +2263,7 @@ impl Drop for BackingBuffer {
 /// This variant is optimized for large buffers and uses virtual memory.
 pub struct GapBuffer {
     /// Pointer to the buffer.
-    text: *mut u8,
+    text: NonNull<u8>,
     /// Maximum size of the buffer, including gap.
     reserve: usize,
     /// Size of the buffer, including gap.
@@ -2294,9 +2289,8 @@ impl GapBuffer {
         let text;
 
         if small {
-            let mut v = Vec::new();
-            text = v.as_mut_ptr();
-            buffer = BackingBuffer::Vec(v);
+            text = NonNull::dangling();
+            buffer = BackingBuffer::Vec(Vec::new());
         } else {
             text = unsafe { sys::virtual_reserve(RESERVE)? };
             buffer = BackingBuffer::VirtualMemory(text, RESERVE);
@@ -2353,10 +2347,12 @@ impl GapBuffer {
                 let move_dst = if left { off + gap_len } else { gap_off };
                 let move_len = if left { gap_off - off } else { off - gap_off };
 
-                unsafe { ptr::copy(data.add(move_src), data.add(move_dst), move_len) };
+                unsafe { data.add(move_src).copy_to(data.add(move_dst), move_len) };
 
                 if cfg!(debug_assertions) {
-                    unsafe { slice::from_raw_parts_mut(data.add(off), gap_len).fill(0xCD) };
+                    unsafe {
+                        slice::from_raw_parts_mut(data.add(off).as_ptr(), gap_len).fill(0xCD)
+                    };
                 }
             }
 
@@ -2366,7 +2362,8 @@ impl GapBuffer {
         // Delete the text
         if cfg!(debug_assertions) {
             unsafe {
-                slice::from_raw_parts_mut(self.text.add(off + self.gap_len), delete).fill(0xCD)
+                slice::from_raw_parts_mut(self.text.add(off + self.gap_len).as_ptr(), delete)
+                    .fill(0xCD)
             };
         }
         self.gap_len += delete;
@@ -2400,7 +2397,7 @@ impl GapBuffer {
                     },
                     BackingBuffer::Vec(v) => {
                         v.resize(bytes_new, 0);
-                        self.text = v.as_mut_ptr();
+                        self.text = unsafe { NonNull::new_unchecked(v.as_mut_ptr()) };
                     }
                 }
 
@@ -2410,16 +2407,19 @@ impl GapBuffer {
             let gap_beg = unsafe { self.text.add(off) };
             unsafe {
                 ptr::copy(
-                    gap_beg.add(gap_len_old),
-                    gap_beg.add(gap_len_new),
+                    gap_beg.add(gap_len_old).as_ptr(),
+                    gap_beg.add(gap_len_new).as_ptr(),
                     self.text_length - off,
                 )
             };
 
             if cfg!(debug_assertions) {
                 unsafe {
-                    slice::from_raw_parts_mut(gap_beg.add(gap_len_old), gap_len_new - gap_len_old)
-                        .fill(0xCD)
+                    slice::from_raw_parts_mut(
+                        gap_beg.add(gap_len_old).as_ptr(),
+                        gap_len_new - gap_len_old,
+                    )
+                    .fill(0xCD)
                 };
             }
 
@@ -2427,7 +2427,7 @@ impl GapBuffer {
         }
 
         self.generation = self.generation.wrapping_add(1);
-        unsafe { slice::from_raw_parts_mut(self.text.add(off), len) }
+        unsafe { slice::from_raw_parts_mut(self.text.add(off).as_ptr(), len) }
     }
 
     fn commit_gap(&mut self, len: usize) {
@@ -2442,6 +2442,28 @@ impl GapBuffer {
         self.gap_len += self.text_length;
         self.generation = self.generation.wrapping_add(1);
         self.text_length = 0;
+    }
+
+    fn extract_raw(&self, mut beg: usize, mut end: usize, out: &mut Vec<u8>, mut out_off: usize) {
+        debug_assert!(beg <= end && end <= self.text_length);
+
+        end = end.min(self.text_length);
+        beg = beg.min(end);
+        out_off = out_off.min(out.len());
+
+        if beg >= end {
+            return;
+        }
+
+        out.reserve(end - beg);
+
+        while beg < end {
+            let chunk = self.read_forward(beg);
+            let chunk = &chunk[..chunk.len().min(end - beg)];
+            helpers::vec_insert_at(out, out_off, chunk);
+            beg += chunk.len();
+            out_off += chunk.len();
+        }
     }
 
     /// Replaces the entire buffer contents with the given `text`.
@@ -2512,7 +2534,7 @@ impl Document for GapBuffer {
             len = self.text_length - off;
         }
 
-        unsafe { slice::from_raw_parts(self.text.add(beg), len) }
+        unsafe { slice::from_raw_parts(self.text.add(beg).as_ptr(), len) }
     }
 
     fn read_backward(&self, off: usize) -> &[u8] {
@@ -2532,7 +2554,7 @@ impl Document for GapBuffer {
             len = off - self.gap_off;
         }
 
-        unsafe { slice::from_raw_parts(self.text.add(beg), len) }
+        unsafe { slice::from_raw_parts(self.text.add(beg).as_ptr(), len) }
     }
 }
 

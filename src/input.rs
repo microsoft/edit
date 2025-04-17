@@ -272,7 +272,7 @@ pub struct Stream<'parser, 'vt, 'input> {
     stream: vt::Stream<'vt, 'input>,
 }
 
-impl<'parser, 'vt, 'input> Stream<'parser, 'vt, 'input> {
+impl<'input> Stream<'_, '_, 'input> {
     /// Parses the next input action from the previously given input.
     ///
     /// Can't implement Iterator, because this is a "lending iterator".

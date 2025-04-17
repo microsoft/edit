@@ -346,6 +346,18 @@ impl DisplayableCString {
     }
 }
 
+/// Surprisingly, there's no way in Rust to do a `ptr::eq` on `Option<&T>`.
+/// Uses `unsafe` so that the debug performance isn't too bad.
+#[inline(always)]
+#[allow(clippy::ptr_eq)]
+pub fn opt_ptr_eq<T>(a: Option<&T>, b: Option<&T>) -> bool {
+    unsafe {
+        let a: *const T = mem::transmute(a);
+        let b: *const T = mem::transmute(b);
+        a == b
+    }
+}
+
 /// Creates a `&str` from a pointer and a length.
 /// Exists, because `std::str::from_raw_parts` is unstable, par for the course.
 ///
