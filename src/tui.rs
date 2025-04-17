@@ -2140,7 +2140,7 @@ impl<'a> Context<'a, '_> {
                 vk::Z => match modifiers {
                     kbmod::CTRL => tb.undo(),
                     kbmod::CTRL_SHIFT => tb.redo(),
-                    kbmod::ALT => tb.toggle_word_wrap(),
+                    kbmod::ALT => tb.set_word_wrap(tb.is_word_wrap_enabled()),
                     _ => return false,
                 },
                 _ => return false,
@@ -2458,7 +2458,7 @@ impl<'a> Context<'a, '_> {
 
     pub fn menubar_menu_begin(&mut self, text: &str, accelerator: char) -> bool {
         self.next_block_id_mixin(self.tree.current_node.borrow().child_count as u64);
-        self.menubar_label(text, accelerator);
+        self.menubar_label(text, accelerator, None);
         self.attr_focusable();
         self.attr_padding(Rect::two(0, 1));
 
@@ -2485,7 +2485,22 @@ impl<'a> Context<'a, '_> {
         false
     }
 
-    pub fn menubar_menu_item(&mut self, text: &str, accelerator: char, shortcut: InputKey) -> bool {
+    pub fn menubar_menu_button(
+        &mut self,
+        text: &str,
+        accelerator: char,
+        shortcut: InputKey,
+    ) -> bool {
+        self.menubar_menu_checkbox(text, accelerator, shortcut, false)
+    }
+
+    pub fn menubar_menu_checkbox(
+        &mut self,
+        text: &str,
+        accelerator: char,
+        shortcut: InputKey,
+        checked: bool,
+    ) -> bool {
         self.table_next_row();
         self.attr_focusable();
         if self.is_focused() {
@@ -2496,7 +2511,7 @@ impl<'a> Context<'a, '_> {
         let clicked =
             self.button_activated() || self.consume_shortcut(InputKey::new(accelerator as u32));
 
-        self.menubar_label(text, accelerator);
+        self.menubar_label(text, accelerator, Some(checked));
         self.menubar_shortcut(shortcut);
 
         if clicked {
@@ -2573,7 +2588,7 @@ impl<'a> Context<'a, '_> {
         self.set_input_consumed();
     }
 
-    fn menubar_label(&mut self, text: &str, accelerator: char) {
+    fn menubar_label(&mut self, text: &str, accelerator: char, checked: Option<bool>) {
         if !accelerator.is_ascii_uppercase() {
             self.label("label", Overflow::Clip, text);
             return;
@@ -2594,6 +2609,9 @@ impl<'a> Context<'a, '_> {
         }
 
         self.styled_label_begin("label", Overflow::Clip);
+        if let Some(checked) = checked {
+            self.styled_label_add_text(if checked { "▣ " } else { "  " });
+        }
 
         if off < text.len() {
             // Highlight the accelerator in red.
@@ -2614,7 +2632,12 @@ impl<'a> Context<'a, '_> {
         }
 
         self.styled_label_end();
-        self.attr_padding(Rect::two(0, 1));
+        self.attr_padding(Rect {
+            left: 0,
+            top: 0,
+            right: 2,
+            bottom: 0,
+        });
     }
 
     fn menubar_shortcut(&mut self, shortcut: InputKey) {
@@ -2633,11 +2656,16 @@ impl<'a> Context<'a, '_> {
             shortcut_text.push(shortcut_letter);
 
             self.label("shortcut", Overflow::Clip, &shortcut_text);
-            self.attr_padding(Rect::two(0, 1));
         } else {
             self.block_begin("shortcut");
             self.block_end();
         }
+        self.attr_padding(Rect {
+            left: 0,
+            top: 0,
+            right: 2,
+            bottom: 0,
+        });
     }
 
     fn arena(&self) -> &'a Arena {

@@ -354,10 +354,12 @@ impl TextBuffer {
 
     // NOTE: It's expected that the tui code calls `set_width()` sometime after this.
     // This will then trigger the actual recalculation of the cursor position.
-    pub fn toggle_word_wrap(&mut self) {
-        self.word_wrap_enabled = !self.word_wrap_enabled;
-        self.width = 0; // Force a reflow.
-        self.make_cursor_visible();
+    pub fn set_word_wrap(&mut self, enabled: bool) {
+        if self.word_wrap_enabled != enabled {
+            self.word_wrap_enabled = enabled;
+            self.width = 0; // Force a reflow.
+            self.make_cursor_visible();
+        }
     }
 
     pub fn set_width(&mut self, width: CoordType) -> bool {
