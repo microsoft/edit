@@ -2467,8 +2467,8 @@ impl<'a> Context<'a, '_> {
         }
 
         if self.contains_focus() {
-            self.attr_background_rgba(self.indexed(IndexedColor::Green));
-            self.attr_foreground_rgba(self.contrasted(self.indexed(IndexedColor::Green)));
+            self.attr_background_rgba(self.tui.floater_default_bg);
+            self.attr_foreground_rgba(self.tui.floater_default_fg);
 
             self.table_begin("flyout");
             self.attr_float(FloatSpec {

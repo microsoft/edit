@@ -95,6 +95,7 @@ fn memset_dispatch(beg: *mut u8, end: *mut u8, val: u64) {
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "sse2")]
 unsafe fn memset_sse2(mut beg: *mut u8, end: *mut u8, val: u64) {
     unsafe {
         use std::arch::x86_64::*;
