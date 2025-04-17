@@ -446,7 +446,7 @@ impl Tui {
         for child in self.prev_tree.iterate_roots() {
             self.render_node(child);
         }
-        self.framebuffer.render_sys()
+        self.framebuffer.render_dop()
     }
 
     /// Recursively renders each node and its children.

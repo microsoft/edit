@@ -349,3 +349,40 @@ pub fn apperr_is_not_found(err: apperr::Error) -> bool {
         _ => false,
     }
 }
+
+pub enum DrawingOp<'a> {
+    Text(&'a str),
+    Color(u32, u32),
+    MoveTo(usize, usize),
+    Cursor(bool),
+}
+
+pub fn render(ops: &[DrawingOp]) {
+    // TODO - these two are hardcoded for UEFI but we
+    // need to know the palette to figure that out
+    let mut last_bg: u32 = 0xff000000;
+    let mut last_fg: u32 = 0xffbebebe;
+    for op in ops {
+        match op {
+            DrawingOp::Text(s) => {
+                write_stdout(s);
+            }
+            DrawingOp::Color(f, b) => {
+                let mut changed = false;
+                if *f != last_fg {
+                    last_fg = *f;
+                    changed = true;
+                }
+                if *b != last_bg {
+                    last_bg = *b;
+                    changed = true;
+                }
+                if changed {
+                    set_color(last_fg, last_bg);
+                }
+            }
+            DrawingOp::MoveTo(x, y) => move_cursor(*x, *y),
+            DrawingOp::Cursor(v) => set_cursor(*v),
+        }
+    }
+}
