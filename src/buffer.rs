@@ -890,13 +890,41 @@ impl TextBuffer {
     }
 
     pub fn select_word(&mut self) {
-        // TODO: Something is wrong about this. Try the string "</sup> in the"
-        // and double click on the "i" (= the cursor is in front of the "i").
-        // It'll select "sup> in" but should only select 1 word of course.
-        // Not sure what the issue is, but I think this approach is wrong in general.
         let Range { start, end } = ucd::word_select(&self.buffer, self.cursor.offset);
         let beg = self.cursor_move_to_offset_internal(self.cursor, start);
         let end = self.cursor_move_to_offset_internal(beg, end);
+        self.set_cursor_for_selection(end);
+        self.set_selection(TextBufferSelection::Done {
+            beg: beg.logical_pos,
+            end: end.logical_pos,
+        });
+    }
+
+    pub fn select_line(&mut self) {
+        let beg = self.cursor_move_to_logical_internal(
+            self.cursor,
+            Point {
+                x: 0,
+                y: self.cursor.logical_pos.y,
+            },
+        );
+        let end = self.cursor_move_to_logical_internal(
+            beg,
+            Point {
+                x: 0,
+                y: self.cursor.logical_pos.y + 1,
+            },
+        );
+        self.set_cursor_for_selection(end);
+        self.set_selection(TextBufferSelection::Done {
+            beg: beg.logical_pos,
+            end: end.logical_pos,
+        });
+    }
+
+    pub fn select_all(&mut self) {
+        let beg = ucd::UcdCursor::default();
+        let end = self.cursor_move_to_logical_internal(beg, Point::MAX);
         self.set_cursor_for_selection(end);
         self.set_selection(TextBufferSelection::Done {
             beg: beg.logical_pos,
@@ -908,16 +936,6 @@ impl TextBuffer {
         if let TextBufferSelection::Active { beg, end } = self.selection {
             self.set_selection(TextBufferSelection::Done { beg, end });
         }
-    }
-
-    pub fn select_all(&mut self) {
-        let beg = ucd::UcdCursor::default();
-        let end = self.cursor_move_to_logical_internal(beg, Point::MAX);
-        self.set_cursor_for_selection(end);
-        self.set_selection(TextBufferSelection::Done {
-            beg: beg.logical_pos,
-            end: end.logical_pos,
-        });
     }
 
     pub fn clear_selection(&mut self) -> bool {

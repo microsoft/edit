@@ -49,12 +49,13 @@ pub struct Tui {
     /// Between mouse down and up, the position where the mouse was pressed.
     /// Otherwise, this contains Point::MIN.
     mouse_down_position: Point,
-    /// Last known mouse state.
+    left_mouse_down_target: u64,
+    mouse_up_timestamp: std::time::Instant,
     mouse_state: InputMouseState,
     mouse_is_drag: bool,
-    last_click: std::time::Instant,
-    last_click_target: u64,
-    last_click_position: Point,
+    mouse_click_counter: CoordType,
+    first_click_position: Point,
+    first_click_target: u64,
 
     clipboard: Vec<u8>,
     clipboard_generation: u32,
@@ -97,11 +98,13 @@ impl Tui {
             },
             mouse_position: Point::MIN,
             mouse_down_position: Point::MIN,
+            left_mouse_down_target: 0,
+            mouse_up_timestamp: std::time::Instant::now(),
             mouse_state: InputMouseState::None,
             mouse_is_drag: false,
-            last_click: std::time::Instant::now(),
-            last_click_target: 0,
-            last_click_position: Point::MIN,
+            mouse_click_counter: 0,
+            first_click_position: Point::MIN,
+            first_click_target: 0,
 
             clipboard: Vec::new(),
             clipboard_generation: 0,
@@ -192,6 +195,7 @@ impl Tui {
         // Same for Scroll events.
         if self.mouse_state > InputMouseState::Right {
             self.mouse_down_position = Point::MIN;
+            self.left_mouse_down_target = 0;
             self.mouse_state = InputMouseState::None;
             self.mouse_is_drag = false;
         }
@@ -209,8 +213,7 @@ impl Tui {
         let mut input_text = None;
         let mut input_keyboard = None;
         let mut input_mouse_modifiers = kbmod::NONE;
-        let mut input_mouse_is_click = false;
-        let mut input_mouse_is_double_click = false;
+        let mut input_mouse_click = 0;
         let mut input_scroll_delta = Point { x: 0, y: 0 };
         let input_consumed = self.needs_settling();
 
@@ -244,14 +247,13 @@ impl Tui {
                     && next_state != InputMouseState::None;
                 let mouse_up = self.mouse_state != InputMouseState::None
                     && next_state == InputMouseState::None;
-                let is_click = mouse_up && next_position == self.mouse_position;
                 let is_drag = self.mouse_state == InputMouseState::Left
                     && next_state == InputMouseState::Left
                     && next_position != self.mouse_position;
 
                 let mut hovered_node = None; // Needed for `mouse_down`
                 let mut focused_node = None; // Needed for `mouse_down` and `is_click`
-                if mouse_down || is_click {
+                if mouse_down || mouse_up {
                     for root in self.prev_tree.iterate_roots() {
                         Tree::visit_all(root, root, 0, true, |_, node| {
                             let n = node.borrow();
@@ -270,29 +272,59 @@ impl Tui {
 
                 if mouse_down {
                     // Transition from no mouse input to some mouse input --> Record the mouse down position.
-                    self.mouse_down_position = next_position; // Gets reset at the start of this function.
                     Self::build_node_path(hovered_node, &mut self.mouse_down_node_path);
 
                     // On left-mouse-down we change focus.
+                    let mut target = 0;
                     if next_state == InputMouseState::Left {
+                        target = focused_node.map_or(0, |n| n.borrow().id);
                         Self::build_node_path(focused_node, &mut self.focused_node_path);
                         self.needs_more_settling(); // See `needs_more_settling()`.
                     }
+
+                    // Double-/Triple-/Etc.-clicks are triggered on mouse-down,
+                    // unlike the first initial click, which is triggered on mouse-up.
+                    if self.mouse_click_counter != 0 {
+                        if self.first_click_target != target
+                            || self.first_click_position != next_position
+                            || (now - self.mouse_up_timestamp)
+                                > std::time::Duration::from_millis(500)
+                        {
+                            // If the cursor moved / the focus changed in between, or if the user did a slow click,
+                            // we reset the click counter. On mouse-up it'll transition to a regular click.
+                            self.mouse_click_counter = 0;
+                            self.first_click_position = Point::MIN;
+                            self.first_click_target = 0;
+                        } else {
+                            self.mouse_click_counter += 1;
+                            input_mouse_click = self.mouse_click_counter;
+                        };
+                    }
+
+                    // Gets reset at the start of this function.
+                    self.left_mouse_down_target = target;
+                    self.mouse_down_position = next_position;
                 } else if mouse_up {
                     // Transition from some mouse input to no mouse input --> The mouse button was released.
                     next_state = InputMouseState::Release;
-                }
 
-                if is_click {
-                    let click_target = focused_node.map_or(0, |n| n.borrow().id);
-                    input_mouse_is_click = true;
-                    input_mouse_is_double_click = (now - self.last_click)
-                        <= std::time::Duration::from_millis(500)
-                        && self.last_click_target == click_target
-                        && self.last_click_position == next_position;
-                    self.last_click = now;
-                    self.last_click_target = click_target;
-                    self.last_click_position = next_position;
+                    let target = focused_node.map_or(0, |n| n.borrow().id);
+
+                    if self.left_mouse_down_target == 0 || self.left_mouse_down_target != target {
+                        // If `left_mouse_down_target == 0`, then it wasn't a left-click, in which case
+                        // the target gets reset. Same, if the focus changed in between any clicks.
+                        self.mouse_click_counter = 0;
+                        self.first_click_position = Point::MIN;
+                        self.first_click_target = 0;
+                    } else if self.mouse_click_counter == 0 {
+                        // No focus change, and no previous clicks? This is an initial, regular click.
+                        self.mouse_click_counter = 1;
+                        self.first_click_position = self.mouse_down_position;
+                        self.first_click_target = target;
+                        input_mouse_click = 1;
+                    }
+
+                    self.mouse_up_timestamp = now;
                 } else if is_drag {
                     self.mouse_is_drag = true;
                 }
@@ -321,8 +353,7 @@ impl Tui {
             input_text,
             input_keyboard,
             input_mouse_modifiers,
-            input_mouse_is_click,
-            input_mouse_is_double_click,
+            input_mouse_click,
             input_scroll_delta,
             input_consumed,
 
@@ -1042,8 +1073,7 @@ pub struct Context<'a, 'input> {
     /// Current keyboard input, if any.
     input_keyboard: Option<InputKey>,
     input_mouse_modifiers: InputKeyMod,
-    input_mouse_is_click: bool,
-    input_mouse_is_double_click: bool,
+    input_mouse_click: CoordType,
     /// By how much the mouse wheel was scrolled since the last frame.
     input_scroll_delta: Point,
     input_consumed: bool,
@@ -1539,7 +1569,7 @@ impl<'a> Context<'a, '_> {
 
     fn button_activated(&mut self) -> bool {
         if !self.input_consumed
-            && ((self.input_mouse_is_click && self.contains_mouse_down())
+            && ((self.input_mouse_click != 0 && self.contains_mouse_down())
                 || self.input_keyboard == Some(vk::RETURN)
                 || self.input_keyboard == Some(vk::SPACE))
             && self.is_focused()
@@ -1728,9 +1758,7 @@ impl<'a> Context<'a, '_> {
                 };
 
                 if text_rect.contains(self.tui.mouse_down_position) {
-                    if self.input_mouse_is_double_click {
-                        tb.select_word();
-                    } else if self.tui.mouse_is_drag {
+                    if self.tui.mouse_is_drag {
                         tb.selection_update_visual(pos);
                         tc.preferred_column = tb.get_cursor_visual_pos().x;
 
@@ -1770,21 +1798,27 @@ impl<'a> Context<'a, '_> {
                             }
                         }
                     } else {
-                        match self.tui.mouse_state {
-                            InputMouseState::Left => {
-                                if self.input_mouse_modifiers.contains(kbmod::SHIFT) {
-                                    // TODO: Untested because Windows Terminal surprisingly doesn't support Shift+Click.
-                                    tb.selection_update_visual(pos);
-                                } else {
-                                    tb.cursor_move_to_visual(pos);
+                        match self.input_mouse_click {
+                            5.. => {}
+                            4 => tb.select_all(),
+                            3 => tb.select_line(),
+                            2 => tb.select_word(),
+                            _ => match self.tui.mouse_state {
+                                InputMouseState::Left => {
+                                    if self.input_mouse_modifiers.contains(kbmod::SHIFT) {
+                                        // TODO: Untested because Windows Terminal surprisingly doesn't support Shift+Click.
+                                        tb.selection_update_visual(pos);
+                                    } else {
+                                        tb.cursor_move_to_visual(pos);
+                                    }
+                                    tc.preferred_column = tb.get_cursor_visual_pos().x;
+                                    make_cursor_visible = true;
                                 }
-                                tc.preferred_column = tb.get_cursor_visual_pos().x;
-                                make_cursor_visible = true;
-                            }
-                            InputMouseState::Release => {
-                                tb.selection_finalize();
-                            }
-                            _ => return false,
+                                InputMouseState::Release => {
+                                    tb.selection_finalize();
+                                }
+                                _ => return false,
+                            },
                         }
                     }
                 } else if track_rect.contains(self.tui.mouse_down_position) {
@@ -2333,7 +2367,7 @@ impl<'a> Context<'a, '_> {
 
         // Clicking an item activates it
         let clicked =
-            !self.input_consumed && (self.input_mouse_is_double_click && self.was_mouse_down());
+            !self.input_consumed && (self.input_mouse_click == 2 && self.was_mouse_down());
         // Pressing Enter on a selected item activates it as well
         let entered = focused
             && selected_before

@@ -104,18 +104,12 @@ unsafe fn memset_sse2(mut beg: *mut u8, end: *mut u8, val: u64) {
         if remaining >= 16 {
             let fill = _mm_set1_epi64x(val as i64);
 
-            if remaining >= 32 {
-                loop {
-                    // Compiles to a single `stp` instruction.
-                    _mm_storeu_si128(beg as *mut _, fill);
-                    _mm_storeu_si128(beg.add(16) as *mut _, fill);
+            while remaining >= 32 {
+                _mm_storeu_si128(beg as *mut _, fill);
+                _mm_storeu_si128(beg.add(16) as *mut _, fill);
 
-                    beg = beg.add(32);
-                    remaining -= 32;
-                    if remaining < 32 {
-                        break;
-                    }
-                }
+                beg = beg.add(32);
+                remaining -= 32;
             }
 
             if remaining >= 16 {
@@ -200,7 +194,7 @@ fn memset_avx2(mut beg: *mut u8, end: *mut u8, val: u64) {
             (beg as *mut u32).write_unaligned(val as u32);
             (end.sub(4) as *mut u32).write_unaligned(val as u32);
         } else if remaining >= 2 {
-            // 2-5 bytes
+            // 2-3 bytes
             (beg as *mut u16).write_unaligned(val as u16);
             (end.sub(2) as *mut u16).write_unaligned(val as u16);
         } else if remaining >= 1 {

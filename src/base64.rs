@@ -18,8 +18,8 @@ pub fn encode(input: &[u8]) -> String {
                 let in2 = inp.add(2).read() as usize;
 
                 (*out.add(0)).write(ENCODE_TABLE[in0 >> 2]);
-                (*out.add(1)).write(ENCODE_TABLE[((in0 & 0x03) << 4) | (in1 >> 4)]);
-                (*out.add(2)).write(ENCODE_TABLE[((in1 & 0x0f) << 2) | (in2 >> 6)]);
+                (*out.add(1)).write(ENCODE_TABLE[(in0 << 4 | in1 >> 4) & 0x3f]);
+                (*out.add(2)).write(ENCODE_TABLE[(in1 << 2 | in2 >> 6) & 0x3f]);
                 (*out.add(3)).write(ENCODE_TABLE[in2 & 0x3f]);
 
                 inp = inp.add(3);
@@ -38,14 +38,14 @@ pub fn encode(input: &[u8]) -> String {
             }
             if remaining >= 2 {
                 in1 = inp.add(1).read() as usize;
-                (*out.add(2)).write(ENCODE_TABLE[(in1 & 0x0f) << 2 | in2 >> 6]);
+                (*out.add(2)).write(ENCODE_TABLE[(in1 << 2 | in2 >> 6) & 0x3f]);
             }
             let in0 = inp.add(0).read() as usize;
-            (*out.add(1)).write(ENCODE_TABLE[(in0 & 0x03) << 4 | in1 >> 4]);
+            (*out.add(1)).write(ENCODE_TABLE[(in0 << 4 | in1 >> 4) & 0x3f]);
             (*out.add(0)).write(ENCODE_TABLE[in0 >> 2]);
         }
 
-        String::from_utf8_unchecked(buf.assume_init().to_vec())
+        String::from_utf8_unchecked(buf.assume_init().into_vec())
     }
 }
 
