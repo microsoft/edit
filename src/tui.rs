@@ -52,6 +52,9 @@ pub struct Tui {
     /// Last known mouse state.
     mouse_state: InputMouseState,
     mouse_is_drag: bool,
+    last_click: std::time::Instant,
+    last_click_target: u64,
+    last_click_position: Point,
 
     clipboard: Vec<u8>,
     clipboard_generation: u32,
@@ -73,8 +76,8 @@ pub struct Tui {
 
 impl Tui {
     pub fn new() -> apperr::Result<Self> {
-        let arena_prev = Arena::new(128 * 1024 * 1024)?;
-        let arena_next = Arena::new(128 * 1024 * 1024)?;
+        let arena_prev = Arena::new(16 * 1024 * 1024)?;
+        let arena_next = Arena::new(16 * 1024 * 1024)?;
         // SAFETY: Since `prev_tree` refers to `arena_prev`/`arena_next`, from its POV the lifetime
         // is `'static`, requiring us to use `transmute` to circumvent the borrow checker.
         let prev_tree = Tree::new(unsafe { mem::transmute::<&Arena, &Arena>(&arena_next) });
@@ -96,6 +99,9 @@ impl Tui {
             mouse_down_position: Point::MIN,
             mouse_state: InputMouseState::None,
             mouse_is_drag: false,
+            last_click: std::time::Instant::now(),
+            last_click_target: 0,
+            last_click_position: Point::MIN,
 
             clipboard: Vec::new(),
             clipboard_generation: 0,
@@ -199,6 +205,7 @@ impl Tui {
             self.needs_more_settling();
         }
 
+        let now = std::time::Instant::now();
         let mut input_text = None;
         let mut input_keyboard = None;
         let mut input_mouse_modifiers = kbmod::NONE;
@@ -230,7 +237,6 @@ impl Tui {
                 input_keyboard = Some(keyboard);
             }
             Some(input::Input::Mouse(mouse)) => {
-                /*
                 let mut next_state = mouse.state;
                 let next_position = mouse.position;
                 let next_scroll = mouse.scroll;
@@ -295,7 +301,6 @@ impl Tui {
                 input_scroll_delta = next_scroll;
                 self.mouse_position = next_position;
                 self.mouse_state = next_state;
-                */
             }
         }
 
@@ -466,13 +471,14 @@ impl Tui {
         }
         self.framebuffer.render()
     }
+
     pub fn render_sys(&mut self) {
         self.framebuffer.reset(self.size);
         for child in self.prev_tree.iterate_roots() {
             let mut child = child.borrow_mut();
             self.render_node(&mut child);
         }
-        self.framebuffer.render_dop()
+        self.framebuffer.render_sys()
     }
 
     /// Recursively renders each node and its children.
