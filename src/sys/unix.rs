@@ -412,7 +412,7 @@ pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
 /// but I found that many (most?) Linux distributions don't do this for some reason.
 /// This function returns the suffix, if any.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn icu_proc_suffix(handle: *mut c_void) -> String {
+pub fn icu_proc_suffix(handle: NonNull<c_void>) -> String {
     unsafe {
         type T = *const c_void;
 
