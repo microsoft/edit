@@ -15,7 +15,7 @@
 
 use crate::apperr;
 use crate::cell::SemiRefCell;
-use crate::framebuffer::{Framebuffer, IndexedColor};
+use crate::framebuffer::{Framebuffer, IndexedColor, alpha_blend};
 use crate::helpers::{self, COORD_TYPE_SAFE_MAX, CoordType, Point, Rect};
 use crate::icu;
 use crate::simd::memchr2;
@@ -1696,10 +1696,12 @@ impl TextBuffer {
                     bottom: top + 1,
                 };
 
-                let bg = if focused {
-                    fb.indexed(IndexedColor::BrightBlue)
-                } else {
-                    fb.indexed(IndexedColor::Blue)
+                let mut bg = alpha_blend(
+                    fb.indexed(IndexedColor::Foreground),
+                    fb.indexed_alpha(IndexedColor::BrightBlue, 0x7f),
+                );
+                if !focused {
+                    bg = alpha_blend(bg, fb.indexed_alpha(IndexedColor::Background, 0x7f))
                 };
                 let fg = fb.contrasted(bg);
                 fb.blend_bg(rect, bg);

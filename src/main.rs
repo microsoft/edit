@@ -192,7 +192,10 @@ fn run() -> apperr::Result<()> {
     let mut tui = Tui::new()?;
 
     query_color_palette(&mut tui, &mut vt_parser);
-    state.menubar_color_bg = tui.indexed(IndexedColor::Cyan);
+    state.menubar_color_bg = alpha_blend(
+        tui.indexed(IndexedColor::Background),
+        tui.indexed_alpha(IndexedColor::BrightBlue, 0x7f),
+    );
     state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
     let floater_bg = alpha_blend(
         tui.indexed_alpha(IndexedColor::Background, 0xcc),
