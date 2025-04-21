@@ -1239,14 +1239,27 @@ impl TextBuffer {
         mut cursor: ucd::UcdCursor,
         offset: usize,
     ) -> ucd::UcdCursor {
+        if offset == cursor.offset {
+            return cursor;
+        }
+
+        // goto_line_start() is fast for seeking across lines _if_ line wrapping is disabled.
+        // For backward seeking we have to use it either way, so we're covered there.
+        // This implements the forward seeking portion, if it's approx. worth doing so.
+        if self.word_wrap_column <= 0 && offset.saturating_sub(cursor.offset) > 1024 {
+            // Replacing this with a more optimal, direct memchr() loop appears
+            // to improve performance only marginally by another 2% or so.
+            loop {
+                let next = self.goto_line_start(cursor, cursor.logical_pos.y + 1);
+                if next.offset > offset {
+                    break;
+                }
+                cursor = next;
+            }
+        }
+
         while offset < cursor.offset {
-            cursor = self.cursor_move_to_logical_internal(
-                cursor,
-                Point {
-                    x: 0,
-                    y: cursor.logical_pos.y - 1,
-                },
-            );
+            cursor = self.goto_line_start(cursor, cursor.logical_pos.y - 1);
         }
 
         self.measurement_config()
@@ -1259,19 +1272,25 @@ impl TextBuffer {
         mut cursor: ucd::UcdCursor,
         pos: Point,
     ) -> ucd::UcdCursor {
-        let x = pos.x.max(0);
-        let y = pos.y.max(0);
+        let pos = Point {
+            x: pos.x.max(0),
+            y: pos.y.max(0),
+        };
 
-        // goto_line_start() is very fast for seeking across lines. But we don't need that
-        // of course if the `y` didn't actually change. The only exception is if we're
-        // moving leftward in the same line as there's no read_backward() for that.
-        if y != cursor.logical_pos.y || x < cursor.logical_pos.x {
-            cursor = self.goto_line_start(cursor, y);
+        if pos == cursor.logical_pos {
+            return cursor;
+        }
+
+        // goto_line_start() is the fastest way for seeking across lines. As such we always
+        // use it if the requested `.y` position is different. We still need to use it if the
+        // `.x` position is smaller, but only because `goto_logical()` cannot seek backwards.
+        if pos.y != cursor.logical_pos.y || pos.x < cursor.logical_pos.x {
+            cursor = self.goto_line_start(cursor, pos.y);
         }
 
         self.measurement_config()
             .with_cursor(cursor)
-            .goto_logical(Point { x, y })
+            .goto_logical(pos)
     }
 
     fn cursor_move_to_visual_internal(
@@ -1279,39 +1298,35 @@ impl TextBuffer {
         mut cursor: ucd::UcdCursor,
         pos: Point,
     ) -> ucd::UcdCursor {
-        let x = pos.x.max(0);
-        let y = pos.y.max(0);
+        let pos = Point {
+            x: pos.x.max(0),
+            y: pos.y.max(0),
+        };
+
+        if pos == cursor.visual_pos {
+            return cursor;
+        }
 
         if self.word_wrap_column <= 0 {
-            // goto_line_start() is very fast for seeking across lines. But we don't need that
-            // of course if the `y` didn't actually change. The only exception is if we're
-            // moving leftward in the same line as there's no read_backward() for that.
-            if y != cursor.logical_pos.y || x < cursor.logical_pos.x {
-                cursor = self.goto_line_start(cursor, y);
+            // Identical to the fast-pass in `cursor_move_to_logical_internal()`.
+            if pos.y != cursor.logical_pos.y || pos.x < cursor.logical_pos.x {
+                cursor = self.goto_line_start(cursor, pos.y);
             }
         } else {
-            // Since we don't store how many visual lines each logical line spans,
-            // we have to iterate line by line and check each time if we're there yet.
-            // We can skip that for forward seeking, since measure_forward() will handle that.
-
-            if y < cursor.visual_pos.y || (y == cursor.visual_pos.y && x < cursor.visual_pos.x) {
-                cursor = self.goto_line_start(cursor, cursor.logical_pos.y);
+            // `goto_visual()` can only seek foward, so we need to seek backward here if needed.
+            // NOTE that this intentionally doesn't use the `Eq` trait of `Point`, because if
+            // `pos.y == cursor.visual_pos.y` we don't need to go to `cursor.logical_pos.y - 1`.
+            while pos.y < cursor.visual_pos.y {
+                cursor = self.goto_line_start(cursor, cursor.logical_pos.y - 1);
             }
-
-            while y < cursor.visual_pos.y {
-                cursor = self.cursor_move_to_logical_internal(
-                    cursor,
-                    Point {
-                        x: 0,
-                        y: cursor.logical_pos.y - 1,
-                    },
-                );
+            if pos.y == cursor.visual_pos.y && pos.x < cursor.visual_pos.x {
+                cursor = self.goto_line_start(cursor, cursor.logical_pos.y);
             }
         }
 
         self.measurement_config()
             .with_cursor(cursor)
-            .goto_visual(Point { x, y })
+            .goto_visual(pos)
     }
 
     fn cursor_move_delta_internal(

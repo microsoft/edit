@@ -219,6 +219,8 @@ impl Iterator for Utf8Chars<'_> {
             // UTF8-1 = %x00-7F
             Some(c as char)
         } else {
+            // Weirdly enough, adding a hint here to assert that `next_slow`
+            // only returns codepoints >= 0x80 makes `ucd` ~5% slower.
             Some(self.next_slow(c))
         }
     }

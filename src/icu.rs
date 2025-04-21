@@ -424,8 +424,8 @@ fn utext_access_impl<'a>(
         // If we've only seen ASCII so far we can fast-pass the UTF-16 translation,
         // because we can just widen from u8 -> u16.
         if utf16_len == ascii_len {
-            // TODO: This crashes, why?
             let haystack = &chunk[..chunk.len().min(utf8_len_limit - ascii_len)];
+
             // When it comes to performance, and the search space is small (which it is here),
             // it's always a good idea to keep the loops small and tight...
             let len = haystack
@@ -475,13 +475,13 @@ fn utext_access_impl<'a>(
                     *cache.utf16_to_utf8_offsets.get_unchecked_mut(utf16_len) = utf8_len_beg as u16;
                     utf16_len += 1;
                 } else {
-                    let c = c as u32 - 0x1_0000;
+                    let c = c as u32 - 0x10000;
+                    let b = utf8_len_beg as u16;
                     *cache.utf16.get_unchecked_mut(utf16_len) = (c >> 10) as u16 | 0xD800;
-                    *cache.utf16_to_utf8_offsets.get_unchecked_mut(utf16_len) = utf8_len_beg as u16;
-                    utf16_len += 1;
-                    *cache.utf16.get_unchecked_mut(utf16_len) = (c & 0x3FF) as u16 | 0xDC00;
-                    *cache.utf16_to_utf8_offsets.get_unchecked_mut(utf16_len) = utf8_len_beg as u16;
-                    utf16_len += 1;
+                    *cache.utf16.get_unchecked_mut(utf16_len + 1) = (c & 0x3FF) as u16 | 0xDC00;
+                    *cache.utf16_to_utf8_offsets.get_unchecked_mut(utf16_len) = b;
+                    *cache.utf16_to_utf8_offsets.get_unchecked_mut(utf16_len + 1) = b;
+                    utf16_len += 2;
                 }
             }
 
