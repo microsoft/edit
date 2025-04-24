@@ -1953,6 +1953,93 @@ impl TextBuffer {
         self.edit_end();
     }
 
+    // TODO: This function is ripe for some optimizations:
+    // * Instead of replacing the entire selection,
+    //   it should unindent each line directly (as if multiple cursors had been used).
+    // * The cursor movement at the end is rather costly, but at least without word wrap
+    //   it should be possible to calculate it directly from the removed amount.
+    pub fn unindent(&mut self) {
+        let mut selection_beg = self.cursor.logical_pos;
+        let mut selection_end = selection_beg;
+
+        match self.selection {
+            TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
+                selection_beg = beg;
+                selection_end = end;
+            }
+            _ => {}
+        }
+
+        let [beg, end] = helpers::minmax(selection_beg, selection_end);
+        let beg = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: beg.y });
+        let end = self.cursor_move_to_logical_internal(
+            beg,
+            Point {
+                x: CoordType::MAX,
+                y: end.y,
+            },
+        );
+
+        let mut replacement = Vec::new();
+        self.buffer
+            .extract_raw(beg.offset, end.offset, &mut replacement, 0);
+
+        let initial_len = replacement.len();
+        let mut offset = 0;
+        let mut y = beg.logical_pos.y;
+
+        loop {
+            let mut remove = 0;
+
+            if replacement[offset] == b'\t' {
+                remove = 1;
+            } else {
+                while remove < self.tab_size as usize
+                    && offset + remove < replacement.len()
+                    && replacement[offset + remove] == b' '
+                {
+                    remove += 1;
+                }
+            }
+
+            if remove > 0 {
+                replacement.drain(offset..offset + remove);
+            }
+
+            if y == selection_beg.y {
+                selection_beg.x -= remove as CoordType;
+            }
+            if y == selection_end.y {
+                selection_end.x -= remove as CoordType;
+            }
+
+            (offset, y) = ucd::newlines_forward(&replacement, offset, y, y + 1);
+            if offset >= replacement.len() {
+                break;
+            }
+        }
+
+        if replacement.len() == initial_len {
+            // Nothing to do.
+            return;
+        }
+
+        self.edit_begin(HistoryType::Other, beg);
+        self.edit_delete(end);
+        self.edit_write(&replacement);
+        self.edit_end();
+
+        match &mut self.selection {
+            TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
+                *beg = selection_beg;
+                *end = selection_end;
+            }
+            _ => {}
+        }
+
+        self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, selection_end));
+    }
+
     /// Extracts a chunk of text or a line if no selection is active. May optionally delete it.
     pub fn extract_selection(&mut self, delete: bool) -> Vec<u8> {
         let Some((beg, end)) = self.selection_range_internal(true) else {

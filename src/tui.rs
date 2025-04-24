@@ -1885,7 +1885,11 @@ impl<'a> Context<'a, '_> {
                         // If this is just a simple input field, don't consume Tab (= early return).
                         return false;
                     }
-                    tb.write(b"\t", false);
+                    if modifiers == kbmod::SHIFT {
+                        tb.unindent();
+                    } else {
+                        tb.write(b"\t", false);
+                    }
                 }
                 vk::RETURN => {
                     if single_line {
