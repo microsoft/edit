@@ -761,7 +761,7 @@ impl Tui {
         result.push_str("general:\r\n- focus_path:\r\n");
 
         for &id in self.focused_node_path.iter().rev() {
-            _ = write!(result, "  - {:016x}\r\n", id);
+            _ = write!(result, "  - {id:016x}\r\n");
         }
 
         result.push_str("\r\ntree:\r\n");

@@ -1046,7 +1046,7 @@ impl TextBuffer {
         options: SearchOptions,
     ) -> apperr::Result<ActiveSearch> {
         let sanitized_pattern = if options.whole_word && options.use_regex {
-            Cow::Owned(format!(r"\b(?:{})\b", pattern))
+            Cow::Owned(format!(r"\b(?:{pattern})\b"))
         } else if options.whole_word {
             let mut p = String::with_capacity(pattern.len() + 16);
             p.push_str(r"\b");

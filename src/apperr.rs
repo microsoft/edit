@@ -31,7 +31,7 @@ impl Error {
     pub fn message(&self) -> String {
         match *self {
             APP_ICU_MISSING => loc(LocId::ErrorIcuMissing).to_string(),
-            Error::App(code) => format!("Unknown app error code: {}", code),
+            Error::App(code) => format!("Unknown app error code: {code}"),
             Error::Icu(code) => icu::apperr_format(code),
             Error::Sys(code) => sys::apperr_format(code),
         }

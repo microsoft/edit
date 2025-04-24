@@ -274,7 +274,7 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
             STATE.inject_resize = false;
             let (w, h) = get_window_size();
             if w > 0 && h > 0 {
-                result = format!("\x1b[8;{};{}t{}", h, w, result);
+                result = format!("\x1b[8;{h};{w}t{result}");
             }
         }
 
@@ -459,7 +459,7 @@ pub fn icu_proc_suffix(handle: NonNull<c_void>) -> String {
         let version = &path[suffix_start..];
         let version_end = version.find('.').unwrap_or(version.len());
         let version = &version[..version_end];
-        format!("_{}", version)
+        format!("_{version}")
     }
 }
 
@@ -468,7 +468,7 @@ pub fn add_icu_proc_suffix<'a>(name: &'a CStr, suffix: &str) -> Cow<'a, CStr> {
         Cow::Borrowed(name)
     } else {
         let name = unsafe { name.to_str().unwrap_unchecked() };
-        let combined = format!("{}{}\0", name, suffix);
+        let combined = format!("{name}{suffix}\0");
         let combined = unsafe { CString::from_vec_unchecked(combined.into_bytes()) };
         Cow::Owned(combined)
     }
@@ -496,7 +496,7 @@ pub fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
 }
 
 pub fn apperr_format(code: u32) -> String {
-    let mut result = format!("Error {}", code);
+    let mut result = format!("Error {code}");
 
     unsafe {
         let ptr = libc::strerror(code as i32);

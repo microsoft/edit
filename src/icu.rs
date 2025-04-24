@@ -57,9 +57,9 @@ pub fn apperr_format(code: u32) -> String {
 
     let msg = format(code);
     if !msg.is_empty() {
-        format!("ICU Error: {}", msg)
+        format!("ICU Error: {msg}")
     } else {
-        format!("ICU Error: {:#08x}", code)
+        format!("ICU Error: {code:#08x}")
     }
 }
 
@@ -118,7 +118,7 @@ impl<'pivot> Converter<'pivot> {
     }
 
     fn append_nul(input: &str) -> String {
-        format!("{}\0", input)
+        format!("{input}\0")
     }
 
     pub fn convert(

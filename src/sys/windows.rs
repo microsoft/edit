@@ -594,7 +594,7 @@ pub fn apperr_format(code: u32) -> String {
             null_mut(),
         );
 
-        let mut result = format!("Error {:#08x}", code);
+        let mut result = format!("Error {code:#08x}");
 
         if len > 0 {
             let msg = helpers::str_from_raw_parts(ptr, len as usize);
