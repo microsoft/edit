@@ -306,11 +306,14 @@ pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {
             let active = opt_ptr(state.documents.active());
 
             if state.documents.update_active(|doc| {
-                ctx.list_item(
-                    ptr::eq(doc, active),
-                    Overflow::TruncateMiddle,
-                    &doc.filename,
-                ) == ListSelection::Activated
+                let tb = doc.buffer.borrow();
+                let title = format!(
+                    "{0} {1}",
+                    (if tb.is_dirty() { "*" } else { " " }),
+                    doc.filename
+                );
+                ctx.list_item(ptr::eq(doc, active), Overflow::TruncateMiddle, &title)
+                    == ListSelection::Activated
             }) {
                 state.wants_document_picker = false;
                 ctx.needs_rerender();
