@@ -1,4 +1,4 @@
-#![feature(allocator_api)]
+#![feature(allocator_api, breakpoint, linked_list_cursors)]
 #![allow(clippy::missing_transmute_annotations, clippy::new_without_default)]
 
 #[macro_use]
@@ -13,7 +13,6 @@ pub mod fuzzy;
 pub mod helpers;
 pub mod icu;
 pub mod input;
-pub mod loc;
 pub mod simd;
 pub mod sys;
 pub mod tui;

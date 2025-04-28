@@ -401,7 +401,7 @@ pub fn open_stdin_if_redirected() -> Option<File> {
     }
 }
 
-pub fn canonicalize<P: AsRef<Path>>(path: P) -> apperr::Result<PathBuf> {
+pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
     let mut path = fs::canonicalize(path)?;
     let path = path.as_mut_os_string();
     let mut path = mem::take(path).into_encoded_bytes();
@@ -428,9 +428,11 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
     unsafe {
         let mut base = null_mut();
 
+        // In debug builds, we use fixed addresses to aid in debugging.
+        // Makes it possible to immediately tell which address space a pointer belongs to.
         if cfg!(debug_assertions) {
-            static mut S_BASE_GEN: usize = 0x0000100000000000;
-            S_BASE_GEN += 0x0000100000000000;
+            static mut S_BASE_GEN: usize = 0x0000100000000000; // 16 TiB
+            S_BASE_GEN += 0x0000001000000000; // 64 GiB
             base = S_BASE_GEN as *mut _;
         }
 
@@ -579,7 +581,7 @@ pub fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
     gle_to_apperr(err.raw_os_error().unwrap_or(0) as u32)
 }
 
-pub fn apperr_format(code: u32) -> String {
+pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
     unsafe {
         let mut ptr: *mut u8 = null_mut();
         let len = Debug::FormatMessageA(
@@ -594,18 +596,17 @@ pub fn apperr_format(code: u32) -> String {
             null_mut(),
         );
 
-        let mut result = format!("Error {code:#08x}");
+        write!(f, "Error {code:#08x}")?;
 
         if len > 0 {
             let msg = helpers::str_from_raw_parts(ptr, len as usize);
             let msg = msg.trim_ascii();
             let msg = msg.replace(['\r', '\n'], " ");
-            result.push_str(": ");
-            result.push_str(&msg);
+            write!(f, ": {msg}")?;
             Foundation::LocalFree(ptr as *mut _);
         }
 
-        result
+        Ok(())
     }
 }
 

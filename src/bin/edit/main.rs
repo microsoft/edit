@@ -1,0 +1,520 @@
+#![feature(linked_list_cursors, os_string_truncate)]
+
+mod documents;
+mod draw_editor;
+mod draw_filepicker;
+mod draw_menubar;
+mod draw_statusbar;
+mod loc;
+mod state;
+
+use documents::DocumentPath;
+use draw_editor::*;
+use draw_filepicker::*;
+use draw_menubar::*;
+use draw_statusbar::*;
+use edit::apperr;
+use edit::base64;
+use edit::buffer::TextBuffer;
+use edit::framebuffer::{self, IndexedColor, alpha_blend};
+use edit::helpers::*;
+use edit::input::{self, kbmod, vk};
+use edit::sys;
+use edit::tui::*;
+use edit::vt::{self, Token};
+use loc::*;
+use state::*;
+use std::path::PathBuf;
+use std::process;
+
+#[cfg(feature = "debug-latency")]
+use std::fmt::Write;
+
+impl State {
+    fn new() -> apperr::Result<Self> {
+        let buffer = TextBuffer::new_rc(false)?;
+        {
+            let mut tb = buffer.borrow_mut();
+            tb.set_margin_enabled(true);
+            tb.set_line_highlight_enabled(true);
+        }
+
+        Ok(Self {
+            menubar_color_bg: 0,
+            menubar_color_fg: 0,
+
+            documents: Default::default(),
+
+            error_log: [const { String::new() }; 10],
+            error_log_index: 0,
+            error_log_count: 0,
+
+            wants_file_picker: StateFilePicker::None,
+            file_picker_pending_dir: Default::default(),
+            file_picker_pending_name: Default::default(),
+            file_picker_entries: None,
+            file_picker_overwrite_warning: None,
+
+            wants_search: StateSearch {
+                kind: StateSearchKind::Hidden,
+                focus: false,
+            },
+            search_needle: Default::default(),
+            search_replacement: Default::default(),
+            search_options: Default::default(),
+            search_success: true,
+
+            wants_save: false,
+            wants_statusbar_focus: false,
+            wants_encoding_picker: false,
+            wants_encoding_change: StateEncodingChange::None,
+            wants_indentation_picker: false,
+            wants_document_picker: false,
+            wants_about: false,
+            wants_close: false,
+            wants_exit: false,
+
+            osc_title_filename: Default::default(),
+            osc_clipboard_generation: 0,
+            exit: false,
+        })
+    }
+}
+
+fn main() -> process::ExitCode {
+    if cfg!(debug_assertions) {
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            drop(RestoreModes);
+            drop(sys::Deinit);
+            hook(info);
+        }));
+    }
+
+    match run() {
+        Ok(()) => process::ExitCode::SUCCESS,
+        Err(err) => {
+            sys::write_stdout(&format!("{}\r\n", FormatApperr::from(err)));
+            process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> apperr::Result<()> {
+    let _sys_deinit = sys::init()?;
+    let mut state = State::new()?;
+
+    if handle_args(&mut state)? {
+        return Ok(());
+    }
+
+    loc::init();
+
+    // sys::init() will switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
+    // Since the `read_file` call may hang for some reason, we must only call this afterwards.
+    // `set_modes()` will enable mouse mode which is equally annoying to switch out for users
+    // and so we do it afterwards, for similar reasons.
+    sys::switch_modes()?;
+    let _restore_vt_modes = set_vt_modes();
+
+    let mut vt_parser = vt::Parser::new();
+    let mut input_parser = input::Parser::new();
+    let mut tui = Tui::new()?;
+
+    query_color_palette(&mut tui, &mut vt_parser);
+    state.menubar_color_bg = alpha_blend(
+        tui.indexed(IndexedColor::Background),
+        tui.indexed_alpha(IndexedColor::BrightBlue, 0x7f),
+    );
+    state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
+    let floater_bg = alpha_blend(
+        tui.indexed_alpha(IndexedColor::Background, 0xcc),
+        tui.indexed_alpha(IndexedColor::Foreground, 0x33),
+    );
+    let floater_fg = tui.contrasted(floater_bg);
+    tui.setup_modifier_translations(ModifierTranslations {
+        ctrl: loc(LocId::Ctrl),
+        alt: loc(LocId::Alt),
+        shift: loc(LocId::Shift),
+    });
+    tui.set_floater_default_bg(floater_bg);
+    tui.set_floater_default_fg(floater_fg);
+    tui.set_modal_default_bg(floater_bg);
+    tui.set_modal_default_fg(floater_fg);
+
+    sys::inject_window_size_into_stdin();
+
+    #[cfg(feature = "debug-latency")]
+    let mut last_latency_width = 0;
+
+    loop {
+        let read_timeout = vt_parser.read_timeout().min(tui.read_timeout());
+        let Some(input) = sys::read_stdin(read_timeout) else {
+            break;
+        };
+
+        #[cfg(feature = "debug-latency")]
+        let time_beg = std::time::Instant::now();
+        #[cfg(feature = "debug-latency")]
+        let mut passes = 0usize;
+
+        let vt_iter = vt_parser.parse(&input);
+        let mut input_iter = input_parser.parse(vt_iter);
+
+        // Process all input.
+        while {
+            let input = input_iter.next();
+            let more = input.is_some();
+            let mut ctx = tui.create_context(input);
+
+            draw(&mut ctx, &mut state);
+
+            #[cfg(feature = "debug-latency")]
+            {
+                passes += 1;
+            }
+
+            more
+        } {}
+
+        // Continue rendering until the layout has settled.
+        // This can take >1 frame, if the input focus is tossed between different controls.
+        while tui.needs_settling() {
+            let mut ctx = tui.create_context(None);
+
+            draw(&mut ctx, &mut state);
+
+            #[cfg(feature = "debug-layout")]
+            {
+                drop(ctx);
+                state
+                    .buffer
+                    .buffer
+                    .debug_replace_everything(&tui.debug_layout());
+            }
+
+            #[cfg(feature = "debug-latency")]
+            {
+                passes += 1;
+            }
+        }
+
+        if state.exit {
+            break;
+        }
+
+        let mut output = tui.render();
+
+        {
+            let filename = state.documents.active().map_or("", |d| &d.filename);
+            if filename != state.osc_title_filename {
+                write_terminal_title(&mut output, filename);
+                state.osc_title_filename = filename.to_string();
+            }
+        }
+
+        if state.osc_clipboard_generation != tui.get_clipboard_generation() {
+            write_osc_clipboard(&mut output, &mut state, &tui);
+        }
+
+        #[cfg(feature = "debug-latency")]
+        {
+            // Print the number of passes and latency in the top right corner.
+            let time_end = std::time::Instant::now();
+            let status = time_end - time_beg;
+            let status = format!(
+                "{}P {}B {:.3}μs",
+                passes,
+                output.len(),
+                status.as_nanos() as f64 / 1000.0
+            );
+
+            // "μs" is 3 bytes and 2 columns.
+            let cols = status.len() as i32 - 3 + 2;
+
+            // Since the status may shrink and grow, we may have to overwrite the previous one with whitespace.
+            let padding = (last_latency_width - cols).max(0);
+
+            // To avoid moving the cursor, push and pop it onto the VT cursor stack.
+            _ = write!(
+                output,
+                "\x1b7\x1b[0;41;97m\x1b[1;{0}H{1:2$}{3}\x1b8",
+                tui.size().width - cols - padding + 1,
+                "",
+                padding as usize,
+                status
+            );
+
+            last_latency_width = cols;
+            sys::write_stdout(&output);
+        }
+
+        sys::write_stdout(&output);
+    }
+
+    Ok(())
+}
+
+// Returns true if the application should exit early.
+fn handle_args(state: &mut State) -> apperr::Result<bool> {
+    let mut path = None;
+
+    // The best CLI argument parser in the world.
+    if let Some(arg) = std::env::args_os().nth(1) {
+        if arg == "-h" || arg == "--help" || (cfg!(windows) && arg == "/?") {
+            print_help();
+            return Ok(true);
+        } else if arg == "-v" || arg == "--version" {
+            print_version();
+            return Ok(true);
+        } else if arg == "-" {
+            // We'll check for a redirected stdin no matter what, so we can just ignore "-".
+        } else {
+            path = Some(PathBuf::from(arg));
+        }
+    }
+
+    let doc;
+    if let Some(mut file) = sys::open_stdin_if_redirected() {
+        doc = state.documents.add_untitled()?;
+        let mut tb = doc.buffer.borrow_mut();
+        tb.read_file(&mut file, None)?;
+        tb.mark_as_dirty();
+    } else if let Some(path) = path {
+        doc = state.documents.add_file_path(&path)?;
+    } else {
+        doc = state.documents.add_untitled()?;
+    }
+
+    let cwd = match &doc.path {
+        DocumentPath::Canonical(path) => path.parent(),
+        _ => None,
+    };
+    let cwd = match cwd {
+        Some(cwd) => cwd.to_path_buf(),
+        None => std::env::current_dir()?,
+    };
+    state.file_picker_pending_dir = DisplayablePathBuf::new(cwd);
+    state.file_picker_pending_name = doc.filename.clone();
+
+    Ok(false)
+}
+
+fn print_help() {
+    sys::write_stdout(concat!(
+        "Usage: edit [OPTIONS] [FILE]\r\n",
+        "Options:\r\n",
+        "    -h, --help       Print this help message\r\n",
+        "    -v, --version    Print the version number\r\n",
+    ));
+}
+
+fn print_version() {
+    sys::write_stdout(concat!("edit version ", env!("CARGO_PKG_VERSION"), "\r\n"));
+}
+
+fn draw(ctx: &mut Context, state: &mut State) {
+    let root_focused = ctx.contains_focus();
+
+    draw_menubar(ctx, state);
+    draw_editor(ctx, state);
+    draw_statusbar(ctx, state);
+
+    if state.wants_exit {
+        draw_handle_wants_exit(ctx, state);
+    }
+    if state.wants_close {
+        draw_handle_wants_close(ctx, state);
+    }
+    if state.wants_file_picker != StateFilePicker::None {
+        draw_file_picker(ctx, state);
+    }
+    if state.wants_save {
+        draw_handle_save(ctx, state);
+    }
+    if state.wants_encoding_change != StateEncodingChange::None {
+        draw_dialog_encoding_change(ctx, state);
+    }
+    if state.wants_document_picker {
+        draw_document_picker(ctx, state);
+    }
+    if state.wants_about {
+        draw_dialog_about(ctx, state);
+    }
+    if state.error_log_count != 0 {
+        draw_error_log(ctx, state);
+    }
+
+    if root_focused {
+        // Shortcuts that are not handled as part of the textarea, etc.
+        if ctx.consume_shortcut(kbmod::CTRL | vk::N) {
+            draw_add_untitled_document(ctx, state);
+        } else if ctx.consume_shortcut(kbmod::CTRL | vk::O) {
+            state.wants_file_picker = StateFilePicker::Open;
+        } else if ctx.consume_shortcut(kbmod::CTRL | vk::S) {
+            state.wants_save = true;
+        } else if ctx.consume_shortcut(kbmod::CTRL_SHIFT | vk::S) {
+            state.wants_file_picker = StateFilePicker::SaveAs;
+        } else if ctx.consume_shortcut(kbmod::CTRL | vk::W) {
+            state.wants_close = true;
+        } else if ctx.consume_shortcut(kbmod::CTRL | vk::P) {
+            state.wants_document_picker = true;
+        } else if ctx.consume_shortcut(kbmod::CTRL | vk::Q) {
+            state.wants_exit = true;
+        } else if state.wants_search.kind != StateSearchKind::Disabled
+            && ctx.consume_shortcut(kbmod::CTRL | vk::F)
+        {
+            state.wants_search.kind = StateSearchKind::Search;
+            state.wants_search.focus = true;
+        } else if state.wants_search.kind != StateSearchKind::Disabled
+            && ctx.consume_shortcut(kbmod::CTRL | vk::R)
+        {
+            state.wants_search.kind = StateSearchKind::Replace;
+            state.wants_search.focus = true;
+        }
+    }
+}
+
+fn draw_handle_wants_exit(_ctx: &mut Context, state: &mut State) {
+    while let Some(doc) = state.documents.active() {
+        if doc.buffer.borrow().is_dirty() {
+            state.wants_close = true;
+            return;
+        }
+        state.documents.remove_active();
+    }
+
+    if state.documents.len() == 0 {
+        state.exit = true;
+    }
+}
+
+fn set_vt_modes() -> RestoreModes {
+    // 1049: Alternative Screen Buffer
+    //   I put the ASB switch in the beginning, just in case the terminal performs
+    //   some additional state tracking beyond the modes we enable/disable.
+    // 1002: Cell Motion Mouse Tracking
+    // 1006: SGR Mouse Mode
+    // 2004: Bracketed Paste Mode
+    sys::write_stdout("\x1b[?1049h\x1b[?1002;1006;2004h");
+    RestoreModes
+}
+
+#[cold]
+fn write_terminal_title(output: &mut String, filename: &str) {
+    output.push_str("\x1b]0;");
+
+    if !filename.is_empty() {
+        output.push_str(&sanitize_control_chars(filename));
+        output.push_str(" - ");
+    }
+
+    output.push_str("edit\x1b\\");
+}
+
+#[cold]
+fn write_osc_clipboard(output: &mut String, state: &mut State, tui: &Tui) {
+    let clipboard = tui.get_clipboard();
+
+    if (1..128 * 1024).contains(&clipboard.len()) {
+        output.push_str("\x1b]52;c;");
+        output.push_str(&base64::encode(clipboard));
+        output.push_str("\x1b\\");
+    }
+
+    state.osc_clipboard_generation = tui.get_clipboard_generation();
+}
+
+struct RestoreModes;
+
+impl Drop for RestoreModes {
+    fn drop(&mut self) {
+        // Same as in the beginning but in the reverse order.
+        // It also includes DECSCUSR 0 to reset the cursor style and DECTCEM to show the cursor.
+        sys::write_stdout("\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1002;1006;2004l\x1b[?1049l");
+    }
+}
+
+fn query_color_palette(tui: &mut Tui, vt_parser: &mut vt::Parser) {
+    let mut indexed_colors = framebuffer::DEFAULT_THEME;
+
+    sys::write_stdout(concat!(
+        // OSC 4 color table requests for indices 0 through 15 (base colors).
+        "\x1b]4;0;?;1;?;2;?;3;?;4;?;5;?;6;?;7;?\x07",
+        "\x1b]4;8;?;9;?;10;?;11;?;12;?;13;?;14;?;15;?\x07",
+        // OSC 10 and 11 queries for the current foreground and background colors.
+        "\x1b]10;?\x07\x1b]11;?\x07",
+        // CSI c reports the terminal capabilities.
+        // It also helps us to detect the end of the responses, because not all
+        // terminals support the OSC queries, but all of them support CSI c.
+        "\x1b[c",
+    ));
+
+    let mut done = false;
+    let mut osc_buffer = String::new();
+
+    while !done {
+        let Some(input) = sys::read_stdin(vt_parser.read_timeout()) else {
+            break;
+        };
+
+        let mut vt_stream = vt_parser.parse(&input);
+        while let Some(token) = vt_stream.next() {
+            match token {
+                Token::Csi(state) if state.final_byte == 'c' => done = true,
+                Token::Osc { mut data, partial } => {
+                    if partial {
+                        osc_buffer.push_str(data);
+                        continue;
+                    }
+                    if !osc_buffer.is_empty() {
+                        osc_buffer.push_str(data);
+                        data = &osc_buffer;
+                    }
+
+                    let mut splits = data.split_terminator(';');
+
+                    let color = match splits.next().unwrap_or("") {
+                        // The response is `4;<color>;rgb:<r>/<g>/<b>`.
+                        "4" => match splits.next().unwrap_or("").parse::<usize>() {
+                            Ok(val) if val < 16 => &mut indexed_colors[val],
+                            _ => continue,
+                        },
+                        // The response is `10;rgb:<r>/<g>/<b>`.
+                        "10" => &mut indexed_colors[IndexedColor::Foreground as usize],
+                        // The response is `11;rgb:<r>/<g>/<b>`.
+                        "11" => &mut indexed_colors[IndexedColor::Background as usize],
+                        _ => continue,
+                    };
+
+                    let color_param = splits.next().unwrap_or("");
+                    if !color_param.starts_with("rgb:") {
+                        continue;
+                    }
+
+                    let mut iter = color_param[4..].split_terminator('/');
+                    let rgb_parts = [(); 3].map(|_| iter.next().unwrap_or("0"));
+                    let mut rgb = 0;
+
+                    for part in rgb_parts {
+                        if part.len() == 2 || part.len() == 4 {
+                            let Ok(mut val) = usize::from_str_radix(part, 16) else {
+                                continue;
+                            };
+                            if part.len() == 4 {
+                                val = (val * 0xff + 0x80) / 0xffff;
+                            }
+                            rgb = (rgb >> 8) | ((val as u32) << 16);
+                        }
+                    }
+
+                    *color = rgb | 0xff000000;
+                    osc_buffer.clear();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    tui.setup_indexed_colors(indexed_colors);
+}

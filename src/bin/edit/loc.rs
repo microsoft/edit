@@ -6,6 +6,7 @@ pub enum LocId {
     Alt,
     Shift,
 
+    Ok,
     Yes,
     No,
 
@@ -13,9 +14,11 @@ pub enum LocId {
 
     // File menu
     File,
+    FileNew,
     FileOpen,
     FileSave,
     FileSaveAs,
+    FileClose,
     FileExit,
 
     // Edit menu
@@ -137,6 +140,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "Shift",
     ],
 
+    // Ok
+    [
+        /* en      */ "Ok",
+        /* de      */ "OK",
+        /* es      */ "Aceptar",
+        /* fr      */ "OK",
+        /* it      */ "OK",
+        /* ja      */ "OK",
+        /* ko      */ "확인",
+        /* pt_br   */ "OK",
+        /* ru      */ "ОК",
+        /* zh_hans */ "确定",
+        /* zh_hant */ "確定",
+    ],
     // Yes
     [
         /* en      */ "Yes",
@@ -195,6 +212,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "文件",
         /* zh_hant */ "檔案",
     ],
+    // FileNew
+    [
+        /* en      */ "New File…",
+        /* de      */ "Neue Datei…",
+        /* es      */ "Nuevo archivo…",
+        /* fr      */ "Nouveau fichier…",
+        /* it      */ "Nuovo file…",
+        /* ja      */ "新規ファイル…",
+        /* ko      */ "새 파일…",
+        /* pt_br   */ "Novo arquivo…",
+        /* ru      */ "Новый файл…",
+        /* zh_hans */ "新建文件…",
+        /* zh_hant */ "新增檔案…",
+    ],
     // FileOpen
     [
         /* en      */ "Open File…",
@@ -236,6 +267,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Сохранить как…",
         /* zh_hans */ "另存为…",
         /* zh_hant */ "另存新檔…",
+    ],
+    // FileClose
+    [
+        /* en      */ "Close Editor",
+        /* de      */ "Editor schließen",
+        /* es      */ "Cerrar editor",
+        /* fr      */ "Fermer l'éditeur",
+        /* it      */ "Chiudi editor",
+        /* ja      */ "エディターを閉じる",
+        /* ko      */ "편집기 닫기",
+        /* pt_br   */ "Fechar editor",
+        /* ru      */ "Закрыть редактор",
+        /* zh_hans */ "关闭编辑器",
+        /* zh_hant */ "關閉編輯器",
     ],
     // FileExit
     [

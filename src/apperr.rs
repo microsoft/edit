@@ -1,5 +1,4 @@
-use crate::loc::{LocId, loc};
-use crate::{icu, sys};
+use crate::sys;
 use std::io;
 use std::result;
 
@@ -26,15 +25,6 @@ impl Error {
 
     pub const fn new_sys(code: u32) -> Self {
         Error::Sys(code)
-    }
-
-    pub fn message(&self) -> String {
-        match *self {
-            APP_ICU_MISSING => loc(LocId::ErrorIcuMissing).to_string(),
-            Error::App(code) => format!("Unknown app error code: {code}"),
-            Error::Icu(code) => icu::apperr_format(code),
-            Error::Sys(code) => sys::apperr_format(code),
-        }
     }
 }
 

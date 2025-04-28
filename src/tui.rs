@@ -6,6 +6,7 @@ use crate::helpers::{CoordType, Point, Rect, Size, hash, hash_str, opt_ptr_eq, w
 use crate::input::{InputKeyMod, kbmod, vk};
 use crate::ucd::Document;
 use crate::{apperr, helpers, input, ucd};
+use std::arch::breakpoint;
 use std::fmt::Write as _;
 use std::iter;
 use std::mem;
@@ -33,10 +34,17 @@ enum TextBufferPayload<'a> {
     Textarea(RcTextBuffer),
 }
 
+pub struct ModifierTranslations {
+    pub ctrl: &'static str,
+    pub alt: &'static str,
+    pub shift: &'static str,
+}
+
 pub struct Tui {
     framebuffer: Framebuffer,
     read_timeout: time::Duration,
 
+    modifier_translations: ModifierTranslations,
     floater_default_bg: u32,
     floater_default_fg: u32,
     modal_default_bg: u32,
@@ -87,6 +95,11 @@ impl Tui {
             framebuffer: Framebuffer::new(),
             read_timeout: time::Duration::MAX,
 
+            modifier_translations: ModifierTranslations {
+                ctrl: "Ctrl",
+                alt: "Alt",
+                shift: "Shift",
+            },
             floater_default_bg: 0,
             floater_default_fg: 0,
             modal_default_bg: 0,
@@ -134,9 +147,12 @@ impl Tui {
         self.size
     }
 
-    /// Sets up indexed colors for the TUI context.
     pub fn setup_indexed_colors(&mut self, colors: [u32; INDEXED_COLORS_COUNT]) {
         self.framebuffer.set_indexed_colors(colors);
+    }
+
+    pub fn setup_modifier_translations(&mut self, translations: ModifierTranslations) {
+        self.modifier_translations = translations;
     }
 
     pub fn set_floater_default_bg(&mut self, color: u32) {
@@ -489,7 +505,9 @@ impl Tui {
         // If the focus has changed, the new node may need to be re-rendered.
         // Same, every time we encounter a previously unknown node via `get_prev_node`,
         // because that means it likely failed to get crucial information such as the layout size.
-        debug_assert!(self.settling_have < 20);
+        if cfg!(debug_assertions) && self.settling_have == 15 {
+            breakpoint();
+        }
         self.settling_want = (self.settling_have + 1).min(20);
     }
 
@@ -608,12 +626,14 @@ impl Tui {
 
         match &mut node.content {
             NodeContent::Modal(title) => {
-                self.framebuffer.replace_text(
-                    node.outer.top,
-                    node.outer.left + 2,
-                    node.outer.right - 1,
-                    title,
-                );
+                if !title.is_empty() {
+                    self.framebuffer.replace_text(
+                        node.outer.top,
+                        node.outer.left + 2,
+                        node.outer.right - 1,
+                        title,
+                    );
+                }
             }
             NodeContent::Text(content) => {
                 if !inner_clipped.is_empty() {
@@ -1130,7 +1150,7 @@ impl<'a> Context<'a, '_> {
 
     pub fn needs_rerender(&mut self) {
         // If this hits, the call stack is responsible is trying to deadlock you.
-        debug_assert!(self.tui.settling_have < 100);
+        debug_assert!(self.tui.settling_have < 15);
         self.needs_settling = true;
     }
 
@@ -1379,7 +1399,12 @@ impl<'a> Context<'a, '_> {
         self.focus_on_first_present();
 
         let mut last_node = self.tree.last_node.borrow_mut();
-        last_node.content = NodeContent::Modal(arena_format!(self.arena(), " {} ", title));
+        let title = if title.is_empty() {
+            ArenaString::new_in(self.arena())
+        } else {
+            arena_format!(self.arena(), " {} ", title)
+        };
+        last_node.content = NodeContent::Modal(title);
         self.last_modal = Some(self.tree.last_node);
     }
 
@@ -2649,13 +2674,16 @@ impl<'a> Context<'a, '_> {
         if shortcut_letter.is_ascii_uppercase() {
             let mut shortcut_text = self.arena().new_string();
             if shortcut.modifiers_contains(kbmod::CTRL) {
-                shortcut_text.push_str("Ctrl+");
+                shortcut_text.push_str(self.tui.modifier_translations.ctrl);
+                shortcut_text.push('+');
             }
             if shortcut.modifiers_contains(kbmod::ALT) {
-                shortcut_text.push_str("Alt+");
+                shortcut_text.push_str(self.tui.modifier_translations.alt);
+                shortcut_text.push('+');
             }
             if shortcut.modifiers_contains(kbmod::SHIFT) {
-                shortcut_text.push_str("Shift+");
+                shortcut_text.push_str(self.tui.modifier_translations.shift);
+                shortcut_text.push('+');
             }
             shortcut_text.push(shortcut_letter);
 
@@ -2707,6 +2735,7 @@ impl<'a> Tree<'a> {
             let mut r = root.borrow_mut();
             r.id = ROOT_ID;
             r.classname = "root";
+            r.attributes.focusable = true;
             r.attributes.focus_well = true;
         }
         Self {
@@ -3227,9 +3256,11 @@ impl Node<'_> {
                 total_height += total_gap_height;
 
                 // Assign the total width/height to the table.
-                self.intrinsic_size.width = total_width;
-                self.intrinsic_size.height = total_height;
-                self.intrinsic_size_set = true;
+                if !self.intrinsic_size_set {
+                    self.intrinsic_size.width = total_width;
+                    self.intrinsic_size.height = total_height;
+                    self.intrinsic_size_set = true;
+                }
             }
             _ => {
                 let mut max_width = 0;

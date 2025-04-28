@@ -1,0 +1,143 @@
+use crate::documents::DocumentManager;
+use crate::loc::*;
+use edit::framebuffer::IndexedColor;
+use edit::helpers::*;
+use edit::icu;
+use edit::sys;
+use edit::tui::*;
+use edit::{apperr, buffer};
+use std::path::PathBuf;
+
+#[repr(transparent)]
+pub struct FormatApperr(apperr::Error);
+
+impl From<apperr::Error> for FormatApperr {
+    fn from(err: apperr::Error) -> Self {
+        FormatApperr(err)
+    }
+}
+
+impl std::fmt::Display for FormatApperr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            apperr::APP_ICU_MISSING => f.write_str(loc(LocId::ErrorIcuMissing)),
+            apperr::Error::App(code) => write!(f, "Unknown app error code: {code}"),
+            apperr::Error::Icu(code) => icu::apperr_format(f, code),
+            apperr::Error::Sys(code) => sys::apperr_format(f, code),
+        }
+    }
+}
+
+pub struct StateSearch {
+    pub kind: StateSearchKind,
+    pub focus: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum StateSearchKind {
+    Hidden,
+    Disabled,
+    Search,
+    Replace,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum StateFilePicker {
+    None,
+    Open,
+    SaveAs,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum StateEncodingChange {
+    None,
+    Convert,
+    Reopen,
+}
+
+pub struct State {
+    pub menubar_color_bg: u32,
+    pub menubar_color_fg: u32,
+
+    pub documents: DocumentManager,
+
+    // A ring buffer of the last 10 errors.
+    pub error_log: [String; 10],
+    pub error_log_index: usize,
+    pub error_log_count: usize,
+
+    pub wants_file_picker: StateFilePicker,
+    pub file_picker_pending_dir: DisplayablePathBuf,
+    pub file_picker_pending_name: String, // This could be PathBuf, if `tui` would expose its TextBuffer for editline.
+    pub file_picker_entries: Option<Vec<DisplayablePathBuf>>,
+    pub file_picker_overwrite_warning: Option<PathBuf>, // The path the warning is about.
+
+    pub wants_search: StateSearch,
+    pub search_needle: String,
+    pub search_replacement: String,
+    pub search_options: buffer::SearchOptions,
+    pub search_success: bool,
+
+    pub wants_save: bool,
+    pub wants_statusbar_focus: bool,
+    pub wants_encoding_picker: bool,
+    pub wants_encoding_change: StateEncodingChange,
+    pub wants_indentation_picker: bool,
+    pub wants_document_picker: bool,
+    pub wants_about: bool,
+    pub wants_close: bool,
+    pub wants_exit: bool,
+
+    pub osc_title_filename: String,
+    pub osc_clipboard_generation: u32,
+    pub exit: bool,
+}
+
+pub fn draw_add_untitled_document(ctx: &mut Context, state: &mut State) {
+    if let Err(err) = state.documents.add_untitled() {
+        error_log_add(ctx, state, err);
+    }
+}
+
+pub fn error_log_add(ctx: &mut Context, state: &mut State, err: apperr::Error) {
+    let msg = format!("{}", FormatApperr::from(err));
+    if !msg.is_empty() {
+        state.error_log[state.error_log_index] = msg;
+        state.error_log_index = (state.error_log_index + 1) % state.error_log.len();
+        state.error_log_count = state.error_log.len().min(state.error_log_count + 1);
+        ctx.needs_rerender();
+    }
+}
+
+pub fn draw_error_log(ctx: &mut Context, state: &mut State) {
+    ctx.modal_begin("errors", "Error");
+    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+    {
+        ctx.block_begin("content");
+        ctx.attr_padding(Rect::three(0, 2, 1));
+        {
+            let off = state.error_log_index + state.error_log.len() - state.error_log_count;
+
+            for i in 0..state.error_log_count {
+                let idx = (off + i) % state.error_log.len();
+                let msg = &state.error_log[idx][..];
+
+                if !msg.is_empty() {
+                    ctx.next_block_id_mixin(i as u64);
+                    ctx.label("error", Overflow::TruncateTail, msg);
+                }
+            }
+        }
+        ctx.block_end();
+
+        if ctx.button("ok", Overflow::Clip, "Ok") {
+            state.error_log_count = 0;
+        }
+        ctx.attr_position(Position::Center);
+        ctx.inherit_focus();
+    }
+    if ctx.modal_end() {
+        state.error_log_count = 0;
+    }
+}

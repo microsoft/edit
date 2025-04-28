@@ -3,6 +3,10 @@ name = "edit"
 version = "0.3.0"
 edition = "2024"
 
+[[bench]]
+name = "lib"
+harness = false
+
 [features]
 debug-layout = []
 debug-latency = []
@@ -47,7 +51,3 @@ features = [
 
 [dev-dependencies]
 criterion = "0.5"
-
-[[bench]]
-name = "lib"
-harness = false

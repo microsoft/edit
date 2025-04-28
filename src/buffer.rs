@@ -511,6 +511,16 @@ impl TextBuffer {
         self.mark_as_clean();
     }
 
+    pub fn read_file_path(
+        &mut self,
+        path: &Path,
+        encoding: Option<&'static str>,
+    ) -> apperr::Result<()> {
+        let mut file = File::open(path)?;
+        self.read_file(&mut file, encoding)?;
+        Ok(())
+    }
+
     /// Reads a file from disk into the text buffer, detecting encoding and BOM.
     pub fn read_file(
         &mut self,
@@ -2281,6 +2291,7 @@ impl TextBuffer {
     }
 
     fn undo_redo(&mut self, undo: bool) {
+        // Transfer the last entry from the undo stack to the redo stack or vice versa.
         {
             let (from, to) = if undo {
                 (&mut self.undo_stack, &mut self.redo_stack)
@@ -2288,12 +2299,11 @@ impl TextBuffer {
                 (&mut self.redo_stack, &mut self.undo_stack)
             };
 
-            let len = from.len();
-            if len == 0 {
+            let Some(list) = from.cursor_back_mut().remove_current_as_list() else {
                 return;
-            }
+            };
 
-            to.append(&mut from.split_off(len - 1));
+            to.cursor_back_mut().splice_after(list);
         }
 
         let change = {
@@ -2584,7 +2594,7 @@ impl GapBuffer {
         while beg < end {
             let chunk = self.read_forward(beg);
             let chunk = &chunk[..chunk.len().min(end - beg)];
-            helpers::vec_insert_at(out, out_off, chunk);
+            helpers::vec_replace(out, out_off, 0, chunk);
             beg += chunk.len();
             out_off += chunk.len();
         }

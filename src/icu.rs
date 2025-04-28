@@ -39,7 +39,7 @@ pub fn get_available_encodings() -> &'static [DisplayableCString] {
     }
 }
 
-pub fn apperr_format(code: u32) -> String {
+pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
     fn format(code: u32) -> &'static str {
         let Ok(f) = init_if_needed() else {
             return "";
@@ -57,9 +57,9 @@ pub fn apperr_format(code: u32) -> String {
 
     let msg = format(code);
     if !msg.is_empty() {
-        format!("ICU Error: {msg}")
+        write!(f, "ICU Error: {msg}")
     } else {
-        format!("ICU Error: {code:#08x}")
+        write!(f, "ICU Error: {code:#08x}")
     }
 }
 

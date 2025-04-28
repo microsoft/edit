@@ -346,16 +346,18 @@ impl DisplayableCString {
     }
 }
 
+#[inline(always)]
+#[allow(clippy::ptr_eq)]
+pub fn opt_ptr<T>(a: Option<&T>) -> *const T {
+    unsafe { mem::transmute(a) }
+}
+
 /// Surprisingly, there's no way in Rust to do a `ptr::eq` on `Option<&T>`.
 /// Uses `unsafe` so that the debug performance isn't too bad.
 #[inline(always)]
 #[allow(clippy::ptr_eq)]
 pub fn opt_ptr_eq<T>(a: Option<&T>, b: Option<&T>) -> bool {
-    unsafe {
-        let a: *const T = mem::transmute(a);
-        let b: *const T = mem::transmute(b);
-        a == b
-    }
+    opt_ptr(a) == opt_ptr(b)
 }
 
 /// Creates a `&str` from a pointer and a length.
@@ -383,42 +385,49 @@ pub const unsafe fn str_from_raw_parts_mut<'a>(ptr: *mut u8, len: usize) -> &'a 
     unsafe { str::from_utf8_unchecked_mut(slice::from_raw_parts_mut(ptr, len)) }
 }
 
-pub fn vec_insert_at<T: Copy>(dst: &mut Vec<T>, off: usize, src: &[T]) {
+pub fn vec_replace<T: Copy>(dst: &mut Vec<T>, off: usize, remove: usize, src: &[T]) {
     unsafe {
         let dst_len = dst.len();
         let src_len = src.len();
-
-        // Make room for the new elements. NOTE that this must be done before
-        // we call as_mut_ptr, or else we risk accessing a stale pointer.
-        dst.reserve(src_len);
-
         let off = off.min(dst_len);
-        let ptr = dst.as_mut_ptr().add(off);
+        let del_len = remove.min(dst_len - off);
 
-        if off < dst_len {
-            // Move the tail of the vector to make room for the new elements.
-            ptr::copy(ptr, ptr.add(src_len), dst_len - off);
+        if del_len == 0 && src_len == 0 {
+            return; // nothing to do
         }
 
-        // Copy the new elements into the vector.
-        ptr::copy_nonoverlapping(src.as_ptr(), ptr, src_len);
-        // Update the length of the vector.
-        dst.set_len(dst_len + src_len);
-    }
-}
+        let tail_len = dst_len - off - del_len;
+        let new_len = dst_len - del_len + src_len;
 
-// How many functions do you want stuck in unstable? Oh all of them? Okay.
-pub fn string_from_utf8_lossy_owned(v: Vec<u8>) -> String {
-    if let Cow::Owned(string) = String::from_utf8_lossy(&v) {
-        string
-    } else {
-        unsafe { String::from_utf8_unchecked(v) }
+        if src_len > del_len {
+            dst.reserve(src_len - del_len);
+        }
+
+        // SAFETY: as_mut_ptr() must called after reserve() to ensure that the pointer is valid.
+        let ptr = dst.as_mut_ptr().add(off);
+
+        // Shift the tail.
+        if tail_len > 0 && src_len != del_len {
+            ptr::copy(ptr.add(del_len), ptr.add(src_len), tail_len);
+        }
+
+        // Copy in the replacement.
+        ptr::copy_nonoverlapping(src.as_ptr(), ptr, src_len);
+        dst.set_len(new_len);
     }
 }
 
 pub fn vec_replace_all_reuse<T: Clone>(dst: &mut Vec<T>, src: &[T]) {
     dst.clear();
     dst.extend_from_slice(src);
+}
+
+pub fn string_from_utf8_lossy_owned(v: Vec<u8>) -> String {
+    if let Cow::Owned(string) = String::from_utf8_lossy(&v) {
+        string
+    } else {
+        unsafe { String::from_utf8_unchecked(v) }
+    }
 }
 
 pub fn file_read_uninit<T: Read>(

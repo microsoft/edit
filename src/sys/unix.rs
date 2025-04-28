@@ -495,19 +495,18 @@ pub fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
     errno_to_apperr(err.raw_os_error().unwrap_or(0))
 }
 
-pub fn apperr_format(code: u32) -> String {
-    let mut result = format!("Error {code}");
+pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
+    write!(f, "Error {code}")?;
 
     unsafe {
         let ptr = libc::strerror(code as i32);
         if !ptr.is_null() {
             let msg = CStr::from_ptr(ptr).to_string_lossy();
-            result.push_str(": ");
-            result.push_str(&msg);
+            write!(f, ": {msg}")?;
         }
     }
 
-    result
+    Ok(())
 }
 
 pub fn apperr_is_not_found(err: apperr::Error) -> bool {
