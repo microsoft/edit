@@ -308,8 +308,8 @@ pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {
             if state.documents.update_active(|doc| {
                 let tb = doc.buffer.borrow();
                 let title = format!(
-                    "{0} {1}",
-                    (if tb.is_dirty() { "*" } else { " " }),
+                    "{} {}",
+                    (if tb.is_dirty() { '*' } else { ' ' }),
                     doc.filename
                 );
                 ctx.list_item(ptr::eq(doc, active), Overflow::TruncateMiddle, &title)
