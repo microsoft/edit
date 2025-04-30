@@ -1,10 +1,8 @@
 use crate::apperr;
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::ffi::{CStr, CString, OsStr, OsString, c_char};
 use std::io::Read;
 use std::mem::{self, MaybeUninit};
-use std::path::{Path, PathBuf};
 use std::ptr;
 use std::slice;
 use std::str;
@@ -255,97 +253,6 @@ where
     if v2 < v1 { [v2, v1] } else { [v1, v2] }
 }
 
-pub struct DisplayablePathBuf {
-    value: PathBuf,
-    str: Cow<'static, str>,
-}
-
-impl DisplayablePathBuf {
-    pub fn new(value: PathBuf) -> Self {
-        let str = value.to_string_lossy();
-        let str = unsafe { mem::transmute(str) };
-        Self { value, str }
-    }
-
-    pub fn as_path(&self) -> &Path {
-        &self.value
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.str
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        self.value.as_os_str().as_encoded_bytes()
-    }
-
-    pub fn clone_path_buf(&self) -> PathBuf {
-        self.value.clone()
-    }
-
-    pub fn take(self) -> PathBuf {
-        self.value
-    }
-}
-
-impl Default for DisplayablePathBuf {
-    fn default() -> Self {
-        Self {
-            value: PathBuf::default(),
-            str: Cow::Borrowed(""),
-        }
-    }
-}
-
-impl Clone for DisplayablePathBuf {
-    fn clone(&self) -> Self {
-        DisplayablePathBuf::new(self.value.clone())
-    }
-}
-
-impl From<OsString> for DisplayablePathBuf {
-    fn from(s: OsString) -> DisplayablePathBuf {
-        DisplayablePathBuf::new(PathBuf::from(s))
-    }
-}
-
-impl<T: ?Sized + AsRef<OsStr>> From<&T> for DisplayablePathBuf {
-    fn from(s: &T) -> DisplayablePathBuf {
-        DisplayablePathBuf::new(PathBuf::from(s))
-    }
-}
-
-pub struct DisplayableCString {
-    value: CString,
-    str: Cow<'static, str>,
-}
-
-impl DisplayableCString {
-    pub fn new(value: CString) -> Self {
-        let str = value.to_string_lossy();
-        let str = unsafe { mem::transmute(str) };
-        Self { value, str }
-    }
-
-    /// Creates a new `DisplayableCString` from a C string.
-    ///
-    /// # Safety
-    ///
-    /// Just as unsafe as the corresponding `CStr::from_ptr` method.
-    pub unsafe fn from_ptr(ptr: *const c_char) -> Self {
-        let s = unsafe { CStr::from_ptr(ptr) };
-        Self::new(s.to_owned())
-    }
-
-    pub fn as_cstr(&self) -> &CStr {
-        &self.value
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.str
-    }
-}
-
 #[inline(always)]
 #[allow(clippy::ptr_eq)]
 pub fn opt_ptr<T>(a: Option<&T>) -> *const T {
@@ -438,26 +345,6 @@ pub fn file_read_uninit<T: Read>(
         let buf_slice = slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len());
         let n = file.read(buf_slice)?;
         Ok(n)
-    }
-}
-
-/// Strips all C0 control characters from the string an replaces them with "_".
-///
-/// Jury is still out on whether this should also strip C1 control characters.
-/// That requires parsing UTF8 codepoints, which is annoying.
-pub fn sanitize_control_chars(text: &str) -> Cow<'_, str> {
-    if let Some(off) = text.bytes().position(|b| (..0x20).contains(&b)) {
-        let mut sanitized = text.to_string();
-        // SAFETY: We only search for ASCII and replace it with ASCII.
-        let vec = unsafe { sanitized.as_bytes_mut() };
-
-        for i in &mut vec[off..] {
-            *i = if (..0x20).contains(i) { b'_' } else { *i }
-        }
-
-        Cow::Owned(sanitized)
-    } else {
-        Cow::Borrowed(text)
     }
 }
 

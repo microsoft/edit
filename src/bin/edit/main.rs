@@ -17,13 +17,13 @@ use edit::apperr;
 use edit::base64;
 use edit::buffer::TextBuffer;
 use edit::framebuffer::{self, IndexedColor, alpha_blend};
-use edit::helpers::*;
 use edit::input::{self, kbmod, vk};
 use edit::sys;
 use edit::tui::*;
 use edit::vt::{self, Token};
 use loc::*;
 use state::*;
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::process;
 
@@ -517,4 +517,24 @@ fn query_color_palette(tui: &mut Tui, vt_parser: &mut vt::Parser) {
     }
 
     tui.setup_indexed_colors(indexed_colors);
+}
+
+/// Strips all C0 control characters from the string an replaces them with "_".
+///
+/// Jury is still out on whether this should also strip C1 control characters.
+/// That requires parsing UTF8 codepoints, which is annoying.
+fn sanitize_control_chars(text: &str) -> Cow<'_, str> {
+    if let Some(off) = text.bytes().position(|b| (..0x20).contains(&b)) {
+        let mut sanitized = text.to_string();
+        // SAFETY: We only search for ASCII and replace it with ASCII.
+        let vec = unsafe { sanitized.as_bytes_mut() };
+
+        for i in &mut vec[off..] {
+            *i = if (..0x20).contains(i) { b'_' } else { *i }
+        }
+
+        Cow::Owned(sanitized)
+    } else {
+        Cow::Borrowed(text)
+    }
 }

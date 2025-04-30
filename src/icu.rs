@@ -1,22 +1,19 @@
 use crate::buffer::TextBuffer;
-use crate::helpers::DisplayableCString;
 use crate::utf8::Utf8Chars;
 use crate::{apperr, sys};
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::ptr::{null, null_mut};
 use std::{cmp, mem};
 
-static mut ENCODINGS: Option<Vec<DisplayableCString>> = None;
+static mut ENCODINGS: Vec<&'static str> = Vec::new();
 
-pub fn get_available_encodings() -> &'static [DisplayableCString] {
+pub fn get_available_encodings() -> &'static [&'static str] {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     unsafe {
-        if ENCODINGS.is_none() {
-            let mut encodings = Vec::new();
-
+        if ENCODINGS.is_empty() {
             if let Ok(f) = init_if_needed() {
                 let mut n = 0;
                 loop {
@@ -24,18 +21,16 @@ pub fn get_available_encodings() -> &'static [DisplayableCString] {
                     if name.is_null() {
                         break;
                     }
-                    encodings.push(DisplayableCString::from_ptr(name));
+                    ENCODINGS.push(CStr::from_ptr(name).to_str().unwrap_unchecked());
                     n += 1;
                 }
             }
 
-            if encodings.is_empty() {
-                encodings.push(DisplayableCString::new(CString::new("UTF-8").unwrap()));
+            if ENCODINGS.is_empty() {
+                ENCODINGS.push("UTF-8");
             }
-
-            ENCODINGS = Some(encodings);
         }
-        ENCODINGS.as_ref().unwrap_unchecked().as_slice()
+        &ENCODINGS
     }
 }
 

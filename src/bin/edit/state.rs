@@ -6,6 +6,10 @@ use edit::icu;
 use edit::sys;
 use edit::tui::*;
 use edit::{apperr, buffer};
+use std::borrow::Cow;
+use std::ffi::{OsStr, OsString};
+use std::mem;
+use std::path::Path;
 use std::path::PathBuf;
 
 #[repr(transparent)]
@@ -25,6 +29,58 @@ impl std::fmt::Display for FormatApperr {
             apperr::Error::Icu(code) => icu::apperr_format(f, code),
             apperr::Error::Sys(code) => sys::apperr_format(f, code),
         }
+    }
+}
+
+pub struct DisplayablePathBuf {
+    value: PathBuf,
+    str: Cow<'static, str>,
+}
+
+impl DisplayablePathBuf {
+    pub fn new(value: PathBuf) -> Self {
+        let str = value.to_string_lossy();
+        let str = unsafe { mem::transmute::<Cow<'_, str>, Cow<'_, str>>(str) };
+        Self { value, str }
+    }
+
+    pub fn as_path(&self) -> &Path {
+        &self.value
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.str
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.value.as_os_str().as_encoded_bytes()
+    }
+}
+
+impl Default for DisplayablePathBuf {
+    fn default() -> Self {
+        Self {
+            value: PathBuf::default(),
+            str: Cow::Borrowed(""),
+        }
+    }
+}
+
+impl Clone for DisplayablePathBuf {
+    fn clone(&self) -> Self {
+        DisplayablePathBuf::new(self.value.clone())
+    }
+}
+
+impl From<OsString> for DisplayablePathBuf {
+    fn from(s: OsString) -> DisplayablePathBuf {
+        DisplayablePathBuf::new(PathBuf::from(s))
+    }
+}
+
+impl<T: ?Sized + AsRef<OsStr>> From<&T> for DisplayablePathBuf {
+    fn from(s: &T) -> DisplayablePathBuf {
+        DisplayablePathBuf::new(PathBuf::from(s))
     }
 }
 

@@ -5,6 +5,7 @@ pub use debug::*;
 #[cfg(not(debug_assertions))]
 pub use release::*;
 
+#[allow(unused)]
 #[cfg(debug_assertions)]
 mod debug {
     pub type SemiRefCell<T> = std::cell::RefCell<T>;

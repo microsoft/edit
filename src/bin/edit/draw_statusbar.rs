@@ -247,11 +247,11 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
 
             ctx.list_begin("encodings");
             ctx.inherit_focus();
-            for encoding in encodings {
+            for &encoding in encodings {
                 if ctx.list_item(
-                    encoding.as_str() == doc.buffer.borrow().encoding(),
+                    encoding == doc.buffer.borrow().encoding(),
                     Overflow::Clip,
-                    encoding.as_str(),
+                    encoding,
                 ) == ListSelection::Activated
                 {
                     change = Some(encoding);
@@ -275,14 +275,14 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
                 res = tb.write_file(path);
             }
             if res.is_ok() {
-                res = tb.read_file_path(path, Some(encoding.as_str()));
+                res = tb.read_file_path(path, Some(encoding));
             }
             if let Err(err) = res {
                 drop(tb);
                 error_log_add(ctx, state, err);
             }
         } else {
-            tb.set_encoding(encoding.as_str());
+            tb.set_encoding(encoding);
         }
 
         state.wants_encoding_change = StateEncodingChange::None;
