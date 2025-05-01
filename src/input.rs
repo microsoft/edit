@@ -451,11 +451,12 @@ impl<'input> Stream<'_, '_, 'input> {
         let mut end = beg;
 
         while let Some(token) = self.stream.next() {
-            if let vt::Token::Csi(csi) = token {
-                if csi.final_byte == '~' && csi.params[0] == 201 {
-                    self.parser.bracketed_paste = false;
-                    break;
-                }
+            if let vt::Token::Csi(csi) = token
+                && csi.final_byte == '~'
+                && csi.params[0] == 201
+            {
+                self.parser.bracketed_paste = false;
+                break;
             }
             end = self.stream.offset();
         }

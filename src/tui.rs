@@ -382,10 +382,10 @@ impl Tui {
         // out where is to do a binary search of commenting out code in main.rs.
         debug_assert!(ctx.tree.current_node.borrow().stack_parent.is_none());
 
-        if let Some(node) = ctx.last_modal {
-            if !self.is_subtree_focused(node.borrow().id) {
-                ctx.steal_focus_for(node);
-            }
+        if let Some(node) = ctx.last_modal
+            && !self.is_subtree_focused(node.borrow().id)
+        {
+            ctx.steal_focus_for(node);
         }
 
         // If nodes have appeared or disappeared, we need to re-render.
@@ -766,12 +766,12 @@ impl Tui {
                 result.push_repeat(' ', depth * 2);
                 _ = write!(result, "  classname:    {}\r\n", node.classname);
 
-                if depth == 0 {
-                    if let Some(parent) = node.parent {
-                        let parent = parent.borrow();
-                        result.push_repeat(' ', depth * 2);
-                        _ = write!(result, "  parent:       {:016x}\r\n", parent.id);
-                    }
+                if depth == 0
+                    && let Some(parent) = node.parent
+                {
+                    let parent = parent.borrow();
+                    result.push_repeat(' ', depth * 2);
+                    _ = write!(result, "  parent:       {:016x}\r\n", parent.id);
                 }
 
                 result.push_repeat(' ', depth * 2);
@@ -967,11 +967,11 @@ impl Tui {
                 next = if input == vk::LEFT { row.children.last } else { row.children.first };
             }
 
-            if let Some(next) = next {
-                if !ptr::eq(&*next.borrow(), &*cell) {
-                    Tui::build_node_path(Some(next), &mut self.focused_node_path);
-                    return true;
-                }
+            if let Some(next) = next
+                && !ptr::eq(&*next.borrow(), &*cell)
+            {
+                Tui::build_node_path(Some(next), &mut self.focused_node_path);
+                return true;
             }
 
             return false;
@@ -1669,10 +1669,8 @@ impl<'a> Context<'a, '_> {
         {
             let mut tb = content.buffer.borrow_mut();
             dirty = tb.is_dirty();
-            if dirty {
-                if let TextBufferPayload::Editline(text) = payload {
-                    tb.save_as_string(text);
-                }
+            if dirty && let TextBufferPayload::Editline(text) = payload {
+                tb.save_as_string(text);
             }
         }
 
@@ -2220,10 +2218,10 @@ impl<'a> Context<'a, '_> {
 
         if let Some(prev_container) = self.tui.prev_node_map.get(container_id) {
             let prev_container = prev_container.borrow();
-            if sc.scroll_offset == Point::MIN {
-                if let NodeContent::Scrollarea(sc_prev) = &prev_container.content {
-                    *sc = sc_prev.clone();
-                }
+            if sc.scroll_offset == Point::MIN
+                && let NodeContent::Scrollarea(sc_prev) = &prev_container.content
+            {
+                *sc = sc_prev.clone();
             }
 
             if !self.input_consumed && self.tui.mouse_state != InputMouseState::None {

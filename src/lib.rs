@@ -1,6 +1,7 @@
 #![feature(
     allocator_api,
     breakpoint,
+    let_chains,
     linked_list_cursors,
     maybe_uninit_uninit_array_transpose,
     os_string_truncate
@@ -18,6 +19,7 @@ pub mod framebuffer;
 pub mod helpers;
 pub mod icu;
 pub mod input;
+pub mod path;
 pub mod simd;
 pub mod sys;
 pub mod tui;

@@ -11,10 +11,9 @@ mod state;
 use std::borrow::Cow;
 #[cfg(feature = "debug-latency")]
 use std::fmt::Write;
-use std::path::PathBuf;
-use std::process;
+use std::path::Path;
+use std::{env, process};
 
-use documents::DocumentPath;
 use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
@@ -27,7 +26,7 @@ use edit::framebuffer::{self, IndexedColor, alpha_blend};
 use edit::input::{self, kbmod, vk};
 use edit::tui::*;
 use edit::vt::{self, Token};
-use edit::{apperr, base64, sys};
+use edit::{apperr, base64, path, sys};
 use loc::*;
 use state::*;
 
@@ -114,13 +113,13 @@ fn run() -> apperr::Result<()> {
     // `set_modes()` will enable mouse mode which is equally annoying to switch out for users
     // and so we do it afterwards, for similar reasons.
     sys::switch_modes()?;
-    let _restore_vt_modes = set_vt_modes();
 
     let mut vt_parser = vt::Parser::new();
     let mut input_parser = input::Parser::new();
     let mut tui = Tui::new()?;
 
-    query_color_palette(&mut tui, &mut vt_parser);
+    let _restore = setup_terminal(&mut tui, &mut vt_parser);
+
     state.menubar_color_bg = alpha_blend(
         tui.indexed(IndexedColor::Background),
         tui.indexed_alpha(IndexedColor::BrightBlue, 0x7f),
@@ -267,10 +266,11 @@ fn run() -> apperr::Result<()> {
 
 // Returns true if the application should exit early.
 fn handle_args(state: &mut State) -> apperr::Result<bool> {
+    let mut cwd = env::current_dir()?;
     let mut path = None;
 
     // The best CLI argument parser in the world.
-    if let Some(arg) = std::env::args_os().nth(1) {
+    if let Some(arg) = env::args_os().nth(1) {
         if arg == "-h" || arg == "--help" || (cfg!(windows) && arg == "/?") {
             print_help();
             return Ok(true);
@@ -280,7 +280,12 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         } else if arg == "-" {
             // We'll check for a redirected stdin no matter what, so we can just ignore "-".
         } else {
-            path = Some(PathBuf::from(arg));
+            let p = cwd.join(Path::new(&arg));
+            let p = path::normalize(&p);
+            if let Some(parent) = p.parent() {
+                cwd = parent.to_path_buf();
+            }
+            path = Some(p);
         }
     }
 
@@ -296,14 +301,6 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         doc = state.documents.add_untitled()?;
     }
 
-    let cwd = match &doc.path {
-        DocumentPath::Canonical(path) => path.parent(),
-        _ => None,
-    };
-    let cwd = match cwd {
-        Some(cwd) => cwd.to_path_buf(),
-        None => std::env::current_dir()?,
-    };
     state.file_picker_pending_dir = DisplayablePathBuf::new(cwd);
     state.file_picker_pending_name = doc.filename.clone();
 
@@ -399,17 +396,6 @@ fn draw_handle_wants_exit(_ctx: &mut Context, state: &mut State) {
     }
 }
 
-fn set_vt_modes() -> RestoreModes {
-    // 1049: Alternative Screen Buffer
-    //   I put the ASB switch in the beginning, just in case the terminal performs
-    //   some additional state tracking beyond the modes we enable/disable.
-    // 1002: Cell Motion Mouse Tracking
-    // 1006: SGR Mouse Mode
-    // 2004: Bracketed Paste Mode
-    sys::write_stdout("\x1b[?1049h\x1b[?1002;1006;2004h");
-    RestoreModes
-}
-
 #[cold]
 fn write_terminal_title(output: &mut ArenaString, filename: &str) {
     output.push_str("\x1b]0;");
@@ -445,10 +431,15 @@ impl Drop for RestoreModes {
     }
 }
 
-fn query_color_palette(tui: &mut Tui, vt_parser: &mut vt::Parser) {
-    let mut indexed_colors = framebuffer::DEFAULT_THEME;
-
+fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
     sys::write_stdout(concat!(
+        // 1049: Alternative Screen Buffer
+        //   I put the ASB switch in the beginning, just in case the terminal performs
+        //   some additional state tracking beyond the modes we enable/disable.
+        // 1002: Cell Motion Mouse Tracking
+        // 1006: SGR Mouse Mode
+        // 2004: Bracketed Paste Mode
+        "\x1b[?1049h\x1b[?1002;1006;2004h",
         // OSC 4 color table requests for indices 0 through 15 (base colors).
         "\x1b]4;0;?;1;?;2;?;3;?;4;?;5;?;6;?;7;?\x07",
         "\x1b]4;8;?;9;?;10;?;11;?;12;?;13;?;14;?;15;?\x07",
@@ -462,6 +453,7 @@ fn query_color_palette(tui: &mut Tui, vt_parser: &mut vt::Parser) {
 
     let mut done = false;
     let mut osc_buffer = String::new();
+    let mut indexed_colors = framebuffer::DEFAULT_THEME;
 
     while !done {
         let scratch = scratch_arena(None);
@@ -528,6 +520,8 @@ fn query_color_palette(tui: &mut Tui, vt_parser: &mut vt::Parser) {
     }
 
     tui.setup_indexed_colors(indexed_colors);
+
+    RestoreModes
 }
 
 /// Strips all C0 control characters from the string an replaces them with "_".

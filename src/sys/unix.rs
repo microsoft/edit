@@ -1,7 +1,7 @@
 use std::ffi::{CStr, c_int, c_void};
 use std::fs::{self, File};
 use std::mem::{self, MaybeUninit};
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd as _, FromRawFd as _};
 use std::ptr::{self, NonNull, null, null_mut};
 use std::{thread, time};
 
@@ -303,6 +303,22 @@ pub fn open_stdin_if_redirected() -> Option<File> {
         } else {
             None
         }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct FileId {
+    st_dev: libc::dev_t,
+    st_ino: libc::ino_t,
+}
+
+/// Returns a unique identifier for the given file.
+pub fn file_id(file: &File) -> apperr::Result<FileId> {
+    unsafe {
+        let mut stat = MaybeUninit::<libc::stat>::uninit();
+        check_int_return(libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()))?;
+        let stat = stat.assume_init();
+        Ok(FileId { st_dev: stat.st_dev, st_ino: stat.st_ino })
     }
 }
 

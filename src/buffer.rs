@@ -21,7 +21,6 @@ use std::fs::File;
 use std::io::{Read as _, Write as _};
 use std::mem::{self, MaybeUninit};
 use std::ops::Range;
-use std::path::Path;
 use std::ptr::{self, NonNull};
 use std::rc::Rc;
 use std::{slice, str};
@@ -494,16 +493,6 @@ impl TextBuffer {
         self.mark_as_clean();
     }
 
-    pub fn read_file_path(
-        &mut self,
-        path: &Path,
-        encoding: Option<&'static str>,
-    ) -> apperr::Result<()> {
-        let mut file = File::open(path)?;
-        self.read_file(&mut file, encoding)?;
-        Ok(())
-    }
-
     /// Reads a file from disk into the text buffer, detecting encoding and BOM.
     pub fn read_file(
         &mut self,
@@ -764,9 +753,7 @@ impl TextBuffer {
     }
 
     /// Writes the text buffer contents to a file, handling BOM and encoding.
-    pub fn write_file(&mut self, path: &Path) -> apperr::Result<()> {
-        // TODO: Write to a temp file and do an atomic rename.
-        let mut file = File::create(path)?;
+    pub fn write_file(&mut self, file: &mut File) -> apperr::Result<()> {
         let mut offset = 0;
 
         if self.encoding.starts_with("UTF-8") {
@@ -789,7 +776,7 @@ impl TextBuffer {
         Ok(())
     }
 
-    fn write_file_with_icu(&mut self, mut file: File) -> apperr::Result<()> {
+    fn write_file_with_icu(&mut self, file: &mut File) -> apperr::Result<()> {
         let scratch = scratch_arena(None);
         let pivot_buffer = scratch.alloc_uninit_slice(4096);
         let buf = scratch.alloc_uninit_slice(4096);
@@ -938,10 +925,10 @@ impl TextBuffer {
             }
 
             // When transitioning from some search to no search, we must clear the selection.
-            if pattern.is_empty() {
-                if let TextBufferSelection::Done { beg, .. } = self.selection {
-                    self.cursor_move_to_logical(beg);
-                }
+            if pattern.is_empty()
+                && let TextBufferSelection::Done { beg, .. } = self.selection
+            {
+                self.cursor_move_to_logical(beg);
             }
         }
 

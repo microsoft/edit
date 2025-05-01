@@ -183,9 +183,9 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 }
 
 pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
-    if let Some(doc) = state.documents.active() {
-        if let Some(path) = doc.path.as_path() {
-            if let Err(err) = { doc.buffer.borrow_mut().write_file(path) } {
+    if let Some(doc) = state.documents.active_mut() {
+        if doc.path.is_some() {
+            if let Err(err) = doc.save(None) {
                 error_log_add(ctx, state, err);
             }
         } else {

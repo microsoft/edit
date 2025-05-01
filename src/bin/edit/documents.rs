@@ -1,42 +1,54 @@
 use std::collections::LinkedList;
 use std::ffi::OsStr;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
 use edit::simd::memrchr2;
-use edit::{apperr, sys};
-
-pub enum DocumentPath {
-    None,
-    Preliminary(PathBuf),
-    Canonical(PathBuf),
-}
-
-impl DocumentPath {
-    pub fn as_path(&self) -> Option<&Path> {
-        match self {
-            DocumentPath::None => None,
-            DocumentPath::Preliminary(p) | DocumentPath::Canonical(p) => Some(p),
-        }
-    }
-
-    pub fn eq_canonical(&self, path: &Path) -> bool {
-        match self {
-            DocumentPath::Canonical(p) => p == path,
-            _ => false,
-        }
-    }
-}
+use edit::{apperr, path, sys};
 
 pub struct Document {
     pub buffer: RcTextBuffer,
-    pub path: DocumentPath,
+    pub path: Option<PathBuf>,
+    pub file_id: Option<sys::FileId>,
     pub filename: String,
     pub new_file_counter: usize,
 }
 
 impl Document {
+    pub fn save(&mut self, new_path: Option<&Path>) -> apperr::Result<()> {
+        let path = new_path.or(self.path.as_deref()).unwrap();
+        let mut file = DocumentManager::open_for_writing(path)?;
+
+        {
+            let mut tb = self.buffer.borrow_mut();
+            tb.write_file(&mut file)?;
+        }
+
+        if let Ok(id) = sys::file_id(&file) {
+            self.file_id = Some(id);
+        }
+
+        Ok(())
+    }
+
+    pub fn reread(&mut self, encoding: Option<&'static str>) -> apperr::Result<()> {
+        let path = self.path.as_deref().unwrap();
+        let mut file = DocumentManager::open_for_reading(path)?;
+
+        {
+            let mut tb = self.buffer.borrow_mut();
+            tb.read_file(&mut file, encoding)?;
+        }
+
+        if let Ok(id) = sys::file_id(&file) {
+            self.file_id = Some(id);
+        }
+
+        Ok(())
+    }
+
     fn update_file_mode(&mut self) {
         let mut tb = self.buffer.borrow_mut();
         tb.set_ruler(if self.filename == "COMMIT_EDITMSG" { 72 } else { 0 });
@@ -92,7 +104,8 @@ impl DocumentManager {
 
         let mut doc = Document {
             buffer,
-            path: DocumentPath::None,
+            path: None,
+            file_id: None,
             filename: Default::default(),
             new_file_counter: 0,
         };
@@ -115,24 +128,26 @@ impl DocumentManager {
 
     pub fn add_file_path(&mut self, path: &Path) -> apperr::Result<&mut Document> {
         let (path, goto) = Self::parse_filename_goto(path);
+        let path = path::normalize(path);
 
-        let canonical = match sys::canonicalize(path).map_err(apperr::Error::from) {
-            Ok(path) => Some(path),
+        let mut file = match Self::open_for_reading(&path) {
+            Ok(file) => Some(file),
             Err(err) if sys::apperr_is_not_found(err) => None,
             Err(err) => return Err(err),
         };
-        let canonical_ref = canonical.as_deref();
-        let canonical_is_file = canonical_ref.is_some_and(|p| p.is_file());
+
+        let file_id = match &file {
+            Some(file) => Some(sys::file_id(file)?),
+            None => None,
+        };
 
         // Check if the file is already open.
-        if let Some(canon) = canonical_ref {
-            if self.update_active(|doc| doc.path.eq_canonical(canon)) {
-                let doc = self.active_mut().unwrap();
-                if let Some(goto) = goto {
-                    doc.buffer.borrow_mut().cursor_move_to_logical(goto);
-                }
-                return Ok(doc);
+        if file_id.is_some() && self.update_active(|doc| doc.file_id == file_id) {
+            let doc = self.active_mut().unwrap();
+            if let Some(goto) = goto {
+                doc.buffer.borrow_mut().cursor_move_to_logical(goto);
             }
+            return Ok(doc);
         }
 
         let buffer = TextBuffer::new_rc(false)?;
@@ -141,8 +156,8 @@ impl DocumentManager {
             tb.set_margin_enabled(true);
             tb.set_line_highlight_enabled(true);
 
-            if canonical_is_file && let Some(canon) = canonical_ref {
-                tb.read_file_path(canon, None)?;
+            if let Some(file) = &mut file {
+                tb.read_file(file, None)?;
 
                 if let Some(goto) = goto
                     && goto != Point::default()
@@ -152,16 +167,9 @@ impl DocumentManager {
             }
         }
 
-        let path = match canonical {
-            // Path exists and is a file.
-            Some(path) if canonical_is_file => DocumentPath::Canonical(path),
-            // Path doesn't exist at all.
-            None => DocumentPath::Preliminary(path.to_path_buf()),
-            // Path exists but is not a file (a directory?).
-            _ => DocumentPath::None,
-        };
-        let filename = path.as_path().map_or(Default::default(), Self::get_filename_from_path);
-        let mut doc = Document { buffer, path, filename, new_file_counter: 0 };
+        let filename =
+            if file.is_some() { Self::get_filename_from_path(&path) } else { Default::default() };
+        let mut doc = Document { buffer, path: Some(path), file_id, filename, new_file_counter: 0 };
 
         if doc.filename.is_empty() {
             self.gen_untitled_name(&mut doc);
@@ -172,30 +180,12 @@ impl DocumentManager {
         Ok(self.list.front_mut().unwrap())
     }
 
-    pub fn save_active(&mut self, new_path: Option<&Path>) -> apperr::Result<()> {
-        let Some(doc) = self.active_mut() else {
-            return Ok(());
-        };
+    pub fn open_for_reading(path: &Path) -> apperr::Result<File> {
+        File::open(path).map_err(apperr::Error::from)
+    }
 
-        {
-            let path = new_path.or_else(|| doc.path.as_path()).unwrap();
-            let mut tb = doc.buffer.borrow_mut();
-            tb.write_file(path)?;
-        }
-
-        // Turn the new_path or existing preliminary path into a canonical path.
-        // Now that the file exists, that should theoretically work.
-        if let Some(path) = new_path.or_else(|| match &doc.path {
-            DocumentPath::Preliminary(path) => Some(path),
-            _ => None,
-        }) {
-            let path = sys::canonicalize(path)?;
-            doc.filename = Self::get_filename_from_path(&path);
-            doc.path = DocumentPath::Canonical(path);
-            doc.update_file_mode();
-        }
-
-        Ok(())
+    pub fn open_for_writing(path: &Path) -> apperr::Result<File> {
+        File::create(path).map_err(apperr::Error::from)
     }
 
     pub fn get_filename_from_path(path: &Path) -> String {

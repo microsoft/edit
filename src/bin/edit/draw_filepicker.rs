@@ -1,11 +1,12 @@
 use std::cmp::Ordering;
-use std::path::{Component, PathBuf};
+use std::fs;
+use std::path::PathBuf;
 
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
-use edit::icu;
 use edit::input::vk;
 use edit::tui::*;
+use edit::{icu, path, sys};
 
 use crate::documents::*;
 use crate::loc::*;
@@ -96,8 +97,8 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             if state.wants_file_picker == StateFilePicker::SaveAs
                 && let Some(path) = doit.as_deref()
                 && let Some(doc) = state.documents.active()
-                && !doc.path.eq_canonical(path)
-                && path.exists()
+                && let Some(file_id) = &doc.file_id
+                && sys::file_id_at(path).is_ok_and(|id| &id == file_id)
             {
                 state.file_picker_overwrite_warning = doit.take();
             }
@@ -155,7 +156,11 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
     if let Some(path) = doit {
         let res = if state.wants_file_picker == StateFilePicker::SaveAs {
-            state.documents.save_active(Some(&path))
+            if let Some(doc) = state.documents.active_mut() {
+                doc.save(Some(&path))
+            } else {
+                Ok(())
+            }
         } else {
             state.documents.add_file_path(&path).map(|_| ())
         };
@@ -173,21 +178,13 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     let path = state.file_picker_pending_dir.as_path();
     let path = path.join(&state.file_picker_pending_name);
-    let mut normalized = PathBuf::new();
+    let path = path::normalize(&path);
 
-    for c in path.components() {
-        match c {
-            Component::CurDir => {}
-            Component::ParentDir => _ = normalized.pop(),
-            _ => normalized.push(c.as_os_str()),
-        }
-    }
-
-    let (dir, name) = if normalized.is_dir() {
-        (normalized.as_path(), String::new())
+    let (dir, name) = if path.is_dir() {
+        (path.as_path(), String::new())
     } else {
-        let dir = normalized.parent().unwrap_or(&normalized);
-        let name = DocumentManager::get_filename_from_path(&normalized);
+        let dir = path.parent().unwrap_or(&path);
+        let name = DocumentManager::get_filename_from_path(&path);
         (dir, name)
     };
     if dir != state.file_picker_pending_dir.as_path() {
@@ -196,7 +193,7 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     }
 
     state.file_picker_pending_name = name;
-    if state.file_picker_pending_name.is_empty() { None } else { Some(normalized) }
+    if state.file_picker_pending_name.is_empty() { None } else { Some(path) }
 }
 
 fn draw_dialog_saveas_refresh_files(state: &mut State) {
@@ -207,11 +204,14 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
         files.push(DisplayablePathBuf::from(".."));
     }
 
-    if let Ok(iter) = std::fs::read_dir(dir) {
+    if let Ok(iter) = fs::read_dir(dir) {
         for entry in iter.flatten() {
             if let Ok(metadata) = entry.metadata() {
                 let mut name = entry.file_name();
-                if metadata.is_dir() {
+                if metadata.is_dir()
+                    || (metadata.is_symlink()
+                        && fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()))
+                {
                     name.push("/");
                 }
                 files.push(DisplayablePathBuf::from(name));

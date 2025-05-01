@@ -6,7 +6,6 @@ use edit::input::vk;
 use edit::tui::*;
 use edit::{arena_format, icu};
 
-use crate::documents::*;
 use crate::loc::*;
 use crate::state::*;
 
@@ -34,7 +33,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 
         state.wants_encoding_picker |= ctx.button("encoding", Overflow::Clip, tb.encoding());
         if state.wants_encoding_picker {
-            if matches!(&doc.path, DocumentPath::Canonical(_)) {
+            if doc.path.is_some() {
                 ctx.block_begin("frame");
                 ctx.attr_float(FloatSpec {
                     anchor: Anchor::Last,
@@ -212,7 +211,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 }
 
 pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
-    let doc = state.documents.active().unwrap();
+    let doc = state.documents.active_mut().unwrap();
     let reopen = state.wants_encoding_change == StateEncodingChange::Reopen;
     let width = (ctx.size().width - 20).max(10);
     let height = (ctx.size().height - 10).max(10);
@@ -251,22 +250,19 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
     }
 
     if let Some(encoding) = change {
-        let mut tb = doc.buffer.borrow_mut();
-
-        if reopen && let DocumentPath::Canonical(path) = &doc.path {
+        if reopen && doc.path.is_some() {
             let mut res = Ok(());
-            if tb.is_dirty() {
-                res = tb.write_file(path);
+            if doc.buffer.borrow().is_dirty() {
+                res = doc.save(None);
             }
             if res.is_ok() {
-                res = tb.read_file_path(path, Some(encoding));
+                res = doc.reread(Some(encoding));
             }
             if let Err(err) = res {
-                drop(tb);
                 error_log_add(ctx, state, err);
             }
         } else {
-            tb.set_encoding(encoding);
+            doc.buffer.borrow_mut().set_encoding(encoding);
         }
 
         state.wants_encoding_change = StateEncodingChange::None;

@@ -2,7 +2,7 @@ use std::ffi::{CStr, OsString, c_void};
 use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::mem::MaybeUninit;
-use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::{AsRawHandle as _, FromRawHandle};
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull, null, null_mut};
 use std::{mem, time};
@@ -373,6 +373,35 @@ pub fn open_stdin_if_redirected() -> Option<File> {
         let handle = Console::GetStdHandle(Console::STD_INPUT_HANDLE);
         // Did we reopen stdin during `init()`?
         if !std::ptr::eq(STATE.stdin, handle) { Some(File::from_raw_handle(handle)) } else { None }
+    }
+}
+
+#[derive(Clone)]
+#[repr(transparent)]
+pub struct FileId(FileSystem::FILE_ID_INFO);
+
+impl PartialEq for FileId {
+    fn eq(&self, other: &Self) -> bool {
+        const SIZE: usize = std::mem::size_of::<FileSystem::FILE_ID_INFO>();
+        let a: &[u8; SIZE] = unsafe { mem::transmute(&self.0) };
+        let b: &[u8; SIZE] = unsafe { mem::transmute(&other.0) };
+        a == b
+    }
+}
+
+impl Eq for FileId {}
+
+/// Returns a unique identifier for the given file.
+pub fn file_id(file: &File) -> apperr::Result<FileId> {
+    unsafe {
+        let mut info = MaybeUninit::<FileSystem::FILE_ID_INFO>::uninit();
+        check_bool_return(FileSystem::GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileSystem::FileIdInfo,
+            info.as_mut_ptr() as *mut _,
+            mem::size_of::<FileSystem::FILE_ID_INFO>() as u32,
+        ))?;
+        Ok(FileId(info.assume_init()))
     }
 }
 
