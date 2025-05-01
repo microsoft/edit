@@ -1,11 +1,12 @@
-use crate::arena::{Arena, ArenaString};
-use crate::helpers::{CoordType, Point, Rect, Size};
-use crate::simd::{MemsetSafe, memset};
-use crate::ucd;
 use std::fmt::Write;
 use std::ops::{BitOr, BitXor};
 use std::ptr;
 use std::slice::ChunksExact;
+
+use crate::arena::{Arena, ArenaString};
+use crate::helpers::{CoordType, Point, Rect, Size};
+use crate::simd::{MemsetSafe, memset};
+use crate::ucd;
 
 #[derive(Clone, Copy)]
 pub enum IndexedColor {
@@ -201,21 +202,16 @@ impl Framebuffer {
         let mut fract_buf = [0xE2, 0x96, 0x88];
         if top_fract != 0 {
             fract_buf[2] = (0x88 - top_fract) as u8;
-            self.replace_text(
-                thumb_top - 1,
-                track_clipped.left,
-                track_clipped.right,
-                unsafe { std::str::from_utf8_unchecked(&fract_buf) },
-            );
+            self.replace_text(thumb_top - 1, track_clipped.left, track_clipped.right, unsafe {
+                std::str::from_utf8_unchecked(&fract_buf)
+            });
         }
         if bottom_fract != 0 {
             fract_buf[2] = (0x88 - bottom_fract) as u8;
-            let rect = self.replace_text(
-                thumb_bottom,
-                track_clipped.left,
-                track_clipped.right,
-                unsafe { std::str::from_utf8_unchecked(&fract_buf) },
-            );
+            let rect =
+                self.replace_text(thumb_bottom, track_clipped.left, track_clipped.right, unsafe {
+                    std::str::from_utf8_unchecked(&fract_buf)
+                });
             self.blend_bg(rect, self.indexed(IndexedColor::BrightWhite));
             self.blend_fg(rect, self.indexed(IndexedColor::BrightBlack));
         }
@@ -400,12 +396,7 @@ impl Framebuffer {
                 }
 
                 let beg = cfg.cursor().offset;
-                let end = cfg
-                    .goto_visual(Point {
-                        x: chunk_end as CoordType,
-                        y: 0,
-                    })
-                    .offset;
+                let end = cfg.goto_visual(Point { x: chunk_end as CoordType, y: 0 }).offset;
                 result.push_str(&back_line[beg..end]);
 
                 chunk_end < back_bg.len()
@@ -458,10 +449,7 @@ struct LineBuffer {
 
 impl LineBuffer {
     fn new(size: Size) -> Self {
-        Self {
-            lines: vec![String::new(); size.height as usize],
-            size,
-        }
+        Self { lines: vec![String::new(); size.height as usize], size }
     }
 
     fn fill_whitespace(&mut self) {
@@ -513,10 +501,7 @@ impl LineBuffer {
             if left < 0 && cursor.offset < text.len() {
                 // `-left` must've intersected a wide glyph and since goto_visual stops _before_ reaching the target,
                 // we stoped before the wide glyph and thus must step forward to the next glyph.
-                let cursor = cfg.goto_logical(Point {
-                    x: cursor.logical_pos.x + 1,
-                    y: 0,
-                });
+                let cursor = cfg.goto_logical(Point { x: cursor.logical_pos.x + 1, y: 0 });
                 left += cursor.visual_pos.x;
             }
         }
@@ -528,10 +513,7 @@ impl LineBuffer {
         }
 
         // Measure the width of the new text (= `res_new.visual_target.x`).
-        let res_new = cfg.goto_visual(Point {
-            x: layout_width,
-            y: 0,
-        });
+        let res_new = cfg.goto_visual(Point { x: layout_width, y: 0 });
 
         // Figure out at which byte offset the new text gets inserted.
         let right = left + res_new.visual_pos.x;
@@ -543,10 +525,7 @@ impl LineBuffer {
         // Since the goto functions will always stop short of the target position,
         // we need to manually step beyond it if we intersect with a wide glyph.
         if res_old_end.visual_pos.x < right {
-            res_old_end = cfg_old.goto_logical(Point {
-                x: res_old_end.logical_pos.x + 1,
-                y: 0,
-            });
+            res_old_end = cfg_old.goto_logical(Point { x: res_old_end.logical_pos.x + 1, y: 0 });
         }
 
         // If we intersect a wide glyph, we need to pad the new text with spaces.
@@ -607,12 +586,7 @@ impl LineBuffer {
             dst.set_len(dst_len - total_del + total_add);
         }
 
-        Rect {
-            left,
-            top: y,
-            right,
-            bottom: y + 1,
-        }
+        Rect { left, top: y, right, bottom: y + 1 }
     }
 }
 
@@ -624,10 +598,7 @@ struct Bitmap {
 
 impl Bitmap {
     fn new(size: Size) -> Self {
-        Self {
-            data: vec![0; (size.width * size.height) as usize],
-            size,
-        }
+        Self { data: vec![0; (size.width * size.height) as usize], size }
     }
 
     fn fill(&mut self, color: u32) {
@@ -809,10 +780,7 @@ struct AttributeBuffer {
 
 impl AttributeBuffer {
     fn new(size: Size) -> Self {
-        Self {
-            data: vec![Default::default(); (size.width * size.height) as usize],
-            size,
-        }
+        Self { data: vec![Default::default(); (size.width * size.height) as usize], size }
     }
 
     fn reset(&mut self) {
@@ -881,16 +849,10 @@ struct Cursor {
 
 impl Cursor {
     const fn new_invalid() -> Self {
-        Self {
-            pos: Point::MIN,
-            overtype: false,
-        }
+        Self { pos: Point::MIN, overtype: false }
     }
 
     const fn new_disabled() -> Self {
-        Self {
-            pos: Point { x: -1, y: -1 },
-            overtype: false,
-        }
+        Self { pos: Point { x: -1, y: -1 }, overtype: false }
     }
 }

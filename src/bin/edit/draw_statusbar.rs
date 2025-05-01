@@ -1,27 +1,21 @@
 use std::ptr;
 
+use edit::framebuffer::IndexedColor;
+use edit::helpers::*;
+use edit::input::vk;
+use edit::tui::*;
+use edit::{arena_format, icu};
+
 use crate::documents::*;
 use crate::loc::*;
 use crate::state::*;
-use edit::arena_format;
-use edit::framebuffer::IndexedColor;
-use edit::helpers::*;
-use edit::icu;
-use edit::input::vk;
-use edit::tui::*;
 
 pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
     ctx.table_begin("statusbar");
     ctx.attr_background_rgba(state.menubar_color_bg);
     ctx.attr_foreground_rgba(state.menubar_color_fg);
-    ctx.table_set_cell_gap(Size {
-        width: 2,
-        height: 0,
-    });
-    ctx.attr_intrinsic_size(Size {
-        width: COORD_TYPE_SAFE_MAX,
-        height: 1,
-    });
+    ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+    ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
     ctx.attr_padding(Rect::two(0, 1));
 
     if let Some(doc) = state.documents.active() {
@@ -29,11 +23,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 
         ctx.table_next_row();
 
-        if ctx.button(
-            "newline",
-            Overflow::Clip,
-            if tb.is_crlf() { "CRLF" } else { "LF" },
-        ) {
+        if ctx.button("newline", Overflow::Clip, if tb.is_crlf() { "CRLF" } else { "LF" }) {
             let is_crlf = tb.is_crlf();
             tb.normalize_newlines(!is_crlf);
         }
@@ -109,10 +99,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             });
             ctx.attr_border();
             ctx.attr_padding(Rect::two(0, 1));
-            ctx.table_set_cell_gap(Size {
-                width: 1,
-                height: 0,
-            });
+            ctx.table_set_cell_gap(Size { width: 1, height: 0 });
             {
                 if ctx.consume_shortcut(vk::RETURN) {
                     ctx.toss_focus_up();
@@ -203,10 +190,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
         }
 
         ctx.block_begin("filename-container");
-        ctx.attr_intrinsic_size(Size {
-            width: COORD_TYPE_SAFE_MAX,
-            height: 1,
-        });
+        ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
         {
             let total = state.documents.len();
             let mut filename = doc.filename.as_str();
@@ -236,11 +220,7 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
 
     ctx.modal_begin(
         "encode",
-        if reopen {
-            loc(LocId::EncodingReopen)
-        } else {
-            loc(LocId::EncodingConvert)
-        },
+        if reopen { loc(LocId::EncodingReopen) } else { loc(LocId::EncodingConvert) },
     );
     {
         ctx.scrollarea_begin("scrollarea", Size { width, height });

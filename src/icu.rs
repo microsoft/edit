@@ -1,12 +1,13 @@
-use crate::arena::{Arena, ArenaString, scratch_arena};
-use crate::buffer::TextBuffer;
-use crate::utf8::Utf8Chars;
-use crate::{apperr, sys};
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::ptr::{null, null_mut};
 use std::{cmp, mem};
+
+use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::buffer::TextBuffer;
+use crate::utf8::Utf8Chars;
+use crate::{apperr, sys};
 
 static mut ENCODINGS: Vec<&'static str> = Vec::new();
 
@@ -104,14 +105,7 @@ impl<'pivot> Converter<'pivot> {
         let pivot_source = pivot_buffer.as_mut_ptr() as *mut u16;
         let pivot_target = unsafe { pivot_source.add(pivot_buffer.len()) };
 
-        Ok(Self {
-            source,
-            target,
-            pivot_buffer,
-            pivot_source,
-            pivot_target,
-            reset: true,
-        })
+        Ok(Self { source, target, pivot_buffer, pivot_source, pivot_target, reset: true })
     }
 
     fn append_nul<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
@@ -425,10 +419,7 @@ fn utext_access_impl<'a>(
 
             // When it comes to performance, and the search space is small (which it is here),
             // it's always a good idea to keep the loops small and tight...
-            let len = haystack
-                .iter()
-                .position(|&c| c >= 0x80)
-                .unwrap_or(haystack.len());
+            let len = haystack.iter().position(|&c| c >= 0x80).unwrap_or(haystack.len());
 
             // ...In this case it allows the compiler to vectorize this loop and double
             // the performance. Luckily, llvm doesn't unroll the loop, which is great,
@@ -844,10 +835,9 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
             #[cfg(unix)]
             let suffix = sys::icu_proc_suffix(&scratch_outer, libicuuc);
 
-            for (handle, names) in [
-                (libicuuc, &LIBICUUC_PROC_NAMES[..]),
-                (libicui18n, &LIBICUI18N_PROC_NAMES[..]),
-            ] {
+            for (handle, names) in
+                [(libicuuc, &LIBICUUC_PROC_NAMES[..]), (libicui18n, &LIBICUI18N_PROC_NAMES[..])]
+            {
                 for name in names {
                     #[cfg(unix)]
                     let scratch = scratch_arena(Some(&scratch_outer));
@@ -895,8 +885,9 @@ fn assume_loaded() -> &'static LibraryFunctions {
 mod icu_ffi {
     #![allow(dead_code, non_camel_case_types)]
 
-    use crate::apperr;
     use std::ffi::{c_char, c_int, c_void};
+
+    use crate::apperr;
 
     #[derive(Copy, Clone, Eq, PartialEq)]
     #[repr(transparent)]

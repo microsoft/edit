@@ -1,8 +1,9 @@
+use std::ops::Range;
+
 use crate::helpers::{self, CoordType, Point};
 use crate::simd::{memchr2, memrchr2};
 use crate::ucd_gen::*;
 use crate::utf8::Utf8Chars;
-use std::ops::Range;
 
 /// An abstraction over potentially chunked text containers.
 pub trait Document {
@@ -74,12 +75,7 @@ pub struct MeasurementConfig<'doc> {
 
 impl<'doc> MeasurementConfig<'doc> {
     pub fn new(buffer: &'doc dyn Document) -> Self {
-        Self {
-            buffer,
-            tab_size: 8,
-            word_wrap_column: 0,
-            cursor: UcdCursor::default(),
-        }
+        Self { buffer, tab_size: 8, word_wrap_column: 0, cursor: UcdCursor::default() }
     }
 
     pub fn with_tab_size(mut self, tab_size: CoordType) -> Self {
@@ -472,14 +468,8 @@ impl<'doc> MeasurementConfig<'doc> {
 
         UcdCursor {
             offset,
-            logical_pos: Point {
-                x: logical_pos_x,
-                y: logical_pos_y,
-            },
-            visual_pos: Point {
-                x: visual_pos_x,
-                y: visual_pos_y,
-            },
+            logical_pos: Point { x: logical_pos_x, y: logical_pos_y },
+            visual_pos: Point { x: visual_pos_x, y: visual_pos_y },
             column,
             wrap_opp,
         }
@@ -529,22 +519,12 @@ const WORD_CLASSIFIER: [CharClass; 256] =
 /// Finds the next word boundary given a document cursor offset.
 /// Returns the offset of the next word boundary.
 pub fn word_forward(doc: &dyn Document, offset: usize) -> usize {
-    word_navigation(WordForward {
-        doc,
-        offset,
-        chunk: &[],
-        chunk_off: 0,
-    })
+    word_navigation(WordForward { doc, offset, chunk: &[], chunk_off: 0 })
 }
 
 /// The backward version of `word_forward`.
 pub fn word_backward(doc: &dyn Document, offset: usize) -> usize {
-    word_navigation(WordBackward {
-        doc,
-        offset,
-        chunk: &[],
-        chunk_off: 0,
-    })
+    word_navigation(WordBackward { doc, offset, chunk: &[], chunk_off: 0 })
 }
 
 /// Word navigation implementation. Matches the behavior of VS Code.
@@ -923,10 +903,7 @@ mod test {
 
         // Does hitting the visual target within a word reset the hit back to the end of the visual line?
         let mut cfg = MeasurementConfig::new(&text).with_word_wrap_column(6);
-        let cursor = cfg.goto_visual(Point {
-            x: CoordType::MAX,
-            y: 0,
-        });
+        let cursor = cfg.goto_visual(Point { x: CoordType::MAX, y: 0 });
         assert_eq!(
             cursor,
             UcdCursor {
@@ -939,9 +916,8 @@ mod test {
         );
 
         // Does hitting the same target but with a non-zero starting position result in the same outcome?
-        let mut cfg = MeasurementConfig::new(&text)
-            .with_word_wrap_column(6)
-            .with_cursor(UcdCursor {
+        let mut cfg =
+            MeasurementConfig::new(&text).with_word_wrap_column(6).with_cursor(UcdCursor {
                 offset: 1,
                 logical_pos: Point { x: 1, y: 0 },
                 visual_pos: Point { x: 1, y: 0 },
@@ -1012,9 +988,8 @@ mod test {
     #[test]
     fn test_measure_forward_tabs() {
         let text = "a\tb\tc".as_bytes();
-        let cursor = MeasurementConfig::new(&text)
-            .with_tab_size(4)
-            .goto_visual(Point { x: 4, y: 0 });
+        let cursor =
+            MeasurementConfig::new(&text).with_tab_size(4).goto_visual(Point { x: 4, y: 0 });
         assert_eq!(
             cursor,
             UcdCursor {
@@ -1045,12 +1020,7 @@ mod test {
         //   |foo_   |
         //   |bar.   |
         //   |abc    |
-        let chunks = [
-            "foo ".as_bytes(),
-            "bar".as_bytes(),
-            ".\n".as_bytes(),
-            "abc".as_bytes(),
-        ];
+        let chunks = ["foo ".as_bytes(), "bar".as_bytes(), ".\n".as_bytes(), "abc".as_bytes()];
         let doc = ChunkedDoc(&chunks);
         let mut cfg = MeasurementConfig::new(&doc).with_word_wrap_column(7);
         let max = CoordType::MAX;
@@ -1225,10 +1195,7 @@ mod test {
         let mut cfg = MeasurementConfig::new(&bytes).with_word_wrap_column(8);
 
         // At the end of "// " there should be a wrap.
-        let end0 = cfg.goto_visual(Point {
-            x: CoordType::MAX,
-            y: 0,
-        });
+        let end0 = cfg.goto_visual(Point { x: CoordType::MAX, y: 0 });
         assert_eq!(
             end0,
             UcdCursor {
@@ -1240,10 +1207,7 @@ mod test {
             }
         );
 
-        let mid1 = cfg.goto_visual(Point {
-            x: end0.visual_pos.x,
-            y: 1,
-        });
+        let mid1 = cfg.goto_visual(Point { x: end0.visual_pos.x, y: 1 });
         assert_eq!(
             mid1,
             UcdCursor {
@@ -1255,10 +1219,7 @@ mod test {
             }
         );
 
-        let mid2 = cfg.goto_visual(Point {
-            x: end0.visual_pos.x,
-            y: 2,
-        });
+        let mid2 = cfg.goto_visual(Point { x: end0.visual_pos.x, y: 2 });
         assert_eq!(
             mid2,
             UcdCursor {
@@ -1329,9 +1290,7 @@ mod test {
         // |____b   | <- 1 tab, 1 space
         let text = "foo \t b";
         let bytes = text.as_bytes();
-        let mut cfg = MeasurementConfig::new(&bytes)
-            .with_word_wrap_column(8)
-            .with_tab_size(4);
+        let mut cfg = MeasurementConfig::new(&bytes).with_word_wrap_column(8).with_tab_size(4);
         let max = CoordType::MAX;
 
         let end0 = cfg.goto_visual(Point { x: max, y: 0 });
@@ -1374,10 +1333,7 @@ mod test {
     #[test]
     fn test_crlf() {
         let text = "a\r\nbcd\r\ne".as_bytes();
-        let cursor = MeasurementConfig::new(&text).goto_visual(Point {
-            x: CoordType::MAX,
-            y: 1,
-        });
+        let cursor = MeasurementConfig::new(&text).goto_visual(Point { x: CoordType::MAX, y: 1 });
         assert_eq!(
             cursor,
             UcdCursor {

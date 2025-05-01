@@ -1,5 +1,4 @@
-use std::mem;
-use std::time;
+use std::{mem, time};
 
 use crate::simd::memchr2;
 
@@ -43,12 +42,7 @@ impl Parser {
     pub fn new() -> Self {
         Self {
             state: State::Ground,
-            csi: Csi {
-                params: [0; 32],
-                param_count: 0,
-                private_byte: '\0',
-                final_byte: '\0',
-            },
+            csi: Csi { params: [0; 32], param_count: 0, private_byte: '\0', final_byte: '\0' },
         }
     }
 
@@ -75,11 +69,7 @@ impl Parser {
         &'parser mut self,
         input: &'input str,
     ) -> Stream<'parser, 'input> {
-        Stream {
-            parser: self,
-            input,
-            off: 0,
-        }
+        Stream { parser: self, input, off: 0 }
     }
 }
 
@@ -294,14 +284,8 @@ impl<'parser, 'input> Stream<'parser, 'input> {
                         self.off += 1;
 
                         return match state {
-                            State::OscEsc => Some(Token::Osc {
-                                data: "",
-                                partial: false,
-                            }),
-                            _ => Some(Token::Dcs {
-                                data: "",
-                                partial: false,
-                            }),
+                            State::OscEsc => Some(Token::Osc { data: "", partial: false }),
+                            _ => Some(Token::Dcs { data: "", partial: false }),
                         };
                     } else {
                         // False alarm: Not a string terminator.
@@ -312,14 +296,8 @@ impl<'parser, 'input> Stream<'parser, 'input> {
                             _ => State::Dcs,
                         };
                         return match parser.state {
-                            State::Osc => Some(Token::Osc {
-                                data: "\x1b",
-                                partial: true,
-                            }),
-                            _ => Some(Token::Dcs {
-                                data: "\x1b",
-                                partial: true,
-                            }),
+                            State::Osc => Some(Token::Osc { data: "\x1b", partial: true }),
+                            _ => Some(Token::Dcs { data: "\x1b", partial: true }),
                         };
                     }
                 }

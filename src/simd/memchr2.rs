@@ -1,8 +1,9 @@
 //! Rust has a very popular `memchr` crate. It's quite fast, so you may ask yourself
 //! why we don't just use it: Simply put, this is optimized for short inputs.
 
-use super::distance;
 use std::ptr;
+
+use super::distance;
 
 /// memchr(), but with two needles.
 /// Returns the index of the first occurrence of either needle in the `haystack`.
@@ -58,11 +59,7 @@ static mut MEMCHR2_DISPATCH: unsafe fn(
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 unsafe fn memchr2_dispatch(needle1: u8, needle2: u8, beg: *const u8, end: *const u8) -> *const u8 {
-    let func = if is_x86_feature_detected!("avx2") {
-        memchr2_avx2
-    } else {
-        memchr2_fallback
-    };
+    let func = if is_x86_feature_detected!("avx2") { memchr2_avx2 } else { memchr2_fallback };
     unsafe { MEMCHR2_DISPATCH = func };
     unsafe { func(needle1, needle2, beg, end) }
 }
@@ -136,9 +133,10 @@ unsafe fn memchr2_neon(needle1: u8, needle2: u8, mut beg: *const u8, end: *const
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use super::*;
     use crate::sys;
-    use std::slice;
 
     #[test]
     fn test_empty() {

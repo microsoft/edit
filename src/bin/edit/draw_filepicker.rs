@@ -1,14 +1,15 @@
-use crate::documents::*;
-use crate::loc::*;
-use crate::state::*;
+use std::cmp::Ordering;
+use std::path::{Component, PathBuf};
+
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::icu;
 use edit::input::vk;
 use edit::tui::*;
-use std::cmp::Ordering;
-use std::path::Component;
-use std::path::PathBuf;
+
+use crate::documents::*;
+use crate::loc::*;
+use crate::state::*;
 
 pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     let width = (ctx.size().width - 20).max(10);
@@ -29,34 +30,19 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
         ctx.table_begin("path");
         ctx.table_set_columns(&[0, COORD_TYPE_SAFE_MAX]);
-        ctx.table_set_cell_gap(Size {
-            width: 1,
-            height: 0,
-        });
+        ctx.table_set_cell_gap(Size { width: 1, height: 0 });
         ctx.attr_padding(Rect::two(1, 1));
         ctx.inherit_focus();
         {
             ctx.table_next_row();
 
-            ctx.label(
-                "dir-label",
-                Overflow::Clip,
-                loc(LocId::SaveAsDialogPathLabel),
-            );
-            ctx.label(
-                "dir",
-                Overflow::TruncateMiddle,
-                state.file_picker_pending_dir.as_str(),
-            );
+            ctx.label("dir-label", Overflow::Clip, loc(LocId::SaveAsDialogPathLabel));
+            ctx.label("dir", Overflow::TruncateMiddle, state.file_picker_pending_dir.as_str());
 
             ctx.table_next_row();
             ctx.inherit_focus();
 
-            ctx.label(
-                "name-label",
-                Overflow::Clip,
-                loc(LocId::SaveAsDialogNameLabel),
-            );
+            ctx.label("name-label", Overflow::Clip, loc(LocId::SaveAsDialogNameLabel));
             ctx.editline("name", &mut state.file_picker_pending_name);
             ctx.inherit_focus();
             if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
@@ -139,10 +125,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.inherit_focus();
             ctx.attr_padding(Rect::three(0, 2, 1));
             ctx.attr_position(Position::Center);
-            ctx.table_set_cell_gap(Size {
-                width: 2,
-                height: 0,
-            });
+            ctx.table_set_cell_gap(Size { width: 2, height: 0 });
             {
                 ctx.table_next_row();
                 ctx.inherit_focus();
@@ -213,11 +196,7 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     }
 
     state.file_picker_pending_name = name;
-    if state.file_picker_pending_name.is_empty() {
-        None
-    } else {
-        Some(normalized)
-    }
+    if state.file_picker_pending_name.is_empty() { None } else { Some(normalized) }
 }
 
 fn draw_dialog_saveas_refresh_files(state: &mut State) {

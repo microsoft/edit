@@ -1,8 +1,9 @@
 //! Rust has a very popular `memchr` crate. It's quite fast, so you may ask yourself
 //! why we don't just use it: Simply put, this is optimized for short inputs.
 
-use super::distance;
 use std::ptr;
+
+use super::distance;
 
 /// Same as `memchr2`, but searches from the end of the haystack.
 /// If no needle is found, 0 is returned.
@@ -15,11 +16,7 @@ pub fn memrchr2(needle1: u8, needle2: u8, haystack: &[u8], offset: usize) -> Opt
         let beg = haystack.as_ptr();
         let it = beg.add(offset.min(haystack.len()));
         let it = memrchr2_raw(needle1, needle2, beg, it);
-        if it.is_null() {
-            None
-        } else {
-            Some(distance(it, beg))
-        }
+        if it.is_null() { None } else { Some(distance(it, beg)) }
     }
 }
 
@@ -62,11 +59,7 @@ static mut MEMRCHR2_DISPATCH: unsafe fn(
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 unsafe fn memrchr2_dispatch(needle1: u8, needle2: u8, beg: *const u8, end: *const u8) -> *const u8 {
-    let func = if is_x86_feature_detected!("avx2") {
-        memrchr2_avx2
-    } else {
-        memrchr2_fallback
-    };
+    let func = if is_x86_feature_detected!("avx2") { memrchr2_avx2 } else { memrchr2_fallback };
     unsafe { MEMRCHR2_DISPATCH = func };
     unsafe { func(needle1, needle2, beg, end) }
 }
@@ -143,9 +136,10 @@ unsafe fn memrchr2_neon(needle1: u8, needle2: u8, beg: *const u8, mut end: *cons
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use super::*;
     use crate::sys;
-    use std::slice;
 
     #[test]
     fn test_empty() {

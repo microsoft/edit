@@ -13,29 +13,26 @@
 //! The solution to the former is to keep line caches, which further complicates the architecture.
 //! There's no solution for the latter. However, there's a chance that the performance will still be sufficient.
 
-use crate::apperr;
-use crate::arena::scratch_arena;
-use crate::cell::SemiRefCell;
-use crate::framebuffer::{Framebuffer, IndexedColor, alpha_blend};
-use crate::helpers::{self, COORD_TYPE_SAFE_MAX, CoordType, Point, Rect};
-use crate::icu;
-use crate::simd::memchr2;
-use crate::sys;
-use crate::ucd::{self, Document};
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
 use std::collections::LinkedList;
 use std::fmt::Write as _;
 use std::fs::File;
-use std::io::Read as _;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::mem::{self, MaybeUninit};
 use std::ops::Range;
 use std::path::Path;
 use std::ptr::{self, NonNull};
 use std::rc::Rc;
-use std::slice;
-use std::str;
+use std::{slice, str};
+
+use crate::arena::scratch_arena;
+use crate::cell::SemiRefCell;
+use crate::framebuffer::{Framebuffer, IndexedColor, alpha_blend};
+use crate::helpers::{self, COORD_TYPE_SAFE_MAX, CoordType, Point, Rect};
+use crate::simd::memchr2;
+use crate::ucd::{self, Document};
+use crate::{apperr, icu, sys};
 
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,
@@ -183,10 +180,7 @@ impl TextBuffer {
             active_edit_depth: 0,
             active_edit_off: 0,
 
-            stats: TextBufferStatistics {
-                logical_lines: 1,
-                visual_lines: 1,
-            },
+            stats: TextBufferStatistics { logical_lines: 1, visual_lines: 1 },
             cursor: ucd::UcdCursor::default(),
             cursor_for_rendering: None,
             selection: TextBufferSelection::None,
@@ -243,9 +237,8 @@ impl TextBuffer {
         let mut off = 0;
 
         let mut cursor_offset = self.cursor.offset;
-        let mut cursor_for_rendering_offset = self
-            .cursor_for_rendering
-            .map_or(cursor_offset, |c| c.offset);
+        let mut cursor_for_rendering_offset =
+            self.cursor_for_rendering.map_or(cursor_offset, |c| c.offset);
 
         #[cfg(debug_assertions)]
         let mut adjusted_newlines = 0;
@@ -288,9 +281,7 @@ impl TextBuffer {
 
                 // Replace the newline.
                 off -= chunk_newline_len;
-                let gap = self
-                    .buffer
-                    .allocate_gap(off, newline.len(), chunk_newline_len);
+                let gap = self.buffer.allocate_gap(off, newline.len(), chunk_newline_len);
                 gap.copy_from_slice(newline);
                 self.buffer.commit_gap(newline.len());
                 off += newline.len();
@@ -417,11 +408,8 @@ impl TextBuffer {
 
         let text_width = self.get_text_width();
         // 2 columns are required, because otherwise wide glyphs wouldn't ever fit.
-        let word_wrap_column = if self.word_wrap_enabled && text_width >= 2 {
-            text_width
-        } else {
-            0
-        };
+        let word_wrap_column =
+            if self.word_wrap_enabled && text_width >= 2 { text_width } else { 0 };
 
         if force || self.word_wrap_column > word_wrap_column {
             self.word_wrap_column = word_wrap_column;
@@ -463,10 +451,7 @@ impl TextBuffer {
     pub fn copy_from_str(&mut self, text: &str) {
         if self.buffer.copy_from_str(text) {
             self.recalc_after_content_swap();
-            self.cursor_move_to_logical(Point {
-                x: CoordType::MAX,
-                y: 0,
-            });
+            self.cursor_move_to_logical(Point { x: CoordType::MAX, y: 0 });
 
             let delete = self.buffer.len() - self.cursor.offset;
             if delete != 0 {
@@ -481,10 +466,7 @@ impl TextBuffer {
             let before = self.cursor.logical_pos;
             let end = self.cursor_move_to_logical_internal(
                 ucd::UcdCursor::default(),
-                Point {
-                    x: 0,
-                    y: CoordType::MAX,
-                },
+                Point { x: 0, y: CoordType::MAX },
             );
             self.stats.logical_lines = end.logical_pos.y + 1;
             self.stats.visual_lines = self.stats.logical_lines;
@@ -586,11 +568,8 @@ impl TextBuffer {
                 } else {
                     // Otherwise, check how many spaces the line starts with. Searching for >8 spaces
                     // allows us to reject lines that have more than 1 level of indentation.
-                    let space_indentation = chunk[offset..]
-                        .iter()
-                        .take(9)
-                        .take_while(|&&c| c == b' ')
-                        .count();
+                    let space_indentation =
+                        chunk[offset..].iter().take(9).take_while(|&&c| c == b' ').count();
 
                     // We'll also reject lines starting with 1 space, because that's too fickle as a heuristic.
                     if (2..=8).contains(&space_indentation) {
@@ -917,18 +896,10 @@ impl TextBuffer {
     pub fn select_line(&mut self) {
         let beg = self.cursor_move_to_logical_internal(
             self.cursor,
-            Point {
-                x: 0,
-                y: self.cursor.logical_pos.y,
-            },
+            Point { x: 0, y: self.cursor.logical_pos.y },
         );
-        let end = self.cursor_move_to_logical_internal(
-            beg,
-            Point {
-                x: 0,
-                y: self.cursor.logical_pos.y + 1,
-            },
-        );
+        let end = self
+            .cursor_move_to_logical_internal(beg, Point { x: 0, y: self.cursor.logical_pos.y + 1 });
         self.set_cursor_for_selection(end);
         self.set_selection(TextBufferSelection::Done {
             beg: beg.logical_pos,
@@ -1000,8 +971,7 @@ impl TextBuffer {
                 if self.selection_generation == search.selection_generation {
                     search.next_search_offset
                 } else {
-                    self.cursor_move_to_logical_internal(self.cursor, beg.min(end))
-                        .offset
+                    self.cursor_move_to_logical_internal(self.cursor, beg.min(end)).offset
                 }
             }
             _ => self.cursor.offset,
@@ -1209,16 +1179,10 @@ impl TextBuffer {
 
         if self.word_wrap_column > 0 {
             let upward = result.offset < cursor.offset;
-            let (top, bottom) = if upward {
-                (result, cursor)
-            } else {
-                (cursor, result)
-            };
+            let (top, bottom) = if upward { (result, cursor) } else { (cursor, result) };
 
-            let mut bottom_remeasured = self
-                .measurement_config()
-                .with_cursor(top)
-                .goto_logical(bottom.logical_pos);
+            let mut bottom_remeasured =
+                self.measurement_config().with_cursor(top).goto_logical(bottom.logical_pos);
 
             // The second problem is that visual positions can be ambiguous. A single logical position
             // can map to two visual positions: One at the end of the preceeding line in front of
@@ -1274,9 +1238,7 @@ impl TextBuffer {
             cursor = self.goto_line_start(cursor, cursor.logical_pos.y - 1);
         }
 
-        self.measurement_config()
-            .with_cursor(cursor)
-            .goto_offset(offset)
+        self.measurement_config().with_cursor(cursor).goto_offset(offset)
     }
 
     fn cursor_move_to_logical_internal(
@@ -1284,10 +1246,7 @@ impl TextBuffer {
         mut cursor: ucd::UcdCursor,
         pos: Point,
     ) -> ucd::UcdCursor {
-        let pos = Point {
-            x: pos.x.max(0),
-            y: pos.y.max(0),
-        };
+        let pos = Point { x: pos.x.max(0), y: pos.y.max(0) };
 
         if pos == cursor.logical_pos {
             return cursor;
@@ -1300,9 +1259,7 @@ impl TextBuffer {
             cursor = self.goto_line_start(cursor, pos.y);
         }
 
-        self.measurement_config()
-            .with_cursor(cursor)
-            .goto_logical(pos)
+        self.measurement_config().with_cursor(cursor).goto_logical(pos)
     }
 
     fn cursor_move_to_visual_internal(
@@ -1310,10 +1267,7 @@ impl TextBuffer {
         mut cursor: ucd::UcdCursor,
         pos: Point,
     ) -> ucd::UcdCursor {
-        let pos = Point {
-            x: pos.x.max(0),
-            y: pos.y.max(0),
-        };
+        let pos = Point { x: pos.x.max(0), y: pos.y.max(0) };
 
         if pos == cursor.visual_pos {
             return cursor;
@@ -1336,9 +1290,7 @@ impl TextBuffer {
             }
         }
 
-        self.measurement_config()
-            .with_cursor(cursor)
-            .goto_visual(pos)
+        self.measurement_config().with_cursor(cursor).goto_visual(pos)
     }
 
     fn cursor_move_delta_internal(
@@ -1362,10 +1314,7 @@ impl TextBuffer {
 
                     cursor = self.cursor_move_to_logical_internal(
                         cursor,
-                        Point {
-                            x: target_x,
-                            y: cursor.logical_pos.y,
-                        },
+                        Point { x: target_x, y: cursor.logical_pos.y },
                     );
 
                     // We can stop if we ran out of remaining delta
@@ -1381,10 +1330,7 @@ impl TextBuffer {
 
                     cursor = self.cursor_move_to_logical_internal(
                         cursor,
-                        Point {
-                            x: start_x,
-                            y: cursor.logical_pos.y + sign,
-                        },
+                        Point { x: start_x, y: cursor.logical_pos.y + sign },
                     );
 
                     // We crossed a newline which counts for 1 grapheme cluster.
@@ -1511,19 +1457,11 @@ impl TextBuffer {
             line.clear();
 
             let visual_line = origin.y + y;
-            let mut cursor_beg = self.cursor_move_to_visual_internal(
-                cursor,
-                Point {
-                    x: origin.x,
-                    y: visual_line,
-                },
-            );
+            let mut cursor_beg =
+                self.cursor_move_to_visual_internal(cursor, Point { x: origin.x, y: visual_line });
             let cursor_end = self.cursor_move_to_visual_internal(
                 cursor_beg,
-                Point {
-                    x: origin.x + text_width,
-                    y: visual_line,
-                },
+                Point { x: origin.x + text_width, y: visual_line },
             );
 
             // Accelerate the next render pass by remembering where we started off.
@@ -1542,12 +1480,7 @@ impl TextBuffer {
                     line.push_str(&MARGIN_TEMPLATE[off..]);
                 } else if self.word_wrap_column <= 0 || cursor_beg.logical_pos.x == 0 {
                     // Regular line? Place "123 | " in the margin.
-                    _ = write!(
-                        line,
-                        "{:1$} │ ",
-                        cursor_beg.logical_pos.y + 1,
-                        line_number_width
-                    );
+                    _ = write!(line, "{:1$} │ ", cursor_beg.logical_pos.y + 1, line_number_width);
                 } else {
                     // Wrapped line? Place " ... | " in the margin.
                     let number_width = (cursor_beg.logical_pos.y + 1).ilog10() as usize + 1;
@@ -1562,12 +1495,7 @@ impl TextBuffer {
                     let left = destination.left;
                     let top = destination.top + y;
                     fb.blend_fg(
-                        Rect {
-                            left,
-                            top,
-                            right: left + line_number_width as i32,
-                            bottom: top + 1,
-                        },
+                        Rect { left, top, right: left + line_number_width as i32, bottom: top + 1 },
                         fb.indexed(IndexedColor::Background),
                     );
                 }
@@ -1581,10 +1509,7 @@ impl TextBuffer {
                 if cursor_beg.visual_pos.x < origin.x {
                     let cursor_next = self.cursor_move_to_logical_internal(
                         cursor_beg,
-                        Point {
-                            x: cursor_beg.logical_pos.x + 1,
-                            y: cursor_beg.logical_pos.y,
-                        },
+                        Point { x: cursor_beg.logical_pos.x + 1, y: cursor_beg.logical_pos.y },
                     );
 
                     if cursor_next.visual_pos.x > origin.x {
@@ -1662,12 +1587,7 @@ impl TextBuffer {
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
 
-            fb.replace_text(
-                destination.top + y,
-                destination.left,
-                destination.right,
-                &line,
-            );
+            fb.replace_text(destination.top + y, destination.left, destination.right, &line);
 
             // Draw the selection on this line, if any.
             // FYI: `cursor_beg.visual_pos.y == visual_line` is necessary as the `visual_line`
@@ -1702,12 +1622,7 @@ impl TextBuffer {
 
                 let left = destination.left + self.margin_width - origin.x;
                 let top = destination.top + y;
-                let rect = Rect {
-                    left: left + beg,
-                    top,
-                    right: left + end,
-                    bottom: top + 1,
-                };
+                let rect = Rect { left: left + beg, top, right: left + end, bottom: top + 1 };
 
                 let mut bg = alpha_blend(
                     fb.indexed(IndexedColor::Foreground),
@@ -1740,12 +1655,7 @@ impl TextBuffer {
             let right = destination.right;
             if left < right {
                 fb.blend_bg(
-                    Rect {
-                        left,
-                        top: destination.top,
-                        right,
-                        bottom: destination.bottom,
-                    },
+                    Rect { left, top: destination.top, right, bottom: destination.bottom },
                     fb.indexed_alpha(IndexedColor::BrightRed, 0x1f),
                 );
             }
@@ -1849,10 +1759,7 @@ impl TextBuffer {
                 let delete = self.cursor.logical_pos.x - column_before;
                 let end = self.cursor_move_to_logical_internal(
                     self.cursor,
-                    Point {
-                        x: self.cursor.logical_pos.x + delete,
-                        y: self.cursor.logical_pos.y,
-                    },
+                    Point { x: self.cursor.logical_pos.x + delete, y: self.cursor.logical_pos.y },
                 );
                 self.edit_delete(end);
             }
@@ -1986,17 +1893,10 @@ impl TextBuffer {
 
         let [beg, end] = helpers::minmax(selection_beg, selection_end);
         let beg = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: beg.y });
-        let end = self.cursor_move_to_logical_internal(
-            beg,
-            Point {
-                x: CoordType::MAX,
-                y: end.y,
-            },
-        );
+        let end = self.cursor_move_to_logical_internal(beg, Point { x: CoordType::MAX, y: end.y });
 
         let mut replacement = Vec::new();
-        self.buffer
-            .extract_raw(beg.offset, end.offset, &mut replacement, 0);
+        self.buffer.extract_raw(beg.offset, end.offset, &mut replacement, 0);
 
         let initial_len = replacement.len();
         let mut offset = 0;
@@ -2099,14 +1999,8 @@ impl TextBuffer {
         let [beg, end] = match self.selection {
             TextBufferSelection::None if !line_fallback => return None,
             TextBufferSelection::None => [
-                Point {
-                    x: 0,
-                    y: self.cursor.logical_pos.y,
-                },
-                Point {
-                    x: 0,
-                    y: self.cursor.logical_pos.y + 1,
-                },
+                Point { x: 0, y: self.cursor.logical_pos.y },
+                Point { x: 0, y: self.cursor.logical_pos.y + 1 },
             ],
             TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
                 helpers::minmax(beg, end)
@@ -2116,11 +2010,7 @@ impl TextBuffer {
         let beg = self.cursor_move_to_logical_internal(self.cursor, beg);
         let end = self.cursor_move_to_logical_internal(beg, end);
 
-        if beg.offset < end.offset {
-            Some((beg, end))
-        } else {
-            None
-        }
+        if beg.offset < end.offset { Some((beg, end)) } else { None }
     }
 
     fn edit_begin(&mut self, history_type: HistoryType, cursor: ucd::UcdCursor) {
@@ -2163,10 +2053,7 @@ impl TextBuffer {
             let safe_start = self.goto_line_start(cursor, cursor.logical_pos.y);
             let next_line = self.cursor_move_to_logical_internal(
                 cursor,
-                Point {
-                    x: 0,
-                    y: cursor.logical_pos.y + 1,
-                },
+                Point { x: 0, y: cursor.logical_pos.y + 1 },
             );
             self.active_edit_line_info = Some(ActiveEditLineInfo {
                 safe_start,
@@ -2187,9 +2074,7 @@ impl TextBuffer {
 
         // Write!
         {
-            let gap = self
-                .buffer
-                .allocate_gap(self.active_edit_off, text.len(), 0);
+            let gap = self.buffer.allocate_gap(self.active_edit_off, text.len(), 0);
             gap.copy_from_slice(text);
             self.buffer.commit_gap(text.len());
         }
@@ -2240,13 +2125,7 @@ impl TextBuffer {
         }
 
         if let Some(info) = self.active_edit_line_info.take() {
-            let deleted_count = self
-                .undo_stack
-                .back_mut()
-                .unwrap()
-                .borrow_mut()
-                .deleted
-                .len();
+            let deleted_count = self.undo_stack.back_mut().unwrap().borrow_mut().deleted.len();
             let target = self.cursor.logical_pos;
 
             // From our safe position we can measure the actual visual position of the cursor.
@@ -2261,13 +2140,8 @@ impl TextBuffer {
             // the entire buffer contents until the end to compute `self.stats.visual_lines`.
             if deleted_count < info.distance_next_line_start {
                 // Now we can measure how many more visual rows this logical line spans.
-                let next_line = self.cursor_move_to_logical_internal(
-                    self.cursor,
-                    Point {
-                        x: 0,
-                        y: target.y + 1,
-                    },
-                );
+                let next_line = self
+                    .cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: target.y + 1 });
                 let lines_before = info.line_height_in_rows;
                 let lines_after = next_line.visual_pos.y - info.safe_start.visual_pos.y;
                 self.stats.visual_lines += lines_after - lines_before;
@@ -2311,11 +2185,7 @@ impl TextBuffer {
         }
 
         let change = {
-            let to = if undo {
-                &self.redo_stack
-            } else {
-                &self.undo_stack
-            };
+            let to = if undo { &self.redo_stack } else { &self.undo_stack };
             to.back().unwrap()
         };
 
@@ -2340,9 +2210,7 @@ impl TextBuffer {
             // Delete the inserted portion and reinsert the deleted portion.
             let deleted = change.deleted.len();
             let added = &change.added[..];
-            let gap = self
-                .buffer
-                .allocate_gap(cursor.offset, added.len(), deleted);
+            let gap = self.buffer.allocate_gap(cursor.offset, added.len(), deleted);
             gap.copy_from_slice(added);
             self.buffer.commit_gap(added.len());
 

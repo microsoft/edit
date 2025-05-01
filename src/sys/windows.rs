@@ -1,6 +1,3 @@
-use crate::arena::{Arena, ArenaString, scratch_arena};
-use crate::helpers::{CoordType, Size};
-use crate::{apperr, helpers};
 use std::ffi::{CStr, OsString, c_void};
 use std::fmt::Write as _;
 use std::fs::{self, File};
@@ -9,16 +6,16 @@ use std::os::windows::io::FromRawHandle;
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull, null, null_mut};
 use std::{mem, time};
-use windows_sys::Win32::Foundation;
-use windows_sys::Win32::Globalization;
+
 use windows_sys::Win32::Storage::FileSystem;
-use windows_sys::Win32::System::Console;
 use windows_sys::Win32::System::Diagnostics::Debug;
-use windows_sys::Win32::System::IO;
-use windows_sys::Win32::System::LibraryLoader;
-use windows_sys::Win32::System::Memory;
-use windows_sys::Win32::System::Threading;
+use windows_sys::Win32::System::{Console, IO, LibraryLoader, Memory, Threading};
+use windows_sys::Win32::{Foundation, Globalization};
 use windows_sys::w;
+
+use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::helpers::{CoordType, Size};
+use crate::{apperr, helpers};
 
 type ReadConsoleInputExW = unsafe extern "system" fn(
     h_console_input: Foundation::HANDLE,
@@ -156,21 +153,12 @@ impl Drop for Deinit {
 
 pub fn switch_modes() -> apperr::Result<()> {
     unsafe {
-        check_bool_return(Console::SetConsoleCtrlHandler(
-            Some(console_ctrl_handler),
-            1,
-        ))?;
+        check_bool_return(Console::SetConsoleCtrlHandler(Some(console_ctrl_handler), 1))?;
 
         STATE.stdin_cp_old = Console::GetConsoleCP();
         STATE.stdout_cp_old = Console::GetConsoleOutputCP();
-        check_bool_return(Console::GetConsoleMode(
-            STATE.stdin,
-            &raw mut STATE.stdin_mode_old,
-        ))?;
-        check_bool_return(Console::GetConsoleMode(
-            STATE.stdout,
-            &raw mut STATE.stdout_mode_old,
-        ))?;
+        check_bool_return(Console::GetConsoleMode(STATE.stdin, &raw mut STATE.stdin_mode_old))?;
+        check_bool_return(Console::GetConsoleMode(STATE.stdout, &raw mut STATE.stdout_mode_old))?;
 
         check_bool_return(Console::SetConsoleCP(Globalization::CP_UTF8))?;
         check_bool_return(Console::SetConsoleOutputCP(Globalization::CP_UTF8))?;
@@ -208,10 +196,7 @@ fn get_console_size() -> Option<Size> {
 
         let w = (info.srWindow.Right - info.srWindow.Left + 1).max(1) as CoordType;
         let h = (info.srWindow.Bottom - info.srWindow.Top + 1).max(1) as CoordType;
-        Some(Size {
-            width: w,
-            height: h,
-        })
+        Some(Size { width: w, height: h })
     }
 }
 
@@ -301,10 +286,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                     // Windows is prone to sending broken/useless `WINDOW_BUFFER_SIZE_EVENT`s.
                     // E.g. starting conhost will emit 3 in a row. Skip rendering in that case.
                     if w > 0 && h > 0 {
-                        resize_event = Some(Size {
-                            width: w,
-                            height: h,
-                        });
+                        resize_event = Some(Size { width: w, height: h });
                     }
                 }
                 _ => {}
@@ -317,11 +299,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
     }
 
     const RESIZE_EVENT_FMT_MAX_LEN: usize = 16; // "\x1b[8;65535;65535t"
-    let resize_event_len = if resize_event.is_some() {
-        RESIZE_EVENT_FMT_MAX_LEN
-    } else {
-        0
-    };
+    let resize_event_len = if resize_event.is_some() { RESIZE_EVENT_FMT_MAX_LEN } else { 0 };
     // +1 to account for a potential `STATE.leading_surrogate`.
     let utf8_max_len = (utf16_buf_len + 1) * 3;
     let mut text = arena.new_string();
@@ -332,11 +310,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
         // If I read xterm's documentation correctly, CSI 18 t reports the window size in characters.
         // CSI 8 ; height ; width t is the response. Of course, we didn't send the request,
         // but we can use this fake response to trigger the editor to resize itself.
-        _ = write!(
-            text,
-            "\x1b[8;{};{}t",
-            resize_event.height, resize_event.width
-        );
+        _ = write!(text, "\x1b[8;{};{}t", resize_event.height, resize_event.width);
     }
 
     // If the input ends with a lone lead surrogate, we need to remember it for the next read.
@@ -398,11 +372,7 @@ pub fn open_stdin_if_redirected() -> Option<File> {
     unsafe {
         let handle = Console::GetStdHandle(Console::STD_INPUT_HANDLE);
         // Did we reopen stdin during `init()`?
-        if !std::ptr::eq(STATE.stdin, handle) {
-            Some(File::from_raw_handle(handle))
-        } else {
-            None
-        }
+        if !std::ptr::eq(STATE.stdin, handle) { Some(File::from_raw_handle(handle)) } else { None }
     }
 }
 
@@ -506,11 +476,7 @@ unsafe fn load_library(name: *const u16) -> apperr::Result<NonNull<c_void>> {
 pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apperr::Result<T> {
     unsafe {
         let ptr = LibraryLoader::GetProcAddress(handle.as_ptr(), name.as_ptr() as *const u8);
-        if let Some(ptr) = ptr {
-            Ok(mem::transmute_copy(&ptr))
-        } else {
-            Err(get_last_error())
-        }
+        if let Some(ptr) = ptr { Ok(mem::transmute_copy(&ptr)) } else { Err(get_last_error()) }
     }
 }
 
@@ -601,11 +567,7 @@ fn get_last_error() -> apperr::Error {
 
 #[inline]
 const fn gle_to_apperr(gle: u32) -> apperr::Error {
-    apperr::Error::new_sys(if gle == 0 {
-        0x8000FFFF
-    } else {
-        0x80070000 | gle
-    })
+    apperr::Error::new_sys(if gle == 0 { 0x8000FFFF } else { 0x80070000 | gle })
 }
 
 #[inline]
@@ -647,11 +609,7 @@ pub fn apperr_is_not_found(err: apperr::Error) -> bool {
 }
 
 fn check_bool_return(ret: Foundation::BOOL) -> apperr::Result<()> {
-    if ret == 0 {
-        Err(get_last_error())
-    } else {
-        Ok(())
-    }
+    if ret == 0 { Err(get_last_error()) } else { Ok(()) }
 }
 
 fn check_ptr_return<T>(ret: *mut T) -> apperr::Result<NonNull<T>> {

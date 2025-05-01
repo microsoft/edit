@@ -8,30 +8,28 @@ mod draw_statusbar;
 mod loc;
 mod state;
 
+use std::borrow::Cow;
+#[cfg(feature = "debug-latency")]
+use std::fmt::Write;
+use std::path::PathBuf;
+use std::process;
+
 use documents::DocumentPath;
 use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
 use draw_statusbar::*;
-use edit::apperr;
 use edit::arena::{self, ArenaString, scratch_arena};
-use edit::base64;
+#[cfg(feature = "debug-latency")]
+use edit::arena_format;
 use edit::buffer::TextBuffer;
 use edit::framebuffer::{self, IndexedColor, alpha_blend};
 use edit::input::{self, kbmod, vk};
-use edit::sys;
 use edit::tui::*;
 use edit::vt::{self, Token};
+use edit::{apperr, base64, sys};
 use loc::*;
 use state::*;
-use std::borrow::Cow;
-use std::path::PathBuf;
-use std::process;
-
-#[cfg(feature = "debug-latency")]
-use edit::arena_format;
-#[cfg(feature = "debug-latency")]
-use std::fmt::Write;
 
 impl State {
     fn new() -> apperr::Result<Self> {
@@ -58,10 +56,7 @@ impl State {
             file_picker_entries: None,
             file_picker_overwrite_warning: None,
 
-            wants_search: StateSearch {
-                kind: StateSearchKind::Hidden,
-                focus: false,
-            },
+            wants_search: StateSearch { kind: StateSearchKind::Hidden, focus: false },
             search_needle: Default::default(),
             search_replacement: Default::default(),
             search_options: Default::default(),
@@ -200,10 +195,7 @@ fn run() -> apperr::Result<()> {
             #[cfg(feature = "debug-layout")]
             {
                 drop(ctx);
-                state
-                    .buffer
-                    .buffer
-                    .debug_replace_everything(&tui.debug_layout());
+                state.buffer.buffer.debug_replace_everything(&tui.debug_layout());
             }
 
             #[cfg(feature = "debug-latency")]

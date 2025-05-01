@@ -1,3 +1,9 @@
+use std::arch::breakpoint;
+#[cfg(debug_assertions)]
+use std::collections::HashSet;
+use std::fmt::Write as _;
+use std::{iter, mem, ptr, time};
+
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::{CursorMovement, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
@@ -6,15 +12,6 @@ use crate::helpers::{CoordType, Point, Rect, Size, hash, hash_str, opt_ptr_eq, w
 use crate::input::{InputKeyMod, kbmod, vk};
 use crate::ucd::Document;
 use crate::{apperr, helpers, input, ucd};
-use std::arch::breakpoint;
-use std::fmt::Write as _;
-use std::iter;
-use std::mem;
-use std::ptr;
-use std::time;
-
-#[cfg(debug_assertions)]
-use std::collections::HashSet;
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
@@ -105,10 +102,7 @@ impl Tui {
             modal_default_bg: 0,
             modal_default_fg: 0,
 
-            size: Size {
-                width: 0,
-                height: 0,
-            },
+            size: Size { width: 0, height: 0 },
             mouse_position: Point::MIN,
             mouse_down_position: Point::MIN,
             left_mouse_down_target: 0,
@@ -593,8 +587,7 @@ impl Tui {
                 }
             }
 
-            self.framebuffer
-                .replace_attr(outer_clipped, Attributes::All, Attributes::None);
+            self.framebuffer.replace_attr(outer_clipped, Attributes::All, Attributes::None);
         }
 
         self.framebuffer.blend_bg(outer_clipped, node.attributes.bg);
@@ -655,20 +648,15 @@ impl Tui {
                                 let mut end = cfg.goto_visual(Point { x: mid_end_x, y: 0 });
                                 if end.visual_pos.x < mid_end_x {
                                     // If we intersected a wide glyph, we need to move past that.
-                                    end = cfg.goto_logical(Point {
-                                        x: end.logical_pos.x + 1,
-                                        y: 0,
-                                    });
+                                    end =
+                                        cfg.goto_logical(Point { x: end.logical_pos.x + 1, y: 0 });
                                 }
                                 modified.push_str(&text[..beg.offset]);
                                 modified.push('…');
                                 modified.push_str(&text[end.offset..]);
                             }
                             Overflow::TruncateTail => {
-                                let end = cfg.goto_visual(Point {
-                                    x: restricted_width - 1,
-                                    y: 0,
-                                });
+                                let end = cfg.goto_visual(Point { x: restricted_width - 1, y: 0 });
                                 modified.push_str(&text[..end.offset]);
                                 modified.push('…');
                             }
@@ -712,12 +700,9 @@ impl Tui {
                     destination.right -= 1;
                 }
 
-                if let Some(res) = tb.render(
-                    tc.scroll_offset,
-                    destination,
-                    tc.has_focus,
-                    &mut self.framebuffer,
-                ) {
+                if let Some(res) =
+                    tb.render(tc.scroll_offset, destination, tc.has_focus, &mut self.framebuffer)
+                {
                     tc.scroll_offset_x_max = res.visual_pos_x_max;
                 }
 
@@ -836,11 +821,7 @@ impl Tui {
                         _ = write!(
                             result,
                             "  text:         \"{}\"\r\n",
-                            content
-                                .chunks
-                                .iter()
-                                .map(|c| c.text.as_str())
-                                .collect::<String>()
+                            content.chunks.iter().map(|c| c.text.as_str()).collect::<String>()
                         );
                     }
                     NodeContent::Textarea(content) => {
@@ -894,9 +875,7 @@ impl Tui {
             .iter()
             .skip(pop_minimum)
             .position(|&id| {
-                self.prev_node_map
-                    .get(id)
-                    .is_some_and(|node| node.borrow().attributes.focusable)
+                self.prev_node_map.get(id).is_some_and(|node| node.borrow().attributes.focusable)
             })
             .map(|idx| idx + pop_minimum)
             .unwrap_or(path.len());
@@ -983,17 +962,9 @@ impl Tui {
 
             let row = row.borrow();
             let cell = cell.borrow();
-            let mut next = if input == vk::LEFT {
-                cell.siblings.prev
-            } else {
-                cell.siblings.next
-            };
+            let mut next = if input == vk::LEFT { cell.siblings.prev } else { cell.siblings.next };
             if next.is_none() {
-                next = if input == vk::LEFT {
-                    row.children.last
-                } else {
-                    row.children.first
-                };
+                next = if input == vk::LEFT { row.children.last } else { row.children.first };
             }
 
             if let Some(next) = next {
@@ -1283,10 +1254,7 @@ impl<'a> Context<'a, '_> {
         ln.attributes.float = Some(FloatAttributes {
             gravity_x: spec.gravity_x.clamp(0.0, 1.0),
             gravity_y: spec.gravity_y.clamp(0.0, 1.0),
-            offset: Point {
-                x: spec.offset_x,
-                y: spec.offset_y,
-            },
+            offset: Point { x: spec.offset_x, y: spec.offset_y },
         });
         ln.attributes.bg = self.tui.floater_default_bg;
         ln.attributes.fg = self.tui.floater_default_fg;
@@ -1367,14 +1335,8 @@ impl<'a> Context<'a, '_> {
 
     pub fn modal_begin(&mut self, classname: &'static str, title: &str) {
         self.block_begin(classname);
-        self.attr_float(FloatSpec {
-            anchor: Anchor::Root,
-            ..Default::default()
-        });
-        self.attr_intrinsic_size(Size {
-            width: self.tui.size.width,
-            height: self.tui.size.height,
-        });
+        self.attr_float(FloatSpec { anchor: Anchor::Root, ..Default::default() });
+        self.attr_intrinsic_size(Size { width: self.tui.size.width, height: self.tui.size.height });
         self.attr_background_rgba(self.indexed_alpha(IndexedColor::Background, 0xd6));
         self.attr_foreground_rgba(self.indexed_alpha(IndexedColor::Background, 0xd6));
         self.attr_focus_well();
@@ -1482,10 +1444,8 @@ impl<'a> Context<'a, '_> {
 
     pub fn styled_label_begin(&mut self, classname: &'static str, overflow: Overflow) {
         self.block_begin(classname);
-        self.tree.last_node.borrow_mut().content = NodeContent::Text(TextContent {
-            chunks: Vec::new_in(self.arena()),
-            overflow,
-        });
+        self.tree.last_node.borrow_mut().content =
+            NodeContent::Text(TextContent { chunks: Vec::new_in(self.arena()), overflow });
     }
 
     pub fn styled_label_set_foreground(&mut self, color: u32) {
@@ -1537,10 +1497,8 @@ impl<'a> Context<'a, '_> {
                 return;
             };
 
-            let cursor = ucd::MeasurementConfig::new(&content.chunks).goto_visual(Point {
-                x: CoordType::MAX,
-                y: 0,
-            });
+            let cursor = ucd::MeasurementConfig::new(&content.chunks)
+                .goto_visual(Point { x: CoordType::MAX, y: 0 });
             last_node.intrinsic_size.width = cursor.visual_pos.x;
             last_node.intrinsic_size.height = 1;
             last_node.intrinsic_size_set = true;
@@ -1995,14 +1953,10 @@ impl<'a> Context<'a, '_> {
                 },
                 vk::HOME => match modifiers {
                     kbmod::CTRL => tb.cursor_move_to_logical(Point::default()),
-                    kbmod::SHIFT => tb.selection_update_visual(Point {
-                        x: 0,
-                        y: tb.get_cursor_visual_pos().y,
-                    }),
-                    _ => tb.cursor_move_to_visual(Point {
-                        x: 0,
-                        y: tb.get_cursor_visual_pos().y,
-                    }),
+                    kbmod::SHIFT => {
+                        tb.selection_update_visual(Point { x: 0, y: tb.get_cursor_visual_pos().y })
+                    }
+                    _ => tb.cursor_move_to_visual(Point { x: 0, y: tb.get_cursor_visual_pos().y }),
                 },
                 vk::LEFT => {
                     let granularity = if modifiers.contains(kbmod::CTRL) {
@@ -2334,16 +2288,12 @@ impl<'a> Context<'a, '_> {
             .prev_node_map
             .get(last_node.id)
             .and_then(|node| match &node.borrow().content {
-                NodeContent::List(content) => Some(ListContent {
-                    selected: content.selected,
-                    selected_node: None,
-                }),
+                NodeContent::List(content) => {
+                    Some(ListContent { selected: content.selected, selected_node: None })
+                }
                 _ => None,
             })
-            .unwrap_or(ListContent {
-                selected: 0,
-                selected_node: None,
-            });
+            .unwrap_or(ListContent { selected: 0, selected_node: None });
 
         last_node.attributes.focus_void = true;
         last_node.content = NodeContent::List(content);
@@ -2432,17 +2382,10 @@ impl<'a> Context<'a, '_> {
             {
                 let selected = selected_node.unwrap().borrow();
                 let forward = self.input_keyboard == Some(vk::DOWN);
-                let mut node = if forward {
-                    selected.siblings.next
-                } else {
-                    selected.siblings.prev
-                };
+                let mut node =
+                    if forward { selected.siblings.next } else { selected.siblings.prev };
                 if node.is_none() {
-                    node = if forward {
-                        list.children.first
-                    } else {
-                        list.children.last
-                    };
+                    node = if forward { list.children.first } else { list.children.last };
                 }
                 selected_next = node;
             } else {
@@ -2656,12 +2599,7 @@ impl<'a> Context<'a, '_> {
         }
 
         self.styled_label_end();
-        self.attr_padding(Rect {
-            left: 0,
-            top: 0,
-            right: 2,
-            bottom: 0,
-        });
+        self.attr_padding(Rect { left: 0, top: 0, right: 2, bottom: 0 });
     }
 
     fn menubar_shortcut(&mut self, shortcut: InputKey) {
@@ -2687,12 +2625,7 @@ impl<'a> Context<'a, '_> {
             self.block_begin("shortcut");
             self.block_end();
         }
-        self.attr_padding(Rect {
-            left: 0,
-            top: 0,
-            right: 2,
-            bottom: 0,
-        });
+        self.attr_padding(Rect { left: 0, top: 0, right: 2, bottom: 0 });
     }
 }
 
@@ -2828,16 +2761,8 @@ impl<'a> Tree<'a> {
         mut cb: T,
     ) {
         let mut node = start;
-        let children_idx = if forward {
-            NodeChildren::FIRST
-        } else {
-            NodeChildren::LAST
-        };
-        let siblings_idx = if forward {
-            NodeSiblings::NEXT
-        } else {
-            NodeSiblings::PREV
-        };
+        let children_idx = if forward { NodeChildren::FIRST } else { NodeChildren::LAST };
+        let siblings_idx = if forward { NodeSiblings::NEXT } else { NodeSiblings::PREV };
 
         while {
             'traverse: {
@@ -2888,11 +2813,7 @@ struct NodeMap<'a> {
 
 impl Default for NodeMap<'_> {
     fn default() -> Self {
-        Self {
-            slots: vec![None; 1],
-            shift: 0,
-            mask: 0,
-        }
+        Self { slots: vec![None; 1], shift: 0, mask: 0 }
     }
 }
 

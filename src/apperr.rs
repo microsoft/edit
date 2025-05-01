@@ -1,6 +1,6 @@
+use std::{io, result};
+
 use crate::sys;
-use std::io;
-use std::result;
 
 // Remember to add an entry to `Error::message()` for each new error.
 pub const APP_ICU_MISSING: Error = Error::new_app(0);

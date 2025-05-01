@@ -1,12 +1,12 @@
-use crate::apperr;
-use crate::arena::{Arena, ArenaString};
 use std::ffi::{CStr, c_int, c_void};
 use std::fs::{self, File};
 use std::mem::{self, MaybeUninit};
 use std::os::fd::FromRawFd;
 use std::ptr::{self, NonNull, null, null_mut};
-use std::thread;
-use std::time;
+use std::{thread, time};
+
+use crate::apperr;
+use crate::arena::{Arena, ArenaString};
 
 struct State {
     stdin: libc::c_int,
@@ -68,11 +68,7 @@ pub fn switch_modes() -> apperr::Result<()> {
         // Set STATE.inject_resize to true whenever we get a SIGWINCH.
         let mut sigwinch_action: libc::sigaction = mem::zeroed();
         sigwinch_action.sa_sigaction = sigwinch_handler as libc::sighandler_t;
-        check_int_return(libc::sigaction(
-            libc::SIGWINCH,
-            &sigwinch_action,
-            null_mut(),
-        ))?;
+        check_int_return(libc::sigaction(libc::SIGWINCH, &sigwinch_action, null_mut()))?;
 
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
@@ -189,11 +185,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
             if timeout != time::Duration::MAX {
                 let beg = time::Instant::now();
 
-                let mut pollfd = libc::pollfd {
-                    fd: STATE.stdin,
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
+                let mut pollfd = libc::pollfd { fd: STATE.stdin, events: libc::POLLIN, revents: 0 };
                 let ts = libc::timespec {
                     tv_sec: timeout.as_secs() as libc::time_t,
                     tv_nsec: timeout.subsec_nanos() as libc::c_long,
@@ -361,16 +353,8 @@ pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
 /// and to pass a size less than or equal to the size passed to `virtual_reserve`.
 pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> apperr::Result<()> {
     unsafe {
-        let status = libc::mprotect(
-            base.cast().as_ptr(),
-            size,
-            libc::PROT_READ | libc::PROT_WRITE,
-        );
-        if status != 0 {
-            Err(errno_to_apperr(libc::ENOMEM))
-        } else {
-            Ok(())
-        }
+        let status = libc::mprotect(base.cast().as_ptr(), size, libc::PROT_READ | libc::PROT_WRITE);
+        if status != 0 { Err(errno_to_apperr(libc::ENOMEM)) } else { Ok(()) }
     }
 }
 
@@ -498,9 +482,7 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
     for key in ["LANGUAGE", "LC_ALL", "LANG"] {
         if let Ok(val) = std::env::var(key) {
             locales.extend(
-                val.split(':')
-                    .filter(|s| !s.is_empty())
-                    .map(|s| ArenaString::from_str(arena, s)),
+                val.split(':').filter(|s| !s.is_empty()).map(|s| ArenaString::from_str(arena, s)),
             );
         }
     }
@@ -536,9 +518,5 @@ const fn errno_to_apperr(no: c_int) -> apperr::Error {
 }
 
 fn check_int_return(ret: libc::c_int) -> apperr::Result<libc::c_int> {
-    if ret < 0 {
-        Err(errno_to_apperr(unsafe { *libc::__errno_location() }))
-    } else {
-        Ok(ret)
-    }
+    if ret < 0 { Err(errno_to_apperr(unsafe { *libc::__errno_location() })) } else { Ok(ret) }
 }

@@ -1,11 +1,10 @@
-use crate::apperr;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::io::Read;
 use std::mem::{self, MaybeUninit};
-use std::ptr;
-use std::slice;
-use std::str;
+use std::{ptr, slice, str};
+
+use crate::apperr;
 
 pub type CoordType = i32;
 
@@ -19,14 +18,8 @@ pub struct Point {
 }
 
 impl Point {
-    pub const MIN: Point = Point {
-        x: CoordType::MIN,
-        y: CoordType::MIN,
-    };
-    pub const MAX: Point = Point {
-        x: CoordType::MAX,
-        y: CoordType::MAX,
-    };
+    pub const MIN: Point = Point { x: CoordType::MIN, y: CoordType::MIN };
+    pub const MAX: Point = Point { x: CoordType::MAX, y: CoordType::MAX };
 }
 
 impl PartialOrd<Point> for Point {
@@ -52,12 +45,7 @@ pub struct Size {
 
 impl Size {
     pub fn as_rect(&self) -> Rect {
-        Rect {
-            left: 0,
-            top: 0,
-            right: self.width,
-            bottom: self.height,
-        }
+        Rect { left: 0, top: 0, right: self.width, bottom: self.height }
     }
 }
 
@@ -71,30 +59,15 @@ pub struct Rect {
 
 impl Rect {
     pub fn one(value: CoordType) -> Self {
-        Self {
-            left: value,
-            top: value,
-            right: value,
-            bottom: value,
-        }
+        Self { left: value, top: value, right: value, bottom: value }
     }
 
     pub fn two(top_bottom: CoordType, left_right: CoordType) -> Self {
-        Self {
-            left: left_right,
-            top: top_bottom,
-            right: left_right,
-            bottom: top_bottom,
-        }
+        Self { left: left_right, top: top_bottom, right: left_right, bottom: top_bottom }
     }
 
     pub fn three(top: CoordType, left_right: CoordType, bottom: CoordType) -> Self {
-        Self {
-            left: left_right,
-            top,
-            right: left_right,
-            bottom,
-        }
+        Self { left: left_right, top, right: left_right, bottom }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -124,12 +97,7 @@ impl Rect {
         let r = l.max(r);
         let b = t.max(b);
 
-        Rect {
-            left: l,
-            top: t,
-            right: r,
-            bottom: b,
-        }
+        Rect { left: l, top: t, right: r, bottom: b }
     }
 }
 

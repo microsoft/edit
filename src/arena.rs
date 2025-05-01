@@ -1,17 +1,11 @@
-use crate::apperr;
-use crate::helpers;
-use crate::sys;
-use std::alloc::AllocError;
-use std::alloc::Allocator;
-use std::alloc::Layout;
+use std::alloc::{AllocError, Allocator, Layout};
 use std::cell::Cell;
-use std::fmt;
-use std::mem;
 use std::mem::MaybeUninit;
-use std::ops::Deref;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::ptr::{self, NonNull};
-use std::slice;
+use std::{fmt, mem, slice};
+
+use crate::{apperr, helpers, sys};
 
 const ALLOC_CHUNK_SIZE: usize = 64 * 1024;
 
@@ -24,23 +18,13 @@ pub struct Arena {
 
 impl Arena {
     pub const fn empty() -> Self {
-        Self {
-            base: NonNull::dangling(),
-            capacity: 0,
-            commit: Cell::new(0),
-            offset: Cell::new(0),
-        }
+        Self { base: NonNull::dangling(), capacity: 0, commit: Cell::new(0), offset: Cell::new(0) }
     }
 
     pub fn new(capacity: usize) -> apperr::Result<Arena> {
         let capacity = (capacity + ALLOC_CHUNK_SIZE - 1) & !(ALLOC_CHUNK_SIZE - 1);
         let base = unsafe { sys::virtual_reserve(capacity)? };
-        Ok(Arena {
-            base,
-            capacity,
-            commit: Cell::new(0),
-            offset: Cell::new(0),
-        })
+        Ok(Arena { base, capacity, commit: Cell::new(0), offset: Cell::new(0) })
     }
 
     /// "Deallocates" the memory in the arena down to the given offset.
@@ -340,9 +324,7 @@ pub struct ArenaString<'a> {
 impl<'a> ArenaString<'a> {
     #[must_use]
     pub const fn new_in(arena: &'a Arena) -> Self {
-        Self {
-            vec: Vec::new_in(arena),
-        }
+        Self { vec: Vec::new_in(arena) }
     }
 
     #[inline]
@@ -448,9 +430,7 @@ impl<'a> ArenaString<'a> {
     pub fn push(&mut self, ch: char) {
         match ch.len_utf8() {
             1 => self.vec.push(ch as u8),
-            _ => self
-                .vec
-                .extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes()),
+            _ => self.vec.extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes()),
         }
     }
 

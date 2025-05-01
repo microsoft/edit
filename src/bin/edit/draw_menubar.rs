@@ -1,9 +1,10 @@
-use crate::loc::*;
-use crate::state::*;
 use edit::arena_format;
 use edit::helpers::*;
 use edit::input::{kbmod, vk};
 use edit::tui::*;
+
+use crate::loc::*;
+use crate::state::*;
 
 pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
     ctx.menubar_begin();
@@ -132,11 +133,7 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
             );
             ctx.attr_position(Position::Center);
 
-            ctx.label(
-                "copyright",
-                Overflow::TruncateTail,
-                "Copyright (c) Microsoft Corp 2025",
-            );
+            ctx.label("copyright", Overflow::TruncateTail, "Copyright (c) Microsoft Corp 2025");
             ctx.attr_position(Position::Center);
 
             ctx.block_begin("choices");

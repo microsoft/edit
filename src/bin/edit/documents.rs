@@ -1,11 +1,11 @@
-use edit::apperr;
-use edit::buffer::{RcTextBuffer, TextBuffer};
-use edit::helpers::{CoordType, Point};
-use edit::simd::memrchr2;
-use edit::sys;
 use std::collections::LinkedList;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+
+use edit::buffer::{RcTextBuffer, TextBuffer};
+use edit::helpers::{CoordType, Point};
+use edit::simd::memrchr2;
+use edit::{apperr, sys};
 
 pub enum DocumentPath {
     None,
@@ -39,11 +39,7 @@ pub struct Document {
 impl Document {
     fn update_file_mode(&mut self) {
         let mut tb = self.buffer.borrow_mut();
-        tb.set_ruler(if self.filename == "COMMIT_EDITMSG" {
-            72
-        } else {
-            0
-        });
+        tb.set_ruler(if self.filename == "COMMIT_EDITMSG" { 72 } else { 0 });
     }
 }
 
@@ -164,15 +160,8 @@ impl DocumentManager {
             // Path exists but is not a file (a directory?).
             _ => DocumentPath::None,
         };
-        let filename = path
-            .as_path()
-            .map_or(Default::default(), Self::get_filename_from_path);
-        let mut doc = Document {
-            buffer,
-            path,
-            filename,
-            new_file_counter: 0,
-        };
+        let filename = path.as_path().map_or(Default::default(), Self::get_filename_from_path);
+        let mut doc = Document { buffer, path, filename, new_file_counter: 0 };
 
         if doc.filename.is_empty() {
             self.gen_untitled_name(&mut doc);
@@ -210,10 +199,7 @@ impl DocumentManager {
     }
 
     pub fn get_filename_from_path(path: &Path) -> String {
-        path.file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned()
+        path.file_name().unwrap_or_default().to_string_lossy().into_owned()
     }
 
     // Parse a filename in the form of "filename:line:char".
@@ -288,10 +274,7 @@ mod tests {
         assert_eq!(parse("45:123"), ("45", Some(Point { x: 0, y: 122 })));
         assert_eq!(parse(":45:123"), (":45", Some(Point { x: 0, y: 122 })));
         assert_eq!(parse("abc:45:123"), ("abc", Some(Point { x: 122, y: 44 })));
-        assert_eq!(
-            parse("abc:def:123"),
-            ("abc:def", Some(Point { x: 0, y: 122 }))
-        );
+        assert_eq!(parse("abc:def:123"), ("abc:def", Some(Point { x: 0, y: 122 })));
         assert_eq!(parse("1:2:3"), ("1", Some(Point { x: 2, y: 1 })));
         assert_eq!(parse("::3"), (":", Some(Point { x: 0, y: 2 })));
         assert_eq!(parse("1::3"), ("1:", Some(Point { x: 0, y: 2 })));
@@ -300,13 +283,7 @@ mod tests {
         assert_eq!(parse("::"), ("::", None));
         assert_eq!(parse("a:1"), ("a", Some(Point { x: 0, y: 0 })));
         assert_eq!(parse("1:a"), ("1:a", None));
-        assert_eq!(
-            parse("file.txt:10"),
-            ("file.txt", Some(Point { x: 0, y: 9 }))
-        );
-        assert_eq!(
-            parse("file.txt:10:5"),
-            ("file.txt", Some(Point { x: 4, y: 9 }))
-        );
+        assert_eq!(parse("file.txt:10"), ("file.txt", Some(Point { x: 0, y: 9 })));
+        assert_eq!(parse("file.txt:10:5"), ("file.txt", Some(Point { x: 4, y: 9 })));
     }
 }

@@ -1,16 +1,15 @@
-use crate::documents::DocumentManager;
-use crate::loc::*;
-use edit::framebuffer::IndexedColor;
-use edit::helpers::*;
-use edit::icu;
-use edit::sys;
-use edit::tui::*;
-use edit::{apperr, buffer};
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::mem;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use edit::framebuffer::IndexedColor;
+use edit::helpers::*;
+use edit::tui::*;
+use edit::{apperr, buffer, icu, sys};
+
+use crate::documents::DocumentManager;
+use crate::loc::*;
 
 #[repr(transparent)]
 pub struct FormatApperr(apperr::Error);
@@ -59,10 +58,7 @@ impl DisplayablePathBuf {
 
 impl Default for DisplayablePathBuf {
     fn default() -> Self {
-        Self {
-            value: PathBuf::default(),
-            str: Cow::Borrowed(""),
-        }
+        Self { value: PathBuf::default(), str: Cow::Borrowed("") }
     }
 }
 

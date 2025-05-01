@@ -260,10 +260,7 @@ impl Parser {
         &'parser mut self,
         stream: vt::Stream<'vt, 'input>,
     ) -> Stream<'parser, 'vt, 'input> {
-        Stream {
-            parser: self,
-            stream,
-        }
+        Stream { parser: self, stream }
     }
 }
 
@@ -289,10 +286,7 @@ impl<'input> Stream<'_, '_, 'input> {
 
             match self.stream.next()? {
                 vt::Token::Text(text) => {
-                    return Some(Input::Text(InputText {
-                        text,
-                        bracketed: false,
-                    }));
+                    return Some(Input::Text(InputText { text, bracketed: false }));
                 }
                 vt::Token::Ctrl(ch) => match ch {
                     '\0' | '\t' | '\r' => return Some(Input::Keyboard(InputKey::new(ch as u32))),
@@ -312,11 +306,8 @@ impl<'input> Stream<'_, '_, 'input> {
                         ' '..='~' => {
                             let ch = ch as u32;
                             let key = ch & !0x20; // Shift a-z to A-Z
-                            let modifiers = if (ch & 0x20) != 0 {
-                                kbmod::ALT
-                            } else {
-                                kbmod::ALT_SHIFT
-                            };
+                            let modifiers =
+                                if (ch & 0x20) != 0 { kbmod::ALT } else { kbmod::ALT_SHIFT };
                             return Some(Input::Keyboard(modifiers | InputKey::new(key)));
                         }
                         _ => {}
@@ -426,21 +417,12 @@ impl<'input> Stream<'_, '_, 'input> {
                             }
 
                             mouse.modifiers = kbmod::NONE;
-                            mouse.modifiers |= if (btn & 0x04) != 0 {
-                                kbmod::SHIFT
-                            } else {
-                                kbmod::NONE
-                            };
-                            mouse.modifiers |= if (btn & 0x08) != 0 {
-                                kbmod::ALT
-                            } else {
-                                kbmod::NONE
-                            };
-                            mouse.modifiers |= if (btn & 0x10f) != 0 {
-                                kbmod::CTRL
-                            } else {
-                                kbmod::NONE
-                            };
+                            mouse.modifiers |=
+                                if (btn & 0x04) != 0 { kbmod::SHIFT } else { kbmod::NONE };
+                            mouse.modifiers |=
+                                if (btn & 0x08) != 0 { kbmod::ALT } else { kbmod::NONE };
+                            mouse.modifiers |=
+                                if (btn & 0x10f) != 0 { kbmod::CTRL } else { kbmod::NONE };
 
                             mouse.position.x = csi.params[1] - 1;
                             mouse.position.y = csi.params[2] - 1;
@@ -480,10 +462,7 @@ impl<'input> Stream<'_, '_, 'input> {
 
         if end != beg {
             let input = self.stream.input();
-            Some(Input::Text(InputText {
-                text: &input[beg..end],
-                bracketed: true,
-            }))
+            Some(Input::Text(InputText { text: &input[beg..end], bracketed: true }))
         } else {
             None
         }
@@ -498,9 +477,8 @@ impl<'input> Stream<'_, '_, 'input> {
     /// This is so puzzling to me. The existence of this function makes me unhappy.
     #[cold]
     fn parse_x10_mouse_coordinates(&mut self) -> Option<Input<'input>> {
-        self.parser.x10_mouse_len += self
-            .stream
-            .read(&mut self.parser.x10_mouse_buf[self.parser.x10_mouse_len..]);
+        self.parser.x10_mouse_len +=
+            self.stream.read(&mut self.parser.x10_mouse_buf[self.parser.x10_mouse_len..]);
         if self.parser.x10_mouse_len < 3 {
             return None;
         }

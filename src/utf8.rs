@@ -1,5 +1,4 @@
-use std::hint;
-use std::iter;
+use std::{hint, iter};
 
 #[derive(Clone, Copy)]
 pub struct Utf8Chars<'a> {

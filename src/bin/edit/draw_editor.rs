@@ -1,17 +1,14 @@
-use crate::loc::*;
-use crate::state::*;
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::icu;
-use edit::input::kbmod;
-use edit::input::vk;
+use edit::input::{kbmod, vk};
 use edit::tui::*;
 
+use crate::loc::*;
+use crate::state::*;
+
 pub fn draw_editor(ctx: &mut Context, state: &mut State) {
-    if !matches!(
-        state.wants_search.kind,
-        StateSearchKind::Hidden | StateSearchKind::Disabled
-    ) {
+    if !matches!(state.wants_search.kind, StateSearchKind::Hidden | StateSearchKind::Disabled) {
         draw_search(ctx, state);
     }
 
@@ -31,10 +28,7 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         ctx.block_end();
     }
 
-    ctx.attr_intrinsic_size(Size {
-        width: 0,
-        height: size.height - height_reduction,
-    });
+    ctx.attr_intrinsic_size(Size { width: 0, height: size.height - height_reduction });
 }
 
 fn draw_search(ctx: &mut Context, state: &mut State) {
@@ -81,10 +75,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         }
 
         ctx.table_begin("needle");
-        ctx.table_set_cell_gap(Size {
-            width: 1,
-            height: 0,
-        });
+        ctx.table_set_cell_gap(Size { width: 1, height: 0 });
         {
             {
                 ctx.table_next_row();
@@ -97,10 +88,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
                     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
                 }
-                ctx.attr_intrinsic_size(Size {
-                    width: COORD_TYPE_SAFE_MAX,
-                    height: 1,
-                });
+                ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
                 if focus == StateSearchKind::Search {
                     ctx.steal_focus();
                 }
@@ -114,10 +102,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                 ctx.label("label", Overflow::Clip, loc(LocId::SearchReplacementLabel));
 
                 ctx.editline("replacement", &mut state.search_replacement);
-                ctx.attr_intrinsic_size(Size {
-                    width: COORD_TYPE_SAFE_MAX,
-                    height: 1,
-                });
+                ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
                 if focus == StateSearchKind::Replace {
                     ctx.steal_focus();
                 }
@@ -133,10 +118,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         ctx.table_end();
 
         ctx.table_begin("options");
-        ctx.table_set_cell_gap(Size {
-            width: 2,
-            height: 0,
-        });
+        ctx.table_set_cell_gap(Size { width: 2, height: 0 });
         {
             ctx.table_next_row();
 
@@ -181,10 +163,9 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 
     state.search_success = match action {
         SearchAction::None => return,
-        SearchAction::Search => doc
-            .buffer
-            .borrow_mut()
-            .find_and_select(&state.search_needle, state.search_options),
+        SearchAction::Search => {
+            doc.buffer.borrow_mut().find_and_select(&state.search_needle, state.search_options)
+        }
         SearchAction::Replace => doc.buffer.borrow_mut().find_and_replace(
             &state.search_needle,
             state.search_options,
@@ -243,21 +224,14 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
     {
-        ctx.label(
-            "description",
-            Overflow::Clip,
-            loc(LocId::UnsavedChangesDialogDescription),
-        );
+        ctx.label("description", Overflow::Clip, loc(LocId::UnsavedChangesDialogDescription));
         ctx.attr_padding(Rect::three(1, 2, 1));
 
         ctx.table_begin("choices");
         ctx.inherit_focus();
         ctx.attr_padding(Rect::three(0, 2, 1));
         ctx.attr_position(Position::Center);
-        ctx.table_set_cell_gap(Size {
-            width: 2,
-            height: 0,
-        });
+        ctx.table_set_cell_gap(Size { width: 2, height: 0 });
         {
             ctx.table_next_row();
             ctx.inherit_focus();
@@ -269,11 +243,7 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
             if ctx.button("no", Overflow::Clip, loc(LocId::UnsavedChangesDialogNo)) {
                 action = Action::Discard;
             }
-            if ctx.button(
-                "cancel",
-                Overflow::Clip,
-                loc(LocId::UnsavedChangesDialogCancel),
-            ) {
+            if ctx.button("cancel", Overflow::Clip, loc(LocId::UnsavedChangesDialogCancel)) {
                 action = Action::Cancel;
             }
 

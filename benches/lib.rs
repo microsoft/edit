@@ -1,7 +1,6 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
-use edit::simd;
-use edit::ucd;
+use edit::{simd, ucd};
 
 fn bench(c: &mut Criterion) {
     let mut buffer1 = [0u8; 2048];
@@ -23,9 +22,7 @@ fn bench(c: &mut Criterion) {
     });
     group.bench_function("word_wrap", |b| {
         b.iter(|| {
-            ucd::MeasurementConfig::new(&bytes)
-                .with_word_wrap_column(50)
-                .goto_logical(Point::MAX)
+            ucd::MeasurementConfig::new(&bytes).with_word_wrap_column(50).goto_logical(Point::MAX)
         })
     });
     group.finish();

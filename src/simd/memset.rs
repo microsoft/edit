@@ -6,8 +6,9 @@
 //! types into a larger `u64` register we can treat all sizes as if they were `u64`. The only thing we need
 //! to take care of then, is the tail end of the array, where we need to write 0-7 additional bytes.
 
-use super::distance;
 use std::mem;
+
+use super::distance;
 
 /// A trait to mark types that are safe to use with `memset`.
 ///
@@ -44,21 +45,13 @@ pub fn memset<T: MemsetSafe>(dst: &mut [T], val: T) {
                 let beg = dst.as_mut_ptr();
                 let end = beg.add(dst.len());
                 let val = mem::transmute_copy::<_, u16>(&val);
-                memset_raw(
-                    beg as *mut u8,
-                    end as *mut u8,
-                    val as u64 * 0x0001000100010001,
-                );
+                memset_raw(beg as *mut u8, end as *mut u8, val as u64 * 0x0001000100010001);
             }
             4 => {
                 let beg = dst.as_mut_ptr();
                 let end = beg.add(dst.len());
                 let val = mem::transmute_copy::<_, u32>(&val);
-                memset_raw(
-                    beg as *mut u8,
-                    end as *mut u8,
-                    val as u64 * 0x0000000100000001,
-                );
+                memset_raw(beg as *mut u8, end as *mut u8, val as u64 * 0x0000000100000001);
             }
             8 => {
                 let beg = dst.as_mut_ptr();
@@ -85,11 +78,7 @@ static mut MEMSET_DISPATCH: unsafe fn(beg: *mut u8, end: *mut u8, val: u64) = me
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn memset_dispatch(beg: *mut u8, end: *mut u8, val: u64) {
-    let func = if is_x86_feature_detected!("avx2") {
-        memset_avx2
-    } else {
-        memset_sse2
-    };
+    let func = if is_x86_feature_detected!("avx2") { memset_avx2 } else { memset_sse2 };
     unsafe { MEMSET_DISPATCH = func };
     unsafe { func(beg, end, val) }
 }
@@ -253,9 +242,10 @@ unsafe fn memset_neon(mut beg: *mut u8, end: *mut u8, val: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fmt;
     use std::ops::Not;
+
+    use super::*;
 
     fn check_memset<T>(val: T, len: usize)
     where
