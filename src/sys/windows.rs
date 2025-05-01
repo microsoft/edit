@@ -1,3 +1,4 @@
+use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::helpers::{CoordType, Size};
 use crate::{apperr, helpers};
 use std::ffi::{CStr, OsString, c_void};
@@ -219,7 +220,9 @@ fn get_console_size() -> Option<Size> {
 /// Returns `None` if there was an error reading from stdin.
 /// Returns `Some("")` if the given timeout was reached.
 /// Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
+pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaString<'_>> {
+    let scratch = scratch_arena(Some(arena));
+
     // On startup we're asked to inject a window size so that the UI system can layout the elements.
     // --> Inject a fake sequence for our input parser.
     let mut resize_event = None;
@@ -230,9 +233,9 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
     }
 
     let read_poll = timeout != time::Duration::MAX; // there is a timeout -> don't block in read()
-    let mut input_buf = [const { MaybeUninit::<Console::INPUT_RECORD>::uninit() }; 1024];
+    let input_buf = scratch.alloc_uninit_slice(4096);
     let mut input_buf_cap = input_buf.len();
-    let mut utf16_buf = [const { MaybeUninit::<u16>::uninit() }; 1024];
+    let utf16_buf = scratch.alloc_uninit_slice(4096);
     let mut utf16_buf_len = 0;
 
     // If there was a leftover leading surrogate from the last read, we prepend it to the buffer.
@@ -321,7 +324,8 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
     };
     // +1 to account for a potential `STATE.leading_surrogate`.
     let utf8_max_len = (utf16_buf_len + 1) * 3;
-    let mut text = String::with_capacity(utf8_max_len + resize_event_len);
+    let mut text = arena.new_string();
+    text.reserve(utf8_max_len + resize_event_len);
 
     // Now prepend our previously extracted resize event.
     if let Some(resize_event) = resize_event {
@@ -369,6 +373,7 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
         }
     }
 
+    text.shrink_to_fit();
     Some(text)
 }
 
@@ -517,49 +522,76 @@ pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
     unsafe { load_library(w!("icuin.dll")) }
 }
 
-pub fn preferred_languages() -> Vec<String> {
-    unsafe {
-        const LEN: usize = 256;
+pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString, &Arena> {
+    // If the GetUserPreferredUILanguages() don't fit into 512 characters,
+    // honestly, just give up. How many languages do you realistically need?
+    const LEN: usize = 512;
 
-        let mut lang_num = 0;
-        let mut lang_buf = [const { MaybeUninit::<u16>::uninit() }; LEN];
-        let mut lang_buf_len = lang_buf.len() as u32;
-        if Globalization::GetUserPreferredUILanguages(
+    let scratch = scratch_arena(Some(arena));
+    let mut res = arena.new_vec();
+
+    // Get the list of preferred languages via `GetUserPreferredUILanguages`.
+    let langs = unsafe {
+        let buf = scratch.alloc_uninit_slice(LEN);
+        let mut len = buf.len() as u32;
+        let mut num = 0;
+
+        let ok = Globalization::GetUserPreferredUILanguages(
             Globalization::MUI_LANGUAGE_NAME,
-            &mut lang_num,
-            lang_buf[0].as_mut_ptr(),
-            &mut lang_buf_len,
-        ) == 0
-            || lang_num == 0
-        {
-            return Vec::new();
+            &mut num,
+            buf[0].as_mut_ptr(),
+            &mut len,
+        );
+
+        if ok == 0 || num == 0 {
+            len = 0;
         }
 
         // Drop the terminating double-null character.
-        lang_buf_len = lang_buf_len.saturating_sub(1);
+        len = len.saturating_sub(1);
 
-        let mut lang_buf_utf8 = [const { MaybeUninit::<u8>::uninit() }; 3 * LEN];
-        let lang_buf_utf8_len = Globalization::WideCharToMultiByte(
+        helpers::slice_assume_init_ref(&buf[..len as usize])
+    };
+
+    // Convert UTF16 to UTF8.
+    let mut langs = wide_to_utf8(&scratch, langs);
+
+    // Turn "de-DE" into "de-de" for easier comparisons.
+    langs.make_ascii_lowercase();
+
+    // Split the null-delimited string into individual chunks
+    // and copy them into the given arena.
+    res.extend(
+        langs
+            .split_terminator('\0')
+            .filter(|s| !s.is_empty())
+            .map(|s| ArenaString::from_str(arena, s)),
+    );
+    res
+}
+
+fn wide_to_utf8<'a>(arena: &'a Arena, wide: &[u16]) -> ArenaString<'a> {
+    let mut res = arena.new_string();
+    res.reserve(wide.len() * 3);
+
+    let len = unsafe {
+        Globalization::WideCharToMultiByte(
             Globalization::CP_UTF8,
             0,
-            lang_buf[0].as_mut_ptr(),
-            lang_buf_len as i32,
-            lang_buf_utf8[0].as_mut_ptr(),
-            lang_buf_utf8.len() as i32,
+            wide.as_ptr(),
+            wide.len() as i32,
+            res.as_mut_ptr() as *mut _,
+            res.capacity() as i32,
             null(),
             null_mut(),
-        );
-        if lang_buf_utf8_len == 0 {
-            return Vec::new();
-        }
-
-        let result = helpers::str_from_raw_parts_mut(
-            lang_buf_utf8[0].as_mut_ptr(),
-            lang_buf_utf8_len as usize,
-        );
-        result.make_ascii_lowercase();
-        result.split_terminator('\0').map(String::from).collect()
+        )
+    };
+    if len > 0 {
+        unsafe { res.as_mut_vec().set_len(len as usize) };
     }
+
+    res.shrink_to_fit();
+    res
 }
 
 #[cold]

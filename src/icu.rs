@@ -1,3 +1,4 @@
+use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::TextBuffer;
 use crate::utf8::Utf8Chars;
 use crate::{apperr, sys};
@@ -83,8 +84,9 @@ impl<'pivot> Converter<'pivot> {
     ) -> apperr::Result<Self> {
         let f = init_if_needed()?;
 
-        let source_encoding = Self::append_nul(source_encoding);
-        let target_encoding = Self::append_nul(target_encoding);
+        let arena = scratch_arena(None);
+        let source_encoding = Self::append_nul(&arena, source_encoding);
+        let target_encoding = Self::append_nul(&arena, target_encoding);
 
         let mut status = icu_ffi::U_ZERO_ERROR;
         let source = unsafe { (f.ucnv_open)(source_encoding.as_ptr(), &mut status) };
@@ -112,8 +114,8 @@ impl<'pivot> Converter<'pivot> {
         })
     }
 
-    fn append_nul(input: &str) -> String {
-        format!("{input}\0")
+    fn append_nul<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
+        arena_format!(arena, "{}\0", input)
     }
 
     pub fn convert(
@@ -543,8 +545,11 @@ impl Regex {
     pub unsafe fn new(pattern: &str, flags: i32, text: &Text) -> apperr::Result<Self> {
         let f = init_if_needed()?;
         unsafe {
-            let utf16: Vec<u16> = pattern.encode_utf16().collect();
+            let scratch = scratch_arena(None);
+            let mut utf16 = scratch.new_vec();
             let mut status = icu_ffi::U_ZERO_ERROR;
+
+            utf16.extend(pattern.encode_utf16());
 
             let ptr = (f.uregex_open)(
                 utf16.as_ptr(),
@@ -654,7 +659,7 @@ pub fn compare_strings(a: &[u8], b: &[u8]) -> cmp::Ordering {
 
 static mut ROOT_CASEMAP: Option<*mut icu_ffi::UCaseMap> = None;
 
-pub fn fold_case(input: &str) -> String {
+pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     let casemap = unsafe {
@@ -672,7 +677,7 @@ pub fn fold_case(input: &str) -> String {
     if !casemap.is_null() {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
-        let mut output = Vec::new();
+        let mut output = Vec::new_in(arena);
         let mut output_len;
 
         // First, guess the output length:
@@ -712,11 +717,15 @@ pub fn fold_case(input: &str) -> String {
             unsafe {
                 output.set_len(output_len as usize);
             }
-            return unsafe { String::from_utf8_unchecked(output) };
+            return unsafe { ArenaString::from_utf8_unchecked(output) };
         }
     }
 
-    input.to_ascii_lowercase()
+    let mut result = ArenaString::from_str(arena, input);
+    for b in unsafe { result.as_bytes_mut() } {
+        b.make_ascii_lowercase();
+    }
+    result
 }
 
 pub fn apperr_is_regex_error(err: apperr::Error) -> bool {
@@ -831,7 +840,9 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
             let mut ptr = funcs.as_mut_ptr() as *mut TransparentFunction;
 
             #[cfg(unix)]
-            let suffix = sys::icu_proc_suffix(libicuuc);
+            let scratch_outer = scratch_arena(None);
+            #[cfg(unix)]
+            let suffix = sys::icu_proc_suffix(&scratch_outer, libicuuc);
 
             for (handle, names) in [
                 (libicuuc, &LIBICUUC_PROC_NAMES[..]),
@@ -839,7 +850,9 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
             ] {
                 for name in names {
                     #[cfg(unix)]
-                    let name = &sys::add_icu_proc_suffix(name, &suffix);
+                    let scratch = scratch_arena(Some(&scratch_outer));
+                    #[cfg(unix)]
+                    let name = &sys::add_icu_proc_suffix(&scratch, name, &suffix);
 
                     let Ok(func) = sys::get_proc_address(handle, name) else {
                         debug_assert!(

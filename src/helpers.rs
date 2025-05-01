@@ -217,34 +217,6 @@ pub fn hash_str(seed: u64, s: &str) -> u64 {
     hash(seed, s.as_bytes())
 }
 
-pub fn string_append_repeat(dst: &mut String, ch: char, total_copies: usize) {
-    if total_copies == 0 {
-        return;
-    }
-
-    let buf = unsafe { dst.as_mut_vec() };
-
-    if ch.is_ascii() {
-        // Compiles down to `memset()`.
-        buf.extend(std::iter::repeat_n(ch as u8, total_copies));
-    } else {
-        // Implements efficient string padding using quadratic duplication.
-        let mut utf8_buf = [0; 4];
-        let utf8 = ch.encode_utf8(&mut utf8_buf).as_bytes();
-        let initial_len = buf.len();
-        let added_len = utf8.len() * total_copies;
-        let final_len = initial_len + added_len;
-
-        buf.reserve(added_len);
-        buf.extend_from_slice(utf8);
-
-        while buf.len() != final_len {
-            let end = (final_len - buf.len() + initial_len).min(buf.len());
-            buf.extend_from_within(initial_len..end);
-        }
-    }
-}
-
 /// `std::cmp::minmax` is unstable, as per usual.
 pub fn minmax<T>(v1: T, v2: T) -> [T; 2]
 where

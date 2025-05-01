@@ -14,6 +14,7 @@
 //! There's no solution for the latter. However, there's a chance that the performance will still be sufficient.
 
 use crate::apperr;
+use crate::arena::scratch_arena;
 use crate::cell::SemiRefCell;
 use crate::framebuffer::{Framebuffer, IndexedColor, alpha_blend};
 use crate::helpers::{self, COORD_TYPE_SAFE_MAX, CoordType, Point, Rect};
@@ -527,10 +528,10 @@ impl TextBuffer {
         file: &mut File,
         encoding: Option<&'static str>,
     ) -> apperr::Result<()> {
-        let mut read = 0;
-
-        let mut buf = [const { MaybeUninit::<u8>::uninit() }; 4096];
+        let scratch = scratch_arena(None);
+        let mut buf = scratch.alloc_uninit().transpose();
         let mut first_chunk_len = 0;
+        let mut read = 0;
 
         // Read enough bytes to detect the BOM.
         while first_chunk_len < BOM_MAX_LEN {
@@ -672,7 +673,7 @@ impl TextBuffer {
     fn read_file_as_utf8(
         &mut self,
         file: &mut File,
-        buf: &mut [MaybeUninit<u8>],
+        buf: &mut [MaybeUninit<u8>; 4096],
         first_chunk_len: usize,
         done: bool,
     ) -> apperr::Result<()> {
@@ -726,13 +727,13 @@ impl TextBuffer {
     fn read_file_with_icu(
         &mut self,
         file: &mut File,
-        buf: &mut [MaybeUninit<u8>],
+        buf: &mut [MaybeUninit<u8>; 4096],
         first_chunk_len: usize,
         mut done: bool,
     ) -> apperr::Result<()> {
-        let mut pivot_buffer = [const { MaybeUninit::<u16>::uninit() }; 4096];
-
-        let mut c = icu::Converter::new(&mut pivot_buffer, self.encoding, "UTF-8")?;
+        let scratch = scratch_arena(None);
+        let pivot_buffer = scratch.alloc_uninit_slice(4096);
+        let mut c = icu::Converter::new(pivot_buffer, self.encoding, "UTF-8")?;
 
         let mut first_chunk = unsafe { helpers::slice_assume_init_ref(&buf[..first_chunk_len]) };
         while !first_chunk.is_empty() {
@@ -810,17 +811,18 @@ impl TextBuffer {
     }
 
     fn write_file_with_icu(&mut self, mut file: File) -> apperr::Result<()> {
-        let mut pivot_buffer = [const { MaybeUninit::<u16>::uninit() }; 4096];
-        let mut buf = [const { MaybeUninit::<u8>::uninit() }; 4096];
-        let mut c = icu::Converter::new(&mut pivot_buffer, "UTF-8", self.encoding)?;
+        let scratch = scratch_arena(None);
+        let pivot_buffer = scratch.alloc_uninit_slice(4096);
+        let buf = scratch.alloc_uninit_slice(4096);
+        let mut c = icu::Converter::new(pivot_buffer, "UTF-8", self.encoding)?;
         let mut offset = 0;
 
         // Write the BOM for the encodings we know need it.
         if self.encoding.starts_with("UTF-16")
             || self.encoding.starts_with("UTF-32")
-            || self.encoding == "gb18030"
+            || self.encoding == "GB18030"
         {
-            let (_, output_advance) = c.convert(b"\xEF\xBB\xBF", &mut buf)?;
+            let (_, output_advance) = c.convert(b"\xEF\xBB\xBF", buf)?;
             let chunk = unsafe { helpers::slice_assume_init_ref(&buf[..output_advance]) };
             file.write_all(chunk)?;
         }
@@ -831,7 +833,7 @@ impl TextBuffer {
                 break;
             }
 
-            let (input_advance, output_advance) = c.convert(chunk, &mut buf)?;
+            let (input_advance, output_advance) = c.convert(chunk, buf)?;
             let chunk = unsafe { helpers::slice_assume_init_ref(&buf[..output_advance]) };
             file.write_all(chunk)?;
             offset += input_advance;
@@ -1478,12 +1480,13 @@ impl TextBuffer {
             return None;
         }
 
+        let scratch = scratch_arena(None);
         let width = destination.width();
         let height = destination.height();
         let line_number_width = self.margin_width.max(3) as usize - 3;
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
-        let mut line = String::new();
+        let mut line = scratch.new_string();
         let mut visual_pos_x_max = 0;
 
         // Pick the cursor closer to the `origin.y`.
@@ -1810,7 +1813,8 @@ impl TextBuffer {
         }
 
         let mut offset = 0;
-        let mut newline_buffer = String::new();
+        let scratch = scratch_arena(None);
+        let mut newline_buffer = scratch.new_string();
 
         loop {
             // Can't use `ucd::newlines_forward` because bracketed paste uses CR instead of LF/CRLF.
@@ -1894,13 +1898,13 @@ impl TextBuffer {
                 // If tabs are enabled, add as many tabs as we can.
                 if self.indent_with_tabs {
                     let tab_count = newline_indentation / tab_size;
-                    helpers::string_append_repeat(&mut newline_buffer, '\t', tab_count);
+                    newline_buffer.push_repeat('\t', tab_count);
                     newline_indentation -= tab_count * tab_size;
                 }
 
                 // If tabs are disabled, or if the indentation wasn't a multiple of the tab size,
                 // add spaces to make up the difference.
-                helpers::string_append_repeat(&mut newline_buffer, ' ', newline_indentation);
+                newline_buffer.push_repeat(' ', newline_indentation);
             }
 
             self.edit_write(newline_buffer.as_bytes());
@@ -2713,7 +2717,7 @@ fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
             return Some("UTF-32BE");
         }
         if bytes.starts_with(b"\x84\x31\x95\x33") {
-            return Some("gb18030");
+            return Some("GB18030");
         }
     }
     if bytes.len() >= 3 && bytes.starts_with(b"\xEF\xBB\xBF") {

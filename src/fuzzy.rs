@@ -2,47 +2,36 @@
 //! Other algorithms exist, such as Sublime Text's, or the one used in `fzf`,
 //! but I figured that this one is what lots of people may be familiar with.
 
+use crate::arena::{Arena, scratch_arena};
 use crate::icu;
+use std::vec;
 
 pub type FuzzyScore = (i32, Vec<usize>);
 
 const NO_MATCH: i32 = 0;
 const NO_SCORE: FuzzyScore = (NO_MATCH, Vec::new());
 
-pub fn score_fuzzy(target: &str, query: &str, allow_non_contiguous_matches: bool) -> FuzzyScore {
-    if target.is_empty() || query.is_empty() {
+pub fn score_fuzzy(haystack: &str, needle: &str, allow_non_contiguous_matches: bool) -> FuzzyScore {
+    if haystack.is_empty() || needle.is_empty() {
         return NO_SCORE; // return early if target or query are empty
     }
 
-    let target_lower = icu::fold_case(target);
-    let query_lower = icu::fold_case(query);
-    let target: Vec<char> = target.chars().collect();
-    let target_lower: Vec<char> = target_lower.chars().collect();
-    let query: Vec<char> = query.chars().collect();
-    let query_lower: Vec<char> = query_lower.chars().collect();
+    let scratch = scratch_arena(None);
+    let target = map_chars(&scratch, haystack);
+    let query = map_chars(&scratch, needle);
 
     if target.len() < query.len() {
         return NO_SCORE; // impossible for query to be contained in target
     }
 
-    do_score_fuzzy(
-        &query,
-        &query_lower,
-        &target,
-        &target_lower,
-        allow_non_contiguous_matches,
-    )
-}
+    let target_lower = icu::fold_case(&scratch, haystack);
+    let query_lower = icu::fold_case(&scratch, needle);
+    let target_lower = map_chars(&scratch, &target_lower);
+    let query_lower = map_chars(&scratch, &query_lower);
 
-fn do_score_fuzzy(
-    query: &[char],
-    query_lower: &[char],
-    target: &[char],
-    target_lower: &[char],
-    allow_non_contiguous_matches: bool,
-) -> FuzzyScore {
-    let mut scores = vec![0; query.len() * target.len()];
-    let mut matches = vec![0; query.len() * target.len()];
+    let area = query.len() * target.len();
+    let mut scores = vec::from_elem_in(0, area, &*scratch);
+    let mut matches = vec::from_elem_in(0, area, &*scratch);
 
     //
     // Build Scorer Matrix:
@@ -120,12 +109,12 @@ fn do_score_fuzzy(
                 && (
                     // We don't need to check if it's contiguous if we allow non-contiguous matches
                     allow_non_contiguous_matches ||
-                    // We must be looking for a contiguous match.
-                    // Looking at an index higher than 0 in the query means we must have already
-                    // found out this is contiguous otherwise there wouldn't have been a score
-                    query_index > 0 ||
-                    // lastly check if the query is completely contiguous at this index in the target
-                    target_lower[target_index..].starts_with(query_lower)
+                        // We must be looking for a contiguous match.
+                        // Looking at an index higher than 0 in the query means we must have already
+                        // found out this is contiguous otherwise there wouldn't have been a score
+                        query_index > 0 ||
+                        // lastly check if the query is completely contiguous at this index in the target
+                        target_lower[target_index..].starts_with(&query_lower)
                 )
             {
                 matches[current_index] = matches_sequence_len + 1;
@@ -231,4 +220,11 @@ fn score_separator_at_pos(ch: char) -> i32 {
         '_' | '-' | '.' | ' ' | '\'' | '"' | ':' => 4, // ...over other separators
         _ => 0,
     }
+}
+
+fn map_chars<'a>(arena: &'a Arena, s: &str) -> Vec<char, &'a Arena> {
+    let mut chars = Vec::with_capacity_in(s.len(), arena);
+    chars.extend(s.chars());
+    chars.shrink_to_fit();
+    chars
 }

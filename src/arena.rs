@@ -1,4 +1,5 @@
 use crate::apperr;
+use crate::helpers;
 use crate::sys;
 use std::alloc::AllocError;
 use std::alloc::Allocator;
@@ -240,9 +241,94 @@ unsafe impl Allocator for &Arena {
         if unsafe { ptr.add(len) == self.base.add(self.offset.get()) } {
             self.offset.set(self.offset.get() - len + new_layout.size());
             len = new_layout.size();
+        } else {
+            debug_assert!(
+                false,
+                "Did you call shrink_to_fit()? Only the last allocation can be shrunk!"
+            );
         }
 
         Ok(NonNull::slice_from_raw_parts(ptr, len))
+    }
+}
+
+static mut S_SCRATCH: [Arena; 2] = const { [Arena::empty(), Arena::empty()] };
+
+#[cfg(debug_assertions)]
+static mut S_SCRATCH_DEPTH: usize = 0;
+
+// Most methods make just two kinds of allocations:
+// * Interior: Temporary data that can be deallocated when the function returns.
+// * Exterior: Data that is returned to the caller and must remain alive until the caller stops using it.
+//
+// Such methods only have two lifetimes, for which you consequently also only need two arenas.
+// ...even if your method calls other methods recursively! This is because the exterior allocations
+// of a callee are simply interior allocations to the caller, and so on, recursively.
+//
+// This works as long as the two arenas flip/flop between being used as interior/exterior allocator
+// along the callstack. To ensure that is the case, we use a recursion counter in debug builds.
+//
+// This approach was described among others at: https://nullprogram.com/blog/2023/09/27/
+pub struct ScratchArena<'a> {
+    arena: &'a Arena,
+    offset: usize,
+
+    #[cfg(debug_assertions)]
+    depth: usize,
+}
+
+impl Drop for ScratchArena<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            #[cfg(debug_assertions)]
+            {
+                debug_assert!(self.depth == S_SCRATCH_DEPTH);
+                S_SCRATCH_DEPTH -= 1;
+            }
+
+            self.arena.reset(self.offset);
+        }
+    }
+}
+
+impl<'a> Deref for ScratchArena<'a> {
+    type Target = Arena;
+
+    fn deref(&self) -> &'a Self::Target {
+        #[cfg(debug_assertions)]
+        unsafe {
+            debug_assert!(self.depth == S_SCRATCH_DEPTH)
+        };
+
+        self.arena
+    }
+}
+
+pub fn init() -> apperr::Result<()> {
+    unsafe {
+        for s in &mut S_SCRATCH[..] {
+            *s = Arena::new(128 * 1024)?;
+        }
+    }
+    Ok(())
+}
+
+/// Returns a new scratch arena for temporary allocations,
+/// ensuring it doesn't conflict with the provided arena.
+pub fn scratch_arena(conflict: Option<&Arena>) -> ScratchArena {
+    let is_first = helpers::opt_ptr_eq(conflict, Some(unsafe { &S_SCRATCH[0] }));
+    let arena = unsafe { &mut S_SCRATCH[is_first as usize] };
+    let offset = arena.offset.get();
+
+    ScratchArena {
+        arena,
+        offset,
+
+        #[cfg(debug_assertions)]
+        depth: unsafe {
+            S_SCRATCH_DEPTH += 1;
+            S_SCRATCH_DEPTH
+        },
     }
 }
 
@@ -396,6 +482,18 @@ impl<'a> ArenaString<'a> {
                 buf.extend_from_within(initial_len..end);
             }
         }
+    }
+}
+
+impl fmt::Debug for ArenaString<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl PartialEq<&str> for ArenaString<'_> {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
     }
 }
 

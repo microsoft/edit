@@ -1,5 +1,6 @@
 use crate::loc::*;
 use crate::state::*;
+use edit::arena_format;
 use edit::helpers::*;
 use edit::input::{kbmod, vk};
 use edit::tui::*;
@@ -122,7 +123,8 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
             ctx.label(
                 "version",
                 Overflow::TruncateHead,
-                &format!(
+                &arena_format!(
+                    ctx.arena(),
                     "{}{}",
                     loc(LocId::AboutDialogVersion),
                     env!("CARGO_PKG_VERSION")

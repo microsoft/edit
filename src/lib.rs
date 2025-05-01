@@ -1,4 +1,10 @@
-#![feature(allocator_api, breakpoint, linked_list_cursors)]
+#![feature(
+    allocator_api,
+    breakpoint,
+    linked_list_cursors,
+    maybe_uninit_uninit_array_transpose,
+    os_string_truncate
+)]
 #![allow(clippy::missing_transmute_annotations, clippy::new_without_default)]
 
 #[macro_use]

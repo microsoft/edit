@@ -3,6 +3,7 @@ use std::ptr;
 use crate::documents::*;
 use crate::loc::*;
 use crate::state::*;
+use edit::arena_format;
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::icu;
@@ -86,7 +87,8 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
         state.wants_indentation_picker |= ctx.button(
             "indentation",
             Overflow::Clip,
-            &format!(
+            &arena_format!(
+                ctx.arena(),
                 "{}:{}",
                 loc(if tb.indent_with_tabs() {
                     LocId::IndentationTabs
@@ -171,7 +173,8 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
         ctx.label(
             "location",
             Overflow::Clip,
-            &format!(
+            &arena_format!(
+                ctx.arena(),
                 "{}:{}",
                 tb.get_cursor_logical_pos().y + 1,
                 tb.get_cursor_logical_pos().x + 1
@@ -182,7 +185,8 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
         ctx.label(
             "stats",
             Overflow::Clip,
-            &format!(
+            &arena_format!(
+                ctx.arena(),
                 "{}/{}",
                 tb.get_logical_line_count(),
                 tb.get_visual_line_count(),
@@ -209,7 +213,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             let filename_buf;
 
             if total > 1 {
-                filename_buf = format!("{} + {}", filename, total - 1);
+                filename_buf = arena_format!(ctx.arena(), "{} + {}", filename, total - 1);
                 filename = &filename_buf;
             }
 
@@ -307,13 +311,14 @@ pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {
 
             if state.documents.update_active(|doc| {
                 let tb = doc.buffer.borrow();
-                let title = format!(
+                let select = ptr::eq(doc, active);
+                let text = arena_format!(
+                    ctx.arena(),
                     "{} {}",
                     (if tb.is_dirty() { '*' } else { ' ' }),
                     doc.filename
                 );
-                ctx.list_item(ptr::eq(doc, active), Overflow::TruncateMiddle, &title)
-                    == ListSelection::Activated
+                ctx.list_item(select, Overflow::TruncateMiddle, &text) == ListSelection::Activated
             }) {
                 state.wants_document_picker = false;
                 ctx.needs_rerender();

@@ -1,4 +1,4 @@
-use crate::arena::{Arena, ArenaString};
+use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::{CursorMovement, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
@@ -512,13 +512,13 @@ impl Tui {
     }
 
     /// Renders all nodes into a string-frame representation.
-    pub fn render(&mut self) -> String {
+    pub fn render<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
         self.framebuffer.reset(self.size);
         for child in self.prev_tree.iterate_roots() {
             let mut child = child.borrow_mut();
             self.render_node(&mut child);
         }
-        self.framebuffer.render()
+        self.framebuffer.render(arena)
     }
 
     /// Recursively renders each node and its children.
@@ -529,16 +529,14 @@ impl Tui {
             return;
         }
 
+        let scratch = scratch_arena(None);
+
         if node.attributes.bordered {
             // ┌────┐
             {
-                let mut fill = String::new();
+                let mut fill = scratch.new_string();
                 fill.push('┌');
-                helpers::string_append_repeat(
-                    &mut fill,
-                    '─',
-                    (outer_clipped.right - outer_clipped.left - 2) as usize,
-                );
+                fill.push_repeat('─', (outer_clipped.right - outer_clipped.left - 2) as usize);
                 fill.push('┐');
                 self.framebuffer.replace_text(
                     outer_clipped.top,
@@ -550,13 +548,9 @@ impl Tui {
 
             // │    │
             {
-                let mut fill = String::new();
+                let mut fill = scratch.new_string();
                 fill.push('│');
-                helpers::string_append_repeat(
-                    &mut fill,
-                    ' ',
-                    (outer_clipped.right - outer_clipped.left - 2) as usize,
-                );
+                fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left - 2) as usize);
                 fill.push('│');
 
                 for y in outer_clipped.top + 1..outer_clipped.bottom - 1 {
@@ -571,13 +565,9 @@ impl Tui {
 
             // └────┘
             {
-                let mut fill = String::new();
+                let mut fill = scratch.new_string();
                 fill.push('└');
-                helpers::string_append_repeat(
-                    &mut fill,
-                    '─',
-                    (outer_clipped.right - outer_clipped.left - 2) as usize,
-                );
+                fill.push_repeat('─', (outer_clipped.right - outer_clipped.left - 2) as usize);
                 fill.push('┘');
                 self.framebuffer.replace_text(
                     outer_clipped.bottom - 1,
@@ -590,12 +580,8 @@ impl Tui {
 
         if node.attributes.float.is_some() && node.attributes.bg & 0xff000000 == 0xff000000 {
             if !node.attributes.bordered {
-                let mut fill = String::new();
-                helpers::string_append_repeat(
-                    &mut fill,
-                    ' ',
-                    (outer_clipped.right - outer_clipped.left) as usize,
-                );
+                let mut fill = scratch.new_string();
+                fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left) as usize);
 
                 for y in outer_clipped.top..outer_clipped.bottom {
                     self.framebuffer.replace_text(
@@ -776,8 +762,8 @@ impl Tui {
     }
 
     /// Outputs a debug string of the layout and focus tree.
-    pub fn debug_layout(&mut self) -> String {
-        let mut result = String::new();
+    pub fn debug_layout<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
+        let mut result = arena.new_string();
         result.push_str("general:\r\n- focus_path:\r\n");
 
         for &id in self.focused_node_path.iter().rev() {
@@ -789,35 +775,35 @@ impl Tui {
         for root in self.prev_tree.iterate_roots() {
             Tree::visit_all(root, root, 0, true, |depth, node| {
                 let node = node.borrow();
-                helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                result.push_repeat(' ', depth * 2);
                 _ = write!(result, "- id: {:016x}\r\n", node.id);
 
-                helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                result.push_repeat(' ', depth * 2);
                 _ = write!(result, "  classname:    {}\r\n", node.classname);
 
                 if depth == 0 {
                     if let Some(parent) = node.parent {
                         let parent = parent.borrow();
-                        helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                        result.push_repeat(' ', depth * 2);
                         _ = write!(result, "  parent:       {:016x}\r\n", parent.id);
                     }
                 }
 
-                helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                result.push_repeat(' ', depth * 2);
                 _ = write!(
                     result,
                     "  intrinsic:    {{{}, {}}}\r\n",
                     node.intrinsic_size.width, node.intrinsic_size.height
                 );
 
-                helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                result.push_repeat(' ', depth * 2);
                 _ = write!(
                     result,
                     "  outer:        {{{}, {}, {}, {}}}\r\n",
                     node.outer.left, node.outer.top, node.outer.right, node.outer.bottom
                 );
 
-                helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                result.push_repeat(' ', depth * 2);
                 _ = write!(
                     result,
                     "  inner:        {{{}, {}, {}, {}}}\r\n",
@@ -825,28 +811,28 @@ impl Tui {
                 );
 
                 if node.attributes.bordered {
-                    helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                    result.push_repeat(' ', depth * 2);
                     result.push_str("  bordered:     true\r\n");
                 }
 
                 if node.attributes.bg != 0 {
-                    helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                    result.push_repeat(' ', depth * 2);
                     _ = write!(result, "  bg:           #{:08x}\r\n", node.attributes.bg);
                 }
 
                 if node.attributes.fg != 0 {
-                    helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                    result.push_repeat(' ', depth * 2);
                     _ = write!(result, "  fg:           #{:08x}\r\n", node.attributes.fg);
                 }
 
                 if self.is_node_focused(node.id) {
-                    helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                    result.push_repeat(' ', depth * 2);
                     result.push_str("  focused:      true\r\n");
                 }
 
                 match &node.content {
                     NodeContent::Text(content) => {
-                        helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                        result.push_repeat(' ', depth * 2);
                         _ = write!(
                             result,
                             "  text:         \"{}\"\r\n",
@@ -860,11 +846,11 @@ impl Tui {
                     NodeContent::Textarea(content) => {
                         let tb = content.buffer.borrow();
                         let tb = &*tb;
-                        helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                        result.push_repeat(' ', depth * 2);
                         _ = write!(result, "  textarea:     {tb:p}\r\n");
                     }
                     NodeContent::Scrollarea(..) => {
-                        helpers::string_append_repeat(&mut result, ' ', depth * 2);
+                        result.push_repeat(' ', depth * 2);
                         result.push_str("  scrollable:   true\r\n");
                     }
                     _ => {}
@@ -1115,7 +1101,16 @@ impl Drop for Context<'_, '_> {
 }
 
 impl<'a> Context<'a, '_> {
-    /// Returns the current terminal size.
+    pub fn arena(&self) -> &'a Arena {
+        // TODO:
+        // `Context` borrows `Tui` for lifetime 'a, so `self.tui` should be `&'a Tui`, right?
+        // And if I do `&self.tui.arena` then that should be 'a too, right?
+        // Searching for and failing to find a workaround for this was _very_ annoying.
+        //
+        // SAFETY: Both the returned reference and its allocations outlive &self.
+        unsafe { mem::transmute::<&'_ Arena, &'a Arena>(&self.tui.arena_next) }
+    }
+
     pub fn size(&self) -> Size {
         self.tui.size
     }
@@ -2698,16 +2693,6 @@ impl<'a> Context<'a, '_> {
             right: 2,
             bottom: 0,
         });
-    }
-
-    fn arena(&self) -> &'a Arena {
-        // TODO:
-        // `Context` borrows `Tui` for lifetime 'a, so `self.tui` should be `&'a Tui`, right?
-        // And if I do `&self.tui.arena` then that should be 'a too, right?
-        // Searching for and failing to find a workaround for this was _very_ annoying.
-        //
-        // SAFETY: Both the returned reference and its allocations outlive &self.
-        unsafe { mem::transmute::<&'_ Arena, &'a Arena>(&self.tui.arena_next) }
     }
 }
 

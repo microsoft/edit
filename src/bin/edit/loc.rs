@@ -1,4 +1,5 @@
-use crate::sys;
+use edit::arena::scratch_arena;
+use edit::sys;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LocId {
@@ -801,7 +802,8 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
 static mut S_LANG: LangId = LangId::en;
 
 pub fn init() {
-    let langs = sys::preferred_languages();
+    let scratch = scratch_arena(None);
+    let langs = sys::preferred_languages(&scratch);
     let mut lang = LangId::en;
 
     for l in langs {

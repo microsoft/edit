@@ -14,6 +14,7 @@ use draw_filepicker::*;
 use draw_menubar::*;
 use draw_statusbar::*;
 use edit::apperr;
+use edit::arena::{self, ArenaString, scratch_arena};
 use edit::base64;
 use edit::buffer::TextBuffer;
 use edit::framebuffer::{self, IndexedColor, alpha_blend};
@@ -27,6 +28,8 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::process;
 
+#[cfg(feature = "debug-latency")]
+use edit::arena_format;
 #[cfg(feature = "debug-latency")]
 use std::fmt::Write;
 
@@ -101,6 +104,7 @@ fn main() -> process::ExitCode {
 }
 
 fn run() -> apperr::Result<()> {
+    arena::init()?;
     let _sys_deinit = sys::init()?;
     let mut state = State::new()?;
 
@@ -148,34 +152,43 @@ fn run() -> apperr::Result<()> {
     let mut last_latency_width = 0;
 
     loop {
-        let read_timeout = vt_parser.read_timeout().min(tui.read_timeout());
-        let Some(input) = sys::read_stdin(read_timeout) else {
-            break;
-        };
-
         #[cfg(feature = "debug-latency")]
-        let time_beg = std::time::Instant::now();
+        let time_beg;
         #[cfg(feature = "debug-latency")]
-        let mut passes = 0usize;
+        let mut passes;
 
-        let vt_iter = vt_parser.parse(&input);
-        let mut input_iter = input_parser.parse(vt_iter);
-
-        // Process all input.
-        while {
-            let input = input_iter.next();
-            let more = input.is_some();
-            let mut ctx = tui.create_context(input);
-
-            draw(&mut ctx, &mut state);
+        // Process a batch of input.
+        {
+            let scratch = scratch_arena(None);
+            let read_timeout = vt_parser.read_timeout().min(tui.read_timeout());
+            let Some(input) = sys::read_stdin(&scratch, read_timeout) else {
+                break;
+            };
 
             #[cfg(feature = "debug-latency")]
             {
-                passes += 1;
+                time_beg = std::time::Instant::now();
+                passes = 0usize;
             }
 
-            more
-        } {}
+            let vt_iter = vt_parser.parse(&input);
+            let mut input_iter = input_parser.parse(vt_iter);
+
+            while {
+                let input = input_iter.next();
+                let more = input.is_some();
+                let mut ctx = tui.create_context(input);
+
+                draw(&mut ctx, &mut state);
+
+                #[cfg(feature = "debug-latency")]
+                {
+                    passes += 1;
+                }
+
+                more
+            } {}
+        }
 
         // Continue rendering until the layout has settled.
         // This can take >1 frame, if the input focus is tossed between different controls.
@@ -203,53 +216,58 @@ fn run() -> apperr::Result<()> {
             break;
         }
 
-        let mut output = tui.render();
-
+        // Render the UI and write it to the terminal.
         {
-            let filename = state.documents.active().map_or("", |d| &d.filename);
-            if filename != state.osc_title_filename {
-                write_terminal_title(&mut output, filename);
-                state.osc_title_filename = filename.to_string();
+            let scratch = scratch_arena(None);
+            let mut output = tui.render(&scratch);
+
+            {
+                let filename = state.documents.active().map_or("", |d| &d.filename);
+                if filename != state.osc_title_filename {
+                    write_terminal_title(&mut output, filename);
+                    state.osc_title_filename = filename.to_string();
+                }
             }
-        }
 
-        if state.osc_clipboard_generation != tui.get_clipboard_generation() {
-            write_osc_clipboard(&mut output, &mut state, &tui);
-        }
+            if state.osc_clipboard_generation != tui.get_clipboard_generation() {
+                write_osc_clipboard(&mut output, &mut state, &tui);
+            }
 
-        #[cfg(feature = "debug-latency")]
-        {
-            // Print the number of passes and latency in the top right corner.
-            let time_end = std::time::Instant::now();
-            let status = time_end - time_beg;
-            let status = format!(
-                "{}P {}B {:.3}μs",
-                passes,
-                output.len(),
-                status.as_nanos() as f64 / 1000.0
-            );
+            #[cfg(feature = "debug-latency")]
+            {
+                // Print the number of passes and latency in the top right corner.
+                let time_end = std::time::Instant::now();
+                let status = time_end - time_beg;
+                let status = arena_format!(
+                    scratch,
+                    "{}P {}B {:.3}μs",
+                    passes,
+                    output.len(),
+                    status.as_nanos() as f64 / 1000.0
+                );
 
-            // "μs" is 3 bytes and 2 columns.
-            let cols = status.len() as i32 - 3 + 2;
+                // "μs" is 3 bytes and 2 columns.
+                let cols = status.len() as i32 - 3 + 2;
 
-            // Since the status may shrink and grow, we may have to overwrite the previous one with whitespace.
-            let padding = (last_latency_width - cols).max(0);
+                // Since the status may shrink and grow, we may have to overwrite the previous one with whitespace.
+                let padding = (last_latency_width - cols).max(0);
 
-            // To avoid moving the cursor, push and pop it onto the VT cursor stack.
-            _ = write!(
-                output,
-                "\x1b7\x1b[0;41;97m\x1b[1;{0}H{1:2$}{3}\x1b8",
-                tui.size().width - cols - padding + 1,
-                "",
-                padding as usize,
-                status
-            );
+                // To avoid moving the cursor, push and pop it onto the VT cursor stack.
+                _ = write!(
+                    output,
+                    "\x1b7\x1b[0;41;97m\x1b[1;{0}H{1:2$}{3}\x1b8",
+                    tui.size().width - cols - padding + 1,
+                    "",
+                    padding as usize,
+                    status
+                );
 
-            last_latency_width = cols;
+                last_latency_width = cols;
+                sys::write_stdout(&output);
+            }
+
             sys::write_stdout(&output);
         }
-
-        sys::write_stdout(&output);
     }
 
     Ok(())
@@ -401,7 +419,7 @@ fn set_vt_modes() -> RestoreModes {
 }
 
 #[cold]
-fn write_terminal_title(output: &mut String, filename: &str) {
+fn write_terminal_title(output: &mut ArenaString, filename: &str) {
     output.push_str("\x1b]0;");
 
     if !filename.is_empty() {
@@ -413,12 +431,12 @@ fn write_terminal_title(output: &mut String, filename: &str) {
 }
 
 #[cold]
-fn write_osc_clipboard(output: &mut String, state: &mut State, tui: &Tui) {
+fn write_osc_clipboard(output: &mut ArenaString, state: &mut State, tui: &Tui) {
     let clipboard = tui.get_clipboard();
 
     if (1..128 * 1024).contains(&clipboard.len()) {
         output.push_str("\x1b]52;c;");
-        output.push_str(&base64::encode(clipboard));
+        base64::encode(output, clipboard);
         output.push_str("\x1b\\");
     }
 
@@ -454,7 +472,8 @@ fn query_color_palette(tui: &mut Tui, vt_parser: &mut vt::Parser) {
     let mut osc_buffer = String::new();
 
     while !done {
-        let Some(input) = sys::read_stdin(vt_parser.read_timeout()) else {
+        let scratch = scratch_arena(None);
+        let Some(input) = sys::read_stdin(&scratch, vt_parser.read_timeout()) else {
             break;
         };
 

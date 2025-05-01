@@ -1,4 +1,5 @@
-use crate::helpers::{self, CoordType, Point, Rect, Size};
+use crate::arena::{Arena, ArenaString};
+use crate::helpers::{CoordType, Point, Rect, Size};
 use crate::simd::{MemsetSafe, memset};
 use crate::ucd;
 use std::fmt::Write;
@@ -284,7 +285,7 @@ impl Framebuffer {
         back.cursor.overtype = overtype;
     }
 
-    pub fn render(&mut self) -> String {
+    pub fn render<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
         let idx = self.frame_counter & 1;
         // Borrows the front/back buffers without letting Rust know that we have a reference to self.
         // SAFETY: Well this is certainly correct, but whether Rust and its strict rules likes it is another question.
@@ -305,7 +306,7 @@ impl Framebuffer {
         let mut back_fgs = back.fg_bitmap.iter();
         let mut back_attrs = back.attributes.iter();
 
-        let mut result = String::with_capacity(256);
+        let mut result = arena.new_string();
         let mut last_bg = self.indexed(IndexedColor::Background);
         let mut last_fg = self.indexed(IndexedColor::Foreground);
         let mut last_attr = Attributes::None;
@@ -468,7 +469,10 @@ impl LineBuffer {
         for l in &mut self.lines {
             l.clear();
             l.reserve(width + width / 2);
-            helpers::string_append_repeat(l, ' ', width);
+
+            let buf = unsafe { l.as_mut_vec() };
+            // Compiles down to `memset()`.
+            buf.extend(std::iter::repeat_n(b' ', width));
         }
     }
 

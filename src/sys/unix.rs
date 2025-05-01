@@ -1,7 +1,6 @@
 use crate::apperr;
-use crate::helpers;
-use std::borrow::Cow;
-use std::ffi::{CStr, CString, c_int, c_void};
+use crate::arena::{Arena, ArenaString};
+use std::ffi::{CStr, c_int, c_void};
 use std::fs::{self, File};
 use std::mem::{self, MaybeUninit};
 use std::os::fd::FromRawFd;
@@ -165,19 +164,20 @@ fn get_window_size() -> (u16, u16) {
 /// Returns `None` if there was an error reading from stdin.
 /// Returns `Some("")` if the given timeout was reached.
 /// Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
+pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaString<'_>> {
     unsafe {
         if STATE.inject_resize {
             timeout = time::Duration::ZERO;
         }
 
         let read_poll = timeout != time::Duration::MAX;
+        let mut buf = arena.new_vec();
 
         // We don't know if the input is valid UTF8, so we first use a Vec and then
         // later turn it into UTF8 using `helpers::string_from_utf8_lossy_owned`.
         // It is important that we allocate the buffer with an explicit capacity,
         // because we later use `spare_capacity_mut` to access it.
-        let mut buf = Vec::with_capacity(1024);
+        buf.reserve(4096);
 
         // We got some leftover broken UTF8 from a previous read? Prepend it.
         if STATE.utf8_len != 0 {
@@ -266,7 +266,7 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
             }
         }
 
-        let mut result = helpers::string_from_utf8_lossy_owned(buf);
+        let mut result = ArenaString::from_utf8_lossy_owned(buf);
 
         // We received a SIGWINCH? Add a fake window size sequence for our input parser.
         // I prepend it so that on startup, the TUI system gets first initialized with a size.
@@ -274,10 +274,11 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
             STATE.inject_resize = false;
             let (w, h) = get_window_size();
             if w > 0 && h > 0 {
-                result = format!("\x1b[8;{h};{w}t{result}");
+                result = arena_format!(arena, "\x1b[8;{h};{w}t{result}");
             }
         }
 
+        result.shrink_to_fit();
         Some(result)
     }
 }
@@ -412,14 +413,16 @@ pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
 /// but I found that many (most?) Linux distributions don't do this for some reason.
 /// This function returns the suffix, if any.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn icu_proc_suffix(handle: NonNull<c_void>) -> String {
+pub fn icu_proc_suffix(arena: &Arena, handle: NonNull<c_void>) -> ArenaString<'_> {
     unsafe {
         type T = *const c_void;
+
+        let mut res = arena.new_string();
 
         // Check if the ICU library is using unversioned symbols.
         // Return an empty suffix in that case.
         if get_proc_address::<T>(handle, c"u_errorName").is_ok() {
-            return String::new();
+            return res;
         }
 
         // In the versions (63-76) and distributions (Arch/Debian) I tested,
@@ -428,20 +431,20 @@ pub fn icu_proc_suffix(handle: NonNull<c_void>) -> String {
         // in a namespace. Thank you ICU maintainers for this oversight.
         let proc = match get_proc_address::<T>(handle, c"_ZN8UCaseMapD1Ev") {
             Ok(proc) => proc,
-            Err(_) => return String::new(),
+            Err(_) => return res,
         };
 
         // `dladdr` is specific to GNU's libc unfortunately.
         let mut info: libc::Dl_info = mem::zeroed();
         let ret = libc::dladdr(proc, &mut info);
         if ret == 0 {
-            return String::new();
+            return res;
         }
 
         // The library path is in `info.dli_fname`.
         let path = match CStr::from_ptr(info.dli_fname).to_str() {
             Ok(name) => name,
-            Err(_) => return String::new(),
+            Err(_) => return res,
         };
 
         let path = match fs::read_link(path) {
@@ -454,35 +457,50 @@ pub fn icu_proc_suffix(handle: NonNull<c_void>) -> String {
         let path = path.to_string_lossy();
         let suffix_start = match path.rfind(".so.") {
             Some(pos) => pos + 4,
-            None => return String::new(),
+            None => return res,
         };
         let version = &path[suffix_start..];
         let version_end = version.find('.').unwrap_or(version.len());
         let version = &version[..version_end];
-        format!("_{version}")
+
+        res.push('_');
+        res.push_str(version);
+        res
     }
 }
 
-pub fn add_icu_proc_suffix<'a>(name: &'a CStr, suffix: &str) -> Cow<'a, CStr> {
+pub fn add_icu_proc_suffix<'a, 'b, 'r>(arena: &'a Arena, name: &'b CStr, suffix: &str) -> &'r CStr
+where
+    'a: 'r,
+    'b: 'r,
+{
     if suffix.is_empty() {
-        Cow::Borrowed(name)
+        name
     } else {
+        // SAFETY: In this particualar case we know that the string
+        // is valid UTF-8, because it comes from icu.rs.
         let name = unsafe { name.to_str().unwrap_unchecked() };
-        let combined = format!("{name}{suffix}\0");
-        let combined = unsafe { CString::from_vec_unchecked(combined.into_bytes()) };
-        Cow::Owned(combined)
+
+        let mut res = arena.new_string();
+        res.reserve(name.len() + suffix.len() + 1);
+        res.push_str(name);
+        res.push_str(suffix);
+        res.push('\0');
+
+        let bytes: &'a [u8] = unsafe { mem::transmute(res.as_bytes()) };
+        unsafe { CStr::from_bytes_with_nul_unchecked(bytes) }
     }
 }
 
-pub fn preferred_languages() -> Vec<String> {
-    let mut locales = Vec::new();
+pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
+    let mut locales = arena.new_vec();
 
     for key in ["LANGUAGE", "LC_ALL", "LANG"] {
         if let Ok(val) = std::env::var(key) {
             locales.extend(
                 val.split(':')
-                    .filter(|val| !val.is_empty())
-                    .map(String::from),
+                    .filter(|s| !s.is_empty())
+                    .map(|s| ArenaString::from_str(arena, s)),
             );
         }
     }

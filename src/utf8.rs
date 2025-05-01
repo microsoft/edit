@@ -1,4 +1,5 @@
-use std::{hint, iter, mem};
+use std::hint;
+use std::iter;
 
 #[derive(Clone, Copy)]
 pub struct Utf8Chars<'a> {
@@ -187,7 +188,7 @@ impl<'a> Utf8Chars<'a> {
         // SAFETY: If `cp` wasn't a valid codepoint, we already returned U+FFFD above.
         #[allow(clippy::transmute_int_to_char)]
         unsafe {
-            mem::transmute(cp)
+            char::from_u32_unchecked(cp)
         }
     }
 
