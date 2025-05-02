@@ -1,5 +1,3 @@
-use std::ptr;
-
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::input::vk;
@@ -22,7 +20,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 
         ctx.table_next_row();
 
-        if ctx.button("newline", Overflow::Clip, if tb.is_crlf() { "CRLF" } else { "LF" }) {
+        if ctx.button("newline", if tb.is_crlf() { "CRLF" } else { "LF" }) {
             let is_crlf = tb.is_crlf();
             tb.normalize_newlines(!is_crlf);
         }
@@ -31,7 +29,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             ctx.steal_focus();
         }
 
-        state.wants_encoding_picker |= ctx.button("encoding", Overflow::Clip, tb.encoding());
+        state.wants_encoding_picker |= ctx.button("encoding", tb.encoding());
         if state.wants_encoding_picker {
             if doc.path.is_some() {
                 ctx.block_begin("frame");
@@ -48,12 +46,12 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                     ctx.list_begin("options");
                     ctx.focus_on_first_present();
                     {
-                        if ctx.list_item(false, Overflow::Clip, loc(LocId::EncodingReopen))
+                        if ctx.list_item(false, loc(LocId::EncodingReopen))
                             == ListSelection::Activated
                         {
                             state.wants_encoding_change = StateEncodingChange::Reopen;
                         }
-                        if ctx.list_item(false, Overflow::Clip, loc(LocId::EncodingConvert))
+                        if ctx.list_item(false, loc(LocId::EncodingConvert))
                             == ListSelection::Activated
                         {
                             state.wants_encoding_change = StateEncodingChange::Convert;
@@ -75,7 +73,6 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 
         state.wants_indentation_picker |= ctx.button(
             "indentation",
-            Overflow::Clip,
             &arena_format!(
                 ctx.arena(),
                 "{}:{}",
@@ -110,20 +107,14 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 ctx.focus_on_first_present();
                 ctx.attr_padding(Rect::two(0, 1));
                 {
-                    if ctx.list_item(
-                        tb.indent_with_tabs(),
-                        Overflow::Clip,
-                        loc(LocId::IndentationTabs),
-                    ) != ListSelection::Unchanged
+                    if ctx.list_item(tb.indent_with_tabs(), loc(LocId::IndentationTabs))
+                        != ListSelection::Unchanged
                     {
                         tb.set_indent_with_tabs(true);
                         ctx.needs_rerender();
                     }
-                    if ctx.list_item(
-                        !tb.indent_with_tabs(),
-                        Overflow::Clip,
-                        loc(LocId::IndentationSpaces),
-                    ) != ListSelection::Unchanged
+                    if ctx.list_item(!tb.indent_with_tabs(), loc(LocId::IndentationSpaces))
+                        != ListSelection::Unchanged
                     {
                         tb.set_indent_with_tabs(false);
                         ctx.needs_rerender();
@@ -138,7 +129,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                         let ch = [b'0' + width];
                         let label = unsafe { std::str::from_utf8_unchecked(&ch) };
 
-                        if ctx.list_item(tb.tab_size() == width as i32, Overflow::Clip, label)
+                        if ctx.list_item(tb.tab_size() == width as i32, label)
                             != ListSelection::Unchanged
                         {
                             tb.set_tab_size(width as i32);
@@ -158,7 +149,6 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 
         ctx.label(
             "location",
-            Overflow::Clip,
             &arena_format!(
                 ctx.arena(),
                 "{}:{}",
@@ -170,7 +160,6 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
         #[cfg(any(feature = "debug-layout", feature = "debug-latency"))]
         ctx.label(
             "stats",
-            Overflow::Clip,
             &arena_format!(
                 ctx.arena(),
                 "{}/{}",
@@ -179,13 +168,13 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             ),
         );
 
-        if tb.is_overtype() && ctx.button("overtype", Overflow::Clip, "OVR") {
+        if tb.is_overtype() && ctx.button("overtype", "OVR") {
             tb.set_overtype(false);
             ctx.needs_rerender();
         }
 
         if tb.is_dirty() {
-            ctx.label("dirty", Overflow::Clip, "*");
+            ctx.label("dirty", "*");
         }
 
         ctx.block_begin("filename-container");
@@ -200,8 +189,8 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 filename = &filename_buf;
             }
 
-            state.wants_document_picker |=
-                ctx.button("filename", Overflow::TruncateMiddle, filename);
+            state.wants_document_picker |= ctx.button("filename", filename);
+            ctx.attr_overflow(Overflow::TruncateMiddle);
             ctx.attr_position(Position::Right);
         }
         ctx.block_end();
@@ -231,11 +220,8 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
             ctx.list_begin("encodings");
             ctx.inherit_focus();
             for &encoding in encodings {
-                if ctx.list_item(
-                    encoding == doc.buffer.borrow().encoding(),
-                    Overflow::Clip,
-                    encoding,
-                ) == ListSelection::Activated
+                if ctx.list_item(encoding == doc.buffer.borrow().encoding(), encoding)
+                    == ListSelection::Activated
                 {
                     change = Some(encoding);
                     break;
@@ -283,18 +269,17 @@ pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {
             ctx.list_begin("documents");
             ctx.inherit_focus();
 
-            let active = opt_ptr(state.documents.active());
-
             if state.documents.update_active(|doc| {
                 let tb = doc.buffer.borrow();
-                let select = ptr::eq(doc, active);
                 let text = arena_format!(
                     ctx.arena(),
                     "{} {}",
                     (if tb.is_dirty() { '*' } else { ' ' }),
                     doc.filename
                 );
-                ctx.list_item(select, Overflow::TruncateMiddle, &text) == ListSelection::Activated
+                let active = ctx.list_item(false, &text) == ListSelection::Activated;
+                ctx.attr_overflow(Overflow::TruncateMiddle);
+                active
             }) {
                 state.wants_document_picker = false;
                 ctx.needs_rerender();

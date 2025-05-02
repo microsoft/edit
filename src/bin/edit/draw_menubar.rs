@@ -118,12 +118,12 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
         ctx.inherit_focus();
         ctx.attr_padding(Rect::three(1, 2, 1));
         {
-            ctx.label("description", Overflow::TruncateTail, "Microsoft Edit");
+            ctx.label("description", "Microsoft Edit");
+            ctx.attr_overflow(Overflow::TruncateTail);
             ctx.attr_position(Position::Center);
 
             ctx.label(
                 "version",
-                Overflow::TruncateHead,
                 &arena_format!(
                     ctx.arena(),
                     "{}{}",
@@ -131,9 +131,11 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
                     env!("CARGO_PKG_VERSION")
                 ),
             );
+            ctx.attr_overflow(Overflow::TruncateHead);
             ctx.attr_position(Position::Center);
 
-            ctx.label("copyright", Overflow::TruncateTail, "Copyright (c) Microsoft Corp 2025");
+            ctx.label("copyright", "Copyright (c) Microsoft Corp 2025");
+            ctx.attr_overflow(Overflow::TruncateTail);
             ctx.attr_position(Position::Center);
 
             ctx.block_begin("choices");
@@ -141,7 +143,7 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
             ctx.attr_padding(Rect::three(1, 2, 0));
             ctx.attr_position(Position::Center);
             {
-                if ctx.button("ok", Overflow::Clip, loc(LocId::Ok)) {
+                if ctx.button("ok", loc(LocId::Ok)) {
                     state.wants_about = false;
                 }
                 ctx.inherit_focus();

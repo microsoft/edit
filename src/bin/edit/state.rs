@@ -177,13 +177,14 @@ pub fn draw_error_log(ctx: &mut Context, state: &mut State) {
 
                 if !msg.is_empty() {
                     ctx.next_block_id_mixin(i as u64);
-                    ctx.label("error", Overflow::TruncateTail, msg);
+                    ctx.label("error", msg);
+                    ctx.attr_overflow(Overflow::TruncateTail);
                 }
             }
         }
         ctx.block_end();
 
-        if ctx.button("ok", Overflow::Clip, "Ok") {
+        if ctx.button("ok", "Ok") {
             state.error_log_count = 0;
         }
         ctx.attr_position(Position::Center);

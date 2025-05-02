@@ -67,7 +67,6 @@ impl Framebuffer {
         }
     }
 
-    #[inline(never)]
     pub fn reset(&mut self, size: Size) {
         if size != self.buffers[0].bg_bitmap.size {
             for buffer in &mut self.buffers {
@@ -108,7 +107,7 @@ impl Framebuffer {
         origin_x: CoordType,
         clip_right: CoordType,
         text: &str,
-    ) -> Rect {
+    ) {
         let back = &mut self.buffers[self.frame_counter & 1];
         back.text.replace_text(y, origin_x, clip_right, text)
     }
@@ -208,10 +207,15 @@ impl Framebuffer {
         }
         if bottom_fract != 0 {
             fract_buf[2] = (0x88 - bottom_fract) as u8;
-            let rect =
-                self.replace_text(thumb_bottom, track_clipped.left, track_clipped.right, unsafe {
-                    std::str::from_utf8_unchecked(&fract_buf)
-                });
+            self.replace_text(thumb_bottom, track_clipped.left, track_clipped.right, unsafe {
+                std::str::from_utf8_unchecked(&fract_buf)
+            });
+            let rect = Rect {
+                left: track_clipped.left,
+                top: thumb_bottom,
+                right: track_clipped.right,
+                bottom: thumb_bottom + 1,
+            };
             self.blend_bg(rect, self.indexed(IndexedColor::BrightWhite));
             self.blend_fg(rect, self.indexed(IndexedColor::BrightBlack));
         }
@@ -475,9 +479,9 @@ impl LineBuffer {
         origin_x: CoordType,
         clip_right: CoordType,
         text: &str,
-    ) -> Rect {
+    ) {
         let Some(line) = self.lines.get_mut(y as usize) else {
-            return Rect::default();
+            return;
         };
 
         let bytes = text.as_bytes();
@@ -486,7 +490,7 @@ impl LineBuffer {
 
         // Can't insert text that can't fit or is empty.
         if layout_width <= 0 || bytes.is_empty() {
-            return Rect::default();
+            return;
         }
 
         let mut cfg = ucd::MeasurementConfig::new(&bytes);
@@ -495,28 +499,29 @@ impl LineBuffer {
         // and figure out the parts that are inside.
         let mut left = origin_x;
         if left < 0 {
-            let cursor = cfg.goto_visual(Point { x: -left, y: 0 });
-            left += cursor.visual_pos.x;
+            let mut cursor = cfg.goto_visual(Point { x: -left, y: 0 });
 
-            if left < 0 && cursor.offset < text.len() {
+            if left + cursor.visual_pos.x < 0 && cursor.offset < text.len() {
                 // `-left` must've intersected a wide glyph and since goto_visual stops _before_ reaching the target,
                 // we stoped before the wide glyph and thus must step forward to the next glyph.
-                let cursor = cfg.goto_logical(Point { x: cursor.logical_pos.x + 1, y: 0 });
-                left += cursor.visual_pos.x;
+                cursor = cfg.goto_logical(Point { x: cursor.logical_pos.x + 1, y: 0 });
             }
+
+            left += cursor.visual_pos.x;
         }
 
         // If the text still starts outside the framebuffer, we must've ran out of text above.
         // Otherwise, if it starts outside the right edge to begin with, we can't insert it anyway.
         if left < 0 || left >= clip_right {
-            return Rect::default();
+            return;
         }
 
         // Measure the width of the new text (= `res_new.visual_target.x`).
-        let res_new = cfg.goto_visual(Point { x: layout_width, y: 0 });
+        let beg_off = cfg.cursor().offset;
+        let end = cfg.goto_visual(Point { x: layout_width, y: 0 });
 
         // Figure out at which byte offset the new text gets inserted.
-        let right = left + res_new.visual_pos.x;
+        let right = left + end.visual_pos.x;
         let line_bytes = line.as_bytes();
         let mut cfg_old = ucd::MeasurementConfig::new(&line_bytes);
         let res_old_beg = cfg_old.goto_visual(Point { x: left, y: 0 });
@@ -529,7 +534,7 @@ impl LineBuffer {
         }
 
         // If we intersect a wide glyph, we need to pad the new text with spaces.
-        let src = &text[..res_new.offset];
+        let src = &text[beg_off..end.offset];
         let overlap_beg = (left - res_old_beg.visual_pos.x).max(0) as usize;
         let overlap_end = (res_old_end.visual_pos.x - right).max(0) as usize;
         let total_add = src.len() + overlap_beg + overlap_end;
@@ -585,8 +590,6 @@ impl LineBuffer {
             // Update the length of the vector.
             dst.set_len(dst_len - total_del + total_add);
         }
-
-        Rect { left, top: y, right, bottom: y + 1 }
     }
 }
 

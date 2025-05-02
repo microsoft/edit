@@ -1401,7 +1401,6 @@ impl TextBuffer {
     /// Extracts a rectangular region of the text buffer and writes it to the framebuffer.
     /// The `destination` rect is framebuffer coordinates. The extracted region within this
     /// text buffer has the given `origin` and the same size as the `destination` rect.
-    #[inline(never)]
     pub fn render(
         &mut self,
         origin: Point,

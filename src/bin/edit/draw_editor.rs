@@ -79,7 +79,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         {
             {
                 ctx.table_next_row();
-                ctx.label("label", Overflow::Clip, loc(LocId::SearchNeedleLabel));
+                ctx.label("label", loc(LocId::SearchNeedleLabel));
 
                 if ctx.editline("needle", &mut state.search_needle) {
                     action = SearchAction::Search;
@@ -99,7 +99,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 
             if state.wants_search.kind == StateSearchKind::Replace {
                 ctx.table_next_row();
-                ctx.label("label", Overflow::Clip, loc(LocId::SearchReplacementLabel));
+                ctx.label("label", loc(LocId::SearchReplacementLabel));
 
                 ctx.editline("replacement", &mut state.search_replacement);
                 ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
@@ -125,19 +125,16 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
             let mut change = false;
             change |= ctx.checkbox(
                 "match-case",
-                Overflow::Clip,
                 loc(LocId::SearchMatchCase),
                 &mut state.search_options.match_case,
             );
             change |= ctx.checkbox(
                 "whole-word",
-                Overflow::Clip,
                 loc(LocId::SearchWholeWord),
                 &mut state.search_options.whole_word,
             );
             change |= ctx.checkbox(
                 "use-regex",
-                Overflow::Clip,
                 loc(LocId::SearchUseRegex),
                 &mut state.search_options.use_regex,
             );
@@ -148,12 +145,12 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
             }
 
             if state.wants_search.kind == StateSearchKind::Replace
-                && ctx.button("replace-all", Overflow::Clip, loc(LocId::SearchReplaceAll))
+                && ctx.button("replace-all", loc(LocId::SearchReplaceAll))
             {
                 action = SearchAction::ReplaceAll;
             }
 
-            if ctx.button("close", Overflow::Clip, loc(LocId::SearchClose)) {
+            if ctx.button("close", loc(LocId::SearchClose)) {
                 state.wants_search.kind = StateSearchKind::Hidden;
             }
         }
@@ -224,7 +221,7 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
     {
-        ctx.label("description", Overflow::Clip, loc(LocId::UnsavedChangesDialogDescription));
+        ctx.label("description", loc(LocId::UnsavedChangesDialogDescription));
         ctx.attr_padding(Rect::three(1, 2, 1));
 
         ctx.table_begin("choices");
@@ -236,14 +233,14 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
             ctx.table_next_row();
             ctx.inherit_focus();
 
-            if ctx.button("yes", Overflow::Clip, loc(LocId::UnsavedChangesDialogYes)) {
+            if ctx.button("yes", loc(LocId::UnsavedChangesDialogYes)) {
                 action = Action::Save;
             }
             ctx.inherit_focus();
-            if ctx.button("no", Overflow::Clip, loc(LocId::UnsavedChangesDialogNo)) {
+            if ctx.button("no", loc(LocId::UnsavedChangesDialogNo)) {
                 action = Action::Discard;
             }
-            if ctx.button("cancel", Overflow::Clip, loc(LocId::UnsavedChangesDialogCancel)) {
+            if ctx.button("cancel", loc(LocId::UnsavedChangesDialogCancel)) {
                 action = Action::Cancel;
             }
 

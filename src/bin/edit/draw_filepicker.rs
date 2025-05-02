@@ -37,13 +37,14 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         {
             ctx.table_next_row();
 
-            ctx.label("dir-label", Overflow::Clip, loc(LocId::SaveAsDialogPathLabel));
-            ctx.label("dir", Overflow::TruncateMiddle, state.file_picker_pending_dir.as_str());
+            ctx.label("dir-label", loc(LocId::SaveAsDialogPathLabel));
+            ctx.label("dir", state.file_picker_pending_dir.as_str());
+            ctx.attr_overflow(Overflow::TruncateMiddle);
 
             ctx.table_next_row();
             ctx.inherit_focus();
 
-            ctx.label("name-label", Overflow::Clip, loc(LocId::SaveAsDialogNameLabel));
+            ctx.label("name-label", loc(LocId::SaveAsDialogNameLabel));
             ctx.editline("name", &mut state.file_picker_pending_name);
             ctx.inherit_focus();
             if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
@@ -74,17 +75,16 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.list_begin("files");
             ctx.inherit_focus();
             for entry in files.iter() {
-                match ctx.list_item(
-                    state.file_picker_pending_name == entry.as_str(),
-                    Overflow::TruncateMiddle,
-                    entry.as_str(),
-                ) {
+                match ctx
+                    .list_item(state.file_picker_pending_name == entry.as_str(), entry.as_str())
+                {
                     ListSelection::Unchanged => {}
                     ListSelection::Selected => {
                         state.file_picker_pending_name = entry.as_str().to_string()
                     }
                     ListSelection::Activated => activated = true,
                 }
+                ctx.attr_overflow(Overflow::TruncateMiddle);
             }
             ctx.list_end();
         }
@@ -115,11 +115,8 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
         ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
         {
-            ctx.label(
-                "description",
-                Overflow::TruncateTail,
-                loc(LocId::FileOverwriteWarningDescription),
-            );
+            ctx.label("description", loc(LocId::FileOverwriteWarningDescription));
+            ctx.attr_overflow(Overflow::TruncateTail);
             ctx.attr_padding(Rect::three(1, 2, 1));
 
             ctx.table_begin("choices");
@@ -131,10 +128,10 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 ctx.table_next_row();
                 ctx.inherit_focus();
 
-                save = ctx.button("yes", Overflow::Clip, loc(LocId::Yes));
+                save = ctx.button("yes", loc(LocId::Yes));
                 ctx.inherit_focus();
 
-                if ctx.button("no", Overflow::Clip, loc(LocId::No)) {
+                if ctx.button("no", loc(LocId::No)) {
                     state.file_picker_overwrite_warning = None;
                 }
             }

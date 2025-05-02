@@ -10,7 +10,6 @@ use crate::cell::*;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::helpers::{CoordType, Point, Rect, Size, hash, hash_str, opt_ptr_eq, wymix};
 use crate::input::{InputKeyMod, kbmod, vk};
-use crate::ucd::Document;
 use crate::{apperr, helpers, input, ucd};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
@@ -614,78 +613,13 @@ impl Tui {
                     );
                 }
             }
-            NodeContent::Text(content) => {
-                if !inner_clipped.is_empty() {
-                    if content.overflow != Overflow::Clip
-                        && node.intrinsic_size.width > inner.width()
-                        // TODO: Implement ellipsis support for text with multiple chunks.
-                        && content.chunks.len() == 1
-                    {
-                        let actual_width = node.intrinsic_size.width;
-                        let restricted_width = inner.width();
-                        let chunk = &content.chunks[0];
-                        let text = &chunk.text[..];
-                        let bytes = text.as_bytes();
-                        let mut modified = String::new();
-                        let mut cfg = ucd::MeasurementConfig::new(&bytes);
-
-                        modified.reserve(text.len());
-
-                        match content.overflow {
-                            Overflow::Clip => unreachable!(),
-                            Overflow::TruncateHead => {
-                                modified.push('…');
-                                let beg = cfg.goto_visual(Point {
-                                    x: actual_width - restricted_width + 1,
-                                    y: 0,
-                                });
-                                modified.push_str(&text[beg.offset..]);
-                            }
-                            Overflow::TruncateMiddle => {
-                                let mid_beg_x = (restricted_width - 1) / 2;
-                                let mid_end_x = actual_width - restricted_width / 2;
-                                let beg = cfg.goto_visual(Point { x: mid_beg_x, y: 0 });
-                                let mut end = cfg.goto_visual(Point { x: mid_end_x, y: 0 });
-                                if end.visual_pos.x < mid_end_x {
-                                    // If we intersected a wide glyph, we need to move past that.
-                                    end =
-                                        cfg.goto_logical(Point { x: end.logical_pos.x + 1, y: 0 });
-                                }
-                                modified.push_str(&text[..beg.offset]);
-                                modified.push('…');
-                                modified.push_str(&text[end.offset..]);
-                            }
-                            Overflow::TruncateTail => {
-                                let end = cfg.goto_visual(Point { x: restricted_width - 1, y: 0 });
-                                modified.push_str(&text[..end.offset]);
-                                modified.push('…');
-                            }
-                        }
-
-                        let rect = self.framebuffer.replace_text(
-                            inner_clipped.top,
-                            inner_clipped.left,
-                            inner_clipped.right,
-                            &modified,
-                        );
-                        self.framebuffer.blend_fg(rect, chunk.fg);
-                        self.framebuffer.replace_attr(rect, chunk.attr, chunk.attr);
-                    } else {
-                        let mut beg_x = inner.left;
-                        for chunk in &content.chunks {
-                            let rect = self.framebuffer.replace_text(
-                                inner_clipped.top,
-                                beg_x,
-                                inner_clipped.right,
-                                &chunk.text,
-                            );
-                            self.framebuffer.blend_fg(rect, chunk.fg);
-                            self.framebuffer.replace_attr(rect, chunk.attr, chunk.attr);
-                            beg_x = rect.right;
-                        }
-                    }
-                }
-            }
+            NodeContent::Text(content) => self.render_styled_text(
+                inner,
+                node.intrinsic_size.width,
+                &content.text,
+                &content.chunks,
+                content.overflow,
+            ),
             NodeContent::Textarea(tc) => {
                 let mut tb = tc.buffer.borrow_mut();
                 let mut destination = Rect {
@@ -743,6 +677,99 @@ impl Tui {
         for child in Tree::iterate_siblings(node.children.first) {
             let mut child = child.borrow_mut();
             self.render_node(&mut child);
+        }
+    }
+
+    fn render_styled_text(
+        &mut self,
+        target: Rect,
+        actual_width: CoordType,
+        text: &str,
+        chunks: &[StyledTextChunk],
+        overflow: Overflow,
+    ) {
+        let target_width = target.width();
+        // The section of `text` that is skipped by the ellipsis.
+        let mut skipped = 0..0;
+        // The number of columns skipped by the ellipsis.
+        let mut skipped_cols = 0;
+
+        if overflow == Overflow::Clip || target_width >= actual_width {
+            self.framebuffer.replace_text(target.top, target.left, target.right, text);
+        } else {
+            let bytes = text.as_bytes();
+            let mut cfg = ucd::MeasurementConfig::new(&bytes);
+
+            match overflow {
+                Overflow::Clip => unreachable!(),
+                Overflow::TruncateHead => {
+                    let beg = cfg.goto_visual(Point { x: actual_width - target_width + 1, y: 0 });
+                    skipped = 0..beg.offset;
+                    skipped_cols = beg.visual_pos.x - 1;
+                }
+                Overflow::TruncateMiddle => {
+                    let mid_beg_x = (target_width - 1) / 2;
+                    let mid_end_x = actual_width - target_width / 2;
+                    let beg = cfg.goto_visual(Point { x: mid_beg_x, y: 0 });
+                    let end = cfg.goto_visual(Point { x: mid_end_x, y: 0 });
+                    skipped = beg.offset..end.offset;
+                    skipped_cols = end.visual_pos.x - beg.visual_pos.x - 1;
+                }
+                Overflow::TruncateTail => {
+                    let end = cfg.goto_visual(Point { x: target_width - 1, y: 0 });
+                    skipped_cols = actual_width - end.visual_pos.x - 1;
+                    skipped = end.offset..text.len();
+                }
+            }
+
+            let scratch = scratch_arena(None);
+
+            let mut modified = scratch.new_string();
+            modified.reserve(text.len() + 3);
+            modified.push_str(&text[..skipped.start]);
+            modified.push('…');
+            modified.push_str(&text[skipped.end..]);
+
+            self.framebuffer.replace_text(target.top, target.left, target.right, &modified);
+        }
+
+        if !chunks.is_empty() {
+            let bytes = text.as_bytes();
+            let mut cfg = ucd::MeasurementConfig::new(&bytes).with_cursor(ucd::UcdCursor {
+                visual_pos: Point { x: target.left, y: 0 },
+                ..Default::default()
+            });
+
+            let mut iter = chunks.iter().peekable();
+
+            while let Some(chunk) = iter.next() {
+                let beg = chunk.offset;
+                let end = iter.peek().map_or(text.len(), |c| c.offset);
+
+                if beg >= skipped.start && end <= skipped.end {
+                    // Chunk is fully inside the text skipped by the ellipsis.
+                    // We don't need to render it at all.
+                    continue;
+                }
+
+                if beg < skipped.start {
+                    let beg = cfg.goto_offset(beg).visual_pos.x;
+                    let end = cfg.goto_offset(end.min(skipped.start)).visual_pos.x;
+                    let rect =
+                        Rect { left: beg, top: target.top, right: end, bottom: target.bottom };
+                    self.framebuffer.blend_fg(rect, chunk.fg);
+                    self.framebuffer.replace_attr(rect, chunk.attr, chunk.attr);
+                }
+
+                if end > skipped.end {
+                    let beg = cfg.goto_offset(beg.max(skipped.end)).visual_pos.x - skipped_cols;
+                    let end = cfg.goto_offset(end).visual_pos.x - skipped_cols;
+                    let rect =
+                        Rect { left: beg, top: target.top, right: end, bottom: target.bottom };
+                    self.framebuffer.blend_fg(rect, chunk.fg);
+                    self.framebuffer.replace_attr(rect, chunk.attr, chunk.attr);
+                }
+            }
         }
     }
 
@@ -818,11 +845,7 @@ impl Tui {
                 match &node.content {
                     NodeContent::Text(content) => {
                         result.push_repeat(' ', depth * 2);
-                        _ = write!(
-                            result,
-                            "  text:         \"{}\"\r\n",
-                            content.chunks.iter().map(|c| c.text.as_str()).collect::<String>()
-                        );
+                        _ = write!(result, "  text:         \"{}\"\r\n", &content.text);
                     }
                     NodeContent::Textarea(content) => {
                         let tb = content.buffer.borrow();
@@ -1436,58 +1459,56 @@ impl<'a> Context<'a, '_> {
         self.block_end(); // table
     }
 
-    pub fn label(&mut self, classname: &'static str, overflow: Overflow, text: &str) {
-        self.styled_label_begin(classname, overflow);
+    pub fn label(&mut self, classname: &'static str, text: &str) {
+        self.styled_label_begin(classname);
         self.styled_label_add_text(text);
         self.styled_label_end();
     }
 
-    pub fn styled_label_begin(&mut self, classname: &'static str, overflow: Overflow) {
+    pub fn styled_label_begin(&mut self, classname: &'static str) {
         self.block_begin(classname);
-        self.tree.last_node.borrow_mut().content =
-            NodeContent::Text(TextContent { chunks: Vec::new_in(self.arena()), overflow });
+        self.tree.last_node.borrow_mut().content = NodeContent::Text(TextContent {
+            text: self.arena().new_string(),
+            chunks: Vec::with_capacity_in(4, self.arena()),
+            overflow: Overflow::Clip,
+        });
     }
 
-    pub fn styled_label_set_foreground(&mut self, color: u32) {
-        let mut last_node = self.tree.last_node.borrow_mut();
-        let chunk = self.styled_label_get_last_chunk(&mut last_node, true);
-        chunk.fg = color;
-    }
-
-    pub fn styled_label_set_attributes(&mut self, attr: Attributes) {
-        let mut last_node = self.tree.last_node.borrow_mut();
-        let chunk = self.styled_label_get_last_chunk(&mut last_node, true);
-        chunk.attr = attr;
-    }
-
-    pub fn styled_label_add_text(&mut self, text: &str) {
-        let mut last_node = self.tree.last_node.borrow_mut();
-        let chunk = self.styled_label_get_last_chunk(&mut last_node, false);
-        chunk.text.push_str(text);
-    }
-
-    fn styled_label_get_last_chunk<'n, 'm>(
-        &mut self,
-        node: &'n mut Node<'m>,
-        flush: bool,
-    ) -> &'n mut StyledTextChunk<'m>
-    where
-        'a: 'n,
-        'a: 'm,
-    {
+    pub fn styled_label_set_foreground(&mut self, fg: u32) {
+        let mut node = self.tree.last_node.borrow_mut();
         let NodeContent::Text(content) = &mut node.content else {
             unreachable!();
         };
 
-        if content.chunks.is_empty() || (flush && !content.chunks.last().unwrap().text.is_empty()) {
+        let last = content.chunks.last().unwrap_or(&INVALID_STYLED_TEXT_CHUNK);
+        if last.offset != content.text.len() && last.fg != fg {
             content.chunks.push(StyledTextChunk {
-                text: self.arena().new_string(),
-                fg: 0,
-                attr: Attributes::default(),
+                offset: content.text.len(),
+                fg,
+                attr: last.attr,
             });
         }
+    }
 
-        content.chunks.last_mut().unwrap()
+    pub fn styled_label_set_attributes(&mut self, attr: Attributes) {
+        let mut node = self.tree.last_node.borrow_mut();
+        let NodeContent::Text(content) = &mut node.content else {
+            unreachable!();
+        };
+
+        let last = content.chunks.last().unwrap_or(&INVALID_STYLED_TEXT_CHUNK);
+        if last.offset != content.text.len() && last.attr != attr {
+            content.chunks.push(StyledTextChunk { offset: content.text.len(), fg: last.fg, attr });
+        }
+    }
+
+    pub fn styled_label_add_text(&mut self, text: &str) {
+        let mut node = self.tree.last_node.borrow_mut();
+        let NodeContent::Text(content) = &mut node.content else {
+            unreachable!();
+        };
+
+        content.text.push_str(text);
     }
 
     pub fn styled_label_end(&mut self) {
@@ -1497,7 +1518,7 @@ impl<'a> Context<'a, '_> {
                 return;
             };
 
-            let cursor = ucd::MeasurementConfig::new(&content.chunks)
+            let cursor = ucd::MeasurementConfig::new(&content.text.as_bytes())
                 .goto_visual(Point { x: CoordType::MAX, y: 0 });
             last_node.intrinsic_size.width = cursor.visual_pos.x;
             last_node.intrinsic_size.height = 1;
@@ -1507,8 +1528,17 @@ impl<'a> Context<'a, '_> {
         self.block_end();
     }
 
-    pub fn button(&mut self, classname: &'static str, overflow: Overflow, text: &str) -> bool {
-        self.styled_label_begin(classname, overflow);
+    pub fn attr_overflow(&mut self, overflow: Overflow) {
+        let mut last_node = self.tree.last_node.borrow_mut();
+        let NodeContent::Text(content) = &mut last_node.content else {
+            return;
+        };
+
+        content.overflow = overflow;
+    }
+
+    pub fn button(&mut self, classname: &'static str, text: &str) -> bool {
+        self.styled_label_begin(classname);
         self.attr_focusable();
         if self.is_focused() {
             self.attr_reverse();
@@ -1521,14 +1551,8 @@ impl<'a> Context<'a, '_> {
         self.button_activated()
     }
 
-    pub fn checkbox(
-        &mut self,
-        classname: &'static str,
-        overflow: Overflow,
-        text: &str,
-        checked: &mut bool,
-    ) -> bool {
-        self.styled_label_begin(classname, overflow);
+    pub fn checkbox(&mut self, classname: &'static str, text: &str, checked: &mut bool) -> bool {
+        self.styled_label_begin(classname);
         self.attr_focusable();
         if self.is_focused() {
             self.attr_reverse();
@@ -2297,12 +2321,12 @@ impl<'a> Context<'a, '_> {
         last_node.content = NodeContent::List(content);
     }
 
-    pub fn list_item(&mut self, select: bool, overflow: Overflow, text: &str) -> ListSelection {
+    pub fn list_item(&mut self, select: bool, text: &str) -> ListSelection {
         let list = self.tree.current_node;
 
         let idx = list.borrow().child_count;
         self.next_block_id_mixin(hash_str(idx as u64, text));
-        self.styled_label_begin("item", overflow);
+        self.styled_label_begin("item");
         self.attr_focusable();
 
         let selected_before;
@@ -2400,7 +2424,7 @@ impl<'a> Context<'a, '_> {
         // Now that we know which item is selected we can mark it as such.
         if let NodeContent::Text(content) = &mut node.borrow_mut().content {
             unsafe {
-                content.chunks[0].text.as_bytes_mut()[0] = b'>';
+                content.text.as_bytes_mut()[0] = b'>';
             }
         }
 
@@ -2555,7 +2579,7 @@ impl<'a> Context<'a, '_> {
 
     fn menubar_label(&mut self, text: &str, accelerator: char, checked: Option<bool>) {
         if !accelerator.is_ascii_uppercase() {
-            self.label("label", Overflow::Clip, text);
+            self.label("label", text);
             return;
         }
 
@@ -2573,7 +2597,7 @@ impl<'a> Context<'a, '_> {
             }
         }
 
-        self.styled_label_begin("label", Overflow::Clip);
+        self.styled_label_begin("label");
         if let Some(checked) = checked {
             self.styled_label_add_text(if checked { "▣ " } else { "  " });
         }
@@ -2618,7 +2642,7 @@ impl<'a> Context<'a, '_> {
             }
             shortcut_text.push(shortcut_letter);
 
-            self.label("shortcut", Overflow::Clip, &shortcut_text);
+            self.label("shortcut", &shortcut_text);
         } else {
             self.block_begin("shortcut");
             self.block_end();
@@ -2856,7 +2880,7 @@ impl<'a> NodeMap<'a> {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub enum Anchor {
     #[default]
     Last,
@@ -2883,7 +2907,7 @@ struct FloatAttributes {
     offset: Point,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ListSelection {
     Unchanged,
     Selected,
@@ -2899,7 +2923,7 @@ pub enum Position {
     Right,
 }
 
-#[derive(PartialEq, Eq, Default)]
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub enum Overflow {
     #[default]
     Clip,
@@ -2908,6 +2932,7 @@ pub enum Overflow {
     TruncateTail,
 }
 
+// NOTE: Must not contain items that require drop().
 #[derive(Default)]
 struct NodeAttributes {
     float: Option<FloatAttributes>,
@@ -2922,48 +2947,33 @@ struct NodeAttributes {
     focus_void: bool, // Prevents focus from entering via Tab
 }
 
+// NOTE: Must not contain items that require drop().
 struct ListContent<'a> {
     selected: u64,
     // Points to the Node that holds this ListContent instance, if any>.
     selected_node: Option<&'a NodeCell<'a>>,
 }
 
+// NOTE: Must not contain items that require drop().
 struct TableContent<'a> {
     columns: Vec<CoordType, &'a Arena>,
     cell_gap: Size,
 }
 
-struct StyledTextChunk<'a> {
-    text: ArenaString<'a>,
+// NOTE: Must not contain items that require drop().
+struct StyledTextChunk {
+    offset: usize,
     fg: u32,
     attr: Attributes,
 }
 
-impl Document for Vec<StyledTextChunk<'_>, &'_ Arena> {
-    fn read_backward(&self, mut off: usize) -> &[u8] {
-        for chunk in self.iter().rev() {
-            if off < chunk.text.len() {
-                return &chunk.text.as_bytes()[chunk.text.len() - off..];
-            }
-            off -= chunk.text.len();
-        }
-        &[]
-    }
-
-    fn read_forward(&self, mut off: usize) -> &[u8] {
-        for chunk in self.iter() {
-            if off < chunk.text.len() {
-                return &chunk.text.as_bytes()[off..];
-            }
-            off -= chunk.text.len();
-        }
-        &[]
-    }
-}
+const INVALID_STYLED_TEXT_CHUNK: StyledTextChunk =
+    StyledTextChunk { offset: usize::MAX, fg: 0, attr: Attributes::None };
 
 // NOTE: Must not contain items that require drop().
 struct TextContent<'a> {
-    chunks: Vec<StyledTextChunk<'a>, &'a Arena>,
+    text: ArenaString<'a>,
+    chunks: Vec<StyledTextChunk, &'a Arena>,
     overflow: Overflow,
 }
 
