@@ -17,8 +17,8 @@ pub struct Document {
 }
 
 impl Document {
-    pub fn save(&mut self, new_path: Option<&Path>) -> apperr::Result<()> {
-        let path = new_path.or(self.path.as_deref()).unwrap();
+    pub fn save(&mut self, new_path: Option<PathBuf>) -> apperr::Result<()> {
+        let path = new_path.as_deref().or(self.path.as_deref()).unwrap();
         let mut file = DocumentManager::open_for_writing(path)?;
 
         {
@@ -28,6 +28,11 @@ impl Document {
 
         if let Ok(id) = sys::file_id(&file) {
             self.file_id = Some(id);
+        }
+
+        if let Some(path) = new_path {
+            self.filename = DocumentManager::get_filename_from_path(&path);
+            self.path = Some(path);
         }
 
         Ok(())
