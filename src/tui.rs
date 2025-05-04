@@ -450,10 +450,8 @@ impl Tui {
 
                 let size = root.intrinsic_to_outer();
 
-                x += float.offset.x;
-                y += float.offset.y;
-                x -= (float.gravity_x * size.width as f32) as CoordType;
-                y -= (float.gravity_y * size.height as f32) as CoordType;
+                x += (float.offset_x - float.gravity_x * size.width as f32 + 0.5) as CoordType;
+                y += (float.offset_y - float.gravity_y * size.height as f32 + 0.5) as CoordType;
 
                 root.outer.left = x;
                 root.outer.top = y;
@@ -1277,7 +1275,8 @@ impl<'a> Context<'a, '_> {
         ln.attributes.float = Some(FloatAttributes {
             gravity_x: spec.gravity_x.clamp(0.0, 1.0),
             gravity_y: spec.gravity_y.clamp(0.0, 1.0),
-            offset: Point { x: spec.offset_x, y: spec.offset_y },
+            offset_x: spec.offset_x,
+            offset_y: spec.offset_y,
         });
         ln.attributes.bg = self.tui.floater_default_bg;
         ln.attributes.fg = self.tui.floater_default_fg;
@@ -1369,8 +1368,8 @@ impl<'a> Context<'a, '_> {
             anchor: Anchor::Last,
             gravity_x: 0.5,
             gravity_y: 0.5,
-            offset_x: self.tui.size.width / 2,
-            offset_y: self.tui.size.height / 2,
+            offset_x: self.tui.size.width as f32 * 0.5,
+            offset_y: self.tui.size.height as f32 * 0.5,
         });
         self.attr_border();
         self.attr_background_rgba(self.tui.modal_default_bg);
@@ -2473,8 +2472,8 @@ impl<'a> Context<'a, '_> {
                 anchor: Anchor::Last,
                 gravity_x: 0.0,
                 gravity_y: 0.0,
-                offset_x: 0,
-                offset_y: 1,
+                offset_x: 0.0,
+                offset_y: 1.0,
             });
             self.attr_border();
             return true;
@@ -2904,8 +2903,8 @@ pub struct FloatSpec {
     pub gravity_x: f32,
     pub gravity_y: f32,
     // Specifies an offset from the origin in cells.
-    pub offset_x: CoordType,
-    pub offset_y: CoordType,
+    pub offset_x: f32,
+    pub offset_y: f32,
 }
 
 struct FloatAttributes {
@@ -2913,7 +2912,8 @@ struct FloatAttributes {
     gravity_x: f32,
     gravity_y: f32,
     // Specifies an offset from the origin in cells.
-    offset: Point,
+    offset_x: f32,
+    offset_y: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
