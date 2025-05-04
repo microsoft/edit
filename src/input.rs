@@ -398,8 +398,8 @@ impl<'input> Stream<'_, '_, 'input> {
                             let mut mouse = InputMouse {
                                 state: InputMouseState::None,
                                 modifiers: kbmod::NONE,
-                                position: Point::default(),
-                                scroll: Point::default(),
+                                position: Default::default(),
+                                scroll: Default::default(),
                             };
 
                             mouse.state = InputMouseState::None;
@@ -508,7 +508,7 @@ impl<'input> Stream<'_, '_, 'input> {
             state: action,
             modifiers,
             position: Point { x, y },
-            scroll: Point::default(),
+            scroll: Default::default(),
         }))
     }
 

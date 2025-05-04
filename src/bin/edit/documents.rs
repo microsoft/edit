@@ -177,7 +177,7 @@ impl DocumentManager {
                 tb.read_file(file, None)?;
 
                 if let Some(goto) = goto
-                    && goto != Point::default()
+                    && goto != Default::default()
                 {
                     tb.cursor_move_to_logical(goto);
                 }

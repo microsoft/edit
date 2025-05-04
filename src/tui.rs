@@ -733,7 +733,7 @@ impl Tui {
 
         if !chunks.is_empty() {
             let bytes = text.as_bytes();
-            let mut cfg = ucd::MeasurementConfig::new(&bytes).with_cursor(ucd::UcdCursor {
+            let mut cfg = ucd::MeasurementConfig::new(&bytes).with_cursor(ucd::Cursor {
                 visual_pos: Point { x: target.left, y: 0 },
                 ..Default::default()
             });
@@ -1401,7 +1401,7 @@ impl<'a> Context<'a, '_> {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.content = NodeContent::Table(TableContent {
             columns: Vec::new_in(self.arena()),
-            cell_gap: Size::default(),
+            cell_gap: Default::default(),
         });
     }
 
@@ -1640,7 +1640,7 @@ impl<'a> Context<'a, '_> {
 
         node.content = NodeContent::Textarea(TextareaContent {
             buffer,
-            scroll_offset: Point::default(),
+            scroll_offset: Default::default(),
             scroll_offset_y_drag_start: CoordType::MIN,
             scroll_offset_x_max: 0,
             thumb_height: 0,
@@ -1975,7 +1975,7 @@ impl<'a> Context<'a, '_> {
                     }),
                 },
                 vk::HOME => match modifiers {
-                    kbmod::CTRL => tb.cursor_move_to_logical(Point::default()),
+                    kbmod::CTRL => tb.cursor_move_to_logical(Default::default()),
                     kbmod::SHIFT => {
                         tb.selection_update_visual(Point { x: 0, y: tb.get_cursor_visual_pos().y })
                     }

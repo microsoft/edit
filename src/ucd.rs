@@ -45,7 +45,7 @@ impl Document for &[u8] {
 }
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UcdCursor {
+pub struct Cursor {
     /// Offset in bytes within the buffer.
     pub offset: usize,
     /// Position in the buffer in lines (.y) and grapheme clusters (.x).
@@ -70,12 +70,12 @@ pub struct MeasurementConfig<'doc> {
     buffer: &'doc dyn Document,
     tab_size: CoordType,
     word_wrap_column: CoordType,
-    cursor: UcdCursor,
+    cursor: Cursor,
 }
 
 impl<'doc> MeasurementConfig<'doc> {
     pub fn new(buffer: &'doc dyn Document) -> Self {
-        Self { buffer, tab_size: 8, word_wrap_column: 0, cursor: UcdCursor::default() }
+        Self { buffer, tab_size: 8, word_wrap_column: 0, cursor: Default::default() }
     }
 
     pub fn with_tab_size(mut self, tab_size: CoordType) -> Self {
@@ -88,12 +88,12 @@ impl<'doc> MeasurementConfig<'doc> {
         self
     }
 
-    pub fn with_cursor(mut self, cursor: UcdCursor) -> Self {
+    pub fn with_cursor(mut self, cursor: Cursor) -> Self {
         self.cursor = cursor;
         self
     }
 
-    pub fn goto_offset(&mut self, offset: usize) -> UcdCursor {
+    pub fn goto_offset(&mut self, offset: usize) -> Cursor {
         self.cursor = Self::measure_forward(
             self.tab_size,
             self.word_wrap_column,
@@ -106,7 +106,7 @@ impl<'doc> MeasurementConfig<'doc> {
         self.cursor
     }
 
-    pub fn goto_logical(&mut self, logical_target: Point) -> UcdCursor {
+    pub fn goto_logical(&mut self, logical_target: Point) -> Cursor {
         self.cursor = Self::measure_forward(
             self.tab_size,
             self.word_wrap_column,
@@ -119,7 +119,7 @@ impl<'doc> MeasurementConfig<'doc> {
         self.cursor
     }
 
-    pub fn goto_visual(&mut self, visual_target: Point) -> UcdCursor {
+    pub fn goto_visual(&mut self, visual_target: Point) -> Cursor {
         self.cursor = Self::measure_forward(
             self.tab_size,
             self.word_wrap_column,
@@ -132,7 +132,7 @@ impl<'doc> MeasurementConfig<'doc> {
         self.cursor
     }
 
-    pub fn cursor(&self) -> UcdCursor {
+    pub fn cursor(&self) -> Cursor {
         self.cursor
     }
 
@@ -150,9 +150,9 @@ impl<'doc> MeasurementConfig<'doc> {
         offset_target: usize,
         logical_target: Point,
         visual_target: Point,
-        cursor: UcdCursor,
+        cursor: Cursor,
         buffer: &dyn Document,
-    ) -> UcdCursor {
+    ) -> Cursor {
         if cursor.offset >= offset_target
             || cursor.logical_pos >= logical_target
             || cursor.visual_pos >= visual_target
@@ -466,7 +466,7 @@ impl<'doc> MeasurementConfig<'doc> {
             }
         }
 
-        UcdCursor {
+        Cursor {
             offset,
             logical_pos: Point { x: logical_pos_x, y: logical_pos_y },
             visual_pos: Point { x: visual_pos_x, y: visual_pos_y },
@@ -871,7 +871,7 @@ mod test {
             MeasurementConfig::new(&"foo\nbar".as_bytes()).goto_visual(Point { x: 0, y: 1 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 0, y: 1 },
                 visual_pos: Point { x: 0, y: 1 },
@@ -886,7 +886,7 @@ mod test {
         let cursor = MeasurementConfig::new(&"a😶‍🌫️b".as_bytes()).goto_visual(Point { x: 2, y: 0 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 1,
                 logical_pos: Point { x: 1, y: 0 },
                 visual_pos: Point { x: 1, y: 0 },
@@ -908,7 +908,7 @@ mod test {
         let cursor = cfg.goto_logical(Point { x: 5, y: 0 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 5,
                 logical_pos: Point { x: 5, y: 0 },
                 visual_pos: Point { x: 1, y: 1 },
@@ -922,7 +922,7 @@ mod test {
         let cursor = cfg.goto_visual(Point { x: CoordType::MAX, y: 0 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
@@ -932,18 +932,17 @@ mod test {
         );
 
         // Does hitting the same target but with a non-zero starting position result in the same outcome?
-        let mut cfg =
-            MeasurementConfig::new(&text).with_word_wrap_column(6).with_cursor(UcdCursor {
-                offset: 1,
-                logical_pos: Point { x: 1, y: 0 },
-                visual_pos: Point { x: 1, y: 0 },
-                column: 1,
-                wrap_opp: false,
-            });
+        let mut cfg = MeasurementConfig::new(&text).with_word_wrap_column(6).with_cursor(Cursor {
+            offset: 1,
+            logical_pos: Point { x: 1, y: 0 },
+            visual_pos: Point { x: 1, y: 0 },
+            column: 1,
+            wrap_opp: false,
+        });
         let cursor = cfg.goto_visual(Point { x: 5, y: 0 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
@@ -955,7 +954,7 @@ mod test {
         let cursor = cfg.goto_visual(Point { x: 0, y: 1 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 0, y: 1 },
@@ -967,7 +966,7 @@ mod test {
         let cursor = cfg.goto_visual(Point { x: 5, y: 1 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 8,
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 4, y: 1 },
@@ -979,7 +978,7 @@ mod test {
         let cursor = cfg.goto_visual(Point { x: 0, y: 2 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 9,
                 logical_pos: Point { x: 0, y: 1 },
                 visual_pos: Point { x: 0, y: 2 },
@@ -991,7 +990,7 @@ mod test {
         let cursor = cfg.goto_visual(Point { x: 5, y: 2 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 12,
                 logical_pos: Point { x: 3, y: 1 },
                 visual_pos: Point { x: 3, y: 2 },
@@ -1008,7 +1007,7 @@ mod test {
             MeasurementConfig::new(&text).with_tab_size(4).goto_visual(Point { x: 4, y: 0 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 2,
                 logical_pos: Point { x: 2, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
@@ -1044,7 +1043,7 @@ mod test {
         let end0 = cfg.goto_visual(Point { x: 7, y: 0 });
         assert_eq!(
             end0,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
@@ -1056,7 +1055,7 @@ mod test {
         let beg1 = cfg.goto_visual(Point { x: 0, y: 1 });
         assert_eq!(
             beg1,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 0, y: 1 },
@@ -1068,7 +1067,7 @@ mod test {
         let end1 = cfg.goto_visual(Point { x: max, y: 1 });
         assert_eq!(
             end1,
-            UcdCursor {
+            Cursor {
                 offset: 8,
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 4, y: 1 },
@@ -1080,7 +1079,7 @@ mod test {
         let beg2 = cfg.goto_visual(Point { x: 0, y: 2 });
         assert_eq!(
             beg2,
-            UcdCursor {
+            Cursor {
                 offset: 9,
                 logical_pos: Point { x: 0, y: 1 },
                 visual_pos: Point { x: 0, y: 2 },
@@ -1092,7 +1091,7 @@ mod test {
         let end2 = cfg.goto_visual(Point { x: max, y: 2 });
         assert_eq!(
             end2,
-            UcdCursor {
+            Cursor {
                 offset: 12,
                 logical_pos: Point { x: 3, y: 1 },
                 visual_pos: Point { x: 3, y: 2 },
@@ -1115,7 +1114,7 @@ mod test {
         let end0 = cfg.goto_visual(Point { x: max, y: 0 });
         assert_eq!(
             end0,
-            UcdCursor {
+            Cursor {
                 offset: 3,
                 logical_pos: Point { x: 3, y: 0 },
                 visual_pos: Point { x: 3, y: 0 },
@@ -1128,7 +1127,7 @@ mod test {
         let beg0 = cfg.goto_visual(Point { x: 0, y: 1 });
         assert_eq!(
             beg0,
-            UcdCursor {
+            Cursor {
                 offset: 3,
                 logical_pos: Point { x: 3, y: 0 },
                 visual_pos: Point { x: 0, y: 1 },
@@ -1144,7 +1143,7 @@ mod test {
         let beg0_off1 = cfg.goto_logical(Point { x: 4, y: 0 });
         assert_eq!(
             beg0_off1,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 1, y: 1 },
@@ -1157,7 +1156,7 @@ mod test {
         let end1 = cfg.goto_visual(Point { x: max, y: 1 });
         assert_eq!(
             end1,
-            UcdCursor {
+            Cursor {
                 offset: 11,
                 logical_pos: Point { x: 11, y: 0 },
                 visual_pos: Point { x: 8, y: 1 },
@@ -1170,7 +1169,7 @@ mod test {
         let end2 = cfg.goto_visual(Point { x: max, y: 2 });
         assert_eq!(
             end2,
-            UcdCursor {
+            Cursor {
                 offset: 15,
                 logical_pos: Point { x: 15, y: 0 },
                 visual_pos: Point { x: 4, y: 2 },
@@ -1214,7 +1213,7 @@ mod test {
         let end0 = cfg.goto_visual(Point { x: CoordType::MAX, y: 0 });
         assert_eq!(
             end0,
-            UcdCursor {
+            Cursor {
                 offset: 3,
                 logical_pos: Point { x: 3, y: 0 },
                 visual_pos: Point { x: 3, y: 0 },
@@ -1226,7 +1225,7 @@ mod test {
         let mid1 = cfg.goto_visual(Point { x: end0.visual_pos.x, y: 1 });
         assert_eq!(
             mid1,
-            UcdCursor {
+            Cursor {
                 offset: 6,
                 logical_pos: Point { x: 6, y: 0 },
                 visual_pos: Point { x: 3, y: 1 },
@@ -1238,7 +1237,7 @@ mod test {
         let mid2 = cfg.goto_visual(Point { x: end0.visual_pos.x, y: 2 });
         assert_eq!(
             mid2,
-            UcdCursor {
+            Cursor {
                 offset: 14,
                 logical_pos: Point { x: 14, y: 0 },
                 visual_pos: Point { x: 3, y: 2 },
@@ -1259,7 +1258,7 @@ mod test {
         let end0 = cfg.goto_visual(Point { x: max, y: 0 });
         assert_eq!(
             end0,
-            UcdCursor {
+            Cursor {
                 offset: 8,
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 8, y: 0 },
@@ -1271,7 +1270,7 @@ mod test {
         let end1 = cfg.goto_visual(Point { x: max, y: 1 });
         assert_eq!(
             end1,
-            UcdCursor {
+            Cursor {
                 offset: 15,
                 logical_pos: Point { x: 15, y: 0 },
                 visual_pos: Point { x: 7, y: 1 },
@@ -1312,7 +1311,7 @@ mod test {
         let end0 = cfg.goto_visual(Point { x: max, y: 0 });
         assert_eq!(
             end0,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
@@ -1324,7 +1323,7 @@ mod test {
         let beg1 = cfg.goto_visual(Point { x: 0, y: 1 });
         assert_eq!(
             beg1,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 0, y: 1 },
@@ -1336,7 +1335,7 @@ mod test {
         let end1 = cfg.goto_visual(Point { x: max, y: 1 });
         assert_eq!(
             end1,
-            UcdCursor {
+            Cursor {
                 offset: 7,
                 logical_pos: Point { x: 7, y: 0 },
                 visual_pos: Point { x: 6, y: 1 },
@@ -1352,7 +1351,7 @@ mod test {
         let cursor = MeasurementConfig::new(&text).goto_visual(Point { x: CoordType::MAX, y: 1 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 6,
                 logical_pos: Point { x: 3, y: 1 },
                 visual_pos: Point { x: 3, y: 1 },
@@ -1372,7 +1371,7 @@ mod test {
         let cursor = cfg.goto_visual(Point { x: 2, y: 1 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 8,
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 2, y: 1 },

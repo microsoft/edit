@@ -58,7 +58,7 @@ impl DisplayablePathBuf {
 
 impl Default for DisplayablePathBuf {
     fn default() -> Self {
-        Self { value: PathBuf::default(), str: Cow::Borrowed("") }
+        Self { value: Default::default(), str: Cow::Borrowed("") }
     }
 }
 
