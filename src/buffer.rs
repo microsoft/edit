@@ -2187,6 +2187,7 @@ impl TextBuffer {
         };
 
         {
+            let buffer_generation = self.buffer.generation;
             let mut change = change.borrow_mut();
             let change = &mut *change;
 
@@ -2207,7 +2208,8 @@ impl TextBuffer {
             mem::swap(&mut self.selection, &mut change.selection_before);
 
             // Pretend as if the buffer was never modified.
-            mem::swap(&mut self.buffer.generation, &mut change.generation_before);
+            self.buffer.generation = change.generation_before;
+            change.generation_before = buffer_generation;
 
             // Restore the previous cursor.
             let cursor_before =
