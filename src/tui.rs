@@ -914,6 +914,8 @@ impl Tui {
         }
     }
 
+    // TODO: Move this into `block_end()` and run it whenever the block is a `focus_well`.
+    // It makes no sense otherwise that all input handling occurs in the controls, except for this.
     fn move_focus(&mut self, input: InputKey) -> bool {
         if !matches!(input, vk::TAB | SHIFT_TAB | vk::LEFT | vk::RIGHT) {
             return false;
@@ -2247,52 +2249,62 @@ impl<'a> Context<'a, '_> {
                 *sc = sc_prev.clone();
             }
 
-            if !self.input_consumed && self.tui.mouse_state != InputMouseState::None {
-                let container_rect = prev_container.inner;
+            if !self.input_consumed {
+                if self.tui.mouse_state != InputMouseState::None {
+                    let container_rect = prev_container.inner;
 
-                if self.tui.mouse_is_drag {
-                    // We don't need to look up the previous track node,
-                    // since it has a fixed size based on the container size.
-                    let track_rect = Rect {
-                        left: container_rect.right,
-                        top: container_rect.top,
-                        right: container_rect.right + 1,
-                        bottom: container_rect.bottom,
-                    };
-                    if track_rect.contains(self.tui.mouse_down_position) {
-                        if sc.scroll_offset_y_drag_start == CoordType::MIN {
-                            sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
-                        }
-
-                        let content = prev_container.children.first.unwrap().borrow();
-                        let content_rect = content.inner;
-                        let content_height = content_rect.height();
-                        let track_height = track_rect.height();
-
-                        if content_height > track_height {
-                            let trackable = track_height - sc.thumb_height;
-                            let scrollable_height = content_height - track_height;
-                            let delta_y =
-                                self.tui.mouse_position.y - self.tui.mouse_down_position.y;
-                            sc.scroll_offset.y = sc.scroll_offset_y_drag_start
-                                + ((delta_y * scrollable_height) / trackable);
-                        }
-
-                        self.set_input_consumed();
-                    }
-                } else {
-                    match self.tui.mouse_state {
-                        InputMouseState::Release => {
-                            sc.scroll_offset_y_drag_start = CoordType::MIN;
-                        }
-                        InputMouseState::Scroll => {
-                            if container_rect.contains(self.tui.mouse_position) {
-                                sc.scroll_offset.x += self.input_scroll_delta.x;
-                                sc.scroll_offset.y += self.input_scroll_delta.y;
-                                self.set_input_consumed();
+                    if self.tui.mouse_is_drag {
+                        // We don't need to look up the previous track node,
+                        // since it has a fixed size based on the container size.
+                        let track_rect = Rect {
+                            left: container_rect.right,
+                            top: container_rect.top,
+                            right: container_rect.right + 1,
+                            bottom: container_rect.bottom,
+                        };
+                        if track_rect.contains(self.tui.mouse_down_position) {
+                            if sc.scroll_offset_y_drag_start == CoordType::MIN {
+                                sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
                             }
+
+                            let content = prev_container.children.first.unwrap().borrow();
+                            let content_rect = content.inner;
+                            let content_height = content_rect.height();
+                            let track_height = track_rect.height();
+
+                            if content_height > track_height {
+                                let trackable = track_height - sc.thumb_height;
+                                let scrollable_height = content_height - track_height;
+                                let delta_y =
+                                    self.tui.mouse_position.y - self.tui.mouse_down_position.y;
+                                sc.scroll_offset.y = sc.scroll_offset_y_drag_start
+                                    + ((delta_y * scrollable_height) / trackable);
+                            }
+
+                            self.set_input_consumed();
                         }
-                        _ => {}
+                    } else {
+                        match self.tui.mouse_state {
+                            InputMouseState::Release => {
+                                sc.scroll_offset_y_drag_start = CoordType::MIN;
+                            }
+                            InputMouseState::Scroll => {
+                                if container_rect.contains(self.tui.mouse_position) {
+                                    sc.scroll_offset.x += self.input_scroll_delta.x;
+                                    sc.scroll_offset.y += self.input_scroll_delta.y;
+                                    self.set_input_consumed();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                } else if self.tui.is_subtree_focused(container_id) {
+                    if self.input_keyboard == Some(vk::PRIOR) {
+                        sc.scroll_offset.y -= prev_container.inner_clipped.height();
+                        self.set_input_consumed();
+                    } else if self.input_keyboard == Some(vk::NEXT) {
+                        sc.scroll_offset.y += prev_container.inner_clipped.height();
+                        self.set_input_consumed();
                     }
                 }
             }
@@ -2394,8 +2406,54 @@ impl<'a> Context<'a, '_> {
     pub fn list_end(&mut self) {
         self.block_end();
 
+        let has_focus = self.tui.is_subtree_focused(self.tree.last_node.borrow().id);
+
+        if has_focus
+            && !self.input_consumed
+            && matches!(self.input_keyboard, Some(vk::PRIOR | vk::NEXT))
+        {
+            let mut list = self.tree.last_node.borrow_mut();
+
+            if let Some(prev_container) = self.tui.prev_node_map.get(list.id) {
+                let prev_container = prev_container.borrow();
+                let mut selected_node = match &list.content {
+                    NodeContent::List(content) => content.selected_node,
+                    _ => unreachable!(),
+                };
+                let rows = prev_container.inner_clipped.height() - 1;
+
+                if self.input_keyboard == Some(vk::PRIOR) {
+                    for _ in 0..rows {
+                        if let Some(node) = selected_node {
+                            let node = node.borrow();
+                            if node.siblings.prev.is_none() {
+                                break;
+                            }
+                            selected_node = node.siblings.prev;
+                        }
+                    }
+                } else {
+                    for _ in 0..rows {
+                        if let Some(node) = selected_node {
+                            let node = node.borrow();
+                            if node.siblings.next.is_none() {
+                                break;
+                            }
+                            selected_node = node.siblings.next;
+                        }
+                    }
+                }
+
+                match &mut list.content {
+                    NodeContent::List(content) => content.selected_node = selected_node,
+                    _ => unreachable!(),
+                }
+
+                self.set_input_consumed();
+            }
+        }
+
         let selected_next;
-        let has_focus;
         {
             let list = self.tree.last_node.borrow();
             let selected_node = match &list.content {
@@ -2421,8 +2479,6 @@ impl<'a> Context<'a, '_> {
             } else {
                 selected_next = selected_node;
             }
-
-            has_focus = self.tui.is_subtree_focused(list.id);
         }
 
         let Some(node) = selected_next else {
