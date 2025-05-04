@@ -1212,9 +1212,12 @@ impl TextBuffer {
         if self.word_wrap_column <= 0 && offset.saturating_sub(cursor.offset) > 1024 {
             // Replacing this with a more optimal, direct memchr() loop appears
             // to improve performance only marginally by another 2% or so.
+            // Still, it's kind of "meh" looking at how poorly this is implemented...
             loop {
                 let next = self.goto_line_start(cursor, cursor.logical_pos.y + 1);
-                if next.offset > offset {
+                // Stop when we either ran past the target offset,
+                // or when we hit the end of the buffer and `goto_line_start` backtracked to the line start.
+                if next.offset > offset || next.offset <= cursor.offset {
                     break;
                 }
                 cursor = next;
