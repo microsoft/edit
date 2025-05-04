@@ -2322,12 +2322,25 @@ impl<'a> Context<'a, '_> {
     }
 
     pub fn list_item(&mut self, select: bool, text: &str) -> ListSelection {
-        let list = self.tree.current_node;
+        self.styled_list_item_begin();
+        self.styled_label_add_text(text);
+        self.styled_list_item_end(select)
+    }
 
+    pub fn styled_list_item_begin(&mut self) {
+        let list = self.tree.current_node;
         let idx = list.borrow().child_count;
-        self.next_block_id_mixin(hash_str(idx as u64, text));
+
+        self.next_block_id_mixin(idx as u64);
         self.styled_label_begin("item");
+        self.styled_label_add_text("  ");
         self.attr_focusable();
+    }
+
+    pub fn styled_list_item_end(&mut self, select: bool) -> ListSelection {
+        self.styled_label_end();
+
+        let list = self.tree.current_node;
 
         let selected_before;
         let selected_now;
@@ -2356,10 +2369,6 @@ impl<'a> Context<'a, '_> {
                 }
             }
         }
-
-        self.styled_label_add_text("  ");
-        self.styled_label_add_text(text);
-        self.styled_label_end();
 
         // Clicking an item activates it
         let clicked =

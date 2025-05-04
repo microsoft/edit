@@ -389,8 +389,15 @@ impl Framebuffer {
 
                 if last_attr != attr {
                     let diff = last_attr ^ attr;
-                    if diff.underlined() {
-                        if attr.underlined() {
+                    if diff.is(Attributes::Italic) {
+                        if attr.is(Attributes::Italic) {
+                            result.push_str("\x1b[3m");
+                        } else {
+                            result.push_str("\x1b[23m");
+                        }
+                    }
+                    if diff.is(Attributes::Underlined) {
+                        if attr.is(Attributes::Underlined) {
                             result.push_str("\x1b[4m");
                         } else {
                             result.push_str("\x1b[24m");
@@ -749,11 +756,12 @@ pub struct Attributes(u8);
 #[allow(non_upper_case_globals)] // Mimics an enum, but it's actually a bitfield. Allows simple diffing.
 impl Attributes {
     pub const None: Attributes = Attributes(0);
-    pub const Underlined: Attributes = Attributes(0b1);
-    pub const All: Attributes = Attributes(0b1);
+    pub const Italic: Attributes = Attributes(0b1);
+    pub const Underlined: Attributes = Attributes(0b10);
+    pub const All: Attributes = Attributes(0b11);
 
-    pub const fn underlined(self) -> bool {
-        self.0 & Self::Underlined.0 != 0
+    pub const fn is(self, attr: Attributes) -> bool {
+        (self.0 & attr.0) == attr.0
     }
 }
 

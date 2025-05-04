@@ -8,17 +8,20 @@ use edit::helpers::{CoordType, Point};
 use edit::simd::memrchr2;
 use edit::{apperr, path, sys};
 
+use crate::state::DisplayablePathBuf;
+
 pub struct Document {
     pub buffer: RcTextBuffer,
     pub path: Option<PathBuf>,
-    pub file_id: Option<sys::FileId>,
+    pub dir: Option<DisplayablePathBuf>,
     pub filename: String,
+    pub file_id: Option<sys::FileId>,
     pub new_file_counter: usize,
 }
 
 impl Document {
     pub fn save(&mut self, new_path: Option<PathBuf>) -> apperr::Result<()> {
-        let path = new_path.as_deref().or(self.path.as_deref()).unwrap();
+        let path = new_path.as_deref().unwrap_or_else(|| self.path.as_ref().unwrap().as_path());
         let mut file = DocumentManager::open_for_writing(path)?;
 
         {
@@ -31,15 +34,14 @@ impl Document {
         }
 
         if let Some(path) = new_path {
-            self.filename = DocumentManager::get_filename_from_path(&path);
-            self.path = Some(path);
+            self.set_path(path);
         }
 
         Ok(())
     }
 
     pub fn reread(&mut self, encoding: Option<&'static str>) -> apperr::Result<()> {
-        let path = self.path.as_deref().unwrap();
+        let path = self.path.as_ref().unwrap().as_path();
         let mut file = DocumentManager::open_for_reading(path)?;
 
         {
@@ -52,6 +54,15 @@ impl Document {
         }
 
         Ok(())
+    }
+
+    fn set_path(&mut self, path: PathBuf) {
+        let filename = DocumentManager::get_filename_from_path(&path);
+        let dir = path.parent().map(ToOwned::to_owned).unwrap_or_default();
+        self.filename = filename;
+        self.dir = Some(DisplayablePathBuf::new(dir));
+        self.path = Some(path);
+        self.update_file_mode();
     }
 
     fn update_file_mode(&mut self) {
@@ -110,8 +121,9 @@ impl DocumentManager {
         let mut doc = Document {
             buffer,
             path: None,
-            file_id: None,
+            dir: Default::default(),
             filename: Default::default(),
+            file_id: None,
             new_file_counter: 0,
         };
         self.gen_untitled_name(&mut doc);
@@ -172,14 +184,15 @@ impl DocumentManager {
             }
         }
 
-        let filename =
-            if file.is_some() { Self::get_filename_from_path(&path) } else { Default::default() };
-        let mut doc = Document { buffer, path: Some(path), file_id, filename, new_file_counter: 0 };
-
-        if doc.filename.is_empty() {
-            self.gen_untitled_name(&mut doc);
-        }
-        doc.update_file_mode();
+        let mut doc = Document {
+            buffer,
+            path: None,
+            dir: None,
+            filename: Default::default(),
+            file_id,
+            new_file_counter: 0,
+        };
+        doc.set_path(path);
 
         self.list.push_front(doc);
         Ok(self.list.front_mut().unwrap())

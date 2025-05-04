@@ -1,4 +1,4 @@
-use edit::framebuffer::IndexedColor;
+use edit::framebuffer::{Attributes, IndexedColor};
 use edit::helpers::*;
 use edit::input::vk;
 use edit::tui::*;
@@ -37,8 +37,8 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                     anchor: Anchor::Last,
                     gravity_x: 0.0,
                     gravity_y: 1.0,
-                    offset_x: 0,
-                    offset_y: 0,
+                    offset_x: 0.0,
+                    offset_y: 0.0,
                 });
                 ctx.attr_padding(Rect::two(0, 1));
                 ctx.attr_border();
@@ -90,8 +90,8 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 anchor: Anchor::Last,
                 gravity_x: 0.0,
                 gravity_y: 1.0,
-                offset_x: 0,
-                offset_y: 0,
+                offset_x: 0.0,
+                offset_y: 0.0,
             });
             ctx.attr_border();
             ctx.attr_padding(Rect::two(0, 1));
@@ -271,15 +271,19 @@ pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {
 
             if state.documents.update_active(|doc| {
                 let tb = doc.buffer.borrow();
-                let text = arena_format!(
-                    ctx.arena(),
-                    "{} {}",
-                    (if tb.is_dirty() { '*' } else { ' ' }),
-                    doc.filename
-                );
-                let active = ctx.list_item(false, &text) == ListSelection::Activated;
-                ctx.attr_overflow(Overflow::TruncateMiddle);
-                active
+
+                ctx.styled_list_item_begin();
+                ctx.attr_overflow(Overflow::TruncateTail);
+                ctx.styled_label_add_text(if tb.is_dirty() { "* " } else { "  " });
+                ctx.styled_label_add_text(&doc.filename);
+
+                if let Some(path) = &doc.dir {
+                    ctx.styled_label_add_text("   ");
+                    ctx.styled_label_set_attributes(Attributes::Italic);
+                    ctx.styled_label_add_text(path.as_str());
+                }
+
+                ctx.styled_list_item_end(false) == ListSelection::Activated
             }) {
                 state.wants_document_picker = false;
                 ctx.needs_rerender();
