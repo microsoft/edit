@@ -74,7 +74,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         {
             ctx.list_begin("files");
             ctx.inherit_focus();
-            for entry in files.iter() {
+            for entry in files {
                 match ctx
                     .list_item(state.file_picker_pending_name == entry.as_str(), entry.as_str())
                 {
@@ -87,6 +87,11 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 ctx.attr_overflow(Overflow::TruncateMiddle);
             }
             ctx.list_end();
+
+            if ctx.contains_focus() && ctx.consume_shortcut(vk::BACK) {
+                state.file_picker_pending_name = "..".to_string();
+                activated = true;
+            }
         }
         ctx.scrollarea_end();
 
