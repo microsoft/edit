@@ -139,7 +139,7 @@ impl DocumentManager {
         }
         new_file_counter += 1;
 
-        doc.filename = format!("Untitled-{new_file_counter}");
+        doc.filename = format!("Untitled-{new_file_counter}.txt");
         doc.new_file_counter = new_file_counter;
     }
 
