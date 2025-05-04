@@ -1805,7 +1805,7 @@ impl TextBuffer {
 
             self.edit_write(newline_buffer.as_bytes());
 
-            // Skip one CR(LF).
+            // Skip one CR/LF/CRLF.
             if offset >= text.len() {
                 break;
             }
@@ -2197,12 +2197,44 @@ impl TextBuffer {
             // Undo: Whatever was deleted is now added and vice versa.
             mem::swap(&mut change.deleted, &mut change.added);
 
-            // Delete the inserted portion and reinsert the deleted portion.
-            let deleted = change.deleted.len();
-            let added = &change.added[..];
-            let gap = self.buffer.allocate_gap(cursor.offset, added.len(), deleted);
-            gap.copy_from_slice(added);
-            self.buffer.commit_gap(added.len());
+            // Delete the inserted portion.
+            self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
+
+            // Reinsert the deleted portion.
+            {
+                let added = &change.added[..];
+                let mut beg = 0;
+                let mut offset = cursor.offset;
+
+                while beg < added.len() {
+                    let (end, line) = ucd::newlines_forward(added, beg, 0, 1);
+                    let has_newline = line != 0;
+                    let link = &added[beg..end];
+                    let line = ucd::strip_newline(link);
+                    let mut written;
+
+                    {
+                        let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
+
+                        gap[..line.len()].copy_from_slice(line);
+                        written = line.len();
+
+                        if has_newline {
+                            if self.newlines_are_crlf {
+                                gap[written] = b'\r';
+                                written += 1;
+                            }
+                            gap[written] = b'\n';
+                            written += 1;
+                        }
+
+                        self.buffer.commit_gap(written);
+                    }
+
+                    beg = end;
+                    offset += written;
+                }
+            }
 
             // Restore the previous line statistics.
             mem::swap(&mut self.stats, &mut change.stats_before);

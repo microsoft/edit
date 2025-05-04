@@ -810,6 +810,22 @@ pub fn newlines_backward(
     }
 }
 
+pub fn skip_newline(text: &[u8], mut offset: usize) -> usize {
+    if offset >= text.len() {
+        return offset;
+    }
+    if text[offset] == b'\r' {
+        offset += 1;
+    }
+    if offset >= text.len() {
+        return offset;
+    }
+    if text[offset] == b'\n' {
+        offset += 1;
+    }
+    offset
+}
+
 pub fn strip_newline(mut text: &[u8]) -> &[u8] {
     // Rust generates surprisingly tight assembly for this.
     if text.last() == Some(&b'\n') {
