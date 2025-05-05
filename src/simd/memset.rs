@@ -87,6 +87,9 @@ fn memset_dispatch(beg: *mut u8, end: *mut u8, val: u64) {
 #[target_feature(enable = "sse2")]
 unsafe fn memset_sse2(mut beg: *mut u8, end: *mut u8, val: u64) {
     unsafe {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::*;
+        #[cfg(target_arch = "x86_64")]
         use std::arch::x86_64::*;
 
         let mut remaining = distance(end, beg);
@@ -133,6 +136,9 @@ unsafe fn memset_sse2(mut beg: *mut u8, end: *mut u8, val: u64) {
 #[target_feature(enable = "avx2")]
 fn memset_avx2(mut beg: *mut u8, end: *mut u8, val: u64) {
     unsafe {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::*;
+        #[cfg(target_arch = "x86_64")]
         use std::arch::x86_64::*;
         use std::hint::black_box;
 

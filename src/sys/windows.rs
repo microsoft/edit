@@ -430,11 +430,13 @@ pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
 /// Don't forget to release the memory when you're done with it or you'll leak it.
 pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
     unsafe {
+        #[allow(unused_assignments, unused_mut)]
         let mut base = null_mut();
 
         // In debug builds, we use fixed addresses to aid in debugging.
         // Makes it possible to immediately tell which address space a pointer belongs to.
-        if cfg!(debug_assertions) {
+        #[cfg(all(debug_assertions, not(target_pointer_width = "32")))]
+        {
             static mut S_BASE_GEN: usize = 0x0000100000000000; // 16 TiB
             S_BASE_GEN += 0x0000001000000000; // 64 GiB
             base = S_BASE_GEN as *mut _;

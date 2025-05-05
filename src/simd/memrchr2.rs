@@ -68,6 +68,9 @@ unsafe fn memrchr2_dispatch(needle1: u8, needle2: u8, beg: *const u8, end: *cons
 #[target_feature(enable = "avx2")]
 unsafe fn memrchr2_avx2(needle1: u8, needle2: u8, beg: *const u8, mut end: *const u8) -> *const u8 {
     unsafe {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::*;
+        #[cfg(target_arch = "x86_64")]
         use std::arch::x86_64::*;
 
         if distance(end, beg) >= 32 {

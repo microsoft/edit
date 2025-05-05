@@ -70,6 +70,9 @@ unsafe fn memchr2_dispatch(needle1: u8, needle2: u8, beg: *const u8, end: *const
 #[target_feature(enable = "avx2")]
 unsafe fn memchr2_avx2(needle1: u8, needle2: u8, mut beg: *const u8, end: *const u8) -> *const u8 {
     unsafe {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::*;
+        #[cfg(target_arch = "x86_64")]
         use std::arch::x86_64::*;
 
         let n1 = _mm256_set1_epi8(needle1 as i8);
