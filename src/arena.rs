@@ -5,9 +5,10 @@ use std::ops::{Deref, DerefMut};
 use std::ptr::{self, NonNull};
 use std::{fmt, mem, slice};
 
-use crate::{apperr, helpers, sys};
+use crate::helpers::*;
+use crate::{apperr, sys};
 
-const ALLOC_CHUNK_SIZE: usize = 64 * 1024;
+const ALLOC_CHUNK_SIZE: usize = 64 * KIBI;
 
 pub struct Arena {
     base: NonNull<u8>,
@@ -291,7 +292,7 @@ impl<'a> Deref for ScratchArena<'a> {
 pub fn init() -> apperr::Result<()> {
     unsafe {
         for s in &mut S_SCRATCH[..] {
-            *s = Arena::new(128 * 1024)?;
+            *s = Arena::new(128 * MEBI)?;
         }
     }
     Ok(())
@@ -300,7 +301,7 @@ pub fn init() -> apperr::Result<()> {
 /// Returns a new scratch arena for temporary allocations,
 /// ensuring it doesn't conflict with the provided arena.
 pub fn scratch_arena(conflict: Option<&Arena>) -> ScratchArena {
-    let is_first = helpers::opt_ptr_eq(conflict, Some(unsafe { &S_SCRATCH[0] }));
+    let is_first = opt_ptr_eq(conflict, Some(unsafe { &S_SCRATCH[0] }));
     let arena = unsafe { &mut S_SCRATCH[is_first as usize] };
     let offset = arena.offset.get();
 

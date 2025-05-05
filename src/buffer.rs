@@ -28,10 +28,11 @@ use std::{slice, str};
 use crate::arena::scratch_arena;
 use crate::cell::SemiRefCell;
 use crate::framebuffer::{Framebuffer, IndexedColor, alpha_blend};
-use crate::helpers::{self, COORD_TYPE_SAFE_MAX, CoordType, Point, Rect};
+use crate::gap_buffer::GapBuffer;
+use crate::helpers::*;
 use crate::simd::memchr2;
 use crate::ucd::{self, Document};
-use crate::{apperr, icu, sys};
+use crate::{apperr, icu};
 
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,
@@ -504,7 +505,7 @@ impl TextBuffer {
 
         // Read enough bytes to detect the BOM.
         while first_chunk_len < BOM_MAX_LEN {
-            read = helpers::file_read_uninit(file, &mut buf[first_chunk_len..])?;
+            read = file_read_uninit(file, &mut buf[first_chunk_len..])?;
             if read == 0 {
                 break;
             }
@@ -514,8 +515,7 @@ impl TextBuffer {
         if let Some(encoding) = encoding {
             self.encoding = encoding;
         } else {
-            let bom =
-                detect_bom(unsafe { helpers::slice_assume_init_ref(&buf[..first_chunk_len]) });
+            let bom = detect_bom(unsafe { slice_assume_init_ref(&buf[..first_chunk_len]) });
             self.encoding = bom.unwrap_or("UTF-8");
         }
 
@@ -639,13 +639,12 @@ impl TextBuffer {
     fn read_file_as_utf8(
         &mut self,
         file: &mut File,
-        buf: &mut [MaybeUninit<u8>; 4096],
+        buf: &mut [MaybeUninit<u8>; 4 * KIBI],
         first_chunk_len: usize,
         done: bool,
     ) -> apperr::Result<()> {
         {
-            let mut first_chunk =
-                unsafe { helpers::slice_assume_init_ref(&buf[..first_chunk_len]) };
+            let mut first_chunk = unsafe { slice_assume_init_ref(&buf[..first_chunk_len]) };
             if first_chunk.starts_with(b"\xEF\xBB\xBF") {
                 first_chunk = &first_chunk[3..];
                 self.encoding = "UTF-8 BOM";
@@ -662,8 +661,8 @@ impl TextBuffer {
 
         // If we don't have file metadata, the input may be a pipe or a socket.
         // Every read will have the same size until we hit the end.
-        let mut chunk_size = 128 * 1024;
-        let mut extra_chunk_size = 128 * 1024;
+        let mut chunk_size = 128 * KIBI;
+        let mut extra_chunk_size = 128 * KIBI;
 
         if let Ok(m) = file.metadata() {
             // Usually the next read of size `chunk_size` will read the entire file,
@@ -672,7 +671,7 @@ impl TextBuffer {
             // 4KiB is not too large and not too slow.
             let len = m.len() as usize;
             chunk_size = len.saturating_sub(first_chunk_len);
-            extra_chunk_size = 4096;
+            extra_chunk_size = 4 * KIBI;
         }
 
         loop {
@@ -693,20 +692,20 @@ impl TextBuffer {
     fn read_file_with_icu(
         &mut self,
         file: &mut File,
-        buf: &mut [MaybeUninit<u8>; 4096],
+        buf: &mut [MaybeUninit<u8>; 4 * KIBI],
         first_chunk_len: usize,
         mut done: bool,
     ) -> apperr::Result<()> {
         let scratch = scratch_arena(None);
-        let pivot_buffer = scratch.alloc_uninit_slice(4096);
+        let pivot_buffer = scratch.alloc_uninit_slice(4 * KIBI);
         let mut c = icu::Converter::new(pivot_buffer, self.encoding, "UTF-8")?;
+        let mut first_chunk = unsafe { slice_assume_init_ref(&buf[..first_chunk_len]) };
 
-        let mut first_chunk = unsafe { helpers::slice_assume_init_ref(&buf[..first_chunk_len]) };
         while !first_chunk.is_empty() {
             let off = self.text_length();
-            let gap = self.buffer.allocate_gap(off, 8 * 1024, 0);
+            let gap = self.buffer.allocate_gap(off, 8 * KIBI, 0);
             let (input_advance, mut output_advance) =
-                c.convert(first_chunk, helpers::slice_as_uninit_mut(gap))?;
+                c.convert(first_chunk, slice_as_uninit_mut(gap))?;
 
             // Remove the BOM from the file, if this is the first chunk.
             // Our caller ensures to only call us once the BOM has been identified,
@@ -727,18 +726,18 @@ impl TextBuffer {
 
         loop {
             if !done {
-                let read = helpers::file_read_uninit(file, &mut buf[buf_len..])?;
+                let read = file_read_uninit(file, &mut buf[buf_len..])?;
                 buf_len += read;
                 done = read == 0;
             }
 
-            let flush = done && buf_len == 0;
-            let gap = self.buffer.allocate_gap(self.text_length(), 8 * 1024, 0);
-            let read = unsafe { helpers::slice_assume_init_ref(&buf[..buf_len]) };
-            let (input_advance, output_advance) =
-                c.convert(read, helpers::slice_as_uninit_mut(gap))?;
+            let gap = self.buffer.allocate_gap(self.text_length(), 8 * KIBI, 0);
+            let read = unsafe { slice_assume_init_ref(&buf[..buf_len]) };
+            let (input_advance, output_advance) = c.convert(read, slice_as_uninit_mut(gap))?;
 
             self.buffer.commit_gap(output_advance);
+
+            let flush = done && buf_len == 0;
             buf_len -= input_advance;
             buf.copy_within(input_advance.., 0);
 
@@ -776,8 +775,8 @@ impl TextBuffer {
 
     fn write_file_with_icu(&mut self, file: &mut File) -> apperr::Result<()> {
         let scratch = scratch_arena(None);
-        let pivot_buffer = scratch.alloc_uninit_slice(4096);
-        let buf = scratch.alloc_uninit_slice(4096);
+        let pivot_buffer = scratch.alloc_uninit_slice(4 * KIBI);
+        let buf = scratch.alloc_uninit_slice(4 * KIBI);
         let mut c = icu::Converter::new(pivot_buffer, "UTF-8", self.encoding)?;
         let mut offset = 0;
 
@@ -787,7 +786,7 @@ impl TextBuffer {
             || self.encoding == "GB18030"
         {
             let (_, output_advance) = c.convert(b"\xEF\xBB\xBF", buf)?;
-            let chunk = unsafe { helpers::slice_assume_init_ref(&buf[..output_advance]) };
+            let chunk = unsafe { slice_assume_init_ref(&buf[..output_advance]) };
             file.write_all(chunk)?;
         }
 
@@ -798,7 +797,7 @@ impl TextBuffer {
             }
 
             let (input_advance, output_advance) = c.convert(chunk, buf)?;
-            let chunk = unsafe { helpers::slice_assume_init_ref(&buf[..output_advance]) };
+            let chunk = unsafe { slice_assume_init_ref(&buf[..output_advance]) };
             file.write_all(chunk)?;
             offset += input_advance;
         }
@@ -1426,7 +1425,7 @@ impl TextBuffer {
         let [selection_beg, selection_end] = match self.selection {
             TextBufferSelection::None => [Point::MIN, Point::MIN],
             TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
-                helpers::minmax(beg, end)
+                minmax(beg, end)
             }
         };
 
@@ -1870,7 +1869,7 @@ impl TextBuffer {
             _ => {}
         }
 
-        let [beg, end] = helpers::minmax(selection_beg, selection_end);
+        let [beg, end] = minmax(selection_beg, selection_end);
         let beg = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: beg.y });
         let end = self.cursor_move_to_logical_internal(beg, Point { x: CoordType::MAX, y: end.y });
 
@@ -1979,7 +1978,7 @@ impl TextBuffer {
                 Point { x: 0, y: self.cursor.logical_pos.y + 1 },
             ],
             TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
-                helpers::minmax(beg, end)
+                minmax(beg, end)
             }
         };
 

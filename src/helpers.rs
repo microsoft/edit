@@ -6,6 +6,14 @@ use std::{ptr, slice, str};
 
 use crate::apperr;
 
+pub const KILO: usize = 1000;
+pub const MEGA: usize = 1000 * 1000;
+pub const GIGA: usize = 1000 * 1000 * 1000;
+
+pub const KIBI: usize = 1024;
+pub const MEBI: usize = 1024 * 1024;
+pub const GIBI: usize = 1024 * 1024 * 1024;
+
 pub type CoordType = i32;
 
 pub const COORD_TYPE_SAFE_MIN: CoordType = -32767 - 1;

@@ -6,6 +6,7 @@ use std::{cmp, mem};
 
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::TextBuffer;
+use crate::helpers::*;
 use crate::utf8::Utf8Chars;
 use crate::{apperr, sys};
 
@@ -553,7 +554,7 @@ impl Regex {
             // and "typically [in] the order of milliseconds", but this claim seems
             // highly outdated. On my CPU from 2021, a limit of 4096 equals roughly 600ms.
             (f.uregex_setTimeLimit)(ptr, 4096, &mut status);
-            (f.uregex_setStackLimit)(ptr, 4 * 1024 * 1024, &mut status);
+            (f.uregex_setStackLimit)(ptr, 4 * MEBI as i32, &mut status);
             (f.uregex_setUText)(ptr, text.0 as *const _ as *mut _, &mut status);
             if status.is_failure() {
                 return Err(status.as_error());

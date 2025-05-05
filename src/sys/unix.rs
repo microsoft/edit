@@ -7,6 +7,7 @@ use std::{thread, time};
 
 use crate::apperr;
 use crate::arena::{Arena, ArenaString};
+use crate::helpers::KIBI;
 
 struct State {
     stdin: libc::c_int,
@@ -173,7 +174,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
         // later turn it into UTF8 using `helpers::string_from_utf8_lossy_owned`.
         // It is important that we allocate the buffer with an explicit capacity,
         // because we later use `spare_capacity_mut` to access it.
-        buf.reserve(4096);
+        buf.reserve(4 * KIBI);
 
         // We got some leftover broken UTF8 from a previous read? Prepend it.
         if STATE.utf8_len != 0 {

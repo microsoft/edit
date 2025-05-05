@@ -13,9 +13,9 @@ use windows_sys::Win32::System::{Console, IO, LibraryLoader, Memory, Threading};
 use windows_sys::Win32::{Foundation, Globalization};
 use windows_sys::w;
 
+use crate::apperr;
 use crate::arena::{Arena, ArenaString, scratch_arena};
-use crate::helpers::{CoordType, Size};
-use crate::{apperr, helpers};
+use crate::helpers::*;
 
 type ReadConsoleInputExW = unsafe extern "system" fn(
     h_console_input: Foundation::HANDLE,
@@ -218,9 +218,9 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
     }
 
     let read_poll = timeout != time::Duration::MAX; // there is a timeout -> don't block in read()
-    let input_buf = scratch.alloc_uninit_slice(4096);
+    let input_buf = scratch.alloc_uninit_slice(4 * KIBI);
     let mut input_buf_cap = input_buf.len();
-    let utf16_buf = scratch.alloc_uninit_slice(4096);
+    let utf16_buf = scratch.alloc_uninit_slice(4 * KIBI);
     let mut utf16_buf_len = 0;
 
     // If there was a leftover leading surrogate from the last read, we prepend it to the buffer.
@@ -265,7 +265,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
             if ok == 0 || STATE.wants_exit {
                 return None;
             }
-            helpers::slice_assume_init_ref(&input_buf[..read as usize])
+            slice_assume_init_ref(&input_buf[..read as usize])
         };
 
         // Convert Win32 input records into UTF16.
@@ -357,7 +357,7 @@ pub fn write_stdout(text: &str) {
 
         while offset < text.len() {
             let ptr = text.as_ptr().add(offset);
-            let write = (text.len() - offset).min(1024 * 1024 * 1024) as u32;
+            let write = (text.len() - offset).min(GIBI) as u32;
             let mut written = 0;
             let ok = FileSystem::WriteFile(STATE.stdout, ptr, write, &mut written, null_mut());
             offset += written as usize;
@@ -545,7 +545,7 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString, &Arena> {
         // Drop the terminating double-null character.
         len = len.saturating_sub(1);
 
-        helpers::slice_assume_init_ref(&buf[..len as usize])
+        slice_assume_init_ref(&buf[..len as usize])
     };
 
     // Convert UTF16 to UTF8.
@@ -622,7 +622,7 @@ pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Re
         write!(f, "Error {code:#08x}")?;
 
         if len > 0 {
-            let msg = helpers::str_from_raw_parts(ptr, len as usize);
+            let msg = str_from_raw_parts(ptr, len as usize);
             let msg = msg.trim_ascii();
             let msg = msg.replace(['\r', '\n'], " ");
             write!(f, ": {msg}")?;

@@ -8,9 +8,9 @@ use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::{CursorMovement, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
-use crate::helpers::{CoordType, Point, Rect, Size, hash, hash_str, opt_ptr_eq, wymix};
+use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
-use crate::{apperr, helpers, input, ucd};
+use crate::{apperr, input, ucd};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
@@ -81,8 +81,8 @@ pub struct Tui {
 
 impl Tui {
     pub fn new() -> apperr::Result<Self> {
-        let arena_prev = Arena::new(128 * 1024 * 1024)?;
-        let arena_next = Arena::new(128 * 1024 * 1024)?;
+        let arena_prev = Arena::new(128 * MEBI)?;
+        let arena_next = Arena::new(128 * MEBI)?;
         // SAFETY: Since `prev_tree` refers to `arena_prev`/`arena_next`, from its POV the lifetime
         // is `'static`, requiring us to use `transmute` to circumvent the borrow checker.
         let prev_tree = Tree::new(unsafe { mem::transmute::<&Arena, &Arena>(&arena_next) });
@@ -209,10 +209,7 @@ impl Tui {
             self.mouse_is_drag = false;
         }
 
-        helpers::vec_replace_all_reuse(
-            &mut self.focused_node_path_previous_frame,
-            &self.focused_node_path,
-        );
+        vec_replace_all_reuse(&mut self.focused_node_path_previous_frame, &self.focused_node_path);
 
         if self.scroll_to_focused() {
             self.needs_more_settling();
@@ -2679,7 +2676,7 @@ impl<'a> Context<'a, '_> {
             self.styled_label_add_text(text);
             self.styled_label_add_text("(");
             self.styled_label_set_attributes(Attributes::Underlined);
-            self.styled_label_add_text(unsafe { helpers::str_from_raw_parts(&ch, 1) });
+            self.styled_label_add_text(unsafe { str_from_raw_parts(&ch, 1) });
             self.styled_label_set_attributes(Attributes::None);
             self.styled_label_add_text(")");
         }

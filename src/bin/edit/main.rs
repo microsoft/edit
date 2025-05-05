@@ -23,6 +23,7 @@ use edit::arena::{self, ArenaString, scratch_arena};
 use edit::arena_format;
 use edit::buffer::TextBuffer;
 use edit::framebuffer::{self, IndexedColor, alpha_blend};
+use edit::helpers::KIBI;
 use edit::input::{self, kbmod, vk};
 use edit::tui::*;
 use edit::vt::{self, Token};
@@ -412,7 +413,7 @@ fn write_terminal_title(output: &mut ArenaString, filename: &str) {
 fn write_osc_clipboard(output: &mut ArenaString, state: &mut State, tui: &Tui) {
     let clipboard = tui.get_clipboard();
 
-    if (1..128 * 1024).contains(&clipboard.len()) {
+    if (1..128 * KIBI).contains(&clipboard.len()) {
         output.push_str("\x1b]52;c;");
         base64::encode(output, clipboard);
         output.push_str("\x1b\\");
