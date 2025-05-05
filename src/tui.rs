@@ -2254,50 +2254,51 @@ impl<'a> Context<'a, '_> {
                 if self.tui.mouse_state != InputMouseState::None {
                     let container_rect = prev_container.inner;
 
-                    if self.tui.mouse_is_drag {
-                        // We don't need to look up the previous track node,
-                        // since it has a fixed size based on the container size.
-                        let track_rect = Rect {
-                            left: container_rect.right,
-                            top: container_rect.top,
-                            right: container_rect.right + 1,
-                            bottom: container_rect.bottom,
-                        };
-                        if track_rect.contains(self.tui.mouse_down_position) {
-                            if sc.scroll_offset_y_drag_start == CoordType::MIN {
-                                sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
-                            }
+                    match self.tui.mouse_state {
+                        InputMouseState::Left => {
+                            if self.tui.mouse_is_drag {
+                                // We don't need to look up the previous track node,
+                                // since it has a fixed size based on the container size.
+                                let track_rect = Rect {
+                                    left: container_rect.right,
+                                    top: container_rect.top,
+                                    right: container_rect.right + 1,
+                                    bottom: container_rect.bottom,
+                                };
+                                if track_rect.contains(self.tui.mouse_down_position) {
+                                    if sc.scroll_offset_y_drag_start == CoordType::MIN {
+                                        sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
+                                    }
 
-                            let content = prev_container.children.first.unwrap().borrow();
-                            let content_rect = content.inner;
-                            let content_height = content_rect.height();
-                            let track_height = track_rect.height();
+                                    let content = prev_container.children.first.unwrap().borrow();
+                                    let content_rect = content.inner;
+                                    let content_height = content_rect.height();
+                                    let track_height = track_rect.height();
+                                    let scrollable_height = content_height - track_height;
 
-                            if content_height > track_height {
-                                let trackable = track_height - sc.thumb_height;
-                                let scrollable_height = content_height - track_height;
-                                let delta_y =
-                                    self.tui.mouse_position.y - self.tui.mouse_down_position.y;
-                                sc.scroll_offset.y = sc.scroll_offset_y_drag_start
-                                    + ((delta_y * scrollable_height) / trackable);
-                            }
+                                    if scrollable_height > 0 {
+                                        let trackable = track_height - sc.thumb_height;
+                                        let delta_y = self.tui.mouse_position.y
+                                            - self.tui.mouse_down_position.y;
+                                        sc.scroll_offset.y = sc.scroll_offset_y_drag_start
+                                            + ((delta_y * scrollable_height) / trackable);
+                                    }
 
-                            self.set_input_consumed();
-                        }
-                    } else {
-                        match self.tui.mouse_state {
-                            InputMouseState::Release => {
-                                sc.scroll_offset_y_drag_start = CoordType::MIN;
-                            }
-                            InputMouseState::Scroll => {
-                                if container_rect.contains(self.tui.mouse_position) {
-                                    sc.scroll_offset.x += self.input_scroll_delta.x;
-                                    sc.scroll_offset.y += self.input_scroll_delta.y;
                                     self.set_input_consumed();
                                 }
                             }
-                            _ => {}
                         }
+                        InputMouseState::Release => {
+                            sc.scroll_offset_y_drag_start = CoordType::MIN;
+                        }
+                        InputMouseState::Scroll => {
+                            if container_rect.contains(self.tui.mouse_position) {
+                                sc.scroll_offset.x += self.input_scroll_delta.x;
+                                sc.scroll_offset.y += self.input_scroll_delta.y;
+                                self.set_input_consumed();
+                            }
+                        }
+                        _ => {}
                     }
                 } else if self.tui.is_subtree_focused(container_id)
                     && let Some(key) = self.input_keyboard
