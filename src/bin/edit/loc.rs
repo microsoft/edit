@@ -186,17 +186,17 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
 
     // ErrorIcuMissing
     [
-        /* en      */ "ICU library not found",
-        /* de      */ "ICU-Bibliothek nicht gefunden",
-        /* es      */ "Biblioteca ICU no encontrada",
-        /* fr      */ "Bibliothèque ICU introuvable",
-        /* it      */ "Libreria ICU non trovata",
-        /* ja      */ "ICUライブラリが見つかりません",
-        /* ko      */ "ICU 라이브러리를 찾을 수 없습니다",
-        /* pt_br   */ "Biblioteca ICU não encontrada",
-        /* ru      */ "Библиотека ICU не найдена",
-        /* zh_hans */ "未找到ICU库",
-        /* zh_hant */ "未找到ICU庫",
+        /* en      */ "This operation requires the ICU library",
+        /* de      */ "Diese Operation erfordert die ICU-Bibliothek",
+        /* es      */ "Esta operación requiere la biblioteca ICU",
+        /* fr      */ "Cette opération nécessite la bibliothèque ICU",
+        /* it      */ "Questa operazione richiede la libreria ICU",
+        /* ja      */ "この操作にはICUライブラリが必要です",
+        /* ko      */ "이 작업에는 ICU 라이브러리가 필요합니다",
+        /* pt_br   */ "Esta operação requer a biblioteca ICU",
+        /* ru      */ "Эта операция требует наличия библиотеки ICU",
+        /* zh_hans */ "此操作需要 ICU 库",
+        /* zh_hant */ "此操作需要 ICU 庫",
     ],
 
     // File
