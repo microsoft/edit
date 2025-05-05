@@ -2143,7 +2143,7 @@ impl<'a> Context<'a, '_> {
                 vk::Z => match modifiers {
                     kbmod::CTRL => tb.undo(),
                     kbmod::CTRL_SHIFT => tb.redo(),
-                    kbmod::ALT => tb.set_word_wrap(tb.is_word_wrap_enabled()),
+                    kbmod::ALT => tb.set_word_wrap(!tb.is_word_wrap_enabled()),
                     _ => return false,
                 },
                 _ => return false,
