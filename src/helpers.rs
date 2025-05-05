@@ -240,6 +240,12 @@ pub const unsafe fn str_from_raw_parts_mut<'a>(ptr: *mut u8, len: usize) -> &'a 
     unsafe { str::from_utf8_unchecked_mut(slice::from_raw_parts_mut(ptr, len)) }
 }
 
+pub fn slice_copy_safe<T: Copy>(dst: &mut [T], src: &[T]) -> usize {
+    let len = src.len().min(dst.len());
+    unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), len) };
+    len
+}
+
 pub fn vec_replace<T: Copy>(dst: &mut Vec<T>, off: usize, remove: usize, src: &[T]) {
     unsafe {
         let dst_len = dst.len();

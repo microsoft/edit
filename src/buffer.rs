@@ -21,9 +21,8 @@ use std::fs::File;
 use std::io::{Read as _, Write as _};
 use std::mem::{self, MaybeUninit};
 use std::ops::Range;
-use std::ptr::{self, NonNull};
 use std::rc::Rc;
-use std::{slice, str};
+use std::str;
 
 use crate::arena::scratch_arena;
 use crate::cell::SemiRefCell;
@@ -209,19 +208,19 @@ impl TextBuffer {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.last_save_generation != self.buffer.generation
+        self.last_save_generation != self.buffer.generation()
     }
 
     pub fn mark_as_dirty(&mut self) {
-        self.last_save_generation = self.buffer.generation.wrapping_sub(1);
+        self.last_save_generation = self.buffer.generation().wrapping_sub(1);
     }
 
     pub fn get_generation(&self) -> u32 {
-        self.buffer.generation
+        self.buffer.generation()
     }
 
     fn mark_as_clean(&mut self) {
-        self.last_save_generation = self.buffer.generation;
+        self.last_save_generation = self.buffer.generation();
     }
 
     pub fn encoding(&self) -> &'static str {
@@ -281,9 +280,7 @@ impl TextBuffer {
 
                 // Replace the newline.
                 off -= chunk_newline_len;
-                let gap = self.buffer.allocate_gap(off, newline.len(), chunk_newline_len);
-                gap.copy_from_slice(newline);
-                self.buffer.commit_gap(newline.len());
+                self.buffer.replace(off..off + chunk_newline_len, newline);
                 off += newline.len();
             }
         }
@@ -441,7 +438,7 @@ impl TextBuffer {
 
     pub fn set_encoding(&mut self, encoding: &'static str) {
         self.encoding = encoding;
-        self.buffer.generation = self.buffer.generation.wrapping_add(1);
+        self.last_save_generation = self.buffer.generation().wrapping_sub(1);
     }
 
     /// Replaces the entire buffer contents with the given `text`.
@@ -454,7 +451,6 @@ impl TextBuffer {
             let delete = self.buffer.len() - self.cursor.offset;
             if delete != 0 {
                 self.buffer.allocate_gap(self.cursor.offset, 0, delete);
-                self.buffer.commit_gap(0);
             }
         }
     }
@@ -650,9 +646,7 @@ impl TextBuffer {
                 self.encoding = "UTF-8 BOM";
             }
 
-            let gap = self.buffer.allocate_gap(0, first_chunk.len(), 0);
-            gap.copy_from_slice(first_chunk);
-            self.buffer.commit_gap(first_chunk.len());
+            self.buffer.replace(0..0, first_chunk);
         }
 
         if done {
@@ -676,6 +670,9 @@ impl TextBuffer {
 
         loop {
             let gap = self.buffer.allocate_gap(self.text_length(), chunk_size, 0);
+            if gap.is_empty() {
+                break;
+            }
 
             let read = file.read(gap)?;
             if read == 0 {
@@ -732,6 +729,10 @@ impl TextBuffer {
             }
 
             let gap = self.buffer.allocate_gap(self.text_length(), 8 * KIBI, 0);
+            if gap.is_empty() {
+                break;
+            }
+
             let read = unsafe { slice_assume_init_ref(&buf[..buf_len]) };
             let (input_advance, output_advance) = c.convert(read, slice_as_uninit_mut(gap))?;
 
@@ -1055,7 +1056,7 @@ impl TextBuffer {
             options,
             text,
             regex,
-            buffer_generation: self.buffer.generation,
+            buffer_generation: self.buffer.generation(),
             selection_generation: 0,
             next_search_offset: 0,
             no_matches: false,
@@ -1063,9 +1064,9 @@ impl TextBuffer {
     }
 
     fn find_select_next(&mut self, search: &mut ActiveSearch, offset: usize, wrap: bool) {
-        if search.buffer_generation != self.buffer.generation {
+        if search.buffer_generation != self.buffer.generation() {
             unsafe { search.regex.set_text(&search.text) };
-            search.buffer_generation = self.buffer.generation;
+            search.buffer_generation = self.buffer.generation();
         }
 
         if search.next_search_offset != offset {
@@ -2011,7 +2012,7 @@ impl TextBuffer {
                 cursor_before: cursor_before.logical_pos,
                 selection_before: self.selection,
                 stats_before: self.stats,
-                generation_before: self.buffer.generation,
+                generation_before: self.buffer.generation(),
                 cursor: cursor.logical_pos,
                 deleted: Vec::new(),
                 added: Vec::new(),
@@ -2048,11 +2049,7 @@ impl TextBuffer {
         }
 
         // Write!
-        {
-            let gap = self.buffer.allocate_gap(self.active_edit_off, text.len(), 0);
-            gap.copy_from_slice(text);
-            self.buffer.commit_gap(text.len());
-        }
+        self.buffer.replace(self.active_edit_off..self.active_edit_off, text);
 
         // Move self.cursor to the end of the newly written text. Can't use `self.set_cursor_internal`,
         // because we're still in the progress of recalculating the line stats.
@@ -2081,7 +2078,6 @@ impl TextBuffer {
         // Delete the portion from the buffer by enlarging the gap.
         let count = to.offset - off;
         self.buffer.allocate_gap(off, 0, count);
-        self.buffer.commit_gap(0);
 
         self.stats.logical_lines += logical_y_before - to.logical_pos.y;
     }
@@ -2176,7 +2172,7 @@ impl TextBuffer {
         };
 
         {
-            let buffer_generation = self.buffer.generation;
+            let buffer_generation = self.buffer.generation();
             let mut change = change.borrow_mut();
             let change = &mut *change;
 
@@ -2201,17 +2197,17 @@ impl TextBuffer {
 
                     {
                         let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
-
-                        gap[..line.len()].copy_from_slice(line);
-                        written = line.len();
+                        written = slice_copy_safe(gap, line);
 
                         if has_newline {
-                            if self.newlines_are_crlf {
+                            if self.newlines_are_crlf && written < gap.len() {
                                 gap[written] = b'\r';
                                 written += 1;
                             }
-                            gap[written] = b'\n';
-                            written += 1;
+                            if written < gap.len() {
+                                gap[written] = b'\n';
+                                written += 1;
+                            }
                         }
 
                         self.buffer.commit_gap(written);
@@ -2229,7 +2225,7 @@ impl TextBuffer {
             mem::swap(&mut self.selection, &mut change.selection_before);
 
             // Pretend as if the buffer was never modified.
-            self.buffer.generation = change.generation_before;
+            self.buffer.set_generation(change.generation_before);
             change.generation_before = buffer_generation;
 
             // Restore the previous cursor.
@@ -2254,322 +2250,6 @@ impl TextBuffer {
 
     pub fn read_forward(&self, off: usize) -> &[u8] {
         self.buffer.read_forward(off)
-    }
-}
-
-enum BackingBuffer {
-    VirtualMemory(NonNull<u8>, usize),
-    Vec(Vec<u8>),
-}
-
-impl Drop for BackingBuffer {
-    fn drop(&mut self) {
-        unsafe {
-            if let BackingBuffer::VirtualMemory(ptr, reserve) = *self {
-                sys::virtual_release(ptr, reserve);
-            }
-        }
-    }
-}
-
-/// Most people know how Vec<T> works: It has some spare capacity at the end,
-/// so that pushing into it doesn't reallocate every single time. A gap buffer
-/// is the same thing, but the spare capacity can be anywhere in the buffer.
-/// This variant is optimized for large buffers and uses virtual memory.
-pub struct GapBuffer {
-    /// Pointer to the buffer.
-    text: NonNull<u8>,
-    /// Maximum size of the buffer, including gap.
-    reserve: usize,
-    /// Size of the buffer, including gap.
-    commit: usize,
-    /// Length of the stored text, NOT including gap.
-    text_length: usize,
-    /// Gap offset.
-    gap_off: usize,
-    /// Gap length.
-    gap_len: usize,
-    /// Increments every time the buffer is modified.
-    generation: u32,
-    /// If `Vec(..)`, the buffer is optimized for small amounts of text
-    /// and uses the standard heap. Otherwise, it uses virtual memory.
-    buffer: BackingBuffer,
-}
-
-impl GapBuffer {
-    fn new(small: bool) -> apperr::Result<Self> {
-        const RESERVE: usize = 2 * 1024 * 1024 * 1024;
-
-        let buffer;
-        let text;
-
-        if small {
-            text = NonNull::dangling();
-            buffer = BackingBuffer::Vec(Vec::new());
-        } else {
-            text = unsafe { sys::virtual_reserve(RESERVE)? };
-            buffer = BackingBuffer::VirtualMemory(text, RESERVE);
-        }
-
-        Ok(Self {
-            text,
-            reserve: RESERVE,
-            commit: 0,
-            text_length: 0,
-            gap_off: 0,
-            gap_len: 0,
-            generation: 0,
-            buffer,
-        })
-    }
-
-    fn len(&self) -> usize {
-        self.text_length
-    }
-
-    fn allocate_gap(&mut self, off: usize, len: usize, delete: usize) -> &mut [u8] {
-        const LARGE_ALLOC_CHUNK: usize = 64 * 1024;
-        const LARGE_GAP_CHUNK: usize = 4 * 1024;
-        const SMALL_ALLOC_CHUNK: usize = 256;
-        const SMALL_GAP_CHUNK: usize = 16;
-
-        // Sanitize parameters
-        let off = off.min(self.text_length);
-        let delete = delete.min(self.text_length - off);
-
-        // Move the existing gap if it exists
-        if off != self.gap_off {
-            let gap_off = self.gap_off;
-            let gap_len = self.gap_len;
-
-            if gap_len > 0 {
-                //
-                //                       v gap_off
-                // left:  |ABCDEFGHIJKLMN   OPQRSTUVWXYZ|
-                //        |ABCDEFGHI   JKLMNOPQRSTUVWXYZ|
-                //                  ^ off
-                //        move: GLMNET
-                //
-                //                       v gap_off
-                // !left: |ABCDEFGHIJKLMN   OPQRSTUVWXYZ|
-                //        |ABCDEFGHIJKLMNOPQRS   TUVWXYZ|
-                //                            ^ off
-                //        move: OPPOSERS
-                //
-                let data = self.text;
-                let left = off < gap_off;
-                let move_src = if left { off } else { gap_off + gap_len };
-                let move_dst = if left { off + gap_len } else { gap_off };
-                let move_len = if left { gap_off - off } else { off - gap_off };
-
-                unsafe { data.add(move_src).copy_to(data.add(move_dst), move_len) };
-
-                if cfg!(debug_assertions) {
-                    unsafe {
-                        slice::from_raw_parts_mut(data.add(off).as_ptr(), gap_len).fill(0xCD)
-                    };
-                }
-            }
-
-            self.gap_off = off;
-        }
-
-        // Delete the text
-        if cfg!(debug_assertions) {
-            unsafe {
-                slice::from_raw_parts_mut(self.text.add(off + self.gap_len).as_ptr(), delete)
-                    .fill(0xCD)
-            };
-        }
-        self.gap_len += delete;
-        self.text_length -= delete;
-
-        // Enlarge the gap if needed
-        if len > self.gap_len {
-            let gap_chunk;
-            let alloc_chunk;
-
-            if matches!(self.buffer, BackingBuffer::VirtualMemory(..)) {
-                gap_chunk = LARGE_GAP_CHUNK;
-                alloc_chunk = LARGE_ALLOC_CHUNK;
-            } else {
-                gap_chunk = SMALL_GAP_CHUNK;
-                alloc_chunk = SMALL_ALLOC_CHUNK;
-            }
-
-            let gap_len_old = self.gap_len;
-            let gap_len_new = (len + gap_chunk + gap_chunk - 1) & !(gap_chunk - 1);
-            let bytes_old = self.commit;
-            let bytes_new = self.text_length + gap_len_new;
-
-            if bytes_new > bytes_old {
-                let bytes_new = (bytes_new + alloc_chunk - 1) & !(alloc_chunk - 1);
-                assert!(bytes_new <= self.reserve);
-
-                match &mut self.buffer {
-                    BackingBuffer::VirtualMemory(ptr, _) => unsafe {
-                        sys::virtual_commit(ptr.add(bytes_old), bytes_new - bytes_old).expect("OOM")
-                    },
-                    BackingBuffer::Vec(v) => {
-                        v.resize(bytes_new, 0);
-                        self.text = unsafe { NonNull::new_unchecked(v.as_mut_ptr()) };
-                    }
-                }
-
-                self.commit = bytes_new;
-            }
-
-            let gap_beg = unsafe { self.text.add(off) };
-            unsafe {
-                ptr::copy(
-                    gap_beg.add(gap_len_old).as_ptr(),
-                    gap_beg.add(gap_len_new).as_ptr(),
-                    self.text_length - off,
-                )
-            };
-
-            if cfg!(debug_assertions) {
-                unsafe {
-                    slice::from_raw_parts_mut(
-                        gap_beg.add(gap_len_old).as_ptr(),
-                        gap_len_new - gap_len_old,
-                    )
-                    .fill(0xCD)
-                };
-            }
-
-            self.gap_len = gap_len_new;
-        }
-
-        self.generation = self.generation.wrapping_add(1);
-        unsafe { slice::from_raw_parts_mut(self.text.add(off).as_ptr(), len) }
-    }
-
-    fn commit_gap(&mut self, len: usize) {
-        assert!(len <= self.gap_len);
-        self.text_length += len;
-        self.gap_off += len;
-        self.gap_len -= len;
-    }
-
-    fn clear(&mut self) {
-        self.gap_off = 0;
-        self.gap_len += self.text_length;
-        self.generation = self.generation.wrapping_add(1);
-        self.text_length = 0;
-    }
-
-    fn extract_raw(&self, mut beg: usize, mut end: usize, out: &mut Vec<u8>, mut out_off: usize) {
-        debug_assert!(beg <= end && end <= self.text_length);
-
-        end = end.min(self.text_length);
-        beg = beg.min(end);
-        out_off = out_off.min(out.len());
-
-        if beg >= end {
-            return;
-        }
-
-        out.reserve(end - beg);
-
-        while beg < end {
-            let chunk = self.read_forward(beg);
-            let chunk = &chunk[..chunk.len().min(end - beg)];
-            helpers::vec_replace(out, out_off, 0, chunk);
-            beg += chunk.len();
-            out_off += chunk.len();
-        }
-    }
-
-    /// Replaces the entire buffer contents with the given `text`.
-    /// The method is optimized for the case where the given `text` already matches
-    /// the existing contents. Returns `true` if the buffer contents were changed.
-    fn copy_from_str(&mut self, text: &str) -> bool {
-        let input = text.as_bytes();
-        let max_common = self.text_length.min(input.len());
-        let mut common = 0;
-
-        // Find the position at which the contents change.
-        while common < max_common {
-            let chunk = self.read_forward(common);
-            let cmp_len = chunk.len().min(max_common - common);
-
-            if chunk[..cmp_len] != input[common..common + cmp_len] {
-                // Find the first differing byte.
-                common += chunk[..cmp_len]
-                    .iter()
-                    .zip(&input[common..common + cmp_len])
-                    .position(|(&a, &b)| a != b)
-                    .unwrap_or(cmp_len);
-                break;
-            }
-
-            common += cmp_len;
-        }
-
-        // If the contents are identical, we're done.
-        if common == self.text_length && common == input.len() {
-            return false;
-        }
-
-        // Update the buffer from the first differing byte.
-        let new = &input[common..];
-        let gap = self.allocate_gap(common, new.len(), self.text_length - common);
-        gap.copy_from_slice(new);
-        self.commit_gap(new.len());
-        true
-    }
-
-    /// Copies the contents of the buffer into a string.
-    fn copy_into_string(&self, dst: &mut String) {
-        dst.clear();
-
-        let mut off = 0;
-        while off < self.text_length {
-            let chunk = self.read_forward(off);
-            dst.push_str(&String::from_utf8_lossy(chunk));
-            off += chunk.len();
-        }
-    }
-}
-
-impl Document for GapBuffer {
-    fn read_forward(&self, off: usize) -> &[u8] {
-        let off = off.min(self.text_length);
-        let beg;
-        let len;
-
-        if off < self.gap_off {
-            // Cursor is before the gap: We can read until the start of the gap.
-            beg = off;
-            len = self.gap_off - off;
-        } else {
-            // Cursor is after the gap: We can read until the end of the buffer.
-            beg = off + self.gap_len;
-            len = self.text_length - off;
-        }
-
-        unsafe { slice::from_raw_parts(self.text.add(beg).as_ptr(), len) }
-    }
-
-    fn read_backward(&self, off: usize) -> &[u8] {
-        let off = off.min(self.text_length);
-        let beg;
-        let len;
-
-        if off <= self.gap_off {
-            // Cursor is before the gap: We can read until the beginning of the buffer.
-            beg = 0;
-            len = off;
-        } else {
-            // Cursor is after the gap: We can read until the end of the gap.
-            beg = self.gap_off + self.gap_len;
-            // The cursor_off doesn't account of the gap_len.
-            // (This allows us to move the gap without recalculating the cursor position.)
-            len = off - self.gap_off;
-        }
-
-        unsafe { slice::from_raw_parts(self.text.add(beg).as_ptr(), len) }
     }
 }
 

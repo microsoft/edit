@@ -16,6 +16,7 @@ pub mod base64;
 pub mod buffer;
 mod cell;
 pub mod framebuffer;
+mod gap_buffer;
 pub mod helpers;
 pub mod icu;
 pub mod input;

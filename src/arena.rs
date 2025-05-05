@@ -43,7 +43,7 @@ impl Arena {
         self.offset.replace(to);
     }
 
-    fn alloc_raw(&self, bytes: usize, alignment: usize) -> NonNull<u8> {
+    fn alloc_raw(&self, bytes: usize, alignment: usize) -> Result<NonNull<[u8]>, AllocError> {
         let bytes = bytes.max(1);
         let alignment = alignment.max(1);
 
@@ -64,12 +64,12 @@ impl Arena {
         }
 
         self.offset.replace(end);
-        unsafe { self.base.add(beg) }
+        Ok(unsafe { NonNull::slice_from_raw_parts(self.base.add(beg), end - beg) })
     }
 
     // With the code in `alloc_raw_bump()` out of the way, `alloc_raw()` compiles down to some super tight assembly.
     #[cold]
-    fn alloc_raw_bump(&self, beg: usize, end: usize) -> NonNull<u8> {
+    fn alloc_raw_bump(&self, beg: usize, end: usize) -> Result<NonNull<[u8]>, AllocError> {
         let offset = self.offset.get();
         let commit_old = self.commit.get();
         let commit_new = (end + ALLOC_CHUNK_SIZE - 1) & !(ALLOC_CHUNK_SIZE - 1);
@@ -79,7 +79,7 @@ impl Arena {
                 sys::virtual_commit(self.base.add(commit_old), commit_new - commit_old).is_err()
             }
         {
-            panic!("Out of memory");
+            return Err(AllocError);
         }
 
         if cfg!(debug_assertions) {
@@ -90,20 +90,14 @@ impl Arena {
 
         self.commit.replace(commit_new);
         self.offset.replace(end);
-        unsafe { self.base.add(beg) }
-    }
-
-    fn alloc_raw_zeroed(&self, bytes: usize, alignment: usize) -> NonNull<u8> {
-        let ptr = self.alloc_raw(bytes, alignment);
-        unsafe { ptr::write_bytes(ptr.as_ptr(), 0, bytes) };
-        ptr
+        Ok(unsafe { NonNull::slice_from_raw_parts(self.base.add(beg), end - beg) })
     }
 
     #[allow(clippy::mut_from_ref)]
     pub fn alloc_uninit<T>(&self) -> &mut MaybeUninit<T> {
         let bytes = mem::size_of::<T>();
         let alignment = mem::align_of::<T>();
-        let ptr = self.alloc_raw(bytes, alignment);
+        let ptr = self.alloc_raw(bytes, alignment).unwrap();
         unsafe { ptr.cast().as_mut() }
     }
 
@@ -111,7 +105,7 @@ impl Arena {
     pub fn alloc_uninit_slice<T>(&self, count: usize) -> &mut [MaybeUninit<T>] {
         let bytes = mem::size_of::<T>() * count;
         let alignment = mem::align_of::<T>();
-        let ptr = self.alloc_raw(bytes, alignment);
+        let ptr = self.alloc_raw(bytes, alignment).unwrap();
         unsafe { slice::from_raw_parts_mut(ptr.cast().as_ptr(), count) }
     }
 
@@ -145,13 +139,13 @@ impl Default for Arena {
 
 unsafe impl Allocator for &Arena {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let p = self.alloc_raw(layout.size(), layout.align());
-        Ok(NonNull::slice_from_raw_parts(p, layout.size()))
+        self.alloc_raw(layout.size(), layout.align())
     }
 
     fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let p = self.alloc_raw_zeroed(layout.size(), layout.align());
-        Ok(NonNull::slice_from_raw_parts(p, layout.size()))
+        let p = self.alloc_raw(layout.size(), layout.align())?;
+        unsafe { p.cast::<u8>().as_ptr().write_bytes(0, p.len()) }
+        Ok(p)
     }
 
     // While it is possible to shrink the tail end of the arena, it is
@@ -175,7 +169,7 @@ unsafe impl Allocator for &Arena {
             let delta = new_layout.size() - old_layout.size();
             // Assuming that the given ptr/length area is at the end of the arena,
             // we can just push more memory to the end of the arena to grow it.
-            _ = self.alloc_raw(delta, 1);
+            self.alloc_raw(delta, 1)?;
         } else {
             new_ptr = self.allocate(new_layout)?.cast();
 
