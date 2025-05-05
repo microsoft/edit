@@ -373,7 +373,7 @@ impl Tui {
         }
     }
 
-    fn report_context_completion(&mut self, ctx: &mut Context) {
+    fn report_context_completion<'a>(&'a mut self, ctx: &mut Context<'a, '_>) {
         // If this hits, you forgot to block_end() somewhere. The best way to figure
         // out where is to do a binary search of commenting out code in main.rs.
         debug_assert!(ctx.tree.current_node.borrow().stack_parent.is_none());
@@ -394,8 +394,10 @@ impl Tui {
         // SAFETY: The memory used by the tree is owned by the `self.arena_next` right now.
         // Stealing the tree here thus doesn't need to copy any memory unless someone resets the arena.
         // (The arena is reset in `reset()` above.)
-        self.prev_tree = unsafe { mem::transmute_copy(&ctx.tree) };
-        self.prev_node_map.reset(&self.prev_tree);
+        unsafe {
+            self.prev_tree = mem::transmute_copy(&ctx.tree);
+            self.prev_node_map = NodeMap::new(mem::transmute(&self.arena_next), &self.prev_tree);
+        }
 
         let mut focus_path_pop_min = 0;
         // If the user pressed Escape, we move the focus to a parent node.
@@ -447,8 +449,8 @@ impl Tui {
 
                 let size = root.intrinsic_to_outer();
 
-                x += (float.offset_x - float.gravity_x * size.width as f32 + 0.5) as CoordType;
-                y += (float.offset_y - float.gravity_y * size.height as f32 + 0.5) as CoordType;
+                x += (float.offset_x - float.gravity_x * size.width as f32) as CoordType;
+                y += (float.offset_y - float.gravity_y * size.height as f32) as CoordType;
 
                 root.outer.left = x;
                 root.outer.top = y;
@@ -1084,10 +1086,10 @@ pub struct Context<'a, 'input> {
     seen_ids: HashSet<u64>,
 }
 
-impl Drop for Context<'_, '_> {
+impl<'a> Drop for Context<'a, '_> {
     fn drop(&mut self) {
-        let this = self as *mut _;
-        self.tui.report_context_completion(unsafe { &mut *this });
+        let tui: &'a mut Tui = unsafe { mem::transmute(&mut *self.tui) };
+        tui.report_context_completion(self);
     }
 }
 
@@ -1121,9 +1123,11 @@ impl<'a> Context<'a, '_> {
     }
 
     pub fn set_clipboard(&mut self, data: Vec<u8>) {
-        self.tui.clipboard = data;
-        self.tui.clipboard_generation = self.tui.clipboard_generation.wrapping_add(1);
-        self.needs_rerender();
+        if !data.is_empty() {
+            self.tui.clipboard = data;
+            self.tui.clipboard_generation = self.tui.clipboard_generation.wrapping_add(1);
+            self.needs_rerender();
+        }
     }
 
     pub fn get_clipboard(&self) -> &[u8] {
@@ -2889,41 +2893,37 @@ impl<'a> Tree<'a> {
 }
 
 struct NodeMap<'a> {
-    slots: Vec<Option<&'a NodeCell<'a>>>,
+    slots: &'a [Option<&'a NodeCell<'a>>],
     shift: usize,
     mask: u64,
 }
 
-impl Default for NodeMap<'_> {
+impl Default for NodeMap<'static> {
     fn default() -> Self {
-        Self { slots: vec![None; 1], shift: 0, mask: 0 }
+        Self { slots: &[None], shift: 0, mask: 0 }
     }
 }
 
 impl<'a> NodeMap<'a> {
-    fn reset(&mut self, tree: &Tree<'a>) {
+    fn new(arena: &'a Arena, tree: &Tree<'a>) -> Self {
         let width = (4 * tree.count + 1).ilog2().max(1) as usize;
         let slots = 1 << width;
-
-        self.shift = std::mem::size_of::<usize>() * 8 - width;
-        self.mask = (slots - 1) as u64;
-
-        if slots != self.slots.len() {
-            self.slots = vec![None; slots];
-        } else {
-            self.slots.fill(None);
-        }
+        let shift = 64 - width;
+        let mask = (slots - 1) as u64;
+        let slots = arena.alloc_uninit_slice(slots).write_filled(None);
 
         for node in iter::successors(Some(tree.root_first), |&node| node.borrow().next) {
-            let mut slot = node.borrow().id >> self.shift;
+            let mut slot = node.borrow().id >> shift;
             loop {
-                if self.slots[slot as usize].is_none() {
-                    self.slots[slot as usize] = Some(node);
+                if slots[slot as usize].is_none() {
+                    slots[slot as usize] = Some(node);
                     break;
                 }
-                slot = (slot + 1) & self.mask;
+                slot = (slot + 1) & mask;
             }
         }
+
+        Self { slots, shift, mask }
     }
 
     fn get(&mut self, id: u64) -> Option<&'a NodeCell<'a>> {
