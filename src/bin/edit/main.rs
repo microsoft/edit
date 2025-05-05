@@ -1,4 +1,4 @@
-#![feature(linked_list_cursors, os_string_truncate)]
+#![feature(let_chains, linked_list_cursors, os_string_truncate)]
 
 mod documents;
 mod draw_editor;

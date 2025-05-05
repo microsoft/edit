@@ -247,12 +247,12 @@ impl DocumentManager {
 
         if let Some(colbeg) = memrchr2(b':', b':', bytes, colend) {
             // Same here: Don't allow empty filenames.
-            if colbeg != 0 {
-                if let Some(first) = parse(&bytes[colbeg + 1..colend]) {
-                    let first = (first - 1).max(0);
-                    len = colbeg;
-                    goto = Point { x: last, y: first };
-                }
+            if colbeg != 0
+                && let Some(first) = parse(&bytes[colbeg + 1..colend])
+            {
+                let first = (first - 1).max(0);
+                len = colbeg;
+                goto = Point { x: last, y: first };
             }
         }
 

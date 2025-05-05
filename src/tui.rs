@@ -2,6 +2,7 @@ use std::arch::breakpoint;
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::mem::MaybeUninit;
 use std::{iter, mem, ptr, time};
 
 use crate::arena::{Arena, ArenaString, scratch_arena};
@@ -470,7 +471,7 @@ impl Tui {
         }
     }
 
-    fn build_node_path<'a>(node: Option<&NodeCell<'a>>, path: &mut Vec<u64>) {
+    fn build_node_path(node: Option<&NodeCell>, path: &mut Vec<u64>) {
         path.clear();
         if let Some(mut node) = node {
             loop {
@@ -2921,7 +2922,10 @@ impl<'a> NodeMap<'a> {
         let slots = 1 << width;
         let shift = 64 - width;
         let mask = (slots - 1) as u64;
-        let slots = arena.alloc_uninit_slice(slots).write_filled(None);
+
+        let slots = arena.alloc_uninit_slice(slots);
+        slots.fill(MaybeUninit::new(None));
+        let slots = unsafe { slice_assume_init_mut(slots) };
 
         for node in iter::successors(Some(tree.root_first), |&node| node.borrow().next) {
             let mut slot = node.borrow().id >> shift;
