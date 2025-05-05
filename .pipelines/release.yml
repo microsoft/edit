@@ -127,7 +127,7 @@ extends:
                   configFile: ".cargo/release-windows-ms.toml"
               # We recommend making a separate `cargo fetch` step, as some build systems perform
               # fetching entirely prior to the build, and perform the build with the network disabled.
-              - script: cargo fetch
+              - script: cargo fetch --config .cargo/release-windows-ms.toml
                 displayName: Fetch crates
               - ${{ each platform in parameters.buildPlatforms }}:
                   - script: cargo build --config .cargo/release-windows-ms.toml --frozen --release --target ${{platform}}
