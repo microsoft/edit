@@ -2299,14 +2299,17 @@ impl<'a> Context<'a, '_> {
                             _ => {}
                         }
                     }
-                } else if self.tui.is_subtree_focused(container_id) {
-                    if self.input_keyboard == Some(vk::PRIOR) {
-                        sc.scroll_offset.y -= prev_container.inner_clipped.height();
-                        self.set_input_consumed();
-                    } else if self.input_keyboard == Some(vk::NEXT) {
-                        sc.scroll_offset.y += prev_container.inner_clipped.height();
-                        self.set_input_consumed();
+                } else if self.tui.is_subtree_focused(container_id)
+                    && let Some(key) = self.input_keyboard
+                {
+                    match key {
+                        vk::PRIOR => sc.scroll_offset.y -= prev_container.inner_clipped.height(),
+                        vk::NEXT => sc.scroll_offset.y += prev_container.inner_clipped.height(),
+                        vk::END => sc.scroll_offset.y = CoordType::MAX,
+                        vk::HOME => sc.scroll_offset.y = 0,
+                        _ => return,
                     }
+                    self.set_input_consumed();
                 }
             }
         }
@@ -2407,100 +2410,107 @@ impl<'a> Context<'a, '_> {
     pub fn list_end(&mut self) {
         self.block_end();
 
-        let has_focus = self.tui.is_subtree_focused(self.tree.last_node.borrow().id);
-
-        if has_focus
-            && !self.input_consumed
-            && matches!(self.input_keyboard, Some(vk::PRIOR | vk::NEXT))
-        {
-            let mut list = self.tree.last_node.borrow_mut();
-
-            if let Some(prev_container) = self.tui.prev_node_map.get(list.id) {
-                let prev_container = prev_container.borrow();
-                let mut selected_node = match &list.content {
-                    NodeContent::List(content) => content.selected_node,
-                    _ => unreachable!(),
-                };
-                let rows = prev_container.inner_clipped.height() - 1;
-
-                if self.input_keyboard == Some(vk::PRIOR) {
-                    for _ in 0..rows {
-                        if let Some(node) = selected_node {
-                            let node = node.borrow();
-                            if node.siblings.prev.is_none() {
-                                break;
-                            }
-                            selected_node = node.siblings.prev;
-                        }
-                    }
-                } else {
-                    for _ in 0..rows {
-                        if let Some(node) = selected_node {
-                            let node = node.borrow();
-                            if node.siblings.next.is_none() {
-                                break;
-                            }
-                            selected_node = node.siblings.next;
-                        }
-                    }
-                }
-
-                match &mut list.content {
-                    NodeContent::List(content) => content.selected_node = selected_node,
-                    _ => unreachable!(),
-                }
-
-                self.set_input_consumed();
-            }
-        }
-
-        let selected_next;
+        let contains_focus;
+        let selected_now;
+        let mut selected_next;
         {
             let list = self.tree.last_node.borrow();
-            let selected_node = match &list.content {
+
+            contains_focus = self.tui.is_subtree_focused(list.id);
+            selected_now = match &list.content {
                 NodeContent::List(content) => content.selected_node,
                 _ => unreachable!(),
             };
+            selected_next = match selected_now.or(list.children.first) {
+                Some(node) => node,
+                None => return,
+            };
+        }
 
-            if selected_node.is_none() && list.children.first.is_some() {
-                selected_next = list.children.first;
-            } else if selected_node.is_some()
-                && !self.input_consumed
-                && (self.input_keyboard == Some(vk::UP) || self.input_keyboard == Some(vk::DOWN))
-                && self.contains_focus()
-            {
-                let selected = selected_node.unwrap().borrow();
-                let forward = self.input_keyboard == Some(vk::DOWN);
-                let mut node =
-                    if forward { selected.siblings.next } else { selected.siblings.prev };
-                if node.is_none() {
-                    node = if forward { list.children.first } else { list.children.last };
+        if contains_focus
+            && !self.input_consumed
+            && let Some(key) = self.input_keyboard
+            && let Some(selected_now) = selected_now
+        {
+            let list = self.tree.last_node.borrow();
+
+            if let Some(prev_container) = self.tui.prev_node_map.get(list.id) {
+                let mut consumed = true;
+
+                match key {
+                    vk::PRIOR => {
+                        selected_next = selected_now;
+                        for _ in 0..prev_container.borrow().inner_clipped.height() - 1 {
+                            let node = selected_next.borrow();
+                            selected_next = match node.siblings.prev {
+                                Some(node) => node,
+                                None => break,
+                            };
+                        }
+                    }
+                    vk::NEXT => {
+                        selected_next = selected_now;
+                        for _ in 0..prev_container.borrow().inner_clipped.height() - 1 {
+                            let node = selected_next.borrow();
+                            selected_next = match node.siblings.next {
+                                Some(node) => node,
+                                None => break,
+                            };
+                        }
+                    }
+                    vk::END => {
+                        selected_next = list.children.last.unwrap_or(selected_next);
+                    }
+                    vk::HOME => {
+                        selected_next = list.children.first.unwrap_or(selected_next);
+                    }
+                    vk::UP => {
+                        selected_next = selected_now
+                            .borrow()
+                            .siblings
+                            .prev
+                            .or(list.children.last)
+                            .unwrap_or(selected_next);
+                    }
+                    vk::DOWN => {
+                        selected_next = selected_now
+                            .borrow()
+                            .siblings
+                            .next
+                            .or(list.children.first)
+                            .unwrap_or(selected_next);
+                    }
+                    _ => consumed = false,
                 }
-                selected_next = node;
-            } else {
-                selected_next = selected_node;
+
+                if consumed {
+                    self.set_input_consumed();
+                }
             }
         }
 
-        let Some(node) = selected_next else {
-            return;
-        };
+        // Now that we know which item is selected we can mark it as such.
+        if !opt_ptr_eq(selected_now, Some(selected_next))
+            && let NodeContent::List(content) = &mut self.tree.last_node.borrow_mut().content
+        {
+            content.selected_node = Some(selected_next);
+        }
 
         // Now that we know which item is selected we can mark it as such.
-        if let NodeContent::Text(content) = &mut node.borrow_mut().content {
+        if let NodeContent::Text(content) = &mut selected_next.borrow_mut().content {
             unsafe {
                 content.text.as_bytes_mut()[0] = b'>';
             }
         }
 
         // If the list has focus, we also delegate focus to the selected item and colorize it.
-        if has_focus {
+        if contains_focus {
             {
-                let mut node = node.borrow_mut();
+                let mut node = selected_next.borrow_mut();
                 node.attributes.bg = self.indexed(IndexedColor::Green);
                 node.attributes.fg = self.contrasted(self.indexed(IndexedColor::Green));
             }
-            self.steal_focus_for(node);
+            self.steal_focus_for(selected_next);
         }
     }
 
