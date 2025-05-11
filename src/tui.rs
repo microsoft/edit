@@ -210,7 +210,11 @@ impl Tui {
             self.mouse_is_drag = false;
         }
 
-        vec_replace_all_reuse(&mut self.focused_node_path_previous_frame, &self.focused_node_path);
+        vec_replace(
+            &mut self.focused_node_path_previous_frame,
+            0..usize::MAX,
+            &self.focused_node_path,
+        );
 
         if self.scroll_to_focused() {
             self.needs_more_settling();

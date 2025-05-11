@@ -1,7 +1,9 @@
+use std::alloc::Allocator;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::io::Read;
 use std::mem::{self, MaybeUninit};
+use std::ops::{Bound, Range, RangeBounds};
 use std::{ptr, slice, str};
 
 use crate::apperr;
@@ -246,12 +248,34 @@ pub fn slice_copy_safe<T: Copy>(dst: &mut [T], src: &[T]) -> usize {
     len
 }
 
-pub fn vec_replace<T: Copy>(dst: &mut Vec<T>, off: usize, remove: usize, src: &[T]) {
+pub fn vec_replace<T: Copy, A: Allocator, R: RangeBounds<usize>>(
+    dst: &mut Vec<T, A>,
+    range: R,
+    src: &[T],
+) {
+    let start = match range.start_bound() {
+        Bound::Included(&start) => start,
+        Bound::Excluded(start) => start + 1,
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(end) => end + 1,
+        Bound::Excluded(&end) => end,
+        Bound::Unbounded => usize::MAX,
+    };
+    vec_replace_impl(dst, start..end, src);
+}
+
+pub fn vec_replace_impl<T: Copy, A: Allocator>(
+    dst: &mut Vec<T, A>,
+    range: Range<usize>,
+    src: &[T],
+) {
     unsafe {
         let dst_len = dst.len();
         let src_len = src.len();
-        let off = off.min(dst_len);
-        let del_len = remove.min(dst_len - off);
+        let off = range.start.min(dst_len);
+        let del_len = range.end.saturating_sub(off).min(dst_len - off);
 
         if del_len == 0 && src_len == 0 {
             return; // nothing to do
@@ -263,6 +287,8 @@ pub fn vec_replace<T: Copy>(dst: &mut Vec<T>, off: usize, remove: usize, src: &[
         if src_len > del_len {
             dst.reserve(src_len - del_len);
         }
+
+        // NOTE: drop_in_place() is not needed here, because T is constrained to Copy.
 
         // SAFETY: as_mut_ptr() must called after reserve() to ensure that the pointer is valid.
         let ptr = dst.as_mut_ptr().add(off);
@@ -276,11 +302,6 @@ pub fn vec_replace<T: Copy>(dst: &mut Vec<T>, off: usize, remove: usize, src: &[
         ptr::copy_nonoverlapping(src.as_ptr(), ptr, src_len);
         dst.set_len(new_len);
     }
-}
-
-pub fn vec_replace_all_reuse<T: Clone>(dst: &mut Vec<T>, src: &[T]) {
-    dst.clear();
-    dst.extend_from_slice(src);
 }
 
 pub fn string_from_utf8_lossy_owned(v: Vec<u8>) -> String {
