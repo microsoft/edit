@@ -2,26 +2,31 @@
 //! Other algorithms exist, such as Sublime Text's, or the one used in `fzf`,
 //! but I figured that this one is what lots of people may be familiar with.
 
-use crate::arena::{Arena, scratch_arena};
-use crate::icu;
 use std::vec;
 
-pub type FuzzyScore = (i32, Vec<usize>);
+use crate::arena::{Arena, scratch_arena};
+use crate::icu;
 
 const NO_MATCH: i32 = 0;
-const NO_SCORE: FuzzyScore = (NO_MATCH, Vec::new());
 
-pub fn score_fuzzy(haystack: &str, needle: &str, allow_non_contiguous_matches: bool) -> FuzzyScore {
+pub fn score_fuzzy<'a>(
+    arena: &'a Arena,
+    haystack: &str,
+    needle: &str,
+    allow_non_contiguous_matches: bool,
+) -> (i32, Vec<usize, &'a Arena>) {
     if haystack.is_empty() || needle.is_empty() {
-        return NO_SCORE; // return early if target or query are empty
+        // return early if target or query are empty
+        return (NO_MATCH, Vec::new_in(arena));
     }
 
-    let scratch = scratch_arena(None);
+    let scratch = scratch_arena(Some(arena));
     let target = map_chars(&scratch, haystack);
     let query = map_chars(&scratch, needle);
 
     if target.len() < query.len() {
-        return NO_SCORE; // impossible for query to be contained in target
+        // impossible for query to be contained in target
+        return (NO_MATCH, Vec::new_in(arena));
     }
 
     let target_lower = icu::fold_case(&scratch, haystack);
@@ -50,11 +55,8 @@ pub fn score_fuzzy(haystack: &str, needle: &str, allow_non_contiguous_matches: b
     //
     for query_index in 0..query.len() {
         let query_index_offset = query_index * target.len();
-        let query_index_previous_offset = if query_index > 0 {
-            (query_index - 1) * target.len()
-        } else {
-            0
-        };
+        let query_index_previous_offset =
+            if query_index > 0 { (query_index - 1) * target.len() } else { 0 };
 
         for target_index in 0..target.len() {
             let current_index = query_index_offset + target_index;
@@ -63,21 +65,11 @@ pub fn score_fuzzy(haystack: &str, needle: &str, allow_non_contiguous_matches: b
             } else {
                 0
             };
-            let left_score = if target_index > 0 {
-                scores[current_index - 1]
-            } else {
-                0
-            };
-            let diag_score = if query_index > 0 && target_index > 0 {
-                scores[diag_index]
-            } else {
-                0
-            };
-            let matches_sequence_len = if query_index > 0 && target_index > 0 {
-                matches[diag_index]
-            } else {
-                0
-            };
+            let left_score = if target_index > 0 { scores[current_index - 1] } else { 0 };
+            let diag_score =
+                if query_index > 0 && target_index > 0 { scores[diag_index] } else { 0 };
+            let matches_sequence_len =
+                if query_index > 0 && target_index > 0 { matches[diag_index] } else { 0 };
 
             // If we are not matching on the first query character any more, we only produce a
             // score if we had a score previously for the last query index (by looking at the diagScore).
@@ -90,11 +82,7 @@ pub fn score_fuzzy(haystack: &str, needle: &str, allow_non_contiguous_matches: b
                 compute_char_score(
                     query[query_index],
                     query_lower[query_index],
-                    if target_index != 0 {
-                        Some(target[target_index - 1])
-                    } else {
-                        None
-                    },
+                    if target_index != 0 { Some(target[target_index - 1]) } else { None },
                     target[target_index],
                     target_lower[target_index],
                     matches_sequence_len,
@@ -130,7 +118,7 @@ pub fn score_fuzzy(haystack: &str, needle: &str, allow_non_contiguous_matches: b
     }
 
     // Restore Positions (starting from bottom right of matrix)
-    let mut positions = Vec::new();
+    let mut positions = Vec::new_in(arena);
 
     if !query.is_empty() && !target.is_empty() {
         let mut query_index = query.len() - 1;
@@ -158,7 +146,7 @@ pub fn score_fuzzy(haystack: &str, needle: &str, allow_non_contiguous_matches: b
         positions.reverse();
     }
 
-    (scores[query.len() * target.len() - 1], positions)
+    (scores[area - 1], positions)
 }
 
 fn compute_char_score(
