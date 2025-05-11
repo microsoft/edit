@@ -15,33 +15,37 @@ pub fn encode(dst: &mut ArenaString, src: &[u8]) {
 
         if remaining != 0 {
             while remaining > 3 {
-                let in0 = inp.add(0).read() as usize;
-                let in1 = inp.add(1).read() as usize;
-                let in2 = inp.add(2).read() as usize;
-
-                *out.add(0) = ENCODE_TABLE[in0 >> 2];
-                *out.add(1) = ENCODE_TABLE[(in0 << 4 | in1 >> 4) & 0x3f];
-                *out.add(2) = ENCODE_TABLE[(in1 << 2 | in2 >> 6) & 0x3f];
-                *out.add(3) = ENCODE_TABLE[in2 & 0x3f];
-
+                let val = u32::from_be((inp as *const u32).read_unaligned());
                 inp = inp.add(3);
-                out = out.add(4);
                 remaining -= 3;
+
+                *out = ENCODE_TABLE[(val >> 26) as usize];
+                out = out.add(1);
+                *out = ENCODE_TABLE[(val >> 20) as usize & 0x3f];
+                out = out.add(1);
+                *out = ENCODE_TABLE[(val >> 14) as usize & 0x3f];
+                out = out.add(1);
+                *out = ENCODE_TABLE[(val >> 8) as usize & 0x3f];
+                out = out.add(1);
             }
+
+            // Convert the remaining 1-3 bytes.
+            let mut in1 = 0;
+            let mut in2 = 0;
 
             *out.add(3) = b'=';
             *out.add(2) = b'=';
 
-            let mut in1 = 0;
-            let mut in2 = 0;
             if remaining >= 3 {
                 in2 = inp.add(2).read() as usize;
                 *out.add(3) = ENCODE_TABLE[in2 & 0x3f];
             }
+
             if remaining >= 2 {
                 in1 = inp.add(1).read() as usize;
                 *out.add(2) = ENCODE_TABLE[(in1 << 2 | in2 >> 6) & 0x3f];
             }
+
             let in0 = inp.add(0).read() as usize;
             *out.add(1) = ENCODE_TABLE[(in0 << 4 | in1 >> 4) & 0x3f];
             *out.add(0) = ENCODE_TABLE[in0 >> 2];
@@ -64,13 +68,32 @@ mod tests {
             encode(&mut dst, s);
             dst
         };
-
         assert_eq!(enc(b""), "");
-        assert_eq!(enc(b"f"), "Zg==");
-        assert_eq!(enc(b"fo"), "Zm8=");
-        assert_eq!(enc(b"foo"), "Zm9v");
-        assert_eq!(enc(b"foob"), "Zm9vYg==");
-        assert_eq!(enc(b"fooba"), "Zm9vYmE=");
-        assert_eq!(enc(b"foobar"), "Zm9vYmFy");
+        assert_eq!(enc(b"a"), "YQ==");
+        assert_eq!(enc(b"ab"), "YWI=");
+        assert_eq!(enc(b"abc"), "YWJj");
+        assert_eq!(enc(b"abcd"), "YWJjZA==");
+        assert_eq!(enc(b"abcde"), "YWJjZGU=");
+        assert_eq!(enc(b"abcdef"), "YWJjZGVm");
+        assert_eq!(enc(b"abcdefg"), "YWJjZGVmZw==");
+        assert_eq!(enc(b"abcdefgh"), "YWJjZGVmZ2g=");
+        assert_eq!(enc(b"abcdefghi"), "YWJjZGVmZ2hp");
+        assert_eq!(enc(b"abcdefghij"), "YWJjZGVmZ2hpag==");
+        assert_eq!(enc(b"abcdefghijk"), "YWJjZGVmZ2hpams=");
+        assert_eq!(enc(b"abcdefghijkl"), "YWJjZGVmZ2hpamts");
+        assert_eq!(enc(b"abcdefghijklm"), "YWJjZGVmZ2hpamtsbQ==");
+        assert_eq!(enc(b"abcdefghijklmN"), "YWJjZGVmZ2hpamtsbU4=");
+        assert_eq!(enc(b"abcdefghijklmNO"), "YWJjZGVmZ2hpamtsbU5P");
+        assert_eq!(enc(b"abcdefghijklmNOP"), "YWJjZGVmZ2hpamtsbU5PUA==");
+        assert_eq!(enc(b"abcdefghijklmNOPQ"), "YWJjZGVmZ2hpamtsbU5PUFE=");
+        assert_eq!(enc(b"abcdefghijklmNOPQR"), "YWJjZGVmZ2hpamtsbU5PUFFS");
+        assert_eq!(enc(b"abcdefghijklmNOPQRS"), "YWJjZGVmZ2hpamtsbU5PUFFSUw==");
+        assert_eq!(enc(b"abcdefghijklmNOPQRST"), "YWJjZGVmZ2hpamtsbU5PUFFSU1Q=");
+        assert_eq!(enc(b"abcdefghijklmNOPQRSTU"), "YWJjZGVmZ2hpamtsbU5PUFFSU1RV");
+        assert_eq!(enc(b"abcdefghijklmNOPQRSTUV"), "YWJjZGVmZ2hpamtsbU5PUFFSU1RVVg==");
+        assert_eq!(enc(b"abcdefghijklmNOPQRSTUVW"), "YWJjZGVmZ2hpamtsbU5PUFFSU1RVVlc=");
+        assert_eq!(enc(b"abcdefghijklmNOPQRSTUVWX"), "YWJjZGVmZ2hpamtsbU5PUFFSU1RVVldY");
+        assert_eq!(enc(b"abcdefghijklmNOPQRSTUVWXY"), "YWJjZGVmZ2hpamtsbU5PUFFSU1RVVldYWQ==");
+        assert_eq!(enc(b"abcdefghijklmNOPQRSTUVWXYZ"), "YWJjZGVmZ2hpamtsbU5PUFFSU1RVVldYWVo=");
     }
 }
