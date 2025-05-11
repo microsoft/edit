@@ -306,7 +306,7 @@ impl Framebuffer {
         let mut back_fgs = back.fg_bitmap.iter();
         let mut back_attrs = back.attributes.iter();
 
-        let mut result = arena.new_string();
+        let mut result = ArenaString::new_in(arena);
         let mut last_bg = self.indexed(IndexedColor::Background);
         let mut last_fg = self.indexed(IndexedColor::Foreground);
         let mut last_attr = Attributes::None;

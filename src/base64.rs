@@ -58,13 +58,13 @@ pub fn encode(dst: &mut ArenaString, src: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::encode;
-    use crate::arena::Arena;
+    use crate::arena::{Arena, ArenaString};
 
     #[test]
     fn test_basic() {
         let arena = Arena::new(4 * 1024).unwrap();
         let enc = |s: &[u8]| {
-            let mut dst = arena.new_string();
+            let mut dst = ArenaString::new_in(&arena);
             encode(&mut dst, s);
             dst
         };

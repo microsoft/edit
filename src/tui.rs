@@ -11,7 +11,7 @@ use crate::cell::*;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
-use crate::{apperr, input, ucd};
+use crate::{apperr, arena_format, input, ucd};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
@@ -525,7 +525,7 @@ impl Tui {
         if node.attributes.bordered {
             // ┌────┐
             {
-                let mut fill = scratch.new_string();
+                let mut fill = ArenaString::new_in(&scratch);
                 fill.push('┌');
                 fill.push_repeat('─', (outer_clipped.right - outer_clipped.left - 2) as usize);
                 fill.push('┐');
@@ -539,7 +539,7 @@ impl Tui {
 
             // │    │
             {
-                let mut fill = scratch.new_string();
+                let mut fill = ArenaString::new_in(&scratch);
                 fill.push('│');
                 fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left - 2) as usize);
                 fill.push('│');
@@ -556,7 +556,7 @@ impl Tui {
 
             // └────┘
             {
-                let mut fill = scratch.new_string();
+                let mut fill = ArenaString::new_in(&scratch);
                 fill.push('└');
                 fill.push_repeat('─', (outer_clipped.right - outer_clipped.left - 2) as usize);
                 fill.push('┘');
@@ -571,7 +571,7 @@ impl Tui {
 
         if node.attributes.float.is_some() && node.attributes.bg & 0xff000000 == 0xff000000 {
             if !node.attributes.bordered {
-                let mut fill = scratch.new_string();
+                let mut fill = ArenaString::new_in(&scratch);
                 fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left) as usize);
 
                 for y in outer_clipped.top..outer_clipped.bottom {
@@ -722,7 +722,7 @@ impl Tui {
 
             let scratch = scratch_arena(None);
 
-            let mut modified = scratch.new_string();
+            let mut modified = ArenaString::new_in(&scratch);
             modified.reserve(text.len() + 3);
             modified.push_str(&text[..skipped.start]);
             modified.push('…');
@@ -773,7 +773,7 @@ impl Tui {
 
     /// Outputs a debug string of the layout and focus tree.
     pub fn debug_layout<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
-        let mut result = arena.new_string();
+        let mut result = ArenaString::new_in(arena);
         result.push_str("general:\r\n- focus_path:\r\n");
 
         for &id in self.focused_node_path.iter().rev() {
@@ -1471,7 +1471,7 @@ impl<'a> Context<'a, '_> {
     pub fn styled_label_begin(&mut self, classname: &'static str) {
         self.block_begin(classname);
         self.tree.last_node.borrow_mut().content = NodeContent::Text(TextContent {
-            text: self.arena().new_string(),
+            text: ArenaString::new_in(self.arena()),
             chunks: Vec::with_capacity_in(4, self.arena()),
             overflow: Overflow::Clip,
         });
@@ -2704,7 +2704,7 @@ impl<'a> Context<'a, '_> {
     fn menubar_shortcut(&mut self, shortcut: InputKey) {
         let shortcut_letter = shortcut.value() as u8 as char;
         if shortcut_letter.is_ascii_uppercase() {
-            let mut shortcut_text = self.arena().new_string();
+            let mut shortcut_text = ArenaString::new_in(self.arena());
             if shortcut.modifiers_contains(kbmod::CTRL) {
                 shortcut_text.push_str(self.tui.modifier_translations.ctrl);
                 shortcut_text.push('+');

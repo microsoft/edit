@@ -231,7 +231,7 @@ fn run() -> apperr::Result<()> {
                 let time_end = std::time::Instant::now();
                 let status = time_end - time_beg;
                 let status = arena_format!(
-                    scratch,
+                    &scratch,
                     "{}P {}B {:.3}μs",
                     passes,
                     output.len(),

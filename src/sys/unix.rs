@@ -6,7 +6,7 @@ use std::ptr::{self, NonNull, null, null_mut};
 use std::{thread, time};
 
 use crate::apperr;
-use crate::arena::{Arena, ArenaString};
+use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::helpers::KIBI;
 
 struct State {
@@ -171,7 +171,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
         let mut buf = arena.new_vec();
 
         // We don't know if the input is valid UTF8, so we first use a Vec and then
-        // later turn it into UTF8 using `helpers::string_from_utf8_lossy_owned`.
+        // later turn it into UTF8 using `from_utf8_lossy_owned`.
         // It is important that we allocate the buffer with an explicit capacity,
         // because we later use `spare_capacity_mut` to access it.
         buf.reserve(4 * KIBI);
@@ -247,7 +247,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                 b if b & 0b1111_0000 == 0b1110_0000 => 3,
                 b if b & 0b1111_1000 == 0b1111_0000 => 4,
                 // If the lead byte we found isn't actually one, we don't cache it.
-                // `string_from_utf8_lossy_owned` will replace it with U+FFFD.
+                // `from_utf8_lossy_owned` will replace it with U+FFFD.
                 _ => 0,
             };
 
@@ -267,7 +267,9 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
             STATE.inject_resize = false;
             let (w, h) = get_window_size();
             if w > 0 && h > 0 {
-                result = arena_format!(arena, "\x1b[8;{h};{w}t{result}");
+                let scratch = scratch_arena(Some(arena));
+                let seq = arena_format!(scratch, "\x1b[8;{h};{w}t");
+                result.replace_range(0..0, &seq);
             }
         }
 
@@ -418,7 +420,7 @@ pub fn icu_proc_suffix(arena: &Arena, handle: NonNull<c_void>) -> ArenaString<'_
     unsafe {
         type T = *const c_void;
 
-        let mut res = arena.new_string();
+        let mut res = ArenaString::new_in(arena);
 
         // Check if the ICU library is using unversioned symbols.
         // Return an empty suffix in that case.
@@ -482,7 +484,7 @@ where
         // is valid UTF-8, because it comes from icu.rs.
         let name = unsafe { name.to_str().unwrap_unchecked() };
 
-        let mut res = arena.new_string();
+        let mut res = ArenaString::new_in(arena);
         res.reserve(name.len() + suffix.len() + 1);
         res.push_str(name);
         res.push_str(suffix);

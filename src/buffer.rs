@@ -24,7 +24,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::str;
 
-use crate::arena::scratch_arena;
+use crate::arena::{ArenaString, scratch_arena};
 use crate::cell::SemiRefCell;
 use crate::framebuffer::{Framebuffer, IndexedColor, alpha_blend};
 use crate::gap_buffer::GapBuffer;
@@ -1411,7 +1411,7 @@ impl TextBuffer {
         let line_number_width = self.margin_width.max(3) as usize - 3;
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
-        let mut line = scratch.new_string();
+        let mut line = ArenaString::new_in(&scratch);
         let mut visual_pos_x_max = 0;
 
         // Pick the cursor closer to the `origin.y`.
@@ -1703,7 +1703,7 @@ impl TextBuffer {
 
         let mut offset = 0;
         let scratch = scratch_arena(None);
-        let mut newline_buffer = scratch.new_string();
+        let mut newline_buffer = ArenaString::new_in(&scratch);
 
         loop {
             // Can't use `ucd::newlines_forward` because bracketed paste uses CR instead of LF/CRLF.

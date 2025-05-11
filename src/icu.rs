@@ -8,7 +8,7 @@ use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::TextBuffer;
 use crate::helpers::*;
 use crate::utf8::Utf8Chars;
-use crate::{apperr, sys};
+use crate::{apperr, arena_format, sys};
 
 static mut ENCODINGS: Vec<&'static str> = Vec::new();
 
@@ -538,7 +538,7 @@ impl Regex {
         let f = init_if_needed()?;
         unsafe {
             let scratch = scratch_arena(None);
-            let mut utf16 = scratch.new_vec();
+            let mut utf16 = Vec::new_in(&*scratch);
             let mut status = icu_ffi::U_ZERO_ERROR;
 
             utf16.extend(pattern.encode_utf16());

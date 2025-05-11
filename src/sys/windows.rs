@@ -302,7 +302,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
     let resize_event_len = if resize_event.is_some() { RESIZE_EVENT_FMT_MAX_LEN } else { 0 };
     // +1 to account for a potential `STATE.leading_surrogate`.
     let utf8_max_len = (utf16_buf_len + 1) * 3;
-    let mut text = arena.new_string();
+    let mut text = ArenaString::new_in(arena);
     text.reserve(utf8_max_len + resize_event_len);
 
     // Now prepend our previously extracted resize event.
@@ -525,7 +525,7 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString, &Arena> {
     const LEN: usize = 512;
 
     let scratch = scratch_arena(Some(arena));
-    let mut res = arena.new_vec();
+    let mut res = Vec::new_in(arena);
 
     // Get the list of preferred languages via `GetUserPreferredUILanguages`.
     let langs = unsafe {
@@ -568,7 +568,7 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString, &Arena> {
 }
 
 fn wide_to_utf8<'a>(arena: &'a Arena, wide: &[u16]) -> ArenaString<'a> {
-    let mut res = arena.new_string();
+    let mut res = ArenaString::new_in(arena);
     res.reserve(wide.len() * 3);
 
     let len = unsafe {
