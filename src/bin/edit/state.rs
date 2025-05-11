@@ -3,6 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::{Path, PathBuf};
 
+use edit::buffer::TextBuffer;
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::tui::*;
@@ -143,6 +144,54 @@ pub struct State {
     pub osc_title_filename: String,
     pub osc_clipboard_generation: u32,
     pub exit: bool,
+}
+
+impl State {
+    pub fn new() -> apperr::Result<Self> {
+        let buffer = TextBuffer::new_rc(false)?;
+        {
+            let mut tb = buffer.borrow_mut();
+            tb.set_margin_enabled(true);
+            tb.set_line_highlight_enabled(true);
+        }
+
+        Ok(Self {
+            menubar_color_bg: 0,
+            menubar_color_fg: 0,
+
+            documents: Default::default(),
+
+            error_log: [const { String::new() }; 10],
+            error_log_index: 0,
+            error_log_count: 0,
+
+            wants_file_picker: StateFilePicker::None,
+            file_picker_pending_dir: Default::default(),
+            file_picker_pending_name: Default::default(),
+            file_picker_entries: None,
+            file_picker_overwrite_warning: None,
+
+            wants_search: StateSearch { kind: StateSearchKind::Hidden, focus: false },
+            search_needle: Default::default(),
+            search_replacement: Default::default(),
+            search_options: Default::default(),
+            search_success: true,
+
+            wants_save: false,
+            wants_statusbar_focus: false,
+            wants_encoding_picker: false,
+            wants_encoding_change: StateEncodingChange::None,
+            wants_indentation_picker: false,
+            wants_document_picker: false,
+            wants_about: false,
+            wants_close: false,
+            wants_exit: false,
+
+            osc_title_filename: Default::default(),
+            osc_clipboard_generation: 0,
+            exit: false,
+        })
+    }
 }
 
 pub fn draw_add_untitled_document(ctx: &mut Context, state: &mut State) {

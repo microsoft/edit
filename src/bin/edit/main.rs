@@ -21,7 +21,6 @@ use draw_statusbar::*;
 use edit::arena::{self, ArenaString, scratch_arena};
 #[cfg(feature = "debug-latency")]
 use edit::arena_format;
-use edit::buffer::TextBuffer;
 use edit::framebuffer::{self, IndexedColor, alpha_blend};
 use edit::helpers::KIBI;
 use edit::input::{self, kbmod, vk};
@@ -30,54 +29,6 @@ use edit::vt::{self, Token};
 use edit::{apperr, base64, path, sys};
 use loc::*;
 use state::*;
-
-impl State {
-    fn new() -> apperr::Result<Self> {
-        let buffer = TextBuffer::new_rc(false)?;
-        {
-            let mut tb = buffer.borrow_mut();
-            tb.set_margin_enabled(true);
-            tb.set_line_highlight_enabled(true);
-        }
-
-        Ok(Self {
-            menubar_color_bg: 0,
-            menubar_color_fg: 0,
-
-            documents: Default::default(),
-
-            error_log: [const { String::new() }; 10],
-            error_log_index: 0,
-            error_log_count: 0,
-
-            wants_file_picker: StateFilePicker::None,
-            file_picker_pending_dir: Default::default(),
-            file_picker_pending_name: Default::default(),
-            file_picker_entries: None,
-            file_picker_overwrite_warning: None,
-
-            wants_search: StateSearch { kind: StateSearchKind::Hidden, focus: false },
-            search_needle: Default::default(),
-            search_replacement: Default::default(),
-            search_options: Default::default(),
-            search_success: true,
-
-            wants_save: false,
-            wants_statusbar_focus: false,
-            wants_encoding_picker: false,
-            wants_encoding_change: StateEncodingChange::None,
-            wants_indentation_picker: false,
-            wants_document_picker: false,
-            wants_about: false,
-            wants_close: false,
-            wants_exit: false,
-
-            osc_title_filename: Default::default(),
-            osc_clipboard_generation: 0,
-            exit: false,
-        })
-    }
-}
 
 fn main() -> process::ExitCode {
     if cfg!(debug_assertions) {
@@ -99,15 +50,17 @@ fn main() -> process::ExitCode {
 }
 
 fn run() -> apperr::Result<()> {
-    arena::init()?;
+    // Init `sys` first, as everything else may depend on its functionality (IO, function pointers, etc.).
     let _sys_deinit = sys::init()?;
-    let mut state = State::new()?;
+    // Next init `arena`, so that `scratch_arena` works. `loc` depends on it.
+    arena::init()?;
+    // Init the `loc` module, so that error messages are localized.
+    loc::init();
 
+    let mut state = State::new()?;
     if handle_args(&mut state)? {
         return Ok(());
     }
-
-    loc::init();
 
     // sys::init() will switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // Since the `read_file` call may hang for some reason, we must only call this afterwards.
