@@ -281,11 +281,11 @@ fn draw(ctx: &mut Context, state: &mut State) {
     draw_editor(ctx, state);
     draw_statusbar(ctx, state);
 
-    if state.wants_exit {
-        draw_handle_wants_exit(ctx, state);
-    }
     if state.wants_close {
         draw_handle_wants_close(ctx, state);
+    }
+    if state.wants_exit {
+        draw_handle_wants_exit(ctx, state);
     }
     if state.wants_file_picker != StateFilePicker::None {
         draw_file_picker(ctx, state);
