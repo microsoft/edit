@@ -1,6 +1,8 @@
 use std::ops::Deref;
 
-use super::{Arena, debug, release};
+#[cfg(debug_assertions)]
+use super::debug;
+use super::{Arena, release};
 use crate::apperr;
 use crate::helpers::*;
 
@@ -85,7 +87,9 @@ pub fn init() -> apperr::Result<()> {
 /// ensuring it doesn't conflict with the provided arena.
 pub fn scratch_arena(conflict: Option<&Arena>) -> ScratchArena<'static> {
     unsafe {
+        #[cfg(debug_assertions)]
         let conflict = conflict.map(|a| a.delegate_target_unchecked());
+
         let index = opt_ptr_eq(conflict, Some(&S_SCRATCH[0])) as usize;
         let arena = &mut S_SCRATCH[index];
         ScratchArena::new(arena)

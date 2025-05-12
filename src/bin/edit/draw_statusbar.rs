@@ -9,6 +9,7 @@ use crate::state::*;
 
 pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
     ctx.table_begin("statusbar");
+    ctx.attr_focus_well();
     ctx.attr_background_rgba(state.menubar_color_bg);
     ctx.attr_foreground_rgba(state.menubar_color_fg);
     ctx.table_set_cell_gap(Size { width: 2, height: 0 });
@@ -190,6 +191,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             }
 
             state.wants_document_picker |= ctx.button("filename", filename);
+            ctx.inherit_focus();
             ctx.attr_overflow(Overflow::TruncateMiddle);
             ctx.attr_position(Position::Right);
         }

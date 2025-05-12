@@ -67,8 +67,7 @@ pub struct Tui {
     cached_text_buffers: Vec<CachedTextBuffer>,
     mouse_down_node_path: Vec<u64>,
     focused_node_path: Vec<u64>,
-    focused_node_path_previous_frame: Vec<u64>,
-    focused_node_path_for_scrolling: Vec<u64>,
+    focused_node_for_scrolling: u64,
 
     arena_prev: Arena,
     arena_next: Arena,
@@ -118,8 +117,7 @@ impl Tui {
             cached_text_buffers: Vec::with_capacity(16),
             mouse_down_node_path: Vec::with_capacity(16),
             focused_node_path: Vec::with_capacity(16),
-            focused_node_path_previous_frame: Vec::with_capacity(16),
-            focused_node_path_for_scrolling: Vec::with_capacity(16),
+            focused_node_for_scrolling: ROOT_ID,
 
             arena_prev,
             arena_next,
@@ -132,8 +130,6 @@ impl Tui {
         };
         tui.mouse_down_node_path.push(ROOT_ID);
         tui.focused_node_path.push(ROOT_ID);
-        tui.focused_node_path_previous_frame.push(ROOT_ID);
-        tui.focused_node_path_for_scrolling.push(ROOT_ID);
         Ok(tui)
     }
 
@@ -210,12 +206,6 @@ impl Tui {
             self.mouse_is_drag = false;
         }
 
-        vec_replace(
-            &mut self.focused_node_path_previous_frame,
-            0..usize::MAX,
-            &self.focused_node_path,
-        );
-
         if self.scroll_to_focused() {
             self.needs_more_settling();
         }
@@ -266,7 +256,7 @@ impl Tui {
                 let mut focused_node = None; // Needed for `mouse_down` and `is_click`
                 if mouse_down || mouse_up {
                     for root in self.prev_tree.iterate_roots() {
-                        Tree::visit_all(root, root, 0, true, |_, node| {
+                        Tree::visit_all(root, root, true, |node| {
                             let n = node.borrow();
                             if !n.outer_clipped.contains(next_position) {
                                 // Skip the entire sub-tree, because it doesn't contain the cursor.
@@ -384,7 +374,7 @@ impl Tui {
         debug_assert!(ctx.tree.current_node.borrow().stack_parent.is_none());
 
         if let Some(node) = ctx.last_modal
-            && !self.is_subtree_focused(node.borrow().id)
+            && !self.is_subtree_focused(&node.borrow())
         {
             ctx.steal_focus_for(node);
         }
@@ -418,8 +408,11 @@ impl Tui {
 
         // If some elements went away and the focus path changed above, we ignore tab presses.
         // It may otherwise lead to weird situations where focus moves unexpectedly.
-        if !focus_path_changed && !ctx.input_consumed && ctx.input_keyboard.is_some() {
-            needs_settling |= self.move_focus(ctx.input_keyboard.unwrap());
+        if !focus_path_changed
+            && !ctx.input_consumed
+            && let Some(input) = ctx.input_keyboard
+        {
+            needs_settling |= self.move_focus(input);
         }
 
         if needs_settling {
@@ -486,6 +479,7 @@ impl Tui {
                     None => break,
                 };
             }
+            path.reverse();
         } else {
             path.push(ROOT_ID);
         }
@@ -780,15 +774,16 @@ impl Tui {
         let mut result = ArenaString::new_in(arena);
         result.push_str("general:\r\n- focus_path:\r\n");
 
-        for &id in self.focused_node_path.iter().rev() {
+        for &id in &self.focused_node_path {
             _ = write!(result, "  - {id:016x}\r\n");
         }
 
         result.push_str("\r\ntree:\r\n");
 
         for root in self.prev_tree.iterate_roots() {
-            Tree::visit_all(root, root, 0, true, |depth, node| {
+            Tree::visit_all(root, root, true, |node| {
                 let node = node.borrow();
+                let depth = node.depth;
                 result.push_repeat(' ', depth * 2);
                 _ = write!(result, "- id: {:016x}\r\n", node.id);
 
@@ -869,69 +864,83 @@ impl Tui {
         result
     }
 
-    /// Checks if the pointer is on the current node's boundary (hover).
-    pub fn was_mouse_down_on_node(&mut self, id: u64) -> bool {
+    fn was_mouse_down_on_node(&self, id: u64) -> bool {
         // We construct the hovered_node_path always with at least 1 element (the root id).
-        unsafe { *self.mouse_down_node_path.get_unchecked(0) == id }
+        unsafe { *self.mouse_down_node_path.last().unwrap_unchecked() == id }
     }
 
-    /// Checks if a node's subtree contains the hover path.
-    pub fn was_mouse_down_on_subtree(&mut self, id: u64) -> bool {
-        self.mouse_down_node_path.contains(&id)
+    fn was_mouse_down_on_subtree(&self, node: &Node) -> bool {
+        self.mouse_down_node_path.get(node.depth) == Some(&node.id)
     }
 
-    /// Checks if a node with the given ID has input focus.
     fn is_node_focused(&self, id: u64) -> bool {
         // We construct the focused_node_path always with at least 1 element (the root id).
-        unsafe { *self.focused_node_path.get_unchecked(0) == id }
+        unsafe { *self.focused_node_path.last().unwrap_unchecked() == id }
     }
 
-    /// Checks if a node's subtree contains the focus path.
-    fn is_subtree_focused(&self, id: u64) -> bool {
-        self.focused_node_path.contains(&id)
+    fn is_subtree_focused(&self, node: &Node) -> bool {
+        self.focused_node_path.get(node.depth) == Some(&node.id)
+    }
+
+    fn is_subtree_focused_alt(&self, id: u64, depth: usize) -> bool {
+        self.focused_node_path.get(depth) == Some(&id)
     }
 
     fn pop_focusable_node(&mut self, pop_minimum: usize) -> bool {
-        let pop_minimum = pop_minimum.min(self.focused_node_path.len());
-        let path = &self.focused_node_path[pop_minimum..self.focused_node_path.len()];
+        let last_before = self.focused_node_path.last().cloned().unwrap_or(0);
 
-        // Find the next focusable node upwards in the hierarchy.
-        let focusable_idx = path
-            .iter()
-            .skip(pop_minimum)
-            .position(|&id| {
-                self.prev_node_map.get(id).is_some_and(|node| node.borrow().attributes.focusable)
-            })
-            .map(|idx| idx + pop_minimum)
-            .unwrap_or(path.len());
+        // Remove `pop_minimum`-many nodes from the end of the focus path.
+        let path = &self.focused_node_path[..];
+        let path = &path[..path.len().saturating_sub(pop_minimum)];
+        let mut len = 0;
 
-        if focusable_idx == 0 {
-            // Nothing to remove.
-            false
-        } else {
-            // Remove all the nodes between us and the next focusable node.
-            self.focused_node_path.drain(..focusable_idx);
-            if self.focused_node_path.is_empty() {
-                self.focused_node_path.push(ROOT_ID);
+        for (i, &id) in path.iter().enumerate() {
+            // Truncate the path so that it only contains nodes that still exist.
+            let Some(node) = self.prev_node_map.get(id) else {
+                break;
+            };
+
+            let n = node.borrow();
+            // If the caller requested upward movement, pop out of the current focus void, if any.
+            // This is kind of janky, to be fair.
+            if pop_minimum != 0 && n.attributes.focus_void {
+                break;
             }
-            true
+
+            // Skip over those that aren't focusable.
+            if n.attributes.focusable {
+                // At this point `n.depth == i` should be true,
+                // but I kind of don't want to rely on that.
+                len = i + 1;
+            }
         }
+
+        self.focused_node_path.truncate(len);
+
+        // If it's empty now, push `ROOT_ID` because there must always be >=1 element.
+        if self.focused_node_path.is_empty() {
+            self.focused_node_path.push(ROOT_ID);
+        }
+
+        // Return true if the focus path changed.
+        let last_after = self.focused_node_path.last().cloned().unwrap_or(0);
+        last_before != last_after
     }
 
     // TODO: Move this into `block_end()` and run it whenever the block is a `focus_well`.
     // It makes no sense otherwise that all input handling occurs in the controls, except for this.
     fn move_focus(&mut self, input: InputKey) -> bool {
-        if !matches!(input, vk::TAB | SHIFT_TAB | vk::LEFT | vk::RIGHT) {
+        if !matches!(input, vk::TAB | SHIFT_TAB | vk::UP | vk::DOWN | vk::LEFT | vk::RIGHT) {
             return false;
         }
 
-        let Some(focused) = self.prev_node_map.get(self.focused_node_path[0]) else {
+        let focused_id = self.focused_node_path.last().cloned().unwrap_or(0);
+        let Some(focused) = self.prev_node_map.get(focused_id) else {
             debug_assert!(false); // The caller should've cleaned up the focus path.
             return false;
         };
 
         let mut focused_start = focused;
-        let mut focused_next = focused;
         let mut root = focused;
 
         // Figure out if we're inside a focus void (a container that doesn't
@@ -955,73 +964,66 @@ impl Tui {
             }
         }
 
-        if input == vk::LEFT || input == vk::RIGHT {
-            // Find the cell within a row within a table that we're in.
-            // To do so we'll use a circular buffer of the last 3 nodes while we travel up.
-            let mut buf = [None; 3];
-            let mut idx = buf.len() - 1;
-            let mut node = focused_start;
+        let forward;
+        let min_depth;
+        match input {
+            SHIFT_TAB | vk::TAB => {
+                forward = input == vk::TAB;
+                min_depth = usize::MAX;
+            }
+            vk::UP | vk::DOWN => {
+                forward = input == vk::DOWN;
+                min_depth = usize::MAX;
+            }
+            vk::LEFT | vk::RIGHT => {
+                // Find the cell within a row within a table that we're in.
+                // To do so we'll use a circular buffer of the last 3 nodes while we travel up.
+                let mut buf = [None; 3];
+                let mut idx = buf.len() - 1;
+                let mut node = focused_start;
 
-            loop {
-                idx = (idx + 1) % buf.len();
-                buf[idx] = Some(node);
-                if let NodeContent::Table(..) = &node.borrow().content {
-                    break;
+                loop {
+                    idx = (idx + 1) % buf.len();
+                    buf[idx] = Some(node);
+                    if let NodeContent::Table(..) = &node.borrow().content {
+                        break;
+                    }
+                    if ptr::eq(node, root) {
+                        return false;
+                    }
+                    node = match node.borrow().parent {
+                        Some(parent) => parent,
+                        None => return false,
+                    }
                 }
-                if ptr::eq(node, root) {
+
+                // The current `idx` points to the table.
+                // The last item is the row.
+                // The 2nd to last item is the cell.
+                let Some(row) = buf[(idx + 3 - 1) % buf.len()] else {
                     return false;
-                }
-                node = match node.borrow().parent {
-                    Some(parent) => parent,
-                    None => return false,
-                }
+                };
+                let Some(cell) = buf[(idx + 3 - 2) % buf.len()] else {
+                    return false;
+                };
+
+                root = row;
+                focused_start = cell;
+                forward = input == vk::RIGHT;
+                min_depth = root.borrow().depth;
             }
-
-            // The current `idx` points to the table.
-            // The last item is the row.
-            // The 2nd to last item is the cell.
-            let Some(row) = buf[(idx + 3 - 1) % buf.len()] else {
-                return false;
-            };
-            let Some(cell) = buf[(idx + 3 - 2) % buf.len()] else {
-                return false;
-            };
-
-            let row = row.borrow();
-            let cell = cell.borrow();
-            let mut next = if input == vk::LEFT { cell.siblings.prev } else { cell.siblings.next };
-            if next.is_none() {
-                next = if input == vk::LEFT { row.children.last } else { row.children.first };
-            }
-
-            if let Some(next) = next
-                && !ptr::eq(&*next.borrow(), &*cell)
-            {
-                Tui::build_node_path(Some(next), &mut self.focused_node_path);
-                return true;
-            }
-
-            return false;
-        }
-
-        let forward = match input {
-            SHIFT_TAB => false,
-            vk::TAB => true,
             _ => return false,
-        };
-
-        // If the window doesn't contain any nodes, there's nothing to focus.
-        // This also protects against infinite loops below.
-        if root.borrow().children.first.is_none() {
-            return false;
         }
 
-        Tree::visit_all(root, focused_start, usize::MAX / 2, forward, |_, node| {
+        let mut focused_next = focused_start;
+        Tree::visit_all(root, focused_start, forward, |node| {
             let n = node.borrow();
-            if n.attributes.focusable && !ptr::eq(node, root) && !ptr::eq(node, focused_start) {
+            if ptr::eq(node, root) {
+                VisitControl::Continue
+            } else if n.attributes.focusable && !ptr::eq(node, focused_start) {
                 focused_next = node;
                 VisitControl::Stop
-            } else if n.attributes.focus_void {
+            } else if n.attributes.focus_void || n.depth >= min_depth {
                 VisitControl::SkipChildren
             } else {
                 VisitControl::Continue
@@ -1038,11 +1040,12 @@ impl Tui {
 
     // Scroll the focused node(s) into view inside scrollviews
     fn scroll_to_focused(&mut self) -> bool {
-        if self.focused_node_path_for_scrolling == self.focused_node_path {
+        let focused_id = self.focused_node_path.last().cloned().unwrap_or(0);
+        if self.focused_node_for_scrolling == focused_id {
             return false;
         }
 
-        let Some(node) = self.prev_node_map.get(self.focused_node_path[0]) else {
+        let Some(node) = self.prev_node_map.get(focused_id) else {
             // Node not found because we're using the old layout tree.
             // Retry in the next rendering loop.
             return true;
@@ -1064,7 +1067,7 @@ impl Tui {
             node = node.parent.unwrap().borrow_mut();
         }
 
-        self.focused_node_path_for_scrolling = self.focused_node_path.clone();
+        self.focused_node_for_scrolling = focused_id;
         true
     }
 }
@@ -1170,12 +1173,11 @@ impl<'a> Context<'a, '_> {
         let node: &mut NodeCell = self.arena().alloc_default();
         {
             let mut n = node.borrow_mut();
-            n.parent = Some(parent);
-            n.stack_parent = Some(parent);
             n.id = id;
             n.classname = classname;
         }
-        self.tree.append_child(node);
+
+        self.tree.push_child(node);
     }
 
     /// Ends the current UI block, returning to its parent container.
@@ -1237,7 +1239,7 @@ impl<'a> Context<'a, '_> {
 
         if self.tui.is_node_focused(parent.id) {
             self.needs_rerender();
-            self.tui.focused_node_path.insert(0, last_node.id);
+            self.tui.focused_node_path.push(last_node.id);
         }
     }
 
@@ -1266,19 +1268,9 @@ impl<'a> Context<'a, '_> {
             }
         };
 
-        // Remove the node from the UI tree and insert it into the floater list.
-        self.tree.remove_from_parent(last_node);
+        self.tree.move_node_to_root(last_node, anchor);
 
         let mut ln = last_node.borrow_mut();
-        ln.siblings.prev = Some(self.tree.root_last);
-
-        {
-            let mut root = self.tree.root_last.borrow_mut();
-            root.siblings.next = Some(last_node);
-            self.tree.root_last = last_node;
-        }
-
-        ln.parent = anchor;
         ln.attributes.focus_well = true;
         ln.attributes.float = Some(FloatAttributes {
             gravity_x: spec.gravity_x.clamp(0.0, 1.0),
@@ -1350,7 +1342,7 @@ impl<'a> Context<'a, '_> {
 
     pub fn contains_mouse_down(&mut self) -> bool {
         let last_node = self.tree.last_node.borrow();
-        self.tui.was_mouse_down_on_subtree(last_node.id)
+        self.tui.was_mouse_down_on_subtree(&last_node)
     }
 
     pub fn is_focused(&mut self) -> bool {
@@ -1360,7 +1352,7 @@ impl<'a> Context<'a, '_> {
 
     pub fn contains_focus(&mut self) -> bool {
         let last_node = self.tree.last_node.borrow();
-        self.tui.is_subtree_focused(last_node.id)
+        self.tui.is_subtree_focused(&last_node)
     }
 
     pub fn modal_begin(&mut self, classname: &'static str, title: &str) {
@@ -2243,80 +2235,83 @@ impl<'a> Context<'a, '_> {
 
         let mut container = self.tree.last_node.borrow_mut();
         let container_id = container.id;
+        let container_depth = container.depth;
+        let Some(prev_container) = self.tui.prev_node_map.get(container_id) else {
+            return;
+        };
+
+        let prev_container = prev_container.borrow();
         let NodeContent::Scrollarea(sc) = &mut container.content else {
             unreachable!();
         };
 
-        if let Some(prev_container) = self.tui.prev_node_map.get(container_id) {
-            let prev_container = prev_container.borrow();
-            if sc.scroll_offset == Point::MIN
-                && let NodeContent::Scrollarea(sc_prev) = &prev_container.content
-            {
-                *sc = sc_prev.clone();
-            }
+        if sc.scroll_offset == Point::MIN
+            && let NodeContent::Scrollarea(sc_prev) = &prev_container.content
+        {
+            *sc = sc_prev.clone();
+        }
 
-            if !self.input_consumed {
-                if self.tui.mouse_state != InputMouseState::None {
-                    let container_rect = prev_container.inner;
+        if !self.input_consumed {
+            if self.tui.mouse_state != InputMouseState::None {
+                let container_rect = prev_container.inner;
 
-                    match self.tui.mouse_state {
-                        InputMouseState::Left => {
-                            if self.tui.mouse_is_drag {
-                                // We don't need to look up the previous track node,
-                                // since it has a fixed size based on the container size.
-                                let track_rect = Rect {
-                                    left: container_rect.right,
-                                    top: container_rect.top,
-                                    right: container_rect.right + 1,
-                                    bottom: container_rect.bottom,
-                                };
-                                if track_rect.contains(self.tui.mouse_down_position) {
-                                    if sc.scroll_offset_y_drag_start == CoordType::MIN {
-                                        sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
-                                    }
-
-                                    let content = prev_container.children.first.unwrap().borrow();
-                                    let content_rect = content.inner;
-                                    let content_height = content_rect.height();
-                                    let track_height = track_rect.height();
-                                    let scrollable_height = content_height - track_height;
-
-                                    if scrollable_height > 0 {
-                                        let trackable = track_height - sc.thumb_height;
-                                        let delta_y = self.tui.mouse_position.y
-                                            - self.tui.mouse_down_position.y;
-                                        sc.scroll_offset.y = sc.scroll_offset_y_drag_start
-                                            + ((delta_y * scrollable_height) / trackable);
-                                    }
-
-                                    self.set_input_consumed();
+                match self.tui.mouse_state {
+                    InputMouseState::Left => {
+                        if self.tui.mouse_is_drag {
+                            // We don't need to look up the previous track node,
+                            // since it has a fixed size based on the container size.
+                            let track_rect = Rect {
+                                left: container_rect.right,
+                                top: container_rect.top,
+                                right: container_rect.right + 1,
+                                bottom: container_rect.bottom,
+                            };
+                            if track_rect.contains(self.tui.mouse_down_position) {
+                                if sc.scroll_offset_y_drag_start == CoordType::MIN {
+                                    sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
                                 }
-                            }
-                        }
-                        InputMouseState::Release => {
-                            sc.scroll_offset_y_drag_start = CoordType::MIN;
-                        }
-                        InputMouseState::Scroll => {
-                            if container_rect.contains(self.tui.mouse_position) {
-                                sc.scroll_offset.x += self.input_scroll_delta.x;
-                                sc.scroll_offset.y += self.input_scroll_delta.y;
+
+                                let content = prev_container.children.first.unwrap().borrow();
+                                let content_rect = content.inner;
+                                let content_height = content_rect.height();
+                                let track_height = track_rect.height();
+                                let scrollable_height = content_height - track_height;
+
+                                if scrollable_height > 0 {
+                                    let trackable = track_height - sc.thumb_height;
+                                    let delta_y =
+                                        self.tui.mouse_position.y - self.tui.mouse_down_position.y;
+                                    sc.scroll_offset.y = sc.scroll_offset_y_drag_start
+                                        + ((delta_y * scrollable_height) / trackable);
+                                }
+
                                 self.set_input_consumed();
                             }
                         }
-                        _ => {}
                     }
-                } else if self.tui.is_subtree_focused(container_id)
-                    && let Some(key) = self.input_keyboard
-                {
-                    match key {
-                        vk::PRIOR => sc.scroll_offset.y -= prev_container.inner_clipped.height(),
-                        vk::NEXT => sc.scroll_offset.y += prev_container.inner_clipped.height(),
-                        vk::END => sc.scroll_offset.y = CoordType::MAX,
-                        vk::HOME => sc.scroll_offset.y = 0,
-                        _ => return,
+                    InputMouseState::Release => {
+                        sc.scroll_offset_y_drag_start = CoordType::MIN;
                     }
-                    self.set_input_consumed();
+                    InputMouseState::Scroll => {
+                        if container_rect.contains(self.tui.mouse_position) {
+                            sc.scroll_offset.x += self.input_scroll_delta.x;
+                            sc.scroll_offset.y += self.input_scroll_delta.y;
+                            self.set_input_consumed();
+                        }
+                    }
+                    _ => {}
                 }
+            } else if self.tui.is_subtree_focused_alt(container_id, container_depth)
+                && let Some(key) = self.input_keyboard
+            {
+                match key {
+                    vk::PRIOR => sc.scroll_offset.y -= prev_container.inner_clipped.height(),
+                    vk::NEXT => sc.scroll_offset.y += prev_container.inner_clipped.height(),
+                    vk::END => sc.scroll_offset.y = CoordType::MAX,
+                    vk::HOME => sc.scroll_offset.y = 0,
+                    _ => return,
+                }
+                self.set_input_consumed();
             }
         }
     }
@@ -2422,7 +2417,7 @@ impl<'a> Context<'a, '_> {
         {
             let list = self.tree.last_node.borrow();
 
-            contains_focus = self.tui.is_subtree_focused(list.id);
+            contains_focus = self.tui.is_subtree_focused(&list);
             selected_now = match &list.content {
                 NodeContent::List(content) => content.selected_node,
                 _ => unreachable!(),
@@ -2527,19 +2522,27 @@ impl<'a> Context<'a, '_> {
     }
 
     pub fn menubar_menu_begin(&mut self, text: &str, accelerator: char) -> bool {
-        self.next_block_id_mixin(self.tree.current_node.borrow().child_count as u64);
+        let mixin = self.tree.current_node.borrow().child_count as u64;
+        self.next_block_id_mixin(mixin);
+
         self.menubar_label(text, accelerator, None);
         self.attr_focusable();
         self.attr_padding(Rect::two(0, 1));
 
-        if self.consume_shortcut(kbmod::ALT | InputKey::new(accelerator as u32)) {
-            self.steal_focus();
-        }
+        let contains_focus = self.contains_focus();
+        let keyboard_focus = !contains_focus
+            && self.consume_shortcut(kbmod::ALT | InputKey::new(accelerator as u32));
 
-        if self.contains_focus() {
+        if contains_focus || keyboard_focus {
             self.attr_background_rgba(self.tui.floater_default_bg);
             self.attr_foreground_rgba(self.tui.floater_default_fg);
 
+            if self.is_focused() {
+                self.attr_background_rgba(self.indexed(IndexedColor::Green));
+                self.attr_foreground_rgba(self.contrasted(self.indexed(IndexedColor::Green)));
+            }
+
+            self.next_block_id_mixin(mixin);
             self.table_begin("flyout");
             self.attr_float(FloatSpec {
                 anchor: Anchor::Last,
@@ -2549,10 +2552,16 @@ impl<'a> Context<'a, '_> {
                 offset_y: 1.0,
             });
             self.attr_border();
-            return true;
-        }
+            self.attr_focus_well();
 
-        false
+            if keyboard_focus {
+                self.steal_focus();
+            }
+
+            true
+        } else {
+            false
+        }
     }
 
     pub fn menubar_menu_button(
@@ -2573,6 +2582,12 @@ impl<'a> Context<'a, '_> {
     ) -> bool {
         self.table_next_row();
         self.attr_focusable();
+
+        // First menu item? Steal focus.
+        if self.tree.current_node.borrow_mut().siblings.prev.is_none() {
+            self.inherit_focus();
+        }
+
         if self.is_focused() {
             self.attr_background_rgba(self.indexed(IndexedColor::Green));
             self.attr_foreground_rgba(self.contrasted(self.indexed(IndexedColor::Green)));
@@ -2596,66 +2611,37 @@ impl<'a> Context<'a, '_> {
 
     pub fn menubar_menu_end(&mut self) {
         self.table_end();
+
+        if !self.input_consumed
+            && let Some(key) = self.input_keyboard
+            && matches!(key, vk::ESCAPE | vk::UP | vk::DOWN | vk::LEFT | vk::RIGHT)
+        {
+            if matches!(key, vk::UP | vk::DOWN) {
+                let ln = self.tree.last_node.borrow();
+                if self.tui.is_node_focused(ln.parent.map_or(0, |n| n.borrow().id)) {
+                    let selected_next =
+                        if key == vk::UP { ln.children.last } else { ln.children.first };
+                    if let Some(selected_next) = selected_next {
+                        self.steal_focus_for(selected_next);
+                        self.set_input_consumed();
+                    }
+                }
+            } else if self.contains_focus() {
+                if key == vk::ESCAPE {
+                    // TODO: This should reassign the previous focused path.
+                    self.needs_rerender();
+                    self.set_input_consumed();
+                    self.tui.focused_node_path.clear();
+                    self.tui.focused_node_path.push(ROOT_ID);
+                } else if !self.is_focused() {
+                    self.tui.pop_focusable_node(2);
+                }
+            }
+        }
     }
 
     pub fn menubar_end(&mut self) {
-        let menu_row = self.tree.current_node.borrow();
         self.table_end();
-
-        let focus_path = &self.tui.focused_node_path[..];
-        if self.input_consumed
-            || focus_path.len() < 4
-            || focus_path[focus_path.len() - 3] != menu_row.id
-        {
-            return;
-        }
-        let Some(input) = self.input_keyboard else {
-            return;
-        };
-        if !matches!(input, vk::LEFT | vk::RIGHT | vk::UP | vk::DOWN) {
-            return;
-        }
-
-        let container;
-        let element_id;
-
-        if input == vk::LEFT || input == vk::RIGHT {
-            container = menu_row;
-            element_id = focus_path[focus_path.len() - 4];
-        } else {
-            container = self.tree.root_last.borrow();
-            element_id =
-                if focus_path.len() == 6 && focus_path[focus_path.len() - 5] == container.id {
-                    focus_path[focus_path.len() - 6]
-                } else {
-                    0
-                };
-        }
-
-        // In an unnested menu like ours, going up/left and down/right respectively is the same.
-        // The only thing that changes is the layout direction, which we don't care about.
-        let focused_node = Tree::iterate_siblings(container.children.first)
-            .map(|node| node.borrow())
-            .find(|node| node.id == element_id)
-            .and_then(|node| {
-                if input == vk::LEFT || input == vk::UP {
-                    node.siblings.prev
-                } else {
-                    node.siblings.next
-                }
-            })
-            .or_else(|| {
-                if input == vk::LEFT || input == vk::UP {
-                    container.children.last
-                } else {
-                    container.children.first
-                }
-            });
-
-        Tui::build_node_path(focused_node, &mut self.tui.focused_node_path);
-        self.needs_rerender();
-
-        self.set_input_consumed();
     }
 
     fn menubar_label(&mut self, text: &str, accelerator: char, checked: Option<bool>) {
@@ -2732,6 +2718,7 @@ impl<'a> Context<'a, '_> {
     }
 }
 
+#[derive(Clone, Copy)]
 enum VisitControl {
     Continue,
     SkipChildren,
@@ -2770,13 +2757,15 @@ impl<'a> Tree<'a> {
         }
     }
 
-    fn append_child(&mut self, node: &'a NodeCell<'a>) {
+    fn push_child(&mut self, node: &'a NodeCell<'a>) {
         let mut n = node.borrow_mut();
+        n.parent = Some(self.current_node);
+        n.stack_parent = Some(self.current_node);
 
         {
             let mut p = self.current_node.borrow_mut();
-            n.parent = Some(self.current_node);
             n.siblings.prev = p.children.last;
+            n.depth = p.depth + 1;
 
             if let Some(child_last) = p.children.last {
                 let mut child_last = child_last.borrow_mut();
@@ -2803,12 +2792,11 @@ impl<'a> Tree<'a> {
         self.checksum = wymix(self.checksum, n.id);
     }
 
-    fn remove_from_parent(&self, node: &NodeCell<'a>) {
+    fn move_node_to_root(&mut self, node: &'a NodeCell<'a>, anchor: Option<&'a NodeCell<'a>>) {
         let mut n = node.borrow_mut();
         let Some(parent) = n.parent else {
             return;
         };
-        let mut p = parent.borrow_mut();
 
         if let Some(sibling_prev) = n.siblings.prev {
             let mut sibling_prev = sibling_prev.borrow_mut();
@@ -2818,17 +2806,25 @@ impl<'a> Tree<'a> {
             let mut sibling_next = sibling_next.borrow_mut();
             sibling_next.siblings.prev = n.siblings.prev;
         }
-        if opt_ptr_eq(p.children.first, Some(node)) {
-            p.children.first = n.siblings.next;
-        }
-        if opt_ptr_eq(p.children.last, Some(node)) {
-            p.children.last = n.siblings.prev;
-        }
-        p.child_count -= 1;
 
-        n.parent = None;
-        n.siblings.prev = None;
+        {
+            let mut p = parent.borrow_mut();
+            if opt_ptr_eq(p.children.first, Some(node)) {
+                p.children.first = n.siblings.next;
+            }
+            if opt_ptr_eq(p.children.last, Some(node)) {
+                p.children.last = n.siblings.prev;
+            }
+            p.child_count -= 1;
+        }
+
+        n.parent = anchor;
+        n.depth = anchor.map_or(0, |n| n.borrow().depth + 1);
+        n.siblings.prev = Some(self.root_last);
         n.siblings.next = None;
+
+        self.root_last.borrow_mut().siblings.next = Some(node);
+        self.root_last = node;
     }
 
     fn pop_stack(&mut self) {
@@ -2856,25 +2852,24 @@ impl<'a> Tree<'a> {
     /// Starts with node `start`.
     ///
     /// WARNING: Breaks in hilarious ways if `start` is not within `root`.
-    fn visit_all<T: FnMut(usize, &'a NodeCell<'a>) -> VisitControl>(
+    fn visit_all<T: FnMut(&'a NodeCell<'a>) -> VisitControl>(
         root: &'a NodeCell<'a>,
         start: &'a NodeCell<'a>,
-        mut depth: usize,
         forward: bool,
         mut cb: T,
     ) {
+        let root_depth = root.borrow().depth;
         let mut node = start;
         let children_idx = if forward { NodeChildren::FIRST } else { NodeChildren::LAST };
         let siblings_idx = if forward { NodeSiblings::NEXT } else { NodeSiblings::PREV };
 
         while {
             'traverse: {
-                match cb(depth, node) {
+                match cb(node) {
                     VisitControl::Continue => {
                         // Depth first search: It has a child? Go there.
                         if let Some(child) = node.borrow().children.get(children_idx) {
                             node = child;
-                            depth += 1;
                             break 'traverse;
                         }
                     }
@@ -2883,14 +2878,14 @@ impl<'a> Tree<'a> {
                 }
 
                 loop {
-                    // If `start != root`, this ensures we restart the traversal at `root` until we hit `start` again.
-                    // Otherwise, this will continue above, hit the if condition, and break out of the loop.
-                    if ptr::eq(node, root) {
+                    // If we hit the root while going up, we restart the traversal at
+                    // `root` going down again until we hit `start` again.
+                    let n = node.borrow();
+                    if n.depth <= root_depth {
                         break 'traverse;
                     }
 
                     // Go to the parent's next sibling. --> Next subtree.
-                    let n = node.borrow();
                     if let Some(sibling) = n.siblings.get(siblings_idx) {
                         node = sibling;
                         break;
@@ -2898,7 +2893,6 @@ impl<'a> Tree<'a> {
 
                     // Out of children? Go back to the parent.
                     node = n.parent.unwrap();
-                    depth -= 1;
                 }
             }
 
@@ -3138,7 +3132,7 @@ type NodeCell<'a> = SemiRefCell<Node<'a>>;
 
 // NOTE: Must not contain items that require drop().
 #[derive(Default)]
-pub struct Node<'a> {
+struct Node<'a> {
     prev: Option<&'a NodeCell<'a>>,
     next: Option<&'a NodeCell<'a>>,
     stack_parent: Option<&'a NodeCell<'a>>,
@@ -3146,6 +3140,7 @@ pub struct Node<'a> {
     id: u64,
     classname: &'static str,
     parent: Option<&'a NodeCell<'a>>,
+    depth: usize,
     siblings: NodeSiblings<'a>,
     children: NodeChildren<'a>,
     child_count: usize,

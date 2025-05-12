@@ -48,7 +48,7 @@ impl Arena {
         })
     }
 
-    pub(super) fn offset(&self) -> usize {
+    pub fn offset(&self) -> usize {
         self.offset.get()
     }
 
@@ -58,7 +58,7 @@ impl Arena {
     ///
     /// Obviously, this is GIGA UNSAFE. It runs no destructors and does not check
     /// whether the offset is valid. You better take care when using this function.
-    pub(super) unsafe fn reset(&self, to: usize) {
+    pub unsafe fn reset(&self, to: usize) {
         if cfg!(debug_assertions) && self.offset.get() > to {
             let commit = self.commit.get();
             let len = (self.offset.get() + 128).min(commit) - to;

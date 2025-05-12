@@ -1,3 +1,4 @@
+#[cfg(debug_assertions)]
 mod debug;
 mod release;
 mod scratch;
