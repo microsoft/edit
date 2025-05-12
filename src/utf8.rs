@@ -94,11 +94,11 @@ impl<'a> Utf8Chars<'a> {
             // -> Strip off the 1110 prefix
             cp &= !0xF0;
 
-            let t = self.source[self.offset];
+            let t = self.source[self.offset] as u32;
             if LEAD_TRAIL1_BITS[cp as usize] & (1 << (t >> 5)) == 0 {
                 return Self::fffd();
             }
-            cp = (cp << 6) | (t as u32 & 0x3F);
+            cp = (cp << 6) | (t & 0x3F);
 
             self.offset += 1;
             if self.offset >= self.source.len() {
@@ -147,11 +147,11 @@ impl<'a> Utf8Chars<'a> {
                 return Self::fffd();
             }
 
-            let t = self.source[self.offset];
+            let t = self.source[self.offset] as u32;
             if TRAIL1_LEAD_BITS[(t >> 4) as usize] & (1 << cp) == 0 {
                 return Self::fffd();
             }
-            cp = (cp << 6) | (t as u32 & 0x3F);
+            cp = (cp << 6) | (t & 0x3F);
 
             self.offset += 1;
             if self.offset >= self.source.len() {
@@ -159,7 +159,7 @@ impl<'a> Utf8Chars<'a> {
             }
 
             // UTF8-tail = %x80-BF
-            let t = self.source[self.offset] as u32 - 0x80;
+            let t = (self.source[self.offset] as u32).wrapping_sub(0x80);
             if t > 0x3F {
                 return Self::fffd();
             }
@@ -176,7 +176,7 @@ impl<'a> Utf8Chars<'a> {
         unsafe { hint::assert_unchecked(self.offset < self.source.len()) };
 
         // UTF8-tail = %x80-BF
-        let t = self.source[self.offset] as u32 - 0x80;
+        let t = (self.source[self.offset] as u32).wrapping_sub(0x80);
         if t > 0x3F {
             return Self::fffd();
         }
