@@ -243,21 +243,18 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         }
     }
 
-    let doc;
     if let Some(mut file) = sys::open_stdin_if_redirected() {
-        doc = state.documents.add_untitled()?;
+        let doc = state.documents.add_untitled()?;
         let mut tb = doc.buffer.borrow_mut();
         tb.read_file(&mut file, None)?;
         tb.mark_as_dirty();
     } else if let Some(path) = path {
-        doc = state.documents.add_file_path(&path)?;
+        state.documents.add_file_path(&path)?;
     } else {
-        doc = state.documents.add_untitled()?;
+        state.documents.add_untitled()?;
     }
 
     state.file_picker_pending_dir = DisplayablePathBuf::new(cwd);
-    state.file_picker_pending_name = doc.filename.clone();
-
     Ok(false)
 }
 

@@ -260,10 +260,7 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
 
     match action {
         Action::None => return,
-        Action::Save => {
-            state.file_picker_pending_name = doc.filename.clone();
-            state.wants_save = true;
-        }
+        Action::Save => state.wants_save = true,
         Action::Discard => state.documents.remove_active(),
         Action::Cancel => state.wants_exit = false,
     }

@@ -17,8 +17,9 @@ pub enum Arena {
 impl Drop for Arena {
     fn drop(&mut self) {
         if let Arena::Delegated { delegate, borrow } = self {
-            assert_eq!(*borrow, delegate.borrows.get());
-            delegate.borrows.update(|b| b - 1);
+            let borrows = delegate.borrows.get();
+            assert_eq!(*borrow, borrows);
+            delegate.borrows.set(borrows - 1);
         }
     }
 }

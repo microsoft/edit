@@ -121,7 +121,7 @@ pub struct State {
 
     pub wants_file_picker: StateFilePicker,
     pub file_picker_pending_dir: DisplayablePathBuf,
-    pub file_picker_pending_name: String, // This could be PathBuf, if `tui` would expose its TextBuffer for editline.
+    pub file_picker_pending_name: String,
     pub file_picker_entries: Option<Vec<DisplayablePathBuf>>,
     pub file_picker_overwrite_warning: Option<PathBuf>, // The path the warning is about.
 

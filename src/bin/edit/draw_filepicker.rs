@@ -13,9 +13,21 @@ use crate::loc::*;
 use crate::state::*;
 
 pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
+    // The save dialog is pre-filled with the current document filename.
+    if state.file_picker_pending_name.is_empty()
+        && state.wants_file_picker == StateFilePicker::SaveAs
+    {
+        state.file_picker_pending_name = state
+            .documents
+            .active()
+            .map_or("Untitled.txt", |doc| doc.filename.as_str())
+            .to_string();
+    }
+
     let width = (ctx.size().width - 20).max(10);
     let height = (ctx.size().height - 10).max(10);
     let mut doit = None;
+    let mut done = false;
 
     ctx.modal_begin(
         "file-picker",
@@ -110,7 +122,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         }
     }
     if ctx.modal_end() {
-        state.wants_file_picker = StateFilePicker::None;
+        done = true;
     }
 
     if state.file_picker_overwrite_warning.is_some() {
@@ -157,18 +169,25 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     }
 
     if let Some(path) = doit {
-        let res = if state.wants_file_picker == StateFilePicker::SaveAs {
-            if let Some(doc) = state.documents.active_mut() { doc.save(Some(path)) } else { Ok(()) }
-        } else {
+        let res = if state.wants_file_picker == StateFilePicker::Open {
             state.documents.add_file_path(&path).map(|_| ())
+        } else if let Some(doc) = state.documents.active_mut() {
+            doc.save(Some(path))
+        } else {
+            Ok(())
         };
         match res {
             Ok(..) => {
                 ctx.needs_rerender();
-                state.wants_file_picker = StateFilePicker::None;
+                done = true;
             }
             Err(err) => error_log_add(ctx, state, err),
         }
+    }
+
+    if done {
+        state.wants_file_picker = StateFilePicker::None;
+        state.file_picker_pending_name = String::new();
     }
 }
 
