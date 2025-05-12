@@ -30,7 +30,7 @@ use crate::framebuffer::{Framebuffer, IndexedColor, alpha_blend};
 use crate::gap_buffer::GapBuffer;
 use crate::helpers::*;
 use crate::simd::memchr2;
-use crate::ucd::{self, Document};
+use crate::ucd::{self, ReadableDocument, WriteableDocument};
 use crate::{apperr, icu};
 
 /// The margin template is used for line numbers.
@@ -443,8 +443,8 @@ impl TextBuffer {
 
     /// Replaces the entire buffer contents with the given `text`.
     /// Assumes that the line count doesn't change.
-    pub fn copy_from_str(&mut self, text: &str) {
-        if self.buffer.copy_from_str(text) {
+    pub fn copy_from_str(&mut self, text: &dyn ReadableDocument) {
+        if self.buffer.copy_from(text) {
             self.recalc_after_content_swap();
             self.cursor_move_to_logical(Point { x: CoordType::MAX, y: 0 });
 
@@ -455,8 +455,8 @@ impl TextBuffer {
         }
     }
 
-    pub fn debug_replace_everything(&mut self, text: &str) {
-        if self.buffer.copy_from_str(text) {
+    pub fn debug_replace_everything(&mut self, text: &dyn ReadableDocument) {
+        if self.buffer.copy_from(text) {
             let before = self.cursor.logical_pos;
             let end = self.cursor_move_to_logical_internal(
                 Default::default(),
@@ -483,8 +483,8 @@ impl TextBuffer {
     }
 
     /// Copies the contents of the buffer into a string.
-    pub fn save_as_string(&mut self, dst: &mut String) {
-        self.buffer.copy_into_string(dst);
+    pub fn save_as_string(&mut self, dst: &mut dyn WriteableDocument) {
+        self.buffer.copy_into(dst);
         self.mark_as_clean();
     }
 
@@ -1325,7 +1325,7 @@ impl TextBuffer {
                 }
             }
             CursorMovement::Word => {
-                let doc = &self.buffer as &dyn Document;
+                let doc = &self.buffer as &dyn ReadableDocument;
                 let mut offset = self.cursor.offset;
 
                 while delta != 0 {

@@ -11,6 +11,7 @@ use crate::cell::*;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
+use crate::ucd::WriteableDocument;
 use crate::{apperr, arena_format, input, ucd};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
@@ -27,7 +28,7 @@ struct CachedTextBuffer {
 }
 
 enum TextBufferPayload<'a> {
-    Editline(&'a mut String),
+    Editline(&'a mut dyn WriteableDocument),
     Textarea(RcTextBuffer),
 }
 
@@ -1585,7 +1586,7 @@ impl<'a> Context<'a, '_> {
     pub fn editline<'s, 'b: 's>(
         &'s mut self,
         classname: &'static str,
-        text: &'b mut String,
+        text: &'b mut dyn WriteableDocument,
     ) -> bool {
         self.textarea_internal(classname, TextBufferPayload::Editline(text))
     }
@@ -1653,7 +1654,7 @@ impl<'a> Context<'a, '_> {
         };
 
         if let TextBufferPayload::Editline(text) = &payload {
-            content.buffer.borrow_mut().copy_from_str(text);
+            content.buffer.borrow_mut().copy_from_str(*text);
         }
 
         if let Some(node_prev) = self.tui.prev_node_map.get(node.id) {

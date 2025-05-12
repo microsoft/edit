@@ -1,5 +1,4 @@
 use std::alloc::Allocator;
-use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::io::Read;
 use std::mem::{self, MaybeUninit};
@@ -301,14 +300,6 @@ pub fn vec_replace_impl<T: Copy, A: Allocator>(
         // Copy in the replacement.
         ptr::copy_nonoverlapping(src.as_ptr(), ptr, src_len);
         dst.set_len(new_len);
-    }
-}
-
-pub fn string_from_utf8_lossy_owned(v: Vec<u8>) -> String {
-    if let Cow::Owned(string) = String::from_utf8_lossy(&v) {
-        string
-    } else {
-        unsafe { String::from_utf8_unchecked(v) }
     }
 }
 

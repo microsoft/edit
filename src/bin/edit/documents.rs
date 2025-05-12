@@ -57,7 +57,7 @@ impl Document {
     }
 
     fn set_path(&mut self, path: PathBuf) {
-        let filename = DocumentManager::get_filename_from_path(&path);
+        let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let dir = path.parent().map(ToOwned::to_owned).unwrap_or_default();
         self.filename = filename;
         self.dir = Some(DisplayablePathBuf::new(dir));
@@ -204,10 +204,6 @@ impl DocumentManager {
 
     pub fn open_for_writing(path: &Path) -> apperr::Result<File> {
         File::create(path).map_err(apperr::Error::from)
-    }
-
-    pub fn get_filename_from_path(path: &Path) -> String {
-        path.file_name().unwrap_or_default().to_string_lossy().into_owned()
     }
 
     // Parse a filename in the form of "filename:line:char".

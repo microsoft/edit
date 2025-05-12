@@ -8,20 +8,16 @@ use edit::input::vk;
 use edit::tui::*;
 use edit::{icu, path, sys};
 
-use crate::documents::*;
 use crate::loc::*;
 use crate::state::*;
 
 pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     // The save dialog is pre-filled with the current document filename.
-    if state.file_picker_pending_name.is_empty()
+    if state.file_picker_pending_name.as_os_str().is_empty()
         && state.wants_file_picker == StateFilePicker::SaveAs
     {
-        state.file_picker_pending_name = state
-            .documents
-            .active()
-            .map_or("Untitled.txt", |doc| doc.filename.as_str())
-            .to_string();
+        state.file_picker_pending_name =
+            state.documents.active().map_or("Untitled.txt", |doc| doc.filename.as_str()).into();
     }
 
     let width = (ctx.size().width - 20).max(10);
@@ -88,11 +84,11 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.inherit_focus();
             for entry in files {
                 match ctx
-                    .list_item(state.file_picker_pending_name == entry.as_str(), entry.as_str())
+                    .list_item(state.file_picker_pending_name == entry.as_path(), entry.as_str())
                 {
                     ListSelection::Unchanged => {}
                     ListSelection::Selected => {
-                        state.file_picker_pending_name = entry.as_str().to_string()
+                        state.file_picker_pending_name = entry.as_path().into()
                     }
                     ListSelection::Activated => activated = true,
                 }
@@ -101,7 +97,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.list_end();
 
             if ctx.contains_focus() && ctx.consume_shortcut(vk::BACK) {
-                state.file_picker_pending_name = "..".to_string();
+                state.file_picker_pending_name = "..".into();
                 activated = true;
             }
         }
@@ -187,7 +183,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
     if done {
         state.wants_file_picker = StateFilePicker::None;
-        state.file_picker_pending_name = String::new();
+        state.file_picker_pending_name = Default::default();
     }
 }
 
@@ -198,10 +194,10 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     let path = path::normalize(&path);
 
     let (dir, name) = if path.is_dir() {
-        (path.as_path(), String::new())
+        (path.as_path(), PathBuf::new())
     } else {
         let dir = path.parent().unwrap_or(&path);
-        let name = DocumentManager::get_filename_from_path(&path);
+        let name = path.file_name().map_or(Default::default(), |s| s.into());
         (dir, name)
     };
     if dir != state.file_picker_pending_dir.as_path() {
@@ -210,7 +206,7 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     }
 
     state.file_picker_pending_name = name;
-    if state.file_picker_pending_name.is_empty() { None } else { Some(path) }
+    if state.file_picker_pending_name.as_os_str().is_empty() { None } else { Some(path) }
 }
 
 fn draw_dialog_saveas_refresh_files(state: &mut State) {

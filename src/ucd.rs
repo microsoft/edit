@@ -1,12 +1,16 @@
+use std::ffi::OsString;
+use std::mem;
 use std::ops::Range;
+use std::path::PathBuf;
 
-use crate::helpers::{self, CoordType, Point};
+use crate::arena::{ArenaString, scratch_arena};
+use crate::helpers::{self, CoordType, Point, vec_replace};
 use crate::simd::{memchr2, memrchr2};
 use crate::ucd_gen::*;
 use crate::utf8::Utf8Chars;
 
 /// An abstraction over potentially chunked text containers.
-pub trait Document {
+pub trait ReadableDocument {
     /// Read some bytes starting at (including) the given absolute offset.
     ///
     /// # Warning
@@ -32,7 +36,11 @@ pub trait Document {
     fn read_backward(&self, off: usize) -> &[u8];
 }
 
-impl Document for &[u8] {
+pub trait WriteableDocument: ReadableDocument {
+    fn replace(&mut self, range: Range<usize>, replacement: &[u8]);
+}
+
+impl ReadableDocument for &[u8] {
     fn read_forward(&self, off: usize) -> &[u8] {
         let s = *self;
         &s[off.min(s.len())..]
@@ -41,6 +49,53 @@ impl Document for &[u8] {
     fn read_backward(&self, off: usize) -> &[u8] {
         let s = *self;
         &s[..off.min(s.len())]
+    }
+}
+
+impl ReadableDocument for String {
+    fn read_forward(&self, off: usize) -> &[u8] {
+        let s = self.as_bytes();
+        &s[off.min(s.len())..]
+    }
+
+    fn read_backward(&self, off: usize) -> &[u8] {
+        let s = self.as_bytes();
+        &s[..off.min(s.len())]
+    }
+}
+
+impl WriteableDocument for String {
+    fn replace(&mut self, range: Range<usize>, replacement: &[u8]) {
+        // `replacement` is not guaranteed to be valid UTF-8, so we need to sanitize it.
+        let scratch = scratch_arena(None);
+        let utf8 = ArenaString::from_utf8_lossy(&scratch, replacement);
+        let src = match &utf8 {
+            Ok(s) => s,
+            Err(s) => s.as_str(),
+        };
+
+        // SAFETY: `range` is guaranteed to be on codepoint boundaries.
+        vec_replace(unsafe { self.as_mut_vec() }, range, src.as_bytes());
+    }
+}
+
+impl ReadableDocument for PathBuf {
+    fn read_forward(&self, off: usize) -> &[u8] {
+        let s = self.as_os_str().as_encoded_bytes();
+        &s[off.min(s.len())..]
+    }
+
+    fn read_backward(&self, off: usize) -> &[u8] {
+        let s = self.as_os_str().as_encoded_bytes();
+        &s[..off.min(s.len())]
+    }
+}
+
+impl WriteableDocument for PathBuf {
+    fn replace(&mut self, range: Range<usize>, replacement: &[u8]) {
+        let mut vec = mem::take(self).into_os_string().into_encoded_bytes();
+        vec_replace(&mut vec, range, replacement);
+        *self = unsafe { PathBuf::from(OsString::from_encoded_bytes_unchecked(vec)) };
     }
 }
 
@@ -67,14 +122,14 @@ pub struct Cursor {
 
 #[derive(Clone)]
 pub struct MeasurementConfig<'doc> {
-    buffer: &'doc dyn Document,
+    buffer: &'doc dyn ReadableDocument,
     tab_size: CoordType,
     word_wrap_column: CoordType,
     cursor: Cursor,
 }
 
 impl<'doc> MeasurementConfig<'doc> {
-    pub fn new(buffer: &'doc dyn Document) -> Self {
+    pub fn new(buffer: &'doc dyn ReadableDocument) -> Self {
         Self { buffer, tab_size: 8, word_wrap_column: 0, cursor: Default::default() }
     }
 
@@ -151,7 +206,7 @@ impl<'doc> MeasurementConfig<'doc> {
         logical_target: Point,
         visual_target: Point,
         cursor: Cursor,
-        buffer: &dyn Document,
+        buffer: &dyn ReadableDocument,
     ) -> Cursor {
         if cursor.offset >= offset_target
             || cursor.logical_pos >= logical_target
@@ -518,12 +573,12 @@ const WORD_CLASSIFIER: [CharClass; 256] =
 
 /// Finds the next word boundary given a document cursor offset.
 /// Returns the offset of the next word boundary.
-pub fn word_forward(doc: &dyn Document, offset: usize) -> usize {
+pub fn word_forward(doc: &dyn ReadableDocument, offset: usize) -> usize {
     word_navigation(WordForward { doc, offset, chunk: &[], chunk_off: 0 })
 }
 
 /// The backward version of `word_forward`.
-pub fn word_backward(doc: &dyn Document, offset: usize) -> usize {
+pub fn word_backward(doc: &dyn ReadableDocument, offset: usize) -> usize {
     word_navigation(WordBackward { doc, offset, chunk: &[], chunk_off: 0 })
 }
 
@@ -568,7 +623,7 @@ trait WordNavigation {
 }
 
 struct WordForward<'a> {
-    doc: &'a dyn Document,
+    doc: &'a dyn ReadableDocument,
     offset: usize,
     chunk: &'a [u8],
     chunk_off: usize,
@@ -625,7 +680,7 @@ impl WordNavigation for WordForward<'_> {
 }
 
 struct WordBackward<'a> {
-    doc: &'a dyn Document,
+    doc: &'a dyn ReadableDocument,
     offset: usize,
     chunk: &'a [u8],
     chunk_off: usize,
@@ -682,7 +737,7 @@ impl WordNavigation for WordBackward<'_> {
 
 /// Returns the offset range of the "word" at the given offset.
 /// Does not cross newlines. Works similar to VS Code.
-pub fn word_select(doc: &dyn Document, offset: usize) -> Range<usize> {
+pub fn word_select(doc: &dyn ReadableDocument, offset: usize) -> Range<usize> {
     let mut beg = offset;
     let mut end = offset;
     let mut class = CharClass::Newline;
@@ -843,7 +898,7 @@ mod test {
 
     struct ChunkedDoc<'a>(&'a [&'a [u8]]);
 
-    impl Document for ChunkedDoc<'_> {
+    impl ReadableDocument for ChunkedDoc<'_> {
         fn read_forward(&self, mut off: usize) -> &[u8] {
             for chunk in self.0 {
                 if off < chunk.len() {

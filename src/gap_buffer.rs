@@ -3,7 +3,7 @@ use std::ptr::{self, NonNull};
 use std::slice;
 
 use crate::helpers::*;
-use crate::ucd::Document;
+use crate::ucd::{ReadableDocument, WriteableDocument};
 use crate::{apperr, sys};
 
 #[cfg(target_pointer_width = "32")]
@@ -273,53 +273,64 @@ impl GapBuffer {
     /// Replaces the entire buffer contents with the given `text`.
     /// The method is optimized for the case where the given `text` already matches
     /// the existing contents. Returns `true` if the buffer contents were changed.
-    pub fn copy_from_str(&mut self, text: &str) -> bool {
-        let input = text.as_bytes();
-        let max_common = self.text_length.min(input.len());
-        let mut common = 0;
+    pub fn copy_from(&mut self, src: &dyn ReadableDocument) -> bool {
+        let mut off = 0;
 
         // Find the position at which the contents change.
-        while common < max_common {
-            let chunk = self.read_forward(common);
-            let cmp_len = chunk.len().min(max_common - common);
+        loop {
+            let dst_chunk = self.read_forward(off);
+            let src_chunk = src.read_forward(off);
 
-            if chunk[..cmp_len] != input[common..common + cmp_len] {
-                // Find the first differing byte.
-                common += chunk[..cmp_len]
-                    .iter()
-                    .zip(&input[common..common + cmp_len])
-                    .position(|(&a, &b)| a != b)
-                    .unwrap_or(cmp_len);
-                break;
+            let dst_len = dst_chunk.len();
+            let src_len = src_chunk.len();
+            let len = dst_len.min(src_len);
+            let mismatch = dst_chunk[..len] != src_chunk[..len];
+
+            if mismatch {
+                break; // The contents differ.
+            }
+            if len == 0 {
+                if dst_len == src_len {
+                    return false; // Both done simultaneously. -> Done.
+                }
+                break; // One of the two is shorter.
             }
 
-            common += cmp_len;
+            off += len;
         }
 
-        // If the contents are identical, we're done.
-        if common == self.text_length && common == input.len() {
-            return false;
-        }
+        // Update the buffer starting at `off`.
+        loop {
+            let chunk = src.read_forward(off);
+            if chunk.is_empty() {
+                return true; // No more data to copy. -> Done.
+            }
 
-        // Update the buffer from the first differing byte.
-        self.replace(common..self.text_length, &input[common..]);
-        true
-    }
-
-    /// Copies the contents of the buffer into a string.
-    pub fn copy_into_string(&self, dst: &mut String) {
-        dst.clear();
-
-        let mut off = 0;
-        while off < self.text_length {
-            let chunk = self.read_forward(off);
-            dst.push_str(&String::from_utf8_lossy(chunk));
+            self.replace(off..usize::MAX, chunk);
             off += chunk.len();
         }
     }
+
+    /// Copies the contents of the buffer into a string.
+    pub fn copy_into(&self, dst: &mut dyn WriteableDocument) {
+        let mut beg = 0;
+        let mut off = 0;
+
+        while {
+            let chunk = self.read_forward(off);
+
+            // The first write will be 0..usize::MAX and effectively clear() the destination.
+            // Every subsequent write will be usize::MAX..usize::MAX and thus effectively append().
+            dst.replace(beg..usize::MAX, chunk);
+            beg = usize::MAX;
+
+            off += chunk.len();
+            off < self.text_length
+        } {}
+    }
 }
 
-impl Document for GapBuffer {
+impl ReadableDocument for GapBuffer {
     fn read_forward(&self, off: usize) -> &[u8] {
         let off = off.min(self.text_length);
         let beg;
