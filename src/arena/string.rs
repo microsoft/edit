@@ -31,26 +31,22 @@ impl<'a> ArenaString<'a> {
         Self { vec: bytes }
     }
 
-    #[must_use]
-    pub fn from_utf8_lossy_owned(v: Vec<u8, &'a Arena>) -> Self {
-        let mut res = Self::new_in(v.allocator());
-
+    pub fn from_utf8_lossy<'s>(arena: &'a Arena, v: &'s [u8]) -> Result<&'s str, ArenaString<'a>> {
         let mut iter = v.utf8_chunks();
         let Some(mut chunk) = iter.next() else {
-            return res;
+            return Ok("");
         };
 
         let valid = chunk.valid();
         if chunk.invalid().is_empty() {
             debug_assert_eq!(valid.len(), v.len());
-            return unsafe { Self::from_utf8_unchecked(v) };
+            return Ok(unsafe { str::from_utf8_unchecked(v) });
         }
 
         const REPLACEMENT: &str = "\u{FFFD}";
 
+        let mut res = Self::new_in(arena);
         res.reserve(v.len());
-        res.push_str(chunk.valid());
-        res.push_str(REPLACEMENT);
 
         loop {
             res.push_str(chunk.valid());
@@ -63,7 +59,15 @@ impl<'a> ArenaString<'a> {
             };
         }
 
-        res
+        Err(res)
+    }
+
+    #[must_use]
+    pub fn from_utf8_lossy_owned(v: Vec<u8, &'a Arena>) -> Self {
+        match Self::from_utf8_lossy(v.allocator(), &v) {
+            Ok(..) => unsafe { Self::from_utf8_unchecked(v) },
+            Err(s) => s,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
