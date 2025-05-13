@@ -21,9 +21,10 @@ use draw_statusbar::*;
 use edit::arena::{self, ArenaString, scratch_arena};
 #[cfg(feature = "debug-latency")]
 use edit::arena_format;
-use edit::framebuffer::{self, IndexedColor, alpha_blend};
+use edit::framebuffer::{self, IndexedColor};
 use edit::helpers::KIBI;
 use edit::input::{self, kbmod, vk};
+use edit::oklab::oklab_blend;
 use edit::tui::*;
 use edit::vt::{self, Token};
 use edit::{apperr, base64, path, sys};
@@ -74,14 +75,14 @@ fn run() -> apperr::Result<()> {
 
     let _restore = setup_terminal(&mut tui, &mut vt_parser);
 
-    state.menubar_color_bg = alpha_blend(
+    state.menubar_color_bg = oklab_blend(
         tui.indexed(IndexedColor::Background),
-        tui.indexed_alpha(IndexedColor::BrightBlue, 0x7f),
+        tui.indexed_alpha(IndexedColor::BrightBlue, 1, 2),
     );
     state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
-    let floater_bg = alpha_blend(
-        tui.indexed_alpha(IndexedColor::Background, 0xcc),
-        tui.indexed_alpha(IndexedColor::Foreground, 0x33),
+    let floater_bg = oklab_blend(
+        tui.indexed_alpha(IndexedColor::Background, 2, 3),
+        tui.indexed_alpha(IndexedColor::Foreground, 1, 3),
     );
     let floater_fg = tui.contrasted(floater_bg);
     tui.setup_modifier_translations(ModifierTranslations {

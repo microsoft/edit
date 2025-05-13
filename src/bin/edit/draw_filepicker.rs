@@ -77,7 +77,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 height: height - 3,
             },
         );
-        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 0x3f));
+        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
         ctx.next_block_id_mixin(state.file_picker_pending_dir.as_str().len() as u64);
         {
             ctx.list_begin("files");

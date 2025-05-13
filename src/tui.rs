@@ -129,8 +129,8 @@ impl Tui {
             settling_have: 0,
             settling_want: 0,
         };
-        tui.mouse_down_node_path.push(ROOT_ID);
-        tui.focused_node_path.push(ROOT_ID);
+        Self::clean_node_path(&mut tui.mouse_down_node_path);
+        Self::clean_node_path(&mut tui.focused_node_path);
         Ok(tui)
     }
 
@@ -172,8 +172,8 @@ impl Tui {
     }
 
     #[inline]
-    pub fn indexed_alpha(&self, index: IndexedColor, alpha: u8) -> u32 {
-        self.framebuffer.indexed_alpha(index, alpha)
+    pub fn indexed_alpha(&self, index: IndexedColor, numerator: u32, denominator: u32) -> u32 {
+        self.framebuffer.indexed_alpha(index, numerator, denominator)
     }
 
     pub fn contrasted(&self, color: u32) -> u32 {
@@ -202,6 +202,7 @@ impl Tui {
         // Same for Scroll events.
         if self.mouse_state > InputMouseState::Right {
             self.mouse_down_position = Point::MIN;
+            self.mouse_down_node_path.clear();
             self.left_mouse_down_target = 0;
             self.mouse_state = InputMouseState::None;
             self.mouse_is_drag = false;
@@ -484,6 +485,10 @@ impl Tui {
         } else {
             path.push(ROOT_ID);
         }
+    }
+
+    fn clean_node_path(path: &mut Vec<u64>) {
+        Self::build_node_path(None, path);
     }
 
     /// After you finished processing all input, continue redrawing your UI until this returns false.
@@ -866,8 +871,7 @@ impl Tui {
     }
 
     fn was_mouse_down_on_node(&self, id: u64) -> bool {
-        // We construct the hovered_node_path always with at least 1 element (the root id).
-        unsafe { *self.mouse_down_node_path.last().unwrap_unchecked() == id }
+        self.mouse_down_node_path.last() == Some(&id)
     }
 
     fn was_mouse_down_on_subtree(&self, node: &Node) -> bool {
@@ -1123,8 +1127,8 @@ impl<'a> Context<'a, '_> {
     }
 
     #[inline]
-    pub fn indexed_alpha(&self, index: IndexedColor, alpha: u8) -> u32 {
-        self.tui.indexed_alpha(index, alpha)
+    pub fn indexed_alpha(&self, index: IndexedColor, numerator: u32, denominator: u32) -> u32 {
+        self.tui.framebuffer.indexed_alpha(index, numerator, denominator)
     }
 
     pub fn contrasted(&self, color: u32) -> u32 {
@@ -1360,8 +1364,8 @@ impl<'a> Context<'a, '_> {
         self.block_begin(classname);
         self.attr_float(FloatSpec { anchor: Anchor::Root, ..Default::default() });
         self.attr_intrinsic_size(Size { width: self.tui.size.width, height: self.tui.size.height });
-        self.attr_background_rgba(self.indexed_alpha(IndexedColor::Background, 0xd6));
-        self.attr_foreground_rgba(self.indexed_alpha(IndexedColor::Background, 0xd6));
+        self.attr_background_rgba(self.indexed_alpha(IndexedColor::Background, 1, 2));
+        self.attr_foreground_rgba(self.indexed_alpha(IndexedColor::Background, 1, 2));
         self.attr_focus_well();
 
         self.block_begin("window");
@@ -1700,11 +1704,11 @@ impl<'a> Context<'a, '_> {
 
         self.textarea_adjust_scroll_offset(content);
 
-        node.attributes.bg = self.indexed(IndexedColor::Background);
         node.attributes.fg = self.indexed(IndexedColor::Foreground);
+        node.attributes.bg = self.indexed(IndexedColor::Background);
         if single_line && !content.has_focus {
-            node.attributes.bg &= 0x7fffffff;
             node.attributes.fg = self.contrasted(node.attributes.bg);
+            node.attributes.bg = self.indexed_alpha(IndexedColor::Background, 1, 2);
         }
 
         node.attributes.focusable = true;
@@ -2611,8 +2615,7 @@ impl<'a> Context<'a, '_> {
         if clicked {
             // TODO: This should reassign the previous focused path.
             self.needs_rerender();
-            self.tui.focused_node_path.clear();
-            self.tui.focused_node_path.push(ROOT_ID);
+            Tui::clean_node_path(&mut self.tui.focused_node_path);
         }
 
         clicked
@@ -2640,8 +2643,7 @@ impl<'a> Context<'a, '_> {
                     // TODO: This should reassign the previous focused path.
                     self.needs_rerender();
                     self.set_input_consumed();
-                    self.tui.focused_node_path.clear();
-                    self.tui.focused_node_path.push(ROOT_ID);
+                    Tui::clean_node_path(&mut self.tui.focused_node_path);
                 } else if !self.is_focused() {
                     self.tui.pop_focusable_node(2);
                 }

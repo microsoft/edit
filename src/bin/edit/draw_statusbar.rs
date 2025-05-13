@@ -44,21 +44,13 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 ctx.attr_padding(Rect::two(0, 1));
                 ctx.attr_border();
                 {
-                    ctx.list_begin("options");
-                    ctx.focus_on_first_present();
-                    {
-                        if ctx.list_item(false, loc(LocId::EncodingReopen))
-                            == ListSelection::Activated
-                        {
-                            state.wants_encoding_change = StateEncodingChange::Reopen;
-                        }
-                        if ctx.list_item(false, loc(LocId::EncodingConvert))
-                            == ListSelection::Activated
-                        {
-                            state.wants_encoding_change = StateEncodingChange::Convert;
-                        }
+                    if ctx.button("reopen", loc(LocId::EncodingReopen)) {
+                        state.wants_encoding_change = StateEncodingChange::Reopen;
                     }
-                    ctx.list_end();
+                    ctx.focus_on_first_present();
+                    if ctx.button("convert", loc(LocId::EncodingConvert)) {
+                        state.wants_encoding_change = StateEncodingChange::Convert;
+                    }
                 }
                 ctx.block_end();
             } else {
@@ -214,7 +206,7 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
     );
     {
         ctx.scrollarea_begin("scrollarea", Size { width, height });
-        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 0x3f));
+        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
         ctx.inherit_focus();
         {
             let encodings = icu::get_available_encodings();
@@ -265,7 +257,7 @@ pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {
         let height = (ctx.size().height - 10).max(10);
 
         ctx.scrollarea_begin("scrollarea", Size { width, height });
-        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 0x3f));
+        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
         ctx.inherit_focus();
         {
             ctx.list_begin("documents");

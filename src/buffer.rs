@@ -26,9 +26,10 @@ use std::str;
 
 use crate::arena::{ArenaString, scratch_arena};
 use crate::cell::SemiRefCell;
-use crate::framebuffer::{Framebuffer, IndexedColor, alpha_blend};
+use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::gap_buffer::GapBuffer;
 use crate::helpers::*;
+use crate::oklab::oklab_blend;
 use crate::simd::memchr2;
 use crate::ucd::{self, ReadableDocument, WriteableDocument};
 use crate::{apperr, icu};
@@ -1475,7 +1476,7 @@ impl TextBuffer {
                     let top = destination.top + y;
                     fb.blend_fg(
                         Rect { left, top, right: left + line_number_width as i32, bottom: top + 1 },
-                        fb.indexed(IndexedColor::Background),
+                        fb.indexed_alpha(IndexedColor::Background, 1, 2),
                     );
                 }
             }
@@ -1603,12 +1604,12 @@ impl TextBuffer {
                 let top = destination.top + y;
                 let rect = Rect { left: left + beg, top, right: left + end, bottom: top + 1 };
 
-                let mut bg = alpha_blend(
+                let mut bg = oklab_blend(
                     fb.indexed(IndexedColor::Foreground),
-                    fb.indexed_alpha(IndexedColor::BrightBlue, 0x7f),
+                    fb.indexed_alpha(IndexedColor::BrightBlue, 1, 2),
                 );
                 if !focused {
-                    bg = alpha_blend(bg, fb.indexed_alpha(IndexedColor::Background, 0x7f))
+                    bg = oklab_blend(bg, fb.indexed_alpha(IndexedColor::Background, 1, 2))
                 };
                 let fg = fb.contrasted(bg);
                 fb.blend_bg(rect, bg);
@@ -1626,7 +1627,7 @@ impl TextBuffer {
                 right: destination.left + self.margin_width,
                 bottom: destination.bottom,
             };
-            fb.blend_fg(margin, 0x7f7f7f7f);
+            fb.blend_fg(margin, 0x7f3f3f3f);
         }
 
         if self.ruler > 0 {
@@ -1635,7 +1636,7 @@ impl TextBuffer {
             if left < right {
                 fb.blend_bg(
                     Rect { left, top: destination.top, right, bottom: destination.bottom },
-                    fb.indexed_alpha(IndexedColor::BrightRed, 0x1f),
+                    fb.indexed_alpha(IndexedColor::BrightRed, 1, 4),
                 );
             }
         }
@@ -1674,7 +1675,7 @@ impl TextBuffer {
                             right: destination.right,
                             bottom: cursor.y + 1,
                         },
-                        0x1f7f7f7f,
+                        0x50282828,
                     );
                 }
             }
