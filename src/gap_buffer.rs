@@ -264,7 +264,7 @@ impl GapBuffer {
         while beg < end {
             let chunk = self.read_forward(beg);
             let chunk = &chunk[..chunk.len().min(end - beg)];
-            vec_replace(out, out_off..out_off, chunk);
+            out.replace_range(out_off..out_off, chunk);
             beg += chunk.len();
             out_off += chunk.len();
         }

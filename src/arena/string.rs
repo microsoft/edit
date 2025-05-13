@@ -167,7 +167,7 @@ impl<'a> ArenaString<'a> {
             Bound::Excluded(&n) => assert!(self.is_char_boundary(n)),
             Bound::Unbounded => {}
         };
-        vec_replace(unsafe { self.as_mut_vec() }, range, replace_with.as_bytes());
+        unsafe { self.as_mut_vec() }.replace_range(range, replace_with.as_bytes());
     }
 }
 

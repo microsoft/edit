@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use crate::arena::{ArenaString, scratch_arena};
-use crate::helpers::{self, CoordType, Point, vec_replace};
+use crate::helpers::{self, CoordType, Point, ReplaceRange};
 use crate::simd::{memchr2, memrchr2};
 use crate::ucd_gen::*;
 use crate::utf8::Utf8Chars;
@@ -75,7 +75,7 @@ impl WriteableDocument for String {
         };
 
         // SAFETY: `range` is guaranteed to be on codepoint boundaries.
-        vec_replace(unsafe { self.as_mut_vec() }, range, src.as_bytes());
+        unsafe { self.as_mut_vec() }.replace_range(range, src.as_bytes());
     }
 }
 
@@ -94,7 +94,7 @@ impl ReadableDocument for PathBuf {
 impl WriteableDocument for PathBuf {
     fn replace(&mut self, range: Range<usize>, replacement: &[u8]) {
         let mut vec = mem::take(self).into_os_string().into_encoded_bytes();
-        vec_replace(&mut vec, range, replacement);
+        vec.replace_range(range, replacement);
         *self = unsafe { PathBuf::from(OsString::from_encoded_bytes_unchecked(vec)) };
     }
 }

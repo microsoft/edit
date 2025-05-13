@@ -247,29 +247,27 @@ pub fn slice_copy_safe<T: Copy>(dst: &mut [T], src: &[T]) -> usize {
     len
 }
 
-pub fn vec_replace<T: Copy, A: Allocator, R: RangeBounds<usize>>(
-    dst: &mut Vec<T, A>,
-    range: R,
-    src: &[T],
-) {
-    let start = match range.start_bound() {
-        Bound::Included(&start) => start,
-        Bound::Excluded(start) => start + 1,
-        Bound::Unbounded => 0,
-    };
-    let end = match range.end_bound() {
-        Bound::Included(end) => end + 1,
-        Bound::Excluded(&end) => end,
-        Bound::Unbounded => usize::MAX,
-    };
-    vec_replace_impl(dst, start..end, src);
+pub trait ReplaceRange<T: Copy> {
+    fn replace_range<R: RangeBounds<usize>>(&mut self, range: R, src: &[T]);
 }
 
-pub fn vec_replace_impl<T: Copy, A: Allocator>(
-    dst: &mut Vec<T, A>,
-    range: Range<usize>,
-    src: &[T],
-) {
+impl<T: Copy, A: Allocator> ReplaceRange<T> for Vec<T, A> {
+    fn replace_range<R: RangeBounds<usize>>(&mut self, range: R, src: &[T]) {
+        let start = match range.start_bound() {
+            Bound::Included(&start) => start,
+            Bound::Excluded(start) => start + 1,
+            Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(end) => end + 1,
+            Bound::Excluded(&end) => end,
+            Bound::Unbounded => usize::MAX,
+        };
+        vec_replace_impl(self, start..end, src);
+    }
+}
+
+fn vec_replace_impl<T: Copy, A: Allocator>(dst: &mut Vec<T, A>, range: Range<usize>, src: &[T]) {
     unsafe {
         let dst_len = dst.len();
         let src_len = src.len();
