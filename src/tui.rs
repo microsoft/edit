@@ -1726,12 +1726,11 @@ impl<'a> Context<'a, '_> {
 
         let mut tb = tc.buffer.borrow_mut();
         let tb = &mut *tb;
+        let mut make_cursor_visible = false;
 
         if self.tui.mouse_state != InputMouseState::None
             && self.tui.was_mouse_down_on_node(node_prev.id)
         {
-            let mut make_cursor_visible = false;
-
             // Scrolling works even if the node isn't focused.
             if self.tui.mouse_state == InputMouseState::Scroll {
                 tc.scroll_offset.x += self.input_scroll_delta.x;
@@ -1852,24 +1851,19 @@ impl<'a> Context<'a, '_> {
             return false;
         }
 
+        let mut write: &[u8] = b"";
+        let mut write_raw = false;
+
         if let Some(input) = &self.input_text {
-            let mut text = input.text.as_bytes();
-            if single_line {
-                let (end, _) = ucd::newlines_forward(text, 0, 0, 1);
-                text = ucd::strip_newline(&text[..end]);
-            }
-
-            tb.write(text, input.bracketed);
-
+            write = input.text.as_bytes();
+            write_raw = input.bracketed;
             tc.preferred_column = tb.get_cursor_visual_pos().x;
-            self.set_input_consumed();
-            return true;
-        }
-
-        if let Some(input) = &self.input_keyboard {
+            make_cursor_visible = true;
+        } else if let Some(input) = &self.input_keyboard {
             let key = input.key();
             let modifiers = input.modifiers();
-            let mut make_cursor_visible = true;
+
+            make_cursor_visible = true;
 
             match key {
                 vk::BACK => {
@@ -1888,7 +1882,7 @@ impl<'a> Context<'a, '_> {
                     if modifiers == kbmod::SHIFT {
                         tb.unindent();
                     } else {
-                        tb.write(b"\t", false);
+                        write = b"\t";
                     }
                 }
                 vk::RETURN => {
@@ -1896,7 +1890,7 @@ impl<'a> Context<'a, '_> {
                         // If this is just a simple input field, don't consume Enter (= early return).
                         return false;
                     }
-                    tb.write(b"\n", false);
+                    write = b"\n";
                 }
                 vk::ESCAPE => {
                     // If there was a selection, clear it and show the cursor (= fallthrough).
@@ -2104,7 +2098,10 @@ impl<'a> Context<'a, '_> {
                     _ => return false,
                 },
                 vk::INSERT => match modifiers {
-                    kbmod::SHIFT => tb.write(&self.tui.clipboard, true),
+                    kbmod::SHIFT => {
+                        write = &self.tui.clipboard;
+                        write_raw = true;
+                    }
                     kbmod::CTRL => self.set_clipboard(tb.extract_selection(false)),
                     _ => tb.set_overtype(!tb.is_overtype()),
                 },
@@ -2130,7 +2127,10 @@ impl<'a> Context<'a, '_> {
                     _ => return false,
                 },
                 vk::V => match modifiers {
-                    kbmod::CTRL => tb.write(&self.tui.clipboard, true),
+                    kbmod::CTRL => {
+                        write = &self.tui.clipboard;
+                        write_raw = true;
+                    }
                     _ => return false,
                 },
                 vk::Y => match modifiers {
@@ -2149,12 +2149,20 @@ impl<'a> Context<'a, '_> {
             if !matches!(key, vk::PRIOR | vk::NEXT | vk::UP | vk::DOWN) {
                 tc.preferred_column = tb.get_cursor_visual_pos().x;
             }
-
-            self.set_input_consumed();
-            return make_cursor_visible;
+        } else {
+            return false;
         }
 
-        false
+        if single_line && !write.is_empty() {
+            let (end, _) = ucd::newlines_forward(write, 0, 0, 1);
+            write = ucd::strip_newline(&write[..end]);
+        }
+        if !write.is_empty() {
+            tb.write(write, write_raw);
+        }
+
+        self.set_input_consumed();
+        make_cursor_visible
     }
 
     fn textarea_make_cursor_visible(&self, tc: &mut TextareaContent, node_prev: &Node) {
