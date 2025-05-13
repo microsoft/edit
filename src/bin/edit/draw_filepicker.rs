@@ -184,6 +184,8 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     if done {
         state.wants_file_picker = StateFilePicker::None;
         state.file_picker_pending_name = Default::default();
+        state.file_picker_entries = Default::default();
+        state.file_picker_overwrite_warning = Default::default();
     }
 }
 
@@ -233,7 +235,8 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     }
 
     // Sort directories first, then by name, case-insensitive.
-    files[1..].sort_by(|a, b| {
+    let off = files.len().saturating_sub(1);
+    files[off..].sort_by(|a, b| {
         let a = a.as_bytes();
         let b = b.as_bytes();
 
