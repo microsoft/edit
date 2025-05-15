@@ -1,12 +1,11 @@
 use crate::arena::ArenaString;
 
-const ENCODE_TABLE: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const CHARSET: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub fn encode(dst: &mut ArenaString, src: &[u8]) {
     unsafe {
         let mut inp = src.as_ptr();
         let mut remaining = src.len();
-
         let dst = dst.as_mut_vec();
         let out_len = src.len().div_ceil(3) * 4;
         dst.reserve(out_len);
@@ -19,13 +18,13 @@ pub fn encode(dst: &mut ArenaString, src: &[u8]) {
                 inp = inp.add(3);
                 remaining -= 3;
 
-                *out = ENCODE_TABLE[(val >> 26) as usize];
+                *out = CHARSET[(val >> 26) as usize];
                 out = out.add(1);
-                *out = ENCODE_TABLE[(val >> 20) as usize & 0x3f];
+                *out = CHARSET[(val >> 20) as usize & 0x3f];
                 out = out.add(1);
-                *out = ENCODE_TABLE[(val >> 14) as usize & 0x3f];
+                *out = CHARSET[(val >> 14) as usize & 0x3f];
                 out = out.add(1);
-                *out = ENCODE_TABLE[(val >> 8) as usize & 0x3f];
+                *out = CHARSET[(val >> 8) as usize & 0x3f];
                 out = out.add(1);
             }
 
@@ -38,17 +37,17 @@ pub fn encode(dst: &mut ArenaString, src: &[u8]) {
 
             if remaining >= 3 {
                 in2 = inp.add(2).read() as usize;
-                *out.add(3) = ENCODE_TABLE[in2 & 0x3f];
+                *out.add(3) = CHARSET[in2 & 0x3f];
             }
 
             if remaining >= 2 {
                 in1 = inp.add(1).read() as usize;
-                *out.add(2) = ENCODE_TABLE[(in1 << 2 | in2 >> 6) & 0x3f];
+                *out.add(2) = CHARSET[(in1 << 2 | in2 >> 6) & 0x3f];
             }
 
             let in0 = inp.add(0).read() as usize;
-            *out.add(1) = ENCODE_TABLE[(in0 << 4 | in1 >> 4) & 0x3f];
-            *out.add(0) = ENCODE_TABLE[in0 >> 2];
+            *out.add(1) = CHARSET[(in0 << 4 | in1 >> 4) & 0x3f];
+            *out.add(0) = CHARSET[in0 >> 2];
         }
 
         dst.set_len(dst.len() + out_len);

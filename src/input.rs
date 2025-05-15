@@ -10,11 +10,11 @@ use crate::vt;
 pub struct InputKey(u32);
 
 impl InputKey {
-    pub const fn new(v: u32) -> Self {
+    pub(crate) const fn new(v: u32) -> Self {
         Self(v)
     }
 
-    pub const fn from_ascii(ch: char) -> Option<Self> {
+    pub(crate) const fn from_ascii(ch: char) -> Option<Self> {
         if ch == ' ' || (ch >= '0' && ch <= '9') {
             Some(Self(ch as u32))
         } else if ch >= 'a' && ch <= 'z' {
@@ -26,26 +26,27 @@ impl InputKey {
         }
     }
 
-    pub const fn value(&self) -> u32 {
+    pub(crate) const fn value(&self) -> u32 {
         self.0
     }
 
-    pub const fn key(&self) -> InputKey {
+    pub(crate) const fn key(&self) -> InputKey {
         InputKey(self.0 & 0x00FFFFFF)
     }
 
-    pub const fn modifiers(&self) -> InputKeyMod {
+    pub(crate) const fn modifiers(&self) -> InputKeyMod {
         InputKeyMod(self.0 & 0xFF000000)
     }
 
-    pub const fn modifiers_contains(&self, modifier: InputKeyMod) -> bool {
+    pub(crate) const fn modifiers_contains(&self, modifier: InputKeyMod) -> bool {
         (self.0 & modifier.0) != 0
     }
 
-    pub const fn with_modifiers(&self, modifiers: InputKeyMod) -> InputKey {
+    pub(crate) const fn with_modifiers(&self, modifiers: InputKeyMod) -> InputKey {
         InputKey(self.0 | modifiers.0)
     }
 }
+
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct InputKeyMod(u32);
@@ -55,7 +56,7 @@ impl InputKeyMod {
         Self(v)
     }
 
-    pub const fn contains(&self, modifier: InputKeyMod) -> bool {
+    pub(crate) const fn contains(&self, modifier: InputKeyMod) -> bool {
         (self.0 & modifier.0) != 0
     }
 }

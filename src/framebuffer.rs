@@ -8,7 +8,7 @@ use crate::arena::{Arena, ArenaString};
 use crate::helpers::{CoordType, Point, Rect, Size};
 use crate::oklab::{oklab_blend, srgb_to_oklab};
 use crate::simd::{MemsetSafe, memset};
-use crate::ucd;
+use crate::unicode::MeasurementConfig;
 
 // Same constants as used in the PCG family of RNGs.
 #[cfg(target_pointer_width = "32")]
@@ -34,6 +34,7 @@ pub enum IndexedColor {
     BrightMagenta,
     BrightCyan,
     BrightWhite,
+
     Background,
     Foreground,
 }
@@ -77,7 +78,7 @@ impl Framebuffer {
         }
     }
 
-    pub fn reset(&mut self, size: Size) {
+    pub fn flip(&mut self, size: Size) {
         if size != self.buffers[0].bg_bitmap.size {
             for buffer in &mut self.buffers {
                 buffer.text = LineBuffer::new(size);
@@ -250,10 +251,6 @@ impl Framebuffer {
         a << 24 | r << 16 | g << 8 | b
     }
 
-    fn is_dark(color: u32) -> bool {
-        srgb_to_oklab(color).l < 0.5
-    }
-
     pub fn contrasted(&self, color: u32) -> u32 {
         let idx = (color as usize).wrapping_mul(HASH_MULTIPLIER) % self.contrast_colors.len();
         let slot = self.contrast_colors[idx].get();
@@ -266,6 +263,10 @@ impl Framebuffer {
         let contrast = self.auto_colors[Self::is_dark(color) as usize];
         self.contrast_colors[idx].set((color, contrast));
         contrast
+    }
+
+    fn is_dark(color: u32) -> bool {
+        srgb_to_oklab(color).l < 0.5
     }
 
     pub fn blend_bg(&mut self, target: Rect, bg: u32) {
@@ -304,10 +305,6 @@ impl Framebuffer {
     pub fn replace_attr(&mut self, target: Rect, mask: Attributes, attr: Attributes) {
         let back = &mut self.buffers[self.frame_counter & 1];
         back.attributes.replace(target, mask, attr);
-    }
-    pub fn flip_attr(&mut self, target: Rect, attr: Attributes) {
-        let back = &mut self.buffers[self.frame_counter & 1];
-        back.attributes.flip(target, attr);
     }
 
     pub fn set_cursor(&mut self, pos: Point, overtype: bool) {
@@ -366,7 +363,7 @@ impl Framebuffer {
             }
 
             let line_bytes = back_line.as_bytes();
-            let mut cfg = ucd::MeasurementConfig::new(&line_bytes);
+            let mut cfg = MeasurementConfig::new(&line_bytes);
             let mut chunk_end = 0;
 
             if result.is_empty() {
@@ -527,7 +524,7 @@ impl LineBuffer {
             return;
         }
 
-        let mut cfg = ucd::MeasurementConfig::new(&bytes);
+        let mut cfg = MeasurementConfig::new(&bytes);
 
         // Check if the text intersects with the left edge of the framebuffer
         // and figure out the parts that are inside.
@@ -557,7 +554,7 @@ impl LineBuffer {
         // Figure out at which byte offset the new text gets inserted.
         let right = left + end.visual_pos.x;
         let line_bytes = line.as_bytes();
-        let mut cfg_old = ucd::MeasurementConfig::new(&line_bytes);
+        let mut cfg_old = MeasurementConfig::new(&line_bytes);
         let res_old_beg = cfg_old.goto_visual(Point { x: left, y: 0 });
         let mut res_old_end = cfg_old.goto_visual(Point { x: right, y: 0 });
 
@@ -767,27 +764,6 @@ impl AttributeBuffer {
                 for a in dst {
                     *a = Attributes(a.0 & !mask.0 | attr.0);
                 }
-            }
-        }
-    }
-
-    fn flip(&mut self, target: Rect, attr: Attributes) {
-        let target = target.intersect(self.size.as_rect());
-        if target.is_empty() {
-            return;
-        }
-
-        let top = target.top as usize;
-        let bottom = target.bottom as usize;
-        let left = target.left as usize;
-        let right = target.right as usize;
-        let stride = self.size.width as usize;
-
-        for y in top..bottom {
-            let beg = y * stride + left;
-            let end = y * stride + right;
-            for a in &mut self.data[beg..end] {
-                *a = Attributes(a.0 ^ attr.0);
             }
         }
     }

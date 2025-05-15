@@ -15,16 +15,16 @@ impl<'a> Utf8Chars<'a> {
         self.source
     }
 
-    pub fn offset(&self) -> usize {
-        self.offset
-    }
-
     pub fn is_empty(&self) -> bool {
         self.source.is_empty()
     }
 
     pub fn len(&self) -> usize {
         self.source.len()
+    }
+
+    pub fn offset(&self) -> usize {
+        self.offset
     }
 
     pub fn seek(&mut self, offset: usize) {

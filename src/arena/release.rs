@@ -2,6 +2,7 @@
 
 use std::alloc::{AllocError, Allocator, Layout};
 use std::cell::Cell;
+use std::hint::cold_path;
 use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
 use std::{mem, slice};
@@ -35,8 +36,9 @@ impl Arena {
     }
 
     pub fn new(capacity: usize) -> apperr::Result<Arena> {
-        let capacity = (capacity + ALLOC_CHUNK_SIZE - 1) & !(ALLOC_CHUNK_SIZE - 1);
+        let capacity = (capacity.max(1) + ALLOC_CHUNK_SIZE - 1) & !(ALLOC_CHUNK_SIZE - 1);
         let base = unsafe { sys::virtual_reserve(capacity)? };
+
         Ok(Arena {
             base,
             capacity,
@@ -64,17 +66,16 @@ impl Arena {
             let len = (self.offset.get() + 128).min(commit) - to;
             unsafe { slice::from_raw_parts_mut(self.base.add(to).as_ptr(), len).fill(0xDD) };
         }
+
         self.offset.replace(to);
     }
 
+    #[inline]
     pub(super) fn alloc_raw(
         &self,
         bytes: usize,
         alignment: usize,
     ) -> Result<NonNull<[u8]>, AllocError> {
-        let bytes = bytes.max(1);
-        let alignment = alignment.max(1);
-
         let commit = self.commit.get();
         let offset = self.offset.get();
 
@@ -92,7 +93,7 @@ impl Arena {
         }
 
         self.offset.replace(end);
-        Ok(unsafe { NonNull::slice_from_raw_parts(self.base.add(beg), end - beg) })
+        Ok(unsafe { NonNull::slice_from_raw_parts(self.base.add(beg), bytes) })
     }
 
     // With the code in `alloc_raw_bump()` out of the way, `alloc_raw()` compiles down to some super tight assembly.
@@ -135,11 +136,6 @@ impl Arena {
         let alignment = mem::align_of::<T>();
         let ptr = self.alloc_raw(bytes, alignment).unwrap();
         unsafe { slice::from_raw_parts_mut(ptr.cast().as_ptr(), count) }
-    }
-
-    #[allow(clippy::mut_from_ref)]
-    pub fn alloc_default<T: Default>(&self) -> &mut T {
-        self.alloc_uninit::<T>().write(Default::default())
     }
 }
 
@@ -191,6 +187,8 @@ unsafe impl Allocator for Arena {
             // we can just push more memory to the end of the arena to grow it.
             self.alloc_raw(delta, 1)?;
         } else {
+            cold_path();
+
             new_ptr = self.allocate(new_layout)?.cast();
 
             // SAFETY: It's weird to me that this doesn't assert new_layout.size() >= old_layout.size(),

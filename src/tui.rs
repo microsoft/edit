@@ -2,24 +2,25 @@ use std::arch::breakpoint;
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 use std::fmt::Write as _;
-use std::mem::MaybeUninit;
 use std::{iter, mem, ptr, time};
 
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::{CursorMovement, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
+use crate::document::WriteableDocument;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
+use crate::hash::*;
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
-use crate::ucd::WriteableDocument;
-use crate::{apperr, arena_format, input, ucd};
+use crate::{apperr, arena_format, input, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
 
-type InputText<'input> = input::InputText<'input>;
+type Input<'input> = input::Input<'input>;
 type InputKey = input::InputKey;
 type InputMouseState = input::InputMouseState;
+type InputText<'input> = input::InputText<'input>;
 
 struct CachedTextBuffer {
     node_id: u64,
@@ -38,9 +39,56 @@ pub struct ModifierTranslations {
     pub shift: &'static str,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub enum Anchor {
+    #[default]
+    Last,
+    Parent,
+    Root,
+}
+
+#[derive(Default)]
+pub struct FloatSpec {
+    pub anchor: Anchor,
+    // Specifies the origin of the container relative to the container size. [0, 1]
+    pub gravity_x: f32,
+    pub gravity_y: f32,
+    // Specifies an offset from the origin in cells.
+    pub offset_x: f32,
+    pub offset_y: f32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ListSelection {
+    Unchanged,
+    Selected,
+    Activated,
+}
+
+#[derive(Default)]
+pub enum Position {
+    #[default]
+    Stretch,
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub enum Overflow {
+    #[default]
+    Clip,
+    TruncateHead,
+    TruncateMiddle,
+    TruncateTail,
+}
+
 pub struct Tui {
+    arena_prev: Arena,
+    arena_next: Arena,
+    prev_tree: Tree<'static>,
+    prev_node_map: NodeMap<'static>,
     framebuffer: Framebuffer,
-    read_timeout: time::Duration,
 
     modifier_translations: ModifierTranslations,
     floater_default_bg: u32,
@@ -60,24 +108,21 @@ pub struct Tui {
     mouse_state: InputMouseState,
     mouse_is_drag: bool,
     mouse_click_counter: CoordType,
+    mouse_down_node_path: Vec<u64>,
     first_click_position: Point,
     first_click_target: u64,
 
-    clipboard: Vec<u8>,
-    clipboard_generation: u32,
-    cached_text_buffers: Vec<CachedTextBuffer>,
-    mouse_down_node_path: Vec<u64>,
     focused_node_path: Vec<u64>,
     focused_node_for_scrolling: u64,
 
-    arena_prev: Arena,
-    arena_next: Arena,
+    cached_text_buffers: Vec<CachedTextBuffer>,
 
-    prev_tree: Tree<'static>,
-    prev_node_map: NodeMap<'static>,
+    clipboard: Vec<u8>,
+    clipboard_generation: u32,
 
     settling_have: i32,
     settling_want: i32,
+    read_timeout: time::Duration,
 }
 
 impl Tui {
@@ -89,8 +134,11 @@ impl Tui {
         let prev_tree = Tree::new(unsafe { mem::transmute::<&Arena, &Arena>(&arena_next) });
 
         let mut tui = Self {
+            arena_prev,
+            arena_next,
+            prev_tree,
+            prev_node_map: Default::default(),
             framebuffer: Framebuffer::new(),
-            read_timeout: time::Duration::MAX,
 
             modifier_translations: ModifierTranslations {
                 ctrl: "Ctrl",
@@ -110,32 +158,25 @@ impl Tui {
             mouse_state: InputMouseState::None,
             mouse_is_drag: false,
             mouse_click_counter: 0,
+            mouse_down_node_path: Vec::with_capacity(16),
             first_click_position: Point::MIN,
             first_click_target: 0,
 
-            clipboard: Vec::new(),
-            clipboard_generation: 0,
-            cached_text_buffers: Vec::with_capacity(16),
-            mouse_down_node_path: Vec::with_capacity(16),
             focused_node_path: Vec::with_capacity(16),
             focused_node_for_scrolling: ROOT_ID,
 
-            arena_prev,
-            arena_next,
+            cached_text_buffers: Vec::with_capacity(16),
 
-            prev_tree,
-            prev_node_map: Default::default(),
+            clipboard: Vec::new(),
+            clipboard_generation: 0,
 
             settling_have: 0,
             settling_want: 0,
+            read_timeout: time::Duration::MAX,
         };
         Self::clean_node_path(&mut tui.mouse_down_node_path);
         Self::clean_node_path(&mut tui.focused_node_path);
         Ok(tui)
-    }
-
-    pub fn size(&self) -> Size {
-        self.size
     }
 
     pub fn setup_indexed_colors(&mut self, colors: [u32; INDEXED_COLORS_COUNT]) {
@@ -180,17 +221,17 @@ impl Tui {
         self.framebuffer.contrasted(color)
     }
 
-    pub fn get_clipboard(&self) -> &[u8] {
+    pub fn clipboard(&self) -> &[u8] {
         &self.clipboard
     }
 
-    pub fn get_clipboard_generation(&self) -> u32 {
+    pub fn clipboard_generation(&self) -> u32 {
         self.clipboard_generation
     }
 
     pub fn create_context<'a, 'input>(
         &'a mut self,
-        input: Option<input::Input<'input>>,
+        input: Option<Input<'input>>,
     ) -> Context<'a, 'input> {
         // SAFETY: Since we have a unique `&mut self`, nothing is holding onto `arena_prev`,
         // which will become `arena_next` and get reset. It's safe to reset and reuse its memory.
@@ -222,12 +263,12 @@ impl Tui {
 
         match input {
             None => {}
-            Some(input::Input::Resize(resize)) => {
+            Some(Input::Resize(resize)) => {
                 assert!(resize.width > 0 && resize.height > 0);
                 assert!(resize.width < 32768 && resize.height < 32768);
                 self.size = resize;
             }
-            Some(input::Input::Text(text)) => {
+            Some(Input::Text(text)) => {
                 input_text = Some(text);
                 // TODO: the .len()==1 check causes us to ignore keyboard inputs that are faster than we process them.
                 // For instance, imagine the user presses "A" twice and we happen to read it in a single chunk.
@@ -239,10 +280,10 @@ impl Tui {
                     input_keyboard = InputKey::from_ascii(ch as char)
                 }
             }
-            Some(input::Input::Keyboard(keyboard)) => {
+            Some(Input::Keyboard(keyboard)) => {
                 input_keyboard = Some(keyboard);
             }
-            Some(input::Input::Mouse(mouse)) => {
+            Some(Input::Mouse(mouse)) => {
                 let mut next_state = mouse.state;
                 let next_position = mouse.position;
                 let next_scroll = mouse.scroll;
@@ -508,7 +549,7 @@ impl Tui {
 
     /// Renders all nodes into a string-frame representation.
     pub fn render<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
-        self.framebuffer.reset(self.size);
+        self.framebuffer.flip(self.size);
         for child in self.prev_tree.iterate_roots() {
             let mut child = child.borrow_mut();
             self.render_node(&mut child);
@@ -654,7 +695,7 @@ impl Tui {
                         inner_clipped,
                         track,
                         tc.scroll_offset.y,
-                        tb.get_visual_line_count() + inner.height() - 1,
+                        tb.visual_line_count() + inner.height() - 1,
                     );
                 }
             }
@@ -700,7 +741,7 @@ impl Tui {
             self.framebuffer.replace_text(target.top, target.left, target.right, text);
         } else {
             let bytes = text.as_bytes();
-            let mut cfg = ucd::MeasurementConfig::new(&bytes);
+            let mut cfg = unicode::MeasurementConfig::new(&bytes);
 
             match overflow {
                 Overflow::Clip => unreachable!(),
@@ -737,7 +778,7 @@ impl Tui {
 
         if !chunks.is_empty() {
             let bytes = text.as_bytes();
-            let mut cfg = ucd::MeasurementConfig::new(&bytes).with_cursor(ucd::Cursor {
+            let mut cfg = unicode::MeasurementConfig::new(&bytes).with_cursor(unicode::Cursor {
                 visual_pos: Point { x: target.left, y: 0 },
                 ..Default::default()
             });
@@ -1123,7 +1164,7 @@ impl<'a> Context<'a, '_> {
 
     #[inline]
     pub fn indexed(&self, index: IndexedColor) -> u32 {
-        self.tui.indexed(index)
+        self.tui.framebuffer.indexed(index)
     }
 
     #[inline]
@@ -1132,7 +1173,15 @@ impl<'a> Context<'a, '_> {
     }
 
     pub fn contrasted(&self, color: u32) -> u32 {
-        self.tui.contrasted(color)
+        self.tui.framebuffer.contrasted(color)
+    }
+
+    pub fn clipboard(&self) -> &[u8] {
+        self.tui.clipboard()
+    }
+
+    pub fn clipboard_generation(&self) -> u32 {
+        self.tui.clipboard_generation()
     }
 
     pub fn set_clipboard(&mut self, data: Vec<u8>) {
@@ -1141,14 +1190,6 @@ impl<'a> Context<'a, '_> {
             self.tui.clipboard_generation = self.tui.clipboard_generation.wrapping_add(1);
             self.needs_rerender();
         }
-    }
-
-    pub fn get_clipboard(&self) -> &[u8] {
-        self.tui.get_clipboard()
-    }
-
-    pub fn get_clipboard_generation(&self) -> u32 {
-        self.tui.get_clipboard_generation()
     }
 
     pub fn needs_rerender(&mut self) {
@@ -1175,7 +1216,7 @@ impl<'a> Context<'a, '_> {
             panic!("Duplicate node ID: {id:x}");
         }
 
-        let node: &mut NodeCell = self.arena().alloc_default();
+        let node = Tree::alloc_node(self.arena());
         {
             let mut n = node.borrow_mut();
             n.id = id;
@@ -1408,7 +1449,7 @@ impl<'a> Context<'a, '_> {
         });
     }
 
-    pub fn table_set_columns(&mut self, columns: &[i32]) {
+    pub fn table_set_columns(&mut self, columns: &[CoordType]) {
         let mut last_node = self.tree.last_node.borrow_mut();
         if let NodeContent::Table(spec) = &mut last_node.content {
             spec.columns.clear();
@@ -1522,7 +1563,7 @@ impl<'a> Context<'a, '_> {
                 return;
             };
 
-            let cursor = ucd::MeasurementConfig::new(&content.text.as_bytes())
+            let cursor = unicode::MeasurementConfig::new(&content.text.as_bytes())
                 .goto_visual(Point { x: CoordType::MAX, y: 0 });
             last_node.intrinsic_size.width = cursor.visual_pos.x;
             last_node.intrinsic_size.height = 1;
@@ -1712,7 +1753,7 @@ impl<'a> Context<'a, '_> {
         }
 
         node.attributes.focusable = true;
-        node.intrinsic_size.height = content.buffer.borrow().get_visual_line_count();
+        node.intrinsic_size.height = content.buffer.borrow().visual_line_count();
         node.intrinsic_size_set = true;
 
         dirty
@@ -1744,7 +1785,7 @@ impl<'a> Context<'a, '_> {
                 let mouse = self.tui.mouse_position;
                 let inner = node_prev.inner;
                 let text_rect = Rect {
-                    left: inner.left + tb.get_margin_width(),
+                    left: inner.left + tb.margin_width(),
                     top: inner.top,
                     right: inner.right - !single_line as CoordType,
                     bottom: inner.bottom,
@@ -1756,14 +1797,14 @@ impl<'a> Context<'a, '_> {
                     bottom: inner.bottom,
                 };
                 let pos = Point {
-                    x: mouse.x - inner.left - tb.get_margin_width() + tc.scroll_offset.x,
+                    x: mouse.x - inner.left - tb.margin_width() + tc.scroll_offset.x,
                     y: mouse.y - inner.top + tc.scroll_offset.y,
                 };
 
                 if text_rect.contains(self.tui.mouse_down_position) {
                     if self.tui.mouse_is_drag {
                         tb.selection_update_visual(pos);
-                        tc.preferred_column = tb.get_cursor_visual_pos().x;
+                        tc.preferred_column = tb.cursor_visual_pos().x;
 
                         let height = inner.height();
 
@@ -1814,7 +1855,7 @@ impl<'a> Context<'a, '_> {
                                     } else {
                                         tb.cursor_move_to_visual(pos);
                                     }
-                                    tc.preferred_column = tb.get_cursor_visual_pos().x;
+                                    tc.preferred_column = tb.cursor_visual_pos().x;
                                     make_cursor_visible = true;
                                 }
                                 InputMouseState::Release => {
@@ -1834,7 +1875,7 @@ impl<'a> Context<'a, '_> {
 
                         // The textarea supports 1 height worth of "scrolling beyond the end".
                         // `track_height` is the same as the viewport height.
-                        let scrollable_height = tb.get_visual_line_count() - 1;
+                        let scrollable_height = tb.visual_line_count() - 1;
 
                         if scrollable_height > 0 {
                             let trackable = track_rect.height() - tc.thumb_height;
@@ -1861,7 +1902,7 @@ impl<'a> Context<'a, '_> {
         if let Some(input) = &self.input_text {
             write = input.text.as_bytes();
             write_raw = input.bracketed;
-            tc.preferred_column = tb.get_cursor_visual_pos().x;
+            tc.preferred_column = tb.cursor_visual_pos().x;
             make_cursor_visible = true;
         } else if let Some(input) = &self.input_keyboard {
             let key = input.key();
@@ -1911,72 +1952,68 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::PRIOR => {
-                    let height = node_prev.inner.height();
+                    let height = node_prev.inner.height() - 1;
 
                     // If the cursor was already on the first line,
                     // move it to the start of the buffer.
-                    if tb.get_cursor_visual_pos().y == 0 {
+                    if tb.cursor_visual_pos().y == 0 {
                         tc.preferred_column = 0;
                     }
 
                     if modifiers == kbmod::SHIFT {
                         tb.selection_update_visual(Point {
                             x: tc.preferred_column,
-                            y: tb.get_cursor_visual_pos().y - height,
+                            y: tb.cursor_visual_pos().y - height,
                         });
                     } else {
                         tb.cursor_move_to_visual(Point {
                             x: tc.preferred_column,
-                            y: tb.get_cursor_visual_pos().y - height,
+                            y: tb.cursor_visual_pos().y - height,
                         });
                     }
-
-                    tc.scroll_offset.y -= height;
                 }
                 vk::NEXT => {
-                    let height = node_prev.inner.height();
+                    let height = node_prev.inner.height() - 1;
 
                     // If the cursor was already on the last line,
                     // move it to the end of the buffer.
-                    if tb.get_cursor_visual_pos().y >= tb.get_visual_line_count() - 1 {
+                    if tb.cursor_visual_pos().y >= tb.visual_line_count() - 1 {
                         tc.preferred_column = CoordType::MAX;
                     }
 
                     if modifiers == kbmod::SHIFT {
                         tb.selection_update_visual(Point {
                             x: tc.preferred_column,
-                            y: tb.get_cursor_visual_pos().y + height,
+                            y: tb.cursor_visual_pos().y + height,
                         });
                     } else {
                         tb.cursor_move_to_visual(Point {
                             x: tc.preferred_column,
-                            y: tb.get_cursor_visual_pos().y + height,
+                            y: tb.cursor_visual_pos().y + height,
                         });
                     }
 
                     if tc.preferred_column == CoordType::MAX {
-                        tc.preferred_column = tb.get_cursor_visual_pos().x;
+                        tc.preferred_column = tb.cursor_visual_pos().x;
                     }
-
-                    tc.scroll_offset.y += height;
                 }
                 vk::END => match modifiers {
                     kbmod::CTRL => tb.cursor_move_to_logical(Point::MAX),
                     kbmod::SHIFT => tb.selection_update_visual(Point {
                         x: CoordType::MAX,
-                        y: tb.get_cursor_visual_pos().y,
+                        y: tb.cursor_visual_pos().y,
                     }),
                     _ => tb.cursor_move_to_visual(Point {
                         x: CoordType::MAX,
-                        y: tb.get_cursor_visual_pos().y,
+                        y: tb.cursor_visual_pos().y,
                     }),
                 },
                 vk::HOME => match modifiers {
                     kbmod::CTRL => tb.cursor_move_to_logical(Default::default()),
                     kbmod::SHIFT => {
-                        tb.selection_update_visual(Point { x: 0, y: tb.get_cursor_visual_pos().y })
+                        tb.selection_update_visual(Point { x: 0, y: tb.cursor_visual_pos().y })
                     }
-                    _ => tb.cursor_move_to_visual(Point { x: 0, y: tb.get_cursor_visual_pos().y }),
+                    _ => tb.cursor_move_to_visual(Point { x: 0, y: tb.cursor_visual_pos().y }),
                 },
                 vk::LEFT => {
                     let granularity = if modifiers.contains(kbmod::CTRL) {
@@ -1996,7 +2033,7 @@ impl<'a> Context<'a, '_> {
                     match modifiers {
                         kbmod::NONE => {
                             let mut x = tc.preferred_column;
-                            let mut y = tb.get_cursor_visual_pos().y - 1;
+                            let mut y = tb.cursor_visual_pos().y - 1;
 
                             // If there's a selection we the cursor above the start of the selection.
                             if let Some((beg, _)) = tb.selection_range() {
@@ -2021,13 +2058,13 @@ impl<'a> Context<'a, '_> {
                         kbmod::SHIFT => {
                             // If the cursor was already on the first line,
                             // move it to the start of the buffer.
-                            if tb.get_cursor_visual_pos().y == 0 {
+                            if tb.cursor_visual_pos().y == 0 {
                                 tc.preferred_column = 0;
                             }
 
                             tb.selection_update_visual(Point {
                                 x: tc.preferred_column,
-                                y: tb.get_cursor_visual_pos().y - 1,
+                                y: tb.cursor_visual_pos().y - 1,
                             });
                         }
                         kbmod::CTRL_ALT => {
@@ -2053,7 +2090,7 @@ impl<'a> Context<'a, '_> {
                 vk::DOWN => match modifiers {
                     kbmod::NONE => {
                         let mut x = tc.preferred_column;
-                        let mut y = tb.get_cursor_visual_pos().y + 1;
+                        let mut y = tb.cursor_visual_pos().y + 1;
 
                         // If there's a selection we the cursor below the end of the selection.
                         if let Some((_, end)) = tb.selection_range() {
@@ -2064,7 +2101,7 @@ impl<'a> Context<'a, '_> {
 
                         // If the cursor was already on the last line,
                         // move it to the end of the buffer.
-                        if y >= tb.get_visual_line_count() {
+                        if y >= tb.visual_line_count() {
                             x = CoordType::MAX;
                         }
 
@@ -2073,7 +2110,7 @@ impl<'a> Context<'a, '_> {
                         // If we fell into the `if y >= tb.get_visual_line_count()` above, we wanted to
                         // update the `preferred_column` but didn't know yet what it was. Now we know!
                         if x == CoordType::MAX {
-                            tc.preferred_column = tb.get_cursor_visual_pos().x;
+                            tc.preferred_column = tb.cursor_visual_pos().x;
                         }
                     }
                     kbmod::CTRL => {
@@ -2083,17 +2120,17 @@ impl<'a> Context<'a, '_> {
                     kbmod::SHIFT => {
                         // If the cursor was already on the last line,
                         // move it to the end of the buffer.
-                        if tb.get_cursor_visual_pos().y >= tb.get_visual_line_count() - 1 {
+                        if tb.cursor_visual_pos().y >= tb.visual_line_count() - 1 {
                             tc.preferred_column = CoordType::MAX;
                         }
 
                         tb.selection_update_visual(Point {
                             x: tc.preferred_column,
-                            y: tb.get_cursor_visual_pos().y + 1,
+                            y: tb.cursor_visual_pos().y + 1,
                         });
 
                         if tc.preferred_column == CoordType::MAX {
-                            tc.preferred_column = tb.get_cursor_visual_pos().x;
+                            tc.preferred_column = tb.cursor_visual_pos().x;
                         }
                     }
                     kbmod::CTRL_ALT => {
@@ -2151,15 +2188,15 @@ impl<'a> Context<'a, '_> {
             }
 
             if !matches!(key, vk::PRIOR | vk::NEXT | vk::UP | vk::DOWN) {
-                tc.preferred_column = tb.get_cursor_visual_pos().x;
+                tc.preferred_column = tb.cursor_visual_pos().x;
             }
         } else {
             return false;
         }
 
         if single_line && !write.is_empty() {
-            let (end, _) = ucd::newlines_forward(write, 0, 0, 1);
-            write = ucd::strip_newline(&write[..end]);
+            let (end, _) = unicode::newlines_forward(write, 0, 0, 1);
+            write = unicode::strip_newline(&write[..end]);
         }
         if !write.is_empty() {
             tb.write(write, write_raw);
@@ -2174,13 +2211,13 @@ impl<'a> Context<'a, '_> {
         let mut scroll_x = tc.scroll_offset.x;
         let mut scroll_y = tc.scroll_offset.y;
 
-        let text_width = tb.get_text_width();
-        let cursor_x = tb.get_cursor_visual_pos().x;
+        let text_width = tb.text_width();
+        let cursor_x = tb.cursor_visual_pos().x;
         scroll_x = scroll_x.min(cursor_x - 10);
         scroll_x = scroll_x.max(cursor_x - text_width + 10);
 
         let viewport_height = node_prev.inner.height();
-        let cursor_y = tb.get_cursor_visual_pos().y;
+        let cursor_y = tb.cursor_visual_pos().y;
         // Scroll up if the cursor is above the visible area.
         scroll_y = scroll_y.min(cursor_y);
         // Scroll down if the cursor is below the visible area.
@@ -2195,9 +2232,9 @@ impl<'a> Context<'a, '_> {
         let mut scroll_x = tc.scroll_offset.x;
         let mut scroll_y = tc.scroll_offset.y;
 
-        scroll_x = scroll_x.min(tc.scroll_offset_x_max.max(tb.get_cursor_visual_pos().x) - 10);
+        scroll_x = scroll_x.min(tc.scroll_offset_x_max.max(tb.cursor_visual_pos().x) - 10);
         scroll_x = scroll_x.max(0);
-        scroll_y = scroll_y.clamp(0, tb.get_visual_line_count() - 1);
+        scroll_y = scroll_y.clamp(0, tb.visual_line_count() - 1);
 
         if tb.is_word_wrap_enabled() {
             scroll_x = 0;
@@ -2749,7 +2786,7 @@ struct Tree<'a> {
 
 impl<'a> Tree<'a> {
     fn new(arena: &'a Arena) -> Self {
-        let root: &mut NodeCell = arena.alloc_default();
+        let root = Self::alloc_node(arena);
         {
             let mut r = root.borrow_mut();
             r.id = ROOT_ID;
@@ -2766,6 +2803,10 @@ impl<'a> Tree<'a> {
             count: 1,
             checksum: ROOT_ID,
         }
+    }
+
+    fn alloc_node(arena: &'a Arena) -> &'a NodeCell<'a> {
+        arena.alloc_uninit().write(Default::default())
     }
 
     fn push_child(&mut self, node: &'a NodeCell<'a>) {
@@ -2932,12 +2973,13 @@ impl<'a> NodeMap<'a> {
         let shift = 64 - width;
         let mask = (slots - 1) as u64;
 
-        let slots = arena.alloc_uninit_slice(slots);
-        slots.fill(MaybeUninit::new(None));
-        let slots = unsafe { slice_assume_init_mut(slots) };
+        let slots = arena.alloc_uninit_slice(slots).write_filled(None);
+        let mut node = tree.root_first;
 
-        for node in iter::successors(Some(tree.root_first), |&node| node.borrow().next) {
-            let mut slot = node.borrow().id >> shift;
+        loop {
+            let n = node.borrow();
+            let mut slot = n.id >> shift;
+
             loop {
                 if slots[slot as usize].is_none() {
                     slots[slot as usize] = Some(node);
@@ -2945,6 +2987,11 @@ impl<'a> NodeMap<'a> {
                 }
                 slot = (slot + 1) & mask;
             }
+
+            node = match n.next {
+                Some(node) => node,
+                None => break,
+            };
         }
 
         Self { slots, shift, mask }
@@ -2953,7 +3000,7 @@ impl<'a> NodeMap<'a> {
     fn get(&mut self, id: u64) -> Option<&'a NodeCell<'a>> {
         let shift = self.shift;
         let mask = self.mask;
-        let mut slot = (id >> shift) & mask;
+        let mut slot = id >> shift;
 
         loop {
             let node = self.slots[slot as usize]?;
@@ -2965,25 +3012,6 @@ impl<'a> NodeMap<'a> {
     }
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
-pub enum Anchor {
-    #[default]
-    Last,
-    Parent,
-    Root,
-}
-
-#[derive(Default)]
-pub struct FloatSpec {
-    pub anchor: Anchor,
-    // Specifies the origin of the container relative to the container size. [0, 1]
-    pub gravity_x: f32,
-    pub gravity_y: f32,
-    // Specifies an offset from the origin in cells.
-    pub offset_x: f32,
-    pub offset_y: f32,
-}
-
 struct FloatAttributes {
     // Specifies the origin of the container relative to the container size. [0, 1]
     gravity_x: f32,
@@ -2991,31 +3019,6 @@ struct FloatAttributes {
     // Specifies an offset from the origin in cells.
     offset_x: f32,
     offset_y: f32,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ListSelection {
-    Unchanged,
-    Selected,
-    Activated,
-}
-
-#[derive(Default)]
-pub enum Position {
-    #[default]
-    Stretch,
-    Left,
-    Center,
-    Right,
-}
-
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
-pub enum Overflow {
-    #[default]
-    Clip,
-    TruncateHead,
-    TruncateMiddle,
-    TruncateTail,
 }
 
 // NOTE: Must not contain items that require drop().
@@ -3281,51 +3284,12 @@ impl Node<'_> {
                     self.intrinsic_size.height = total_height;
                     self.intrinsic_size_set = true;
                 }
-
-                /*
-
-                let mut row_size = Size {
-                    width: 0,
-                    height: 0,
-                };
-                let mut total_size = Size {
-                    width: 0,
-                    height: 0,
-                };
-                let columns = self.attributes.grid_columns.len().max(1);
-                let mut column = 0;
-
-                for child in Tree::iterate_siblings(self.children.first) {
-                    child.compute_intrinsic_size();
-
-                    let size = child.intrinsic_to_outer();
-                    row_size.width += size.width;
-                    row_size.height = row_size.height.max(size.height);
-
-                    column += 1;
-                    if column >= columns {
-                        total_size.width = total_size.width.max(row_size.width);
-                        total_size.height += row_size.height;
-                        row_size = Size {
-                            width: 0,
-                            height: 0,
-                        };
-                        column = 0;
-                    }
-                }
-
-                total_size.width = total_size.width.max(row_size.width);
-                total_size.height += row_size.height;
-
-                if !self.intrinsic_size_set {
-                    self.intrinsic_size = total_size;
-                    self.intrinsic_size_set = true;
-                }
-                */
             }
         }
     }
 
+    /// Lays out the children of this node.
+    /// The clip rect restricts "rendering" to a certain area (the viewport).
     fn layout_children(&mut self, clip: Rect) {
         if self.children.first.is_none() || self.inner.is_empty() {
             return;
@@ -3437,92 +3401,6 @@ impl Node<'_> {
                     let mut child = child.borrow_mut();
                     child.layout_children(clip);
                 }
-
-                /*
-
-                let mut columns = &mut self.attributes.grid_columns[..];
-                let mut default_width = 1;
-                if columns.is_empty() {
-                    columns = slice::from_mut(&mut default_width);
-                }
-
-                // TODO: We can skip this for nodes without a grid layout.
-                let mut intrinsic_column_width = vec![0; columns.len()];
-                let mut column = 0;
-
-                for child in Tree::iterate_siblings(self.children.first) {
-                    let size = child.intrinsic_to_outer();
-                    intrinsic_column_width[column] = intrinsic_column_width[column].max(size.width);
-
-                    column += 1;
-                    if column >= columns.len() {
-                        column = 0;
-                    }
-                }
-
-                {
-                    let mut total_abs_widths = 0;
-                    let mut total_fr_widths = 0;
-
-                    for i in 0..columns.len() {
-                        if columns[i] > 0 {
-                            total_fr_widths += columns[i];
-                        } else {
-                            total_abs_widths += intrinsic_column_width[i];
-                        }
-                    }
-
-                    let mut fr_scale = 0.0;
-                    if total_fr_widths > 0 {
-                        let remaining = (self.inner.right - self.inner.left) - total_abs_widths;
-                        let remaining = remaining.max(0);
-                        // `unit` will be negative and invert the `grid_widths` each to a positive value.
-                        fr_scale = remaining as f64 / total_fr_widths as f64;
-                    }
-
-                    for i in 0..columns.len() {
-                        if columns[i] > 0 {
-                            columns[i] = (columns[i] as f64 * fr_scale + 0.5) as CoordType;
-                        } else {
-                            columns[i] = intrinsic_column_width[i];
-                        }
-                    }
-                }
-
-                let mut x = self.inner.left;
-                let mut y = self.inner.top;
-                let mut row_height = 0;
-                let mut column = 0;
-
-                for child in Tree::iterate_siblings(self.children.first) {
-                    let mut size = child.intrinsic_to_outer();
-                    size.width = columns[column];
-
-                    child.outer.left = x;
-                    child.outer.top = y;
-                    child.outer.right = x + size.width;
-                    child.outer.bottom = y + size.height;
-                    child.outer = child.outer.intersect(self.inner);
-                    child.inner = child.outer_to_inner(child.outer);
-                    child.outer_clipped = child.outer.intersect(clip);
-                    child.inner_clipped = child.inner.intersect(clip);
-
-                    x += size.width;
-                    row_height = row_height.max(size.height);
-                    column += 1;
-
-                    if column >= columns.len() {
-                        x = self.inner.left;
-                        y += row_height;
-                        row_height = 0;
-                        column = 0;
-                    }
-                }
-
-                for child in Tree::iterate_siblings(self.children.first) {
-                    child.layout_children(clip);
-                }
-                */
             }
         }
     }

@@ -1,33 +1,10 @@
+use std::hint::black_box;
 use std::mem;
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
 use edit::simd::MemsetSafe;
-use edit::{simd, ucd};
-
-fn bench_ucd(c: &mut Criterion) {
-    let reference = concat!(
-        "In the quiet twilight, dreams unfold, soft whispers of a story untold.\n",
-        "月明かりが静かに照らし出し、夢を見る心の奥で詩が静かに囁かれる\n",
-        "Stars collide in the early light of hope, echoing the silent call of the night.\n",
-        "夜の静寂、希望と孤独が混ざり合うその中で詩が永遠に続く\n",
-    );
-    let buffer = reference.repeat(10);
-    let bytes = buffer.as_bytes();
-
-    c.benchmark_group("ucd::MeasurementConfig::goto_logical")
-        .throughput(Throughput::Bytes(bytes.len() as u64))
-        .bench_function("basic", |b| {
-            b.iter(|| ucd::MeasurementConfig::new(&bytes).goto_logical(Point::MAX))
-        })
-        .bench_function("word_wrap", |b| {
-            b.iter(|| {
-                ucd::MeasurementConfig::new(black_box(&bytes))
-                    .with_word_wrap_column(50)
-                    .goto_logical(Point::MAX)
-            })
-        });
-}
+use edit::{hash, simd, unicode};
 
 fn bench_simd_memchr2(c: &mut Criterion) {
     let mut group = c.benchmark_group("simd");
@@ -64,11 +41,68 @@ fn bench_simd_memset<T: MemsetSafe + Copy + Default>(c: &mut Criterion) {
     }
 }
 
+fn bench_unicode(c: &mut Criterion) {
+    let reference = concat!(
+        "In the quiet twilight, dreams unfold, soft whispers of a story untold.\n",
+        "月明かりが静かに照らし出し、夢を見る心の奥で詩が静かに囁かれる\n",
+        "Stars collide in the early light of hope, echoing the silent call of the night.\n",
+        "夜の静寂、希望と孤独が混ざり合うその中で詩が永遠に続く\n",
+    );
+    let buffer = reference.repeat(10);
+    let bytes = buffer.as_bytes();
+
+    c.benchmark_group("unicode::MeasurementConfig::goto_logical")
+        .throughput(Throughput::Bytes(bytes.len() as u64))
+        .bench_function("basic", |b| {
+            b.iter(|| unicode::MeasurementConfig::new(&bytes).goto_logical(Point::MAX))
+        })
+        .bench_function("word_wrap", |b| {
+            b.iter(|| {
+                unicode::MeasurementConfig::new(black_box(&bytes))
+                    .with_word_wrap_column(50)
+                    .goto_logical(Point::MAX)
+            })
+        });
+
+    c.benchmark_group("unicode::Utf8Chars")
+        .throughput(Throughput::Bytes(bytes.len() as u64))
+        .bench_function("next", |b| {
+            b.iter(|| {
+                unicode::Utf8Chars::new(bytes, 0).fold(0u32, |acc, ch| acc.wrapping_add(ch as u32))
+            })
+        });
+}
+
+fn bench_hash(c: &mut Criterion) {
+    c.benchmark_group("hash")
+        .throughput(Throughput::Bytes(4))
+        .bench_function(BenchmarkId::new("hash", 4), |b| {
+            let data = [0u8; 4];
+            b.iter(|| hash::hash(0, black_box(&data)))
+        })
+        .throughput(Throughput::Bytes(8))
+        .bench_function(BenchmarkId::new("hash", 8), |b| {
+            let data = [0u8; 8];
+            b.iter(|| hash::hash(0, black_box(&data)))
+        })
+        .throughput(Throughput::Bytes(16))
+        .bench_function(BenchmarkId::new("hash", 16), |b| {
+            let data = [0u8; 16];
+            b.iter(|| hash::hash(0, black_box(&data)))
+        })
+        .throughput(Throughput::Bytes(128 * 1024))
+        .bench_function(BenchmarkId::new("hash", 128 * 1024), |b| {
+            let data = [0u8; 128 * 1024];
+            b.iter(|| hash::hash(0, black_box(&data)))
+        });
+}
+
 fn bench(c: &mut Criterion) {
-    bench_ucd(c);
     bench_simd_memchr2(c);
-    bench_simd_memset::<u8>(c);
     bench_simd_memset::<u32>(c);
+    bench_simd_memset::<u8>(c);
+    bench_unicode(c);
+    bench_hash(c);
 }
 
 criterion_group!(benches, bench);

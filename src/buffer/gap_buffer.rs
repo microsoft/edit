@@ -2,8 +2,8 @@ use std::ops::Range;
 use std::ptr::{self, NonNull};
 use std::slice;
 
+use crate::document::{ReadableDocument, WriteableDocument};
 use crate::helpers::*;
-use crate::ucd::{ReadableDocument, WriteableDocument};
 use crate::{apperr, sys};
 
 #[cfg(target_pointer_width = "32")]

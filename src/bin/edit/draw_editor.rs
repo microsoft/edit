@@ -4,7 +4,7 @@ use edit::icu;
 use edit::input::{kbmod, vk};
 use edit::tui::*;
 
-use crate::loc::*;
+use crate::localization::*;
 use crate::state::*;
 
 pub fn draw_editor(ctx: &mut Context, state: &mut State) {

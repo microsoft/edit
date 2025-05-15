@@ -10,7 +10,7 @@ use edit::tui::*;
 use edit::{apperr, buffer, icu, sys};
 
 use crate::documents::DocumentManager;
-use crate::loc::*;
+use crate::localization::*;
 
 #[repr(transparent)]
 pub struct FormatApperr(apperr::Error);

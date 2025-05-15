@@ -5,7 +5,7 @@ mod draw_editor;
 mod draw_filepicker;
 mod draw_menubar;
 mod draw_statusbar;
-mod loc;
+mod localization;
 mod state;
 
 use std::borrow::Cow;
@@ -28,7 +28,7 @@ use edit::oklab::oklab_blend;
 use edit::tui::*;
 use edit::vt::{self, Token};
 use edit::{apperr, base64, path, sys};
-use loc::*;
+use localization::*;
 use state::*;
 
 fn main() -> process::ExitCode {
@@ -56,7 +56,7 @@ fn run() -> apperr::Result<()> {
     // Next init `arena`, so that `scratch_arena` works. `loc` depends on it.
     arena::init()?;
     // Init the `loc` module, so that error messages are localized.
-    loc::init();
+    localization::init();
 
     let mut state = State::new()?;
     if handle_args(&mut state)? {
@@ -149,7 +149,7 @@ fn run() -> apperr::Result<()> {
             #[cfg(feature = "debug-layout")]
             {
                 drop(ctx);
-                state.buffer.buffer.debug_replace_everything(&tui.debug_layout());
+                state.buffer.buffer.copy_from_str(&tui.debug_layout());
             }
 
             #[cfg(feature = "debug-latency")]
@@ -175,7 +175,7 @@ fn run() -> apperr::Result<()> {
                 }
             }
 
-            if state.osc_clipboard_generation != tui.get_clipboard_generation() {
+            if state.osc_clipboard_generation != tui.clipboard_generation() {
                 write_osc_clipboard(&mut output, &mut state, &tui);
             }
 
@@ -362,7 +362,7 @@ fn write_terminal_title(output: &mut ArenaString, filename: &str) {
 
 #[cold]
 fn write_osc_clipboard(output: &mut ArenaString, state: &mut State, tui: &Tui) {
-    let clipboard = tui.get_clipboard();
+    let clipboard = tui.clipboard();
 
     if (1..128 * KIBI).contains(&clipboard.len()) {
         output.push_str("\x1b]52;c;");
@@ -370,7 +370,7 @@ fn write_osc_clipboard(output: &mut ArenaString, state: &mut State, tui: &Tui) {
         output.push_str("\x1b\\");
     }
 
-    state.osc_clipboard_generation = tui.get_clipboard_generation();
+    state.osc_clipboard_generation = tui.clipboard_generation();
 }
 
 struct RestoreModes;

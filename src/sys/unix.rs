@@ -5,9 +5,9 @@ use std::os::fd::{AsRawFd as _, FromRawFd as _};
 use std::ptr::{self, NonNull, null, null_mut};
 use std::{thread, time};
 
-use crate::apperr;
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::helpers::KIBI;
+use crate::{apperr, arena_format};
 
 struct State {
     stdin: libc::c_int,
@@ -168,7 +168,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
         }
 
         let read_poll = timeout != time::Duration::MAX;
-        let mut buf = arena.new_vec();
+        let mut buf = Vec::new_in(arena);
 
         // We don't know if the input is valid UTF8, so we first use a Vec and then
         // later turn it into UTF8 using `from_utf8_lossy_owned`.
@@ -268,7 +268,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
             let (w, h) = get_window_size();
             if w > 0 && h > 0 {
                 let scratch = scratch_arena(Some(arena));
-                let seq = arena_format!(scratch, "\x1b[8;{h};{w}t");
+                let seq = arena_format!(&scratch, "\x1b[8;{h};{w}t");
                 result.replace_range(0..0, &seq);
             }
         }
@@ -496,7 +496,7 @@ where
 }
 
 pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
-    let mut locales = arena.new_vec();
+    let mut locales = Vec::new_in(arena);
 
     for key in ["LANGUAGE", "LC_ALL", "LANG"] {
         if let Ok(val) = std::env::var(key) {
@@ -510,7 +510,7 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
 }
 
 #[inline]
-pub fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
+pub(crate) fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
     errno_to_apperr(err.raw_os_error().unwrap_or(0))
 }
 

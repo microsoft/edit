@@ -3,7 +3,7 @@ use edit::helpers::*;
 use edit::input::{kbmod, vk};
 use edit::tui::*;
 
-use crate::loc::*;
+use crate::localization::*;
 use crate::state::*;
 
 pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
@@ -70,7 +70,7 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
         ctx.set_clipboard(tb.extract_selection(false));
     }
     if ctx.menubar_menu_button(loc(LocId::EditPaste), 'P', kbmod::CTRL | vk::V) {
-        tb.write(ctx.get_clipboard(), true);
+        tb.write(ctx.clipboard(), true);
         ctx.needs_rerender();
     }
     if state.wants_search.kind != StateSearchKind::Disabled {

@@ -1,9 +1,12 @@
 #![feature(
     allocator_api,
     breakpoint,
+    cold_path,
     inherent_str_constructors,
     let_chains,
     linked_list_cursors,
+    maybe_uninit_fill,
+    maybe_uninit_slice,
     maybe_uninit_uninit_array_transpose,
     os_string_truncate
 )]
@@ -15,9 +18,10 @@ pub mod arena;
 pub mod apperr;
 pub mod base64;
 pub mod buffer;
-mod cell;
+pub mod cell;
+pub mod document;
 pub mod framebuffer;
-mod gap_buffer;
+pub mod hash;
 pub mod helpers;
 pub mod icu;
 pub mod input;
@@ -26,7 +30,5 @@ pub mod path;
 pub mod simd;
 pub mod sys;
 pub mod tui;
-pub mod ucd;
-mod ucd_gen;
-pub mod utf8;
+pub mod unicode;
 pub mod vt;

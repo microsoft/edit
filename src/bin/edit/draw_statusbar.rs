@@ -4,7 +4,7 @@ use edit::input::vk;
 use edit::tui::*;
 use edit::{arena_format, icu};
 
-use crate::loc::*;
+use crate::localization::*;
 use crate::state::*;
 
 pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
@@ -122,10 +122,10 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                         let ch = [b'0' + width];
                         let label = unsafe { std::str::from_utf8_unchecked(&ch) };
 
-                        if ctx.list_item(tb.tab_size() == width as i32, label)
+                        if ctx.list_item(tb.tab_size() == width as CoordType, label)
                             != ListSelection::Unchanged
                         {
-                            tb.set_tab_size(width as i32);
+                            tb.set_tab_size(width as CoordType);
                             ctx.needs_rerender();
                         }
                     }
@@ -145,8 +145,8 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             &arena_format!(
                 ctx.arena(),
                 "{}:{}",
-                tb.get_cursor_logical_pos().y + 1,
-                tb.get_cursor_logical_pos().x + 1
+                tb.cursor_logical_pos().y + 1,
+                tb.cursor_logical_pos().x + 1
             ),
         );
 

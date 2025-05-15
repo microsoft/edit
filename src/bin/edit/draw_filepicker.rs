@@ -8,7 +8,7 @@ use edit::input::vk;
 use edit::tui::*;
 use edit::{icu, path, sys};
 
-use crate::loc::*;
+use crate::localization::*;
 use crate::state::*;
 
 pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {

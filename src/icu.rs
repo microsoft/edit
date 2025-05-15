@@ -7,7 +7,7 @@ use std::{cmp, mem};
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::TextBuffer;
 use crate::helpers::*;
-use crate::utf8::Utf8Chars;
+use crate::unicode::Utf8Chars;
 use crate::{apperr, arena_format, sys};
 
 static mut ENCODINGS: Vec<&'static str> = Vec::new();
@@ -244,7 +244,7 @@ impl Text {
         let ut = unsafe { &mut *ptr };
         ut.p_funcs = &FUNCS;
         ut.context = tb as *const TextBuffer as *mut _;
-        ut.a = tb.get_generation() as i64;
+        ut.a = tb.generation() as i64;
 
         // ICU unfortunately expects a `UText` instance to have valid contents after construction.
         utext_access(ut, 0, true);
@@ -345,14 +345,14 @@ fn utext_access_impl<'a>(
     let index_contained = index_contained as usize;
     let native_index = native_index as usize;
     let double_cache = double_cache_from_utext(ut);
-    let dirty = ut.a != tb.get_generation() as i64;
+    let dirty = ut.a != tb.generation() as i64;
 
     if dirty {
         double_cache.cache[0].utf16_len = 0;
         double_cache.cache[1].utf16_len = 0;
         double_cache.cache[0].utf8_range = 0..0;
         double_cache.cache[1].utf8_range = 0..0;
-        ut.a = tb.get_generation() as i64;
+        ut.a = tb.generation() as i64;
     } else {
         for (i, cache) in double_cache.cache.iter_mut().enumerate() {
             if cache.utf8_range.contains(&index_contained) {
@@ -718,12 +718,6 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
         b.make_ascii_lowercase();
     }
     result
-}
-
-pub fn apperr_is_regex_error(err: apperr::Error) -> bool {
-    // As per icu.h:
-    // > Error codes in the range 0x10300-0x103ff are reserved for regular expression related errors.
-    matches!(err, apperr::Error::Icu(0x10300..0x10400))
 }
 
 // WARNING:

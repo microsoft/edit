@@ -9,7 +9,7 @@ use super::distance;
 /// If no needle is found, 0 is returned.
 ///
 /// *NOTE: Unlike `memchr2` (or `memrchr`), an offset PAST the hit is returned.*
-/// This is because this function is primarily used for `ucd::newlines_backward`,
+/// This is because this function is primarily used for `unicode::newlines_backward`,
 /// which needs exactly that.
 pub fn memrchr2(needle1: u8, needle2: u8, haystack: &[u8], offset: usize) -> Option<usize> {
     unsafe {

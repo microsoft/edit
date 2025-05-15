@@ -24,6 +24,12 @@ impl Drop for Arena {
     }
 }
 
+impl Default for Arena {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 impl Arena {
     pub const fn empty() -> Self {
         Self::Owned { arena: release::Arena::empty() }
@@ -75,10 +81,6 @@ impl Arena {
 
     pub fn alloc_uninit_slice<T>(&self, count: usize) -> &mut [MaybeUninit<T>] {
         self.delegate_target().alloc_uninit_slice(count)
-    }
-
-    pub fn alloc_default<T: Default>(&self) -> &mut T {
-        self.delegate_target().alloc_default()
     }
 }
 

@@ -9,6 +9,28 @@ use crate::helpers::*;
 static mut S_SCRATCH: [release::Arena; 2] =
     const { [release::Arena::empty(), release::Arena::empty()] };
 
+pub fn init() -> apperr::Result<()> {
+    unsafe {
+        for s in &mut S_SCRATCH[..] {
+            *s = release::Arena::new(128 * MEBI)?;
+        }
+    }
+    Ok(())
+}
+
+/// Returns a new scratch arena for temporary allocations,
+/// ensuring it doesn't conflict with the provided arena.
+pub fn scratch_arena(conflict: Option<&Arena>) -> ScratchArena<'static> {
+    unsafe {
+        #[cfg(debug_assertions)]
+        let conflict = conflict.map(|a| a.delegate_target_unchecked());
+
+        let index = opt_ptr_eq(conflict, Some(&S_SCRATCH[0])) as usize;
+        let arena = &mut S_SCRATCH[index];
+        ScratchArena::new(arena)
+    }
+}
+
 // Most methods make just two kinds of allocations:
 // * Interior: Temporary data that can be deallocated when the function returns.
 // * Exterior: Data that is returned to the caller and must remain alive until the caller stops using it.
@@ -71,27 +93,5 @@ impl Deref for ScratchArena<'_> {
 
     fn deref(&self) -> &Self::Target {
         self.arena
-    }
-}
-
-pub fn init() -> apperr::Result<()> {
-    unsafe {
-        for s in &mut S_SCRATCH[..] {
-            *s = release::Arena::new(128 * MEBI)?;
-        }
-    }
-    Ok(())
-}
-
-/// Returns a new scratch arena for temporary allocations,
-/// ensuring it doesn't conflict with the provided arena.
-pub fn scratch_arena(conflict: Option<&Arena>) -> ScratchArena<'static> {
-    unsafe {
-        #[cfg(debug_assertions)]
-        let conflict = conflict.map(|a| a.delegate_target_unchecked());
-
-        let index = opt_ptr_eq(conflict, Some(&S_SCRATCH[0])) as usize;
-        let arena = &mut S_SCRATCH[index];
-        ScratchArena::new(arena)
     }
 }

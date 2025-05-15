@@ -265,7 +265,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
             if ok == 0 || STATE.wants_exit {
                 return None;
             }
-            slice_assume_init_ref(&input_buf[..read as usize])
+            input_buf[..read as usize].assume_init_ref()
         };
 
         // Convert Win32 input records into UTF16.
@@ -547,7 +547,7 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString, &Arena> {
         // Drop the terminating double-null character.
         len = len.saturating_sub(1);
 
-        slice_assume_init_ref(&buf[..len as usize])
+        buf[..len as usize].assume_init_ref()
     };
 
     // Convert UTF16 to UTF8.
@@ -602,7 +602,7 @@ const fn gle_to_apperr(gle: u32) -> apperr::Error {
 }
 
 #[inline]
-pub fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
+pub(crate) fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
     gle_to_apperr(err.raw_os_error().unwrap_or(0) as u32)
 }
 
