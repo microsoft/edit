@@ -1,16 +1,15 @@
-//! Rust has a very popular `memchr` crate. It's quite fast, so you may ask yourself
-//! why we don't just use it: Simply put, this is optimized for short inputs.
+//! `memchr`, but with two needles.
 
 use std::ptr;
 
 use super::distance;
 
-/// Same as `memchr2`, but searches from the end of the haystack.
-/// If no needle is found, 0 is returned.
+/// `memchr`, but with two needles.
 ///
-/// *NOTE: Unlike `memchr2` (or `memrchr`), an offset PAST the hit is returned.*
-/// This is because this function is primarily used for `unicode::newlines_backward`,
-/// which needs exactly that.
+/// If no needle is found, 0 is returned.
+/// Unlike `memchr2` (or `memrchr`), an offset PAST the hit is returned.
+/// This is because this function is primarily used for
+/// `ucd::newlines_backward`, which needs exactly that.
 pub fn memrchr2(needle1: u8, needle2: u8, haystack: &[u8], offset: usize) -> Option<usize> {
     unsafe {
         let beg = haystack.as_ptr();

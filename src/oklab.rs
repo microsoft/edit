@@ -1,7 +1,10 @@
-//! This module implements Oklab as defined at: https://bottosson.github.io/posts/oklab/
+//! Oklab colorspace conversions.
+//!
+//! Implements Oklab as defined at: <https://bottosson.github.io/posts/oklab/>
 
 #![allow(clippy::excessive_precision)]
 
+/// An Oklab color with alpha.
 pub struct Lab {
     pub l: f32,
     pub a: f32,
@@ -9,6 +12,7 @@ pub struct Lab {
     pub alpha: f32,
 }
 
+/// Converts a 32-bit sRGB color to Oklab.
 pub fn srgb_to_oklab(color: u32) -> Lab {
     let r = SRGB_TO_RGB_LUT[(color & 0xff) as usize];
     let g = SRGB_TO_RGB_LUT[((color >> 8) & 0xff) as usize];
@@ -31,6 +35,7 @@ pub fn srgb_to_oklab(color: u32) -> Lab {
     }
 }
 
+/// Converts an Oklab color to a 32-bit sRGB color.
 pub fn oklab_to_srgb(c: Lab) -> u32 {
     let l_ = c.l + 0.3963377774 * c.a + 0.2158037573 * c.b;
     let m_ = c.l - 0.1055613458 * c.a - 0.0638541728 * c.b;
@@ -57,6 +62,7 @@ pub fn oklab_to_srgb(c: Lab) -> u32 {
     r | (g << 8) | (b << 16) | (a << 24)
 }
 
+/// Blends two 32-bit sRGB colors in the Oklab color space.
 pub fn oklab_blend(dst: u32, src: u32) -> u32 {
     let dst = srgb_to_oklab(dst);
     let src = srgb_to_oklab(src);

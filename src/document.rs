@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use crate::arena::{ArenaString, scratch_arena};
 use crate::helpers::ReplaceRange as _;
 
-/// An abstraction over potentially chunked text containers.
+/// An abstraction over reading from text containers.
 pub trait ReadableDocument {
     /// Read some bytes starting at (including) the given absolute offset.
     ///
@@ -16,7 +16,7 @@ pub trait ReadableDocument {
     ///
     /// * Be lenient on inputs:
     ///   * The given offset may be out of bounds and you MUST clamp it.
-    ///   * You SHOULD NOT assume that offsets are at grapheme cluster boundaries.
+    ///   * You should not assume that offsets are at grapheme cluster boundaries.
     /// * Be strict on outputs:
     ///   * You MUST NOT break grapheme clusters across chunks.
     ///   * You MUST NOT return an empty slice unless the offset is at or beyond the end.
@@ -28,14 +28,21 @@ pub trait ReadableDocument {
     ///
     /// * Be lenient on inputs:
     ///   * The given offset may be out of bounds and you MUST clamp it.
-    ///   * You SHOULD NOT assume that offsets are at grapheme cluster boundaries.
+    ///   * You should not assume that offsets are at grapheme cluster boundaries.
     /// * Be strict on outputs:
     ///   * You MUST NOT break grapheme clusters across chunks.
     ///   * You MUST NOT return an empty slice unless the offset is zero.
     fn read_backward(&self, off: usize) -> &[u8];
 }
 
+/// An abstraction over writing to text containers.
 pub trait WriteableDocument: ReadableDocument {
+    /// Replace the given range with the given bytes.
+    ///
+    /// # Warning
+    ///
+    /// * The given range may be out of bounds and you MUST clamp it.
+    /// * The replacement may not be valid UTF8.
     fn replace(&mut self, range: Range<usize>, replacement: &[u8]);
 }
 

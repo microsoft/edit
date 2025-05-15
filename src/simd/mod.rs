@@ -1,3 +1,5 @@
+//! Provides various high-throughput utilities.
+
 mod memchr2;
 mod memrchr2;
 mod memset;

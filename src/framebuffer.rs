@@ -1,3 +1,5 @@
+//! A shoddy framebuffer for terminal applications.
+
 use std::cell::Cell;
 use std::fmt::Write;
 use std::ops::{BitOr, BitXor};
@@ -24,6 +26,7 @@ const CACHE_TABLE_SIZE: usize = 1 << CACHE_TABLE_LOG2_SIZE;
 /// 8 bits out, but rather shift 56 bits down to get the best bits from the top.
 const CACHE_TABLE_SHIFT: usize = usize::BITS as usize - CACHE_TABLE_LOG2_SIZE;
 
+/// Standard 16 VT & default foreground/background colors.
 #[derive(Clone, Copy)]
 pub enum IndexedColor {
     Black,
@@ -47,33 +50,55 @@ pub enum IndexedColor {
     Foreground,
 }
 
+/// Number of indices used by [`IndexedColor`].
 pub const INDEXED_COLORS_COUNT: usize = 18;
 
+/// Fallback theme.
 pub const DEFAULT_THEME: [u32; INDEXED_COLORS_COUNT] = [
     0xff000000, 0xff212cbe, 0xff3aae3f, 0xff4a9abe, 0xffbe4d20, 0xffbe54bb, 0xffb2a700, 0xffbebebe,
     0xff808080, 0xff303eff, 0xff51ea58, 0xff44c9ff, 0xffff6a2f, 0xffff74fc, 0xfff0e100, 0xffffffff,
     0xff000000, 0xffffffff,
 ];
 
+/// A shoddy framebuffer for terminal applications.
+///
+/// The idea is that you create a [`Framebuffer`], draw a bunch of text and
+/// colors into it, and it takes care of figuring out what changed since the
+/// last rendering and sending the differences as VT to the terminal.
+///
+/// This is an improvement over how many other terminal applications work,
+/// as they fail to accurately track what changed. If you watch the output
+/// of `vim` for instance, you'll notice that it redraws unrelated parts of
+/// the screen all the time.
 pub struct Framebuffer {
+    /// Store the color palette.
     indexed_colors: [u32; INDEXED_COLORS_COUNT],
+    /// Front and back buffers. Indexed by `frame_counter & 1`.
     buffers: [Buffer; 2],
+    /// The current frame counter. Increments on every `flip` call.
     frame_counter: usize,
-    auto_colors: [u32; 2], // [dark, light]
+    /// The colors used for `contrast()`. It stores the default colors
+    /// of the palette as [dark, light], unless the palette is recognized
+    /// as a light them, in which case it swaps them.
+    auto_colors: [u32; 2],
+    /// A cache table for previously contrasted colors.
+    /// See: <https://fgiesen.wordpress.com/2019/02/11/cache-tables/>
     contrast_colors: [Cell<(u32, u32)>; CACHE_TABLE_SIZE],
 }
 
 impl Framebuffer {
+    /// Creates a new framebuffer.
     pub fn new() -> Self {
         Self {
             indexed_colors: DEFAULT_THEME,
             buffers: Default::default(),
             frame_counter: 0,
             auto_colors: [0, 0],
-            contrast_colors: [const { Cell::new((0, 0)) }; 256],
+            contrast_colors: [const { Cell::new((0, 0)) }; CACHE_TABLE_SIZE],
         }
     }
 
+    /// Sets the base color palette.
     pub fn set_indexed_colors(&mut self, colors: [u32; INDEXED_COLORS_COUNT]) {
         self.indexed_colors = colors;
 
@@ -86,6 +111,7 @@ impl Framebuffer {
         }
     }
 
+    /// Begins a new frame with the given `size`.
     pub fn flip(&mut self, size: Size) {
         if size != self.buffers[0].bg_bitmap.size {
             for buffer in &mut self.buffers {
@@ -117,9 +143,7 @@ impl Framebuffer {
 
     /// Replaces text contents in a single line of the framebuffer.
     /// All coordinates are in viewport coordinates.
-    /// Assumes that all tabs have been replaced with spaces.
-    ///
-    /// TODO: This function is ripe for performance improvements.
+    /// Assumes that control characters have been replaced or escaped.
     pub fn replace_text(
         &mut self,
         y: CoordType,
@@ -131,6 +155,18 @@ impl Framebuffer {
         back.text.replace_text(y, origin_x, clip_right, text)
     }
 
+    /// Draws a scrollbar in the given `track` rectangle.
+    ///
+    /// Not entirely sure why I put it here instead of elsewhere.
+    ///
+    /// # Parameters
+    ///
+    /// * `clip_rect`: Clips the rendering to this rectangle.
+    ///   This is relevant when you have scrollareas inside scrollareas.
+    /// * `track`: The rectangle in which to draw the scrollbar.
+    ///   In absolute viewport coordinates.
+    /// * `content_offset`: The current offset of the scrollarea.
+    /// * `content_height`: The height of the scrollarea content.
     pub fn draw_scrollbar(
         &mut self,
         clip_rect: Rect,
@@ -247,8 +283,10 @@ impl Framebuffer {
         self.indexed_colors[index as usize]
     }
 
-    // To facilitate constant folding by the compiler,
-    // alpha is given as a fraction (`numerator` / `denominator`).
+    /// Returns a color from the palette.
+    ///
+    /// To facilitate constant folding by the compiler,
+    /// alpha is given as a fraction (`numerator` / `denominator`).
     #[inline]
     pub fn indexed_alpha(&self, index: IndexedColor, numerator: u32, denominator: u32) -> u32 {
         let c = self.indexed_colors[index as usize];
@@ -259,6 +297,7 @@ impl Framebuffer {
         a << 24 | r << 16 | g << 8 | b
     }
 
+    /// Returns a color opposite to the brightness of the given `color`.
     pub fn contrasted(&self, color: u32) -> u32 {
         let idx = (color as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
         let slot = self.contrast_colors[idx].get();
@@ -277,16 +316,25 @@ impl Framebuffer {
         srgb_to_oklab(color).l < 0.5
     }
 
+    /// Blends the given sRGB color onto the background bitmap.
+    ///
+    /// TODO: The current approach blends foreground/background independently,
+    /// but ideally `blend_bg` with semi-transparent dark should also darken text below it.
     pub fn blend_bg(&mut self, target: Rect, bg: u32) {
         let back = &mut self.buffers[self.frame_counter & 1];
         back.bg_bitmap.blend(target, bg);
     }
 
+    /// Blends the given sRGB color onto the foreground bitmap.
+    ///
+    /// TODO: The current approach blends foreground/background independently,
+    /// but ideally `blend_fg` should blend with the background color below it.
     pub fn blend_fg(&mut self, target: Rect, fg: u32) {
         let back = &mut self.buffers[self.frame_counter & 1];
         back.fg_bitmap.blend(target, fg);
     }
 
+    /// Reverses the foreground and background colors in the given rectangle.
     pub fn reverse(&mut self, target: Rect) {
         let back = &mut self.buffers[self.frame_counter & 1];
 
@@ -310,17 +358,23 @@ impl Framebuffer {
         }
     }
 
+    /// Replaces VT attributes in the given rectangle.
     pub fn replace_attr(&mut self, target: Rect, mask: Attributes, attr: Attributes) {
         let back = &mut self.buffers[self.frame_counter & 1];
         back.attributes.replace(target, mask, attr);
     }
 
+    /// Sets the current visible cursor position and type.
+    ///
+    /// Call this when focus is inside an editable area and you want to show the cursor.
     pub fn set_cursor(&mut self, pos: Point, overtype: bool) {
         let back = &mut self.buffers[self.frame_counter & 1];
         back.cursor.pos = pos;
         back.cursor.overtype = overtype;
     }
 
+    /// Renders the framebuffer contents accumulated since the
+    /// last call to `flip()` and returns them serialized as VT.
     pub fn render<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
         let idx = self.frame_counter & 1;
         // Borrows the front/back buffers without letting Rust know that we have a reference to self.
@@ -484,6 +538,7 @@ struct Buffer {
     cursor: Cursor,
 }
 
+/// A buffer for the text contents of the framebuffer.
 #[derive(Default)]
 struct LineBuffer {
     lines: Vec<String>,
@@ -509,10 +564,8 @@ impl LineBuffer {
 
     /// Replaces text contents in a single line of the framebuffer.
     /// All coordinates are in viewport coordinates.
-    /// Assumes that all tabs have been replaced with spaces.
-    ///
-    /// TODO: This function is ripe for performance improvements.
-    pub fn replace_text(
+    /// Assumes that control characters have been replaced or escaped.
+    fn replace_text(
         &mut self,
         y: CoordType,
         origin_x: CoordType,
@@ -632,6 +685,7 @@ impl LineBuffer {
     }
 }
 
+/// An sRGB bitmap.
 #[derive(Default)]
 struct Bitmap {
     data: Vec<u32>,
@@ -647,6 +701,10 @@ impl Bitmap {
         memset(&mut self.data, color);
     }
 
+    /// Blends the given sRGB color onto the bitmap.
+    ///
+    /// This uses the `oklab` color space for blending so the
+    /// resulting colors may look different from what you'd expect.
     fn blend(&mut self, target: Rect, color: u32) {
         if (color & 0xff000000) == 0x00000000 {
             return;
@@ -700,11 +758,14 @@ impl Bitmap {
     }
 }
 
+/// A bitfield for VT text attributes.
+///
+/// It being a bitfield allows for simple diffing.
 #[repr(transparent)]
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub struct Attributes(u8);
 
-#[allow(non_upper_case_globals)] // Mimics an enum, but it's actually a bitfield. Allows simple diffing.
+#[allow(non_upper_case_globals)]
 impl Attributes {
     pub const None: Attributes = Attributes(0);
     pub const Italic: Attributes = Attributes(0b1);
@@ -734,6 +795,7 @@ impl BitXor for Attributes {
     }
 }
 
+/// Stores VT attributes for the framebuffer.
 #[derive(Default)]
 struct AttributeBuffer {
     data: Vec<Attributes>,
@@ -782,6 +844,7 @@ impl AttributeBuffer {
     }
 }
 
+/// Stores cursor position and type for the framebuffer.
 #[derive(Default, PartialEq, Eq)]
 struct Cursor {
     pos: Point,

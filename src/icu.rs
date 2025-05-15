@@ -1,3 +1,5 @@
+//! Bindings to the ICU library.
+
 use std::cmp::Ordering;
 use std::ffi::CStr;
 use std::mem;
@@ -13,6 +15,7 @@ use crate::{apperr, arena_format, sys};
 
 static mut ENCODINGS: Vec<&'static str> = Vec::new();
 
+/// Returns a list of encodings ICU supports.
 pub fn get_available_encodings() -> &'static [&'static str] {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
@@ -38,6 +41,7 @@ pub fn get_available_encodings() -> &'static [&'static str] {
     }
 }
 
+/// Formats the given ICU error code into a human-readable string.
 pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
     fn format(code: u32) -> &'static str {
         let Ok(f) = init_if_needed() else {
@@ -62,6 +66,7 @@ pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Re
     }
 }
 
+/// Converts between two encodings using ICU.
 pub struct Converter<'pivot> {
     source: *mut icu_ffi::UConverter,
     target: *mut icu_ffi::UConverter,
@@ -80,6 +85,14 @@ impl Drop for Converter<'_> {
 }
 
 impl<'pivot> Converter<'pivot> {
+    /// Constructs a new `Converter` instance.
+    ///
+    /// # Parameters
+    ///
+    /// * `pivot_buffer`: A buffer used to cache partial conversions.
+    ///   Don't make it too small.
+    /// * `source_encoding`: The source encoding name (e.g., "UTF-8").
+    /// * `target_encoding`: The target encoding name (e.g., "UTF-16").
     pub fn new(
         pivot_buffer: &'pivot mut [MaybeUninit<u16>],
         source_encoding: &str,
@@ -114,6 +127,20 @@ impl<'pivot> Converter<'pivot> {
         arena_format!(arena, "{}\0", input)
     }
 
+    /// Performs one step of the encoding conversion.
+    ///
+    /// # Parameters
+    ///
+    /// * `input`: The input buffer to convert from.
+    ///   It should be in the `source_encoding` that was previously specified.
+    /// * `output`: The output buffer to convert to.
+    ///   It should be in the `target_encoding` that was previously specified.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// 1. The number of bytes read from the input buffer.
+    /// 2. The number of bytes written to the output buffer.
     pub fn convert(
         &mut self,
         input: &[u8],
@@ -168,24 +195,26 @@ impl<'pivot> Converter<'pivot> {
 // I picked 64 because it seemed like a reasonable lower bound.
 const CACHE_SIZE: usize = 64;
 
-// Caches a chunk of TextBuffer contents (UTF-8) in UTF-16 format.
+/// Caches a chunk of TextBuffer contents (UTF-8) in UTF-16 format.
 struct Cache {
-    /// The translated text. Contains `len`-many valid items.
+    /// The translated text. Contains [`Cache::utf16_len`]-many valid items.
     utf16: [u16; CACHE_SIZE],
-    /// For each character in `utf16` this stores the offset in the `TextBuffer`,
+    /// For each character in [`Cache::utf16`] this stores the offset in the [`TextBuffer`],
     /// relative to the start offset stored in `native_beg`.
-    /// This has the same length as `utf16`.
+    /// This has the same length as [`Cache::utf16`].
     utf16_to_utf8_offsets: [u16; CACHE_SIZE],
-    /// `utf8_to_utf16_offsets[native_offset - native_beg]` will tell you which character
-    /// in `utf16` maps to the given `native_offset` in the underlying `TextBuffer`.
+    /// `utf8_to_utf16_offsets[native_offset - native_beg]` will tell you which character in
+    /// [`Cache::utf16`] maps to the given `native_offset` in the underlying [`TextBuffer`].
     /// Contains `native_end - native_beg`-many valid items.
     utf8_to_utf16_offsets: [u16; CACHE_SIZE],
 
-    /// The number of valid items in `utf16`.
+    /// The number of valid items in [`Cache::utf16`].
     utf16_len: usize,
+    /// Offset of the first non-ASCII character.
+    /// Less than or equal to [`Cache::utf16_len`].
     native_indexing_limit: usize,
 
-    /// The range of UTF-8 text in the `TextBuffer` that this chunk covers.
+    /// The range of UTF-8 text in the [`TextBuffer`] that this chunk covers.
     utf8_range: Range<usize>,
 }
 
@@ -195,9 +224,15 @@ struct DoubleCache {
     mru: bool,
 }
 
-// I initially did this properly with a PhantomData marker for the TextBuffer lifetime,
-// but it was a pain so now I don't. Not a big deal - its only use is in a self-referential
-// struct in TextBuffer which Rust can't deal with anyway.
+/// A wrapper around ICU's `UText` struct.
+///
+/// In our case its only purpose is to adapt a [`TextBuffer`] for ICU.
+///
+/// # Safety
+///
+/// Warning! No lifetime tracking is done here.
+/// I initially did it properly with a PhantomData marker for the TextBuffer
+/// lifetime, but it was a pain so now I don't. Not a big deal in our case.
 pub struct Text(&'static mut icu_ffi::UText);
 
 impl Drop for Text {
@@ -208,11 +243,12 @@ impl Drop for Text {
 }
 
 impl Text {
-    /// Constructs an ICU `UText` instance from a `TextBuffer`.
+    /// Constructs an ICU `UText` instance from a [`TextBuffer`].
     ///
     /// # Safety
     ///
-    /// The caller must ensure that the given `TextBuffer` outlives the returned `Text` instance.
+    /// The caller must ensure that the given [`TextBuffer`]
+    /// outlives the returned `Text` instance.
     pub unsafe fn new(tb: &TextBuffer) -> apperr::Result<Self> {
         let f = init_if_needed()?;
 
@@ -349,12 +385,16 @@ fn utext_access_impl<'a>(
     let dirty = ut.a != tb.generation() as i64;
 
     if dirty {
+        // The text buffer contents have changed.
+        // Invalidate both caches so that future calls don't mistakenly use them
+        // when they enter the for loop in the else branch below (`dirty == false`).
         double_cache.cache[0].utf16_len = 0;
         double_cache.cache[1].utf16_len = 0;
         double_cache.cache[0].utf8_range = 0..0;
         double_cache.cache[1].utf8_range = 0..0;
         ut.a = tb.generation() as i64;
     } else {
+        // Check if one of the caches already contains the requested range.
         for (i, cache) in double_cache.cache.iter_mut().enumerate() {
             if cache.utf8_range.contains(&index_contained) {
                 double_cache.mru = i != 0;
@@ -443,13 +483,12 @@ fn utext_access_impl<'a>(
             }
         }
 
-        // TODO: This loop is the slow part of our uregex search. May be worth optimizing.
         loop {
             let Some(c) = it.next() else {
                 break;
             };
 
-            // Thanks to our `if utf16_len >= utf16_limit` check,
+            // Thanks to our `if utf16_len >= UTF16_LEN_LIMIT` check,
             // we can safely assume that this will fit.
             unsafe {
                 let utf8_len_beg = utf8_len;
@@ -515,7 +554,11 @@ extern "C" fn utext_map_native_index_to_utf16(ut: &icu_ffi::UText, native_index:
     off_rel as i32
 }
 
-// Same reason here for not using a PhantomData marker as with `Text`.
+/// A wrapper around ICU's `URegularExpression` struct.
+///
+/// # Safety
+///
+/// Warning! No lifetime tracking is done here.
 pub struct Regex(&'static mut icu_ffi::URegularExpression);
 
 impl Drop for Regex {
@@ -526,8 +569,14 @@ impl Drop for Regex {
 }
 
 impl Regex {
+    /// Enable case-insensitive matching.
     pub const CASE_INSENSITIVE: i32 = icu_ffi::UREGEX_CASE_INSENSITIVE;
+
+    /// If set, ^ and $ match the start and end of each line.
+    /// Otherwise, they match the start and end of the entire string.
     pub const MULTILINE: i32 = icu_ffi::UREGEX_MULTILINE;
+
+    /// Treat the given pattern as a literal string.
     pub const LITERAL: i32 = icu_ffi::UREGEX_LITERAL;
 
     /// Constructs a regex, plain and simple. Read `uregex_open` docs.
@@ -566,7 +615,7 @@ impl Regex {
     }
 
     /// Updates the regex pattern with the given text.
-    /// If the text contents have changed, you can pass the same text as you usued
+    /// If the text contents have changed, you can pass the same text as you used
     /// initially and it'll trigger ICU to reload the text and invalidate its caches.
     ///
     /// # Safety
@@ -578,6 +627,7 @@ impl Regex {
         unsafe { (f.uregex_setUText)(self.0, text.0 as *const _ as *mut _, &mut status) };
     }
 
+    /// Sets the regex to the absolute offset in the underlying text.
     pub fn reset(&mut self, index: usize) {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
@@ -611,6 +661,7 @@ impl Iterator for Regex {
 
 static mut ROOT_COLLATOR: Option<*mut icu_ffi::UCollator> = None;
 
+/// Compares two UTF-8 strings for sorting using ICU's collation algorithm.
 pub fn compare_strings(a: &[u8], b: &[u8]) -> Ordering {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
@@ -688,6 +739,10 @@ fn compare_strings_ascii(a: &[u8], b: &[u8]) -> Ordering {
 
 static mut ROOT_CASEMAP: Option<*mut icu_ffi::UCaseMap> = None;
 
+/// Converts the given UTF-8 string to lower case.
+///
+/// Case folding differs from lower case in that the output is primarily useful
+/// to machines for comparisons. It's like applying Unicode normalization.
 pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]

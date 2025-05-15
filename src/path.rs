@@ -1,3 +1,5 @@
+//! Path related helpers.
+
 use std::ffi::OsStr;
 use std::path::{Component, MAIN_SEPARATOR_STR, Path, PathBuf};
 

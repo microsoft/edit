@@ -1,13 +1,13 @@
-//! Rust has a very popular `memchr` crate. It's quite fast, so you may ask yourself
-//! why we don't just use it: Simply put, this is optimized for short inputs.
+//! `memchr`, but with two needles.
 
 use std::ptr;
 
 use super::distance;
 
-/// memchr(), but with two needles.
-/// Returns the index of the first occurrence of either needle in the `haystack`.
-/// If no needle is found, `haystack.len()` is returned.
+/// `memchr`, but with two needles.
+///
+/// Returns the index of the first occurrence of either needle in the
+/// `haystack`. If no needle is found, `haystack.len()` is returned.
 /// `offset` specifies the index to start searching from.
 pub fn memchr2(needle1: u8, needle2: u8, haystack: &[u8], offset: usize) -> usize {
     unsafe {

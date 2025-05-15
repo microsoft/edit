@@ -1,3 +1,8 @@
+//! Unix-specific platform code.
+//!
+//! Read the `windows` module for reference.
+//! TODO: This reminds me that the sys API should probably be a trait.
+
 use std::ffi::{CStr, c_int, c_void};
 use std::fs::{self, File};
 use std::mem::{self, MaybeUninit};

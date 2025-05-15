@@ -1,12 +1,16 @@
+//! Provides a transparent error type for edit.
+
 use std::{io, result};
 
 use crate::sys;
 
-// Remember to add an entry to `Error::message()` for each new error.
 pub const APP_ICU_MISSING: Error = Error::new_app(0);
 
+/// Edit's transparent `Result` type.
 pub type Result<T> = result::Result<T, Error>;
 
+/// Edit's transparent `Error` type.
+/// Abstracts over system and application errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     App(u32),

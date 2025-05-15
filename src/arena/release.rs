@@ -12,12 +12,36 @@ use crate::{apperr, sys};
 
 const ALLOC_CHUNK_SIZE: usize = 64 * KIBI;
 
+/// An arena allocator.
+///
+/// If you have never used an arena allocator before, think of it as
+/// allocating objects on the stack, but the stack is *really* big.
+/// Each time you allocate, memory gets pushed at the end of the stack,
+/// each time you deallocate, memory gets popped from the end of the stack.
+///
+/// One reason you'd want to use this is obviously performance: It's very simple
+/// and so it's also very fast, >10x faster than your system allocator.
+///
+/// However, modern allocators such as `mimalloc` are just as fast, so why not use them?
+/// Because their performance comes at the cost of binary size and we can't have that.
+///
+/// The biggest benefit though is that it sometimes massively simplifies lifetime
+/// and memory management. This can best be seen by this project's UI code, which
+/// uses an arena to allocate a tree of UI nodes. This is infameously difficult
+/// to do in Rust, but not so when you got an arena allocator:
+/// All nodes have the same lifetime, so you can just use references.
+///
+/// # Safety
+///
+/// **Do not** push objects into the arena that require destructors.
+/// Destructors are not executed. Use a pool allocator for that.
 pub struct Arena {
     base: NonNull<u8>,
     capacity: usize,
     commit: Cell<usize>,
     offset: Cell<usize>,
 
+    /// See [`super::debug`], which uses this for borrow tracking.
     #[cfg(debug_assertions)]
     pub(super) borrows: Cell<usize>,
 }
@@ -61,6 +85,7 @@ impl Arena {
     /// Obviously, this is GIGA UNSAFE. It runs no destructors and does not check
     /// whether the offset is valid. You better take care when using this function.
     pub unsafe fn reset(&self, to: usize) {
+        // Fill the deallocated memory with 0xDD to aid debugging.
         if cfg!(debug_assertions) && self.offset.get() > to {
             let commit = self.commit.get();
             let len = (self.offset.get() + 128).min(commit) - to;

@@ -1,3 +1,12 @@
+//! Provides fast, non-cryptographic hash functions.
+
+/// The venerable wyhash hash function.
+///
+/// It's fast, has good statistical properties, and is in the public domain.
+/// See: <https://github.com/wangyi-fudan/wyhash>
+/// If you visit the link, you'll find that it was superseded by "rapidhash",
+/// but that's not particularly interesting for this project. rapidhash results
+/// in way larger assembly and isn't faster when hashing small amounts of data.
 pub fn hash(mut seed: u64, data: &[u8]) -> u64 {
     unsafe {
         const S0: u64 = 0xa0761d6478bd642f;

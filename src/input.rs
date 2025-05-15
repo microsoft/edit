@@ -1,10 +1,17 @@
+//! Parses VT sequences into input events.
+//!
+//! In the future this allows us to take apart the application and
+//! support input schemes that aren't VT, such as UEFI, or GUI.
+
 use crate::helpers::{CoordType, Point, Size};
 use crate::vt;
 
-// TODO: Is this a good idea? I did it to allow typing `kbmod::CTRL | vk::A`.
-// The reason it's an awkard u32 and not a struct is to hopefully make ABIs easier later.
-// Of course you could just translate on the ABI boundary, but my hope is that this
-// design lets me realize some restrictions early on that I can't foresee yet.
+/// Represents a key/modifier combination.
+///
+/// TODO: Is this a good idea? I did it to allow typing `kbmod::CTRL | vk::A`.
+/// The reason it's an awkard u32 and not a struct is to hopefully make ABIs easier later.
+/// Of course you could just translate on the ABI boundary, but my hope is that this
+/// design lets me realize some restrictions early on that I can't foresee yet.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct InputKey(u32);
@@ -47,6 +54,7 @@ impl InputKey {
     }
 }
 
+/// A keyboard modifier. Ctrl/Alt/Shift.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct InputKeyMod(u32);
@@ -83,8 +91,10 @@ impl std::ops::BitOrAssign for InputKeyMod {
     }
 }
 
-// The codes defined here match the VK_* constants on Windows.
-// It's a convenient way to handle keyboard input, even on other platforms.
+/// Keyboard keys.
+///
+/// The codes defined here match the VK_* constants on Windows.
+/// It's a convenient way to handle keyboard input, even on other platforms.
 pub mod vk {
     use super::InputKey;
 
@@ -189,6 +199,7 @@ pub mod vk {
     pub const F24: InputKey = InputKey::new(0x87);
 }
 
+/// Keyboard modifiers.
 pub mod kbmod {
     use super::InputKeyMod;
 
@@ -203,12 +214,17 @@ pub mod kbmod {
     pub const CTRL_ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x07000000);
 }
 
+/// Text input.
+///
+/// "Keyboard" input is also "text" input and vice versa.
+/// It differs in that text input can also be Unicode.
 #[derive(Clone, Copy)]
 pub struct InputText<'a> {
     pub text: &'a str,
     pub bracketed: bool,
 }
 
+/// Mouse input state. Up/Down, Left/Right, etc.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum InputMouseState {
     #[default]
@@ -224,21 +240,34 @@ pub enum InputMouseState {
     Scroll,
 }
 
+/// Mouse input.
 #[derive(Clone, Copy)]
 pub struct InputMouse {
+    /// The state of the mouse.Up/Down, Left/Right, etc.
     pub state: InputMouseState,
+    /// Any keyboard modifiers that are held down.
     pub modifiers: InputKeyMod,
+    /// Position of the mouse in the viewport.
     pub position: Point,
+    /// Scroll delta.
     pub scroll: Point,
 }
 
+/// Primary result type of the parser.
 pub enum Input<'input> {
+    /// Window resize event.
     Resize(Size),
+    /// Text input.
+    ///
+    /// Note that [`Input::Keyboard`] events can also be text.
     Text(InputText<'input>),
+    /// Keyboard input.
     Keyboard(InputKey),
+    /// Mouse input.
     Mouse(InputMouse),
 }
 
+/// Parses VT sequences into input events.
 pub struct Parser {
     bracketed_paste: bool,
     x10_mouse_want: bool,
@@ -247,6 +276,9 @@ pub struct Parser {
 }
 
 impl Parser {
+    /// Creates a new parser that turns VT sequences into input events.
+    ///
+    /// Keep the instance alive for the lifetime of the input stream.
     pub fn new() -> Self {
         Self {
             bracketed_paste: false,
@@ -256,7 +288,8 @@ impl Parser {
         }
     }
 
-    /// Turns VT sequences into keyboard, mouse, etc., inputs.
+    /// Takes an [`vt::Stream`] and returns a [`Stream`]
+    /// that turns VT sequences into input events.
     pub fn parse<'parser, 'vt, 'input>(
         &'parser mut self,
         stream: vt::Stream<'vt, 'input>,
@@ -265,15 +298,15 @@ impl Parser {
     }
 }
 
+/// An iterator that parses VT sequences into input events.
+///
+/// Can't implement [`Iterator`], because this is a "lending iterator".
 pub struct Stream<'parser, 'vt, 'input> {
     parser: &'parser mut Parser,
     stream: vt::Stream<'vt, 'input>,
 }
 
 impl<'input> Stream<'_, '_, 'input> {
-    /// Parses the next input action from the previously given input.
-    ///
-    /// Can't implement Iterator, because this is a "lending iterator".
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<Input<'input>> {
         loop {
@@ -446,6 +479,17 @@ impl<'input> Stream<'_, '_, 'input> {
         }
     }
 
+    /// Once we encounter the start of a bracketed paste
+    /// we seek to the end of the paste in this function.
+    ///
+    /// A bracketed paste is basically:
+    /// ```text
+    /// <ESC>[201~    lots of text    <ESC>[201~
+    /// ```
+    ///
+    /// That text inbetween is then expected to be taken literally.
+    /// It can inbetween be anything though, including other escape sequences.
+    /// This is the reason why this is a separate method.
     #[cold]
     fn handle_bracketed_paste(&mut self) -> Option<Input<'input>> {
         let beg = self.stream.offset();

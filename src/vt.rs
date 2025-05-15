@@ -1,19 +1,38 @@
+//! Our VT parser.
+
 use std::{mem, time};
 
 use crate::simd::memchr2;
 
+/// The parser produces these tokens.
 pub enum Token<'parser, 'input> {
+    /// A bunch of text. Doesn't contain any control characters.
     Text(&'input str),
+    /// A single control character, like backspace or return.
     Ctrl(char),
+    /// We encountered `ESC x` and this contains `x`.
     Esc(char),
+    /// We encountered `ESC O x` and this contains `x`.
     SS3(char),
+    /// A CSI sequence started with `ESC [`.
+    ///
+    /// They are the most common escape sequences. See [`Csi`].
     Csi(&'parser Csi),
+    /// An OSC sequence started with `ESC ]`.
+    ///
+    /// The sequence may be split up into multiple tokens if the input
+    /// is given in chunks. This is indicated by the `partial` field.
     Osc { data: &'input str, partial: bool },
+    /// An DCS sequence started with `ESC P`.
+    ///
+    /// The sequence may be split up into multiple tokens if the input
+    /// is given in chunks. This is indicated by the `partial` field.
     Dcs { data: &'input str, partial: bool },
 }
 
+/// Stores the state of the parser.
 #[derive(Clone, Copy)]
-pub enum State {
+enum State {
     Ground,
     Esc,
     Ss3,
@@ -24,10 +43,20 @@ pub enum State {
     DcsEsc,
 }
 
+/// A single CSI sequence, parsed for your convenience.
 pub struct Csi {
+    /// The parameters of the CSI sequence.
     pub params: [u16; 32],
+    /// The number of parameters stored in [`Csi::params`].
     pub param_count: usize,
+    /// The private byte, if any. `0` if none.
+    ///
+    /// The private byte is the first character right after the
+    /// `ESC [` sequence. It is usually a `?` or `<`.
     pub private_byte: char,
+    /// The final byte of the CSI sequence.
+    ///
+    /// This is the last character of the sequence, e.g. `m` or `H`.
     pub final_byte: char,
 }
 
@@ -73,6 +102,9 @@ impl Parser {
     }
 }
 
+/// An iterator that parses VT sequences into [`Token`]s.
+///
+/// Can't implement [`Iterator`], because this is a "lending iterator".
 pub struct Stream<'parser, 'input> {
     parser: &'parser mut Parser,
     input: &'input str,
@@ -80,10 +112,12 @@ pub struct Stream<'parser, 'input> {
 }
 
 impl<'parser, 'input> Stream<'parser, 'input> {
+    /// Returns the input that is being parsed.
     pub fn input(&self) -> &'input str {
         self.input
     }
 
+    /// Returns the current parser offset.
     pub fn offset(&self) -> usize {
         self.off
     }
@@ -99,8 +133,6 @@ impl<'parser, 'input> Stream<'parser, 'input> {
     }
 
     /// Parses the next VT sequence from the previously given input.
-    ///
-    /// Can't implement Iterator, because this is a "lending iterator".
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<Token<'parser, 'input>> {
         // I don't know how to tell Rust that `self.parser` and its lifetime

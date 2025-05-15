@@ -6,17 +6,24 @@ use crate::document::ReadableDocument;
 use crate::helpers::{CoordType, Point};
 use crate::simd::{memchr2, memrchr2};
 
+/// Stores a position inside a [`ReadableDocument`].
+///
+/// The cursor tracks both the absolute byte-offset,
+/// as well as the position in terminal-related coordinates.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cursor {
     /// Offset in bytes within the buffer.
     pub offset: usize,
     /// Position in the buffer in lines (.y) and grapheme clusters (.x).
+    ///
     /// Line wrapping has NO influence on this.
     pub logical_pos: Point,
     /// Position in the buffer in laid out rows (.y) and columns (.x).
+    ///
     /// Line wrapping has an influence on this.
     pub visual_pos: Point,
     /// Horizontal position in visual columns.
+    ///
     /// Line wrapping has NO influence on this and if word wrap is disabled,
     /// it's identical to `visual_pos.x`. This is useful for calculating tab widths.
     pub column: CoordType,
@@ -27,6 +34,7 @@ pub struct Cursor {
     pub wrap_opp: bool,
 }
 
+/// Your entrypoint to navigating inside a [`ReadableDocument`].
 #[derive(Clone)]
 pub struct MeasurementConfig<'doc> {
     buffer: &'doc dyn ReadableDocument,
@@ -36,25 +44,41 @@ pub struct MeasurementConfig<'doc> {
 }
 
 impl<'doc> MeasurementConfig<'doc> {
+    /// Creates a new [`MeasurementConfig`] for the given document.
     pub fn new(buffer: &'doc dyn ReadableDocument) -> Self {
         Self { buffer, tab_size: 8, word_wrap_column: 0, cursor: Default::default() }
     }
 
+    /// Sets the tab size.
+    ///
+    /// Defaults to 8, because that's what a tab in terminals evaluates to.
     pub fn with_tab_size(mut self, tab_size: CoordType) -> Self {
         self.tab_size = tab_size.max(1);
         self
     }
 
+    /// You want word wrap? Set it here!
+    ///
+    /// Defaults to 0, which means no word wrap.
     pub fn with_word_wrap_column(mut self, word_wrap_column: CoordType) -> Self {
         self.word_wrap_column = word_wrap_column;
         self
     }
 
+    /// Sets the initial cursor to the given position.
+    ///
+    /// WARNING: While the code doesn't panic if the cursor is invalid,
+    /// the results will obviously be complete garbage.
     pub fn with_cursor(mut self, cursor: Cursor) -> Self {
         self.cursor = cursor;
         self
     }
 
+    /// Navigates **forward** to the given absolute offset.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position after the navigation.
     pub fn goto_offset(&mut self, offset: usize) -> Cursor {
         self.cursor = Self::measure_forward(
             self.tab_size,
@@ -68,6 +92,13 @@ impl<'doc> MeasurementConfig<'doc> {
         self.cursor
     }
 
+    /// Navigates **forward** to the given logical position.
+    ///
+    /// Logical positions are in lines and grapheme clusters.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position after the navigation.
     pub fn goto_logical(&mut self, logical_target: Point) -> Cursor {
         self.cursor = Self::measure_forward(
             self.tab_size,
@@ -81,6 +112,13 @@ impl<'doc> MeasurementConfig<'doc> {
         self.cursor
     }
 
+    /// Navigates **forward** to the given visual position.
+    ///
+    /// Visual positions are in laid out rows and columns.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position after the navigation.
     pub fn goto_visual(&mut self, visual_target: Point) -> Cursor {
         self.cursor = Self::measure_forward(
             self.tab_size,
@@ -94,6 +132,7 @@ impl<'doc> MeasurementConfig<'doc> {
         self.cursor
     }
 
+    /// Returns the current cursor position.
     pub fn cursor(&self) -> Cursor {
         self.cursor
     }
@@ -447,10 +486,33 @@ impl<'doc> MeasurementConfig<'doc> {
     }
 }
 
-// TODO: This code could be optimized by replacing memchr with manual line counting.
-// If `line_stop` is very far away, we could accumulate newline counts horizontally
-// in a AVX2 register (= 32 u8 slots). Then, every 256 bytes we compute the horizontal
-// sum via `_mm256_sad_epu8` yielding us the newline count in the last block.
+/// Seeks forward to to the given line start.
+///
+/// If given a piece of `text`, and assuming you're currently at `offset` which
+/// is on the logical line `line`, this will seek forward until the logical line
+/// `line_stop` is reached. For instance, if `line` is 0 and `line_stop` is 2,
+/// it'll seek forward past 2 line feeds.
+///
+/// This function always stops exactly past a line feed
+/// and thus returns a position at the start of a line.
+///
+/// # Warning
+///
+/// If the end of `text` is hit before reaching `line_stop`, the function
+/// will return an offset of `text.len()`, not at the start of a line.
+///
+/// # Parameters
+///
+/// * `text`: The text to search in.
+/// * `offset`: The offset to start searching from.
+/// * `line`: The current line.
+/// * `line_stop`: The line to stop at.
+///
+/// # Returns
+///
+/// A tuple consisting of:
+/// * The new offset.
+/// * The line number that was reached.
 pub fn newlines_forward(
     text: &[u8],
     mut offset: usize,
@@ -467,6 +529,13 @@ pub fn newlines_forward(
     offset = offset.min(len);
 
     loop {
+        // TODO: This code could be optimized by replacing memchr with manual line counting.
+        //
+        // If `line_stop` is very far away, we could accumulate newline counts horizontally
+        // in a AVX2 register (= 32 u8 slots). Then, every 256 bytes we compute the horizontal
+        // sum via `_mm256_sad_epu8` yielding us the newline count in the last block.
+        //
+        // We could also just use `_mm256_sad_epu8` on each fetch as-is.
         offset = memchr2(b'\n', b'\n', text, offset);
         if offset >= len {
             break;
@@ -482,9 +551,18 @@ pub fn newlines_forward(
     (offset, line)
 }
 
-// Seeks to the start of the given line.
-// No matter what parameters are given, it only returns an offset at the start of a line.
-// Put differently, even if `line == line_stop`, it'll seek backward to the line start.
+/// Seeks backward to the given line start.
+///
+/// See [`newlines_forward`] for details.
+/// This function does almost the same thing, but in reverse.
+///
+/// # Warning
+///
+/// In addition to the notes in [`newlines_forward`]:
+///
+/// No matter what parameters are given, [`newlines_backward`] only returns an
+/// offset at the start of a line. Put differently, even if `line == line_stop`,
+/// it'll seek backward to the line start.
 pub fn newlines_backward(
     text: &[u8],
     mut offset: usize,
@@ -506,6 +584,10 @@ pub fn newlines_backward(
     }
 }
 
+/// Returns an offset past a newline.
+///
+/// If `offset` is right in front of a newline,
+/// this will return the offset past said newline.
 pub fn skip_newline(text: &[u8], mut offset: usize) -> usize {
     if offset >= text.len() {
         return offset;
@@ -522,6 +604,7 @@ pub fn skip_newline(text: &[u8], mut offset: usize) -> usize {
     offset
 }
 
+/// Strips a trailing newline from the given text.
 pub fn strip_newline(mut text: &[u8]) -> &[u8] {
     // Rust generates surprisingly tight assembly for this.
     if text.last() == Some(&b'\n') {

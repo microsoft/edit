@@ -1,3 +1,145 @@
+//! An immediate mode UI framework for terminals.
+//!
+//! # Why immediate mode?
+//!
+//! This uses an "immediate mode" design, similar to [ImGui](https://github.com/ocornut/imgui).
+//! The reason for this is that I expect the UI needs for any terminal application to be
+//! fairly minimal, and for that purpose an immediate mode design is much simpler to use.
+//!
+//! So what's "immediate mode"? The primary alternative is called "retained mode".
+//! The diference is that when you create a button in this framework in one frame,
+//! and you stop telling this framework in the next frame, the button will vanish.
+//! When you use a regular retained mode UI framework, you create the button once,
+//! set up callbacks for when it is clicked, and then stop worrying about it.
+//!
+//! The downside of immediate mode is that your UI code _may_ become cluttered.
+//! The upside however is that that you cannot leak UI elements, you don't need to
+//! worry about lifetimes nor callbacks, and that simple UIs are simple to write.
+//!
+//! More importantly though, the primary reason for this is that the
+//! lack of callbacks means we can use this design across a plain C ABI,
+//! which we'll need once plugins come into play. GTK's `g_signal_connect`
+//! shows that the alternative can be rather cumbersome.
+//!
+//! # Design overview
+//!
+//! While this file is fairly lengthy, the overall algorithm is simple.
+//! On the first frame ever:
+//! * Prepare an empty `arena_next`.
+//! * Parse the incoming [`input::Input`] which should be a resize event.
+//! * Create a new [`Context`] instance and give it the caller.
+//! * Now the caller will draw their UI with the [`Context`] by calling the
+//!   various [`Context`] UI methods, such as [`Context::block_begin()`] and
+//!   [`Context::block_end()`]. These two are the basis which all other UI
+//!   elements are built upon by the way. Each UI element that is created gets
+//!   allocated onto `arena_next` and inserted into the UI tree.
+//!   That tree works exactly like the DOM tree in HTML: Each node in the tree
+//!   has a parent, children, and siblings. The tree layout at the end is then
+//!   a direct mirror of the code "layout" that created it.
+//! * Once the caller is done and drops the [`Context`], it'll secretly call
+//!   `report_context_completion`. This causes a number of things:
+//!   * The DOM tree that was built is stored in `prev_tree`.
+//!   * A hashmap of all nodes is built and stored in `prev_node_map`.
+//!   * `arena_next` is swapped with `arena_prev`.
+//!   * Each UI node is measured and laid out.
+//! * Now the caller is expected to repeat this process with a [`None`]
+//!   input event until [`Tui::needs_settling()`] returns false.
+//!   This is necessary, because when [`Context::button()`] returns `true`
+//!   in one frame, it may change the state in the caller's code
+//!   and require another frame to be drawn.
+//! * Finally a call to [`Tui::render()`] will render the UI tree into the
+//!   framebuffer and return VT output.
+//!
+//! On every subsequent frame the process is similar, but one crucial element
+//! of any immediate mode UI framework is added:
+//! Now when the caller draws their UI, the various [`Context`] UI elements
+//! have access to `prev_node_map` and the previously built UI tree.
+//! This allows the UI framework to reuse the previously computed layout for
+//! hit tests, caching scroll offsets, and so on.
+//!
+//! In the end it looks very similar:
+//! * Prepare an empty `arena_next`.
+//! * Parse the incoming [`input::Input`]...
+//!   * **BUT** now we can hit-test mouse clicks onto the previously built
+//!     UI tree. This way we can delegate focus on left mouse clicks.
+//! * Create a new [`Context`] instance and give it the caller.
+//! * The caller draws their UI with the [`Context`]...
+//!   * **BUT** we can preserve the UI state across frames.
+//! * Continue rendering until [`Tui::needs_settling()`] returns false.
+//! * And the final call to [`Tui::render()`].
+//!
+//! # Classnames and node IDs
+//!
+//! So how do we find which node from the previous tree correlates to the
+//! current node? Each node needs to be constructed with a "classname".
+//! The classname is hashed with the parent node ID as the seed. This derived
+//! hash is then used as the new child node ID. Under the assumption that the
+//! collision likelihood of the hash function is low, this services as true IDs.
+//!
+//! This has the nice added property that finding a node with the same ID
+//! guarantees that all of the parent nodes must have equivalent IDs as well.
+//! This turns "is the focus anywhere inside this subtree" into an O(1) check.
+//!
+//! The reason "classnames" are used is because I was hoping to add theming
+//! in the future with a syntax similar to CSS (simplified, however).
+//!
+//! # Example
+//!
+//! ```
+//! use edit::helpers::Size;
+//! use edit::input::Input;
+//! use edit::tui::*;
+//! use edit::{arena, arena_format};
+//!
+//! struct State {
+//!     counter: i32,
+//! }
+//!
+//! fn main() {
+//!     arena::init().unwrap();
+//!
+//!     // Create a `Tui` instance which holds state across frames.
+//!     let mut tui = Tui::new().unwrap();
+//!     let mut state = State { counter: 0 };
+//!     let input = Input::Resize(Size { width: 80, height: 24 });
+//!
+//!     // Pass the input to the TUI.
+//!     {
+//!         let mut ctx = tui.create_context(Some(input));
+//!         draw(&mut ctx, &mut state);
+//!     }
+//!
+//!     // Continue until the layout has settled.
+//!     while tui.needs_settling() {
+//!         let mut ctx = tui.create_context(None);
+//!         draw(&mut ctx, &mut state);
+//!     }
+//!
+//!     // Render the output.
+//!     let scratch = arena::scratch_arena(None);
+//!     let output = tui.render(&*scratch);
+//!     println!("{}", output);
+//! }
+//!
+//! fn draw(ctx: &mut Context, state: &mut State) {
+//!     ctx.table_begin("classname");
+//!     {
+//!         ctx.table_next_row();
+//!
+//!         // Thanks to the lack of callbacks, we can use a primitive
+//!         // if condition here, as well as in any potential C code.
+//!         if ctx.button("button", "Click me!") {
+//!             state.counter += 1;
+//!         }
+//!
+//!         // Similarly, formatting and showing labels is straightforward.
+//!         // It's impossible to forget updating the label this way.
+//!         ctx.label("label", &arena_format!(ctx.arena(), "Counter: {}", state.counter));
+//!     }
+//!     ctx.table_end();
+//! }
+//! ```
+
 use std::arch::breakpoint;
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
@@ -22,33 +164,46 @@ type InputKey = input::InputKey;
 type InputMouseState = input::InputMouseState;
 type InputText<'input> = input::InputText<'input>;
 
+/// Since [`TextBuffer`] creation and management is expensive,
+/// we cache instances of them for reuse between frames.
+/// This is used for [`Context::editline()`].
 struct CachedTextBuffer {
     node_id: u64,
     editor: RcTextBuffer,
     seen: bool,
 }
 
+/// Since [`Context::editline()`] and [`Context::textarea()`]
+/// do almost the same thing, this abstracts over the two.
 enum TextBufferPayload<'a> {
     Editline(&'a mut dyn WriteableDocument),
     Textarea(RcTextBuffer),
 }
 
+/// In order for the TUI to show the correct Ctrl/Alt/Shift
+/// translations, this struct lets you set them.
 pub struct ModifierTranslations {
     pub ctrl: &'static str,
     pub alt: &'static str,
     pub shift: &'static str,
 }
 
+/// Controls to which node the floater is anchored.
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub enum Anchor {
+    /// The floater is attached relative to the node created last.
     #[default]
     Last,
+    /// The floater is attached relative to the current node (= parent of new nodes).
     Parent,
+    /// The floater is attached relative to the root node (= usually the viewport).
     Root,
 }
 
+/// Controls the position of the floater. See [`Context::attr_float`].
 #[derive(Default)]
 pub struct FloatSpec {
+    /// Controls to which node the floater is anchored.
     pub anchor: Anchor,
     // Specifies the origin of the container relative to the container size. [0, 1]
     pub gravity_x: f32,
@@ -58,36 +213,65 @@ pub struct FloatSpec {
     pub offset_y: f32,
 }
 
+/// Informs you about the change that was made to the list selection.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ListSelection {
+    /// The selection wasn't changed.
     Unchanged,
+    /// The selection was changed to the current list item.
     Selected,
+    /// The selection was changed to the current list item
+    /// *and* the item was also activated (Enter or Double-click).
     Activated,
 }
 
+/// Controls the position of a node relative to its parent.
 #[derive(Default)]
 pub enum Position {
+    /// The child is stretched to fill the parent.
     #[default]
     Stretch,
+    /// The child is positioned at the left edge of the parent.
     Left,
+    /// The child is positioned at the center of the parent.
     Center,
+    /// The child is positioned at the right edge of the parent.
     Right,
 }
 
+/// Controls the text overflow behavior of a label
+/// when the text doesn't fit the container.
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub enum Overflow {
+    /// Text is simply cut off when it doesn't fit.
     #[default]
     Clip,
+    /// An ellipsis is shown at the end of the text.
     TruncateHead,
+    /// An ellipsis is shown in the middle of the text.
     TruncateMiddle,
+    /// An ellipsis is shown at the beginning of the text.
     TruncateTail,
 }
 
+/// There's two types of lifetimes the TUI code needs to manage:
+/// * Across frames
+/// * Per frame
+///
+/// [`Tui`] manages the first one. It's also the entrypoint for
+/// everything else you may want to do.
 pub struct Tui {
+    /// Arena used for the previous frame.
     arena_prev: Arena,
+    /// Arena used for the current frame.
     arena_next: Arena,
+    /// The UI tree built in the previous frame.
+    /// This refers to memory in `arena_prev`.
     prev_tree: Tree<'static>,
+    /// A hashmap of all nodes built in the previous frame.
+    /// This refers to memory in `arena_prev`.
     prev_node_map: NodeMap<'static>,
+    /// The framebuffer used for rendering.
     framebuffer: Framebuffer,
 
     modifier_translations: ModifierTranslations,
@@ -97,27 +281,51 @@ pub struct Tui {
     modal_default_fg: u32,
 
     /// Last known terminal size.
+    ///
+    /// This lives here instead of [`Context`], because we need to
+    /// track the state across frames and input events.
+    /// This also applies to the remaining members in this block below.
     size: Size,
     /// Last known mouse position.
     mouse_position: Point,
     /// Between mouse down and up, the position where the mouse was pressed.
     /// Otherwise, this contains Point::MIN.
     mouse_down_position: Point,
+    /// Node ID of the node that was clicked on.
+    /// Used for tracking drag targets.
     left_mouse_down_target: u64,
+    /// Timestamp of the last mouse up event.
+    /// Used for tracking double/triple clicks.
     mouse_up_timestamp: std::time::Instant,
+    /// The current mouse state.
     mouse_state: InputMouseState,
+    /// Whether the mouse is currently being dragged.
     mouse_is_drag: bool,
+    /// The number of clicks that have happened in a row.
+    /// Gets reset when the mouse was released for a while.
     mouse_click_counter: CoordType,
+    /// The path to the node that was clicked on.
     mouse_down_node_path: Vec<u64>,
+    /// The position of the first click in a double/triple click series.
     first_click_position: Point,
+    /// The node ID of the node that was first clicked on
+    /// in a double/triple click series.
     first_click_target: u64,
 
+    /// Path to the currently focused node.
     focused_node_path: Vec<u64>,
+    /// Contains the last element in [`Tui::focused_node_path`].
+    /// This way we can track if the focus changed, because then we
+    /// need to scroll the node into view if it's within a scrollarea.
     focused_node_for_scrolling: u64,
 
+    /// A list of cached text buffers used for [`Context::editline()`].
     cached_text_buffers: Vec<CachedTextBuffer>,
 
+    /// The clipboard contents.
     clipboard: Vec<u8>,
+    /// A counter that is incremented every time the clipboard changes.
+    /// Allows for tracking clipboard changes without comparing contents.
     clipboard_generation: u32,
 
     settling_have: i32,
@@ -126,6 +334,7 @@ pub struct Tui {
 }
 
 impl Tui {
+    /// Creates a new [`Tui`] instance for storing state across frames.
     pub fn new() -> apperr::Result<Self> {
         let arena_prev = Arena::new(128 * MEBI)?;
         let arena_next = Arena::new(128 * MEBI)?;
@@ -179,56 +388,74 @@ impl Tui {
         Ok(tui)
     }
 
+    /// Sets up the framebuffer's color palette.
     pub fn setup_indexed_colors(&mut self, colors: [u32; INDEXED_COLORS_COUNT]) {
         self.framebuffer.set_indexed_colors(colors);
     }
 
+    /// Set up translations for Ctrl/Alt/Shift modifiers.
     pub fn setup_modifier_translations(&mut self, translations: ModifierTranslations) {
         self.modifier_translations = translations;
     }
 
+    /// Set the default background color for floaters (dropdowns, etc.).
     pub fn set_floater_default_bg(&mut self, color: u32) {
         self.floater_default_bg = color;
     }
 
+    /// Set the default foreground color for floaters (dropdowns, etc.).
     pub fn set_floater_default_fg(&mut self, color: u32) {
         self.floater_default_fg = color;
     }
 
+    /// Set the default background color for modals.
     pub fn set_modal_default_bg(&mut self, color: u32) {
         self.modal_default_bg = color;
     }
 
+    /// Set the default foreground color for modals.
     pub fn set_modal_default_fg(&mut self, color: u32) {
         self.modal_default_fg = color;
     }
 
+    /// If the TUI is currently running animations, etc.,
+    /// this will return a timeout smaller than [`time::Duration::MAX`].
     pub fn read_timeout(&mut self) -> time::Duration {
         mem::replace(&mut self.read_timeout, time::Duration::MAX)
     }
 
+    /// Returns an indexed color from the framebuffer.
     #[inline]
     pub fn indexed(&self, index: IndexedColor) -> u32 {
         self.framebuffer.indexed(index)
     }
 
+    /// Returns an indexed color from the framebuffer with the given alpha.
+    /// See [`Framebuffer::indexed_alpha()`].
     #[inline]
     pub fn indexed_alpha(&self, index: IndexedColor, numerator: u32, denominator: u32) -> u32 {
         self.framebuffer.indexed_alpha(index, numerator, denominator)
     }
 
+    /// Returns a color in contrast with the given color.
+    /// See [`Framebuffer::contrasted()`].
     pub fn contrasted(&self, color: u32) -> u32 {
         self.framebuffer.contrasted(color)
     }
 
+    /// Returns the current clipboard contents.
     pub fn clipboard(&self) -> &[u8] {
         &self.clipboard
     }
 
+    /// Returns the current clipboard generation.
+    /// The generation changes every time the clipboard contents change.
+    /// This allows you to track clipboard changes.
     pub fn clipboard_generation(&self) -> u32 {
         self.clipboard_generation
     }
 
+    /// Starts a new frame and returns a [`Context`] for it.
     pub fn create_context<'a, 'input>(
         &'a mut self,
         input: Option<Input<'input>>,
@@ -547,7 +774,7 @@ impl Tui {
         self.settling_want = (self.settling_have + 1).min(20);
     }
 
-    /// Renders all nodes into a string-frame representation.
+    /// Renders the last frame into the framebuffer and returns the VT output.
     pub fn render<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
         self.framebuffer.flip(self.size);
         for child in self.prev_tree.iterate_roots() {
@@ -1118,6 +1345,8 @@ impl Tui {
     }
 }
 
+/// Context is a temporary object that is created for each frame.
+/// Its primary purpose is to build a UI tree.
 pub struct Context<'a, 'input> {
     tui: &'a mut Tui,
 
@@ -1148,6 +1377,7 @@ impl<'a> Drop for Context<'a, '_> {
 }
 
 impl<'a> Context<'a, '_> {
+    /// Get an arena for temporary allocations such as for [`arena_format`].
     pub fn arena(&self) -> &'a Arena {
         // TODO:
         // `Context` borrows `Tui` for lifetime 'a, so `self.tui` should be `&'a Tui`, right?
@@ -1158,32 +1388,45 @@ impl<'a> Context<'a, '_> {
         unsafe { mem::transmute::<&'_ Arena, &'a Arena>(&self.tui.arena_next) }
     }
 
+    /// Returns the viewport size.
     pub fn size(&self) -> Size {
+        // We don't use the size stored in the framebuffer, because until
+        // `render()` is called, the framebuffer will use a stale size.
         self.tui.size
     }
 
+    /// Returns an indexed color from the framebuffer.
     #[inline]
     pub fn indexed(&self, index: IndexedColor) -> u32 {
         self.tui.framebuffer.indexed(index)
     }
 
+    /// Returns an indexed color from the framebuffer with the given alpha.
+    /// See [`Framebuffer::indexed_alpha()`].
     #[inline]
     pub fn indexed_alpha(&self, index: IndexedColor, numerator: u32, denominator: u32) -> u32 {
         self.tui.framebuffer.indexed_alpha(index, numerator, denominator)
     }
 
+    /// Returns a color in contrast with the given color.
+    /// See [`Framebuffer::contrasted()`].
     pub fn contrasted(&self, color: u32) -> u32 {
         self.tui.framebuffer.contrasted(color)
     }
 
+    /// Returns the current clipboard contents.
     pub fn clipboard(&self) -> &[u8] {
         self.tui.clipboard()
     }
 
+    /// Returns the current clipboard generation.
+    /// The generation changes every time the clipboard contents change.
+    /// This allows you to track clipboard changes.
     pub fn clipboard_generation(&self) -> u32 {
         self.tui.clipboard_generation()
     }
 
+    /// Sets the clipboard contents.
     pub fn set_clipboard(&mut self, data: Vec<u8>) {
         if !data.is_empty() {
             self.tui.clipboard = data;
@@ -1192,13 +1435,14 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Tell the UI framework that your state changed and you need another layout pass.
     pub fn needs_rerender(&mut self) {
         // If this hits, the call stack is responsible is trying to deadlock you.
         debug_assert!(self.tui.settling_have < 15);
         self.needs_settling = true;
     }
 
-    /// Begins a new UI block (container) with a unique ID.
+    /// Begins a generic UI block (container) with a unique ID derived from the given `classname`.
     pub fn block_begin(&mut self, classname: &'static str) {
         let parent = self.tree.current_node;
 
@@ -1232,6 +1476,7 @@ impl<'a> Context<'a, '_> {
     }
 
     /// Mixes in an extra value to the next UI block's ID for uniqueness.
+    /// Use this when you build a list of items with the same classname.
     pub fn next_block_id_mixin(&mut self, id: u64) {
         self.next_block_id_mixin = id;
     }
@@ -1241,6 +1486,8 @@ impl<'a> Context<'a, '_> {
         last_node.attributes.focusable = true;
     }
 
+    /// If this is the first time the current node is being drawn,
+    /// it'll steal the active focus.
     pub fn focus_on_first_present(&mut self) {
         let steal = {
             let mut last_node = self.tree.last_node.borrow_mut();
@@ -1252,6 +1499,7 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Steals the focus unconditionally.
     pub fn steal_focus(&mut self) {
         self.steal_focus_for(self.tree.last_node);
     }
@@ -1263,12 +1511,14 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// If the current node owns the focus, it'll be given to the parent.
     pub fn toss_focus_up(&mut self) {
         if self.tui.pop_focusable_node(1) {
             self.needs_rerender();
         }
     }
 
+    /// If the parent node owns the focus, it'll be given to the current node.
     pub fn inherit_focus(&mut self) {
         let mut last_node = self.tree.last_node.borrow_mut();
         let Some(parent) = last_node.parent else {
@@ -1289,17 +1539,23 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Causes keyboard focus to be unable to escape this node and its children.
+    /// It's a "well" because if the focus is inside it, it can't escape.
     pub fn attr_focus_well(&mut self) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.focus_well = true;
     }
 
+    /// Explicitly sets the intrinsic size of the current node.
+    /// The intrinsic size is the size the node ideally wants to be.
     pub fn attr_intrinsic_size(&mut self, size: Size) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.intrinsic_size = size;
         last_node.intrinsic_size_set = true;
     }
 
+    /// Turns the current node into a floating node,
+    /// like a popup, modal or a tooltip.
     pub fn attr_float(&mut self, spec: FloatSpec) {
         let last_node = self.tree.last_node;
         let anchor = {
@@ -1328,16 +1584,19 @@ impl<'a> Context<'a, '_> {
         ln.attributes.fg = self.tui.floater_default_fg;
     }
 
+    /// Gives the current node a border.
     pub fn attr_border(&mut self) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.bordered = true;
     }
 
+    /// Sets the current node's position inside the parent.
     pub fn attr_position(&mut self, align: Position) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.position = align;
     }
 
+    /// Assigns padding to the current node.
     pub fn attr_padding(&mut self, padding: Rect) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.padding = Self::normalize_rect(padding);
@@ -1352,21 +1611,27 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Assigns a sRGB background color to the current node.
     pub fn attr_background_rgba(&mut self, bg: u32) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.bg = bg;
     }
 
+    /// Assigns a sRGB foreground color to the current node.
     pub fn attr_foreground_rgba(&mut self, fg: u32) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.fg = fg;
     }
 
+    /// Applies reverse-video to the current node:
+    /// Background and foreground colors are swapped.
     pub fn attr_reverse(&mut self) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.reverse = true;
     }
 
+    /// Checks if the current keyboard input matches the given shortcut,
+    /// consumes it if it is and returns true in that case.
     pub fn consume_shortcut(&mut self, shortcut: InputKey) -> bool {
         if !self.input_consumed && self.input_keyboard == Some(shortcut) {
             self.set_input_consumed();
@@ -1381,26 +1646,31 @@ impl<'a> Context<'a, '_> {
         self.input_consumed = true;
     }
 
+    /// Returns whether the mouse was pressed down on the current node.
     pub fn was_mouse_down(&mut self) -> bool {
         let last_node = self.tree.last_node.borrow();
         self.tui.was_mouse_down_on_node(last_node.id)
     }
 
+    /// Returns whether the mouse was pressed down on the current node's subtree.
     pub fn contains_mouse_down(&mut self) -> bool {
         let last_node = self.tree.last_node.borrow();
         self.tui.was_mouse_down_on_subtree(&last_node)
     }
 
+    /// Returns whether the current node is focused.
     pub fn is_focused(&mut self) -> bool {
         let last_node = self.tree.last_node.borrow();
         self.tui.is_node_focused(last_node.id)
     }
 
+    /// Returns whether the current node's subtree is focused.
     pub fn contains_focus(&mut self) -> bool {
         let last_node = self.tree.last_node.borrow();
         self.tui.is_subtree_focused(&last_node)
     }
 
+    /// Begins a modal window. Call [`Context::modal_end()`].
     pub fn modal_begin(&mut self, classname: &'static str, title: &str) {
         self.block_begin(classname);
         self.attr_float(FloatSpec { anchor: Anchor::Root, ..Default::default() });
@@ -1433,12 +1703,16 @@ impl<'a> Context<'a, '_> {
         self.last_modal = Some(self.tree.last_node);
     }
 
+    /// Ends the current modal window block.
     pub fn modal_end(&mut self) -> bool {
         self.block_end();
         self.block_end();
         self.contains_focus() && self.consume_shortcut(vk::ESCAPE)
     }
 
+    /// Begins a table block. Call [`Context::table_end()`].
+    /// Tables are the primary way to create a grid layout,
+    /// and to layout controls on a single row (= a table with 1 row).
     pub fn table_begin(&mut self, classname: &'static str) {
         self.block_begin(classname);
 
@@ -1449,6 +1723,8 @@ impl<'a> Context<'a, '_> {
         });
     }
 
+    /// Assigns widths to the columns of the current table.
+    /// By default, the table will left-align all columns.
     pub fn table_set_columns(&mut self, columns: &[CoordType]) {
         let mut last_node = self.tree.last_node.borrow_mut();
         if let NodeContent::Table(spec) = &mut last_node.content {
@@ -1459,6 +1735,7 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Assigns the gap between cells in the current table.
     pub fn table_set_cell_gap(&mut self, cell_gap: Size) {
         let mut last_node = self.tree.last_node.borrow_mut();
         if let NodeContent::Table(spec) = &mut last_node.content {
@@ -1468,6 +1745,7 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Starts the next row in the current table.
     pub fn table_next_row(&mut self) {
         {
             let current_node = self.tree.current_node.borrow();
@@ -1492,6 +1770,7 @@ impl<'a> Context<'a, '_> {
         self.block_begin("row");
     }
 
+    /// Ends the current table block.
     pub fn table_end(&mut self) {
         let current_node = self.tree.current_node.borrow();
 
@@ -1504,12 +1783,29 @@ impl<'a> Context<'a, '_> {
         self.block_end(); // table
     }
 
+    /// Creates a simple text label.
     pub fn label(&mut self, classname: &'static str, text: &str) {
         self.styled_label_begin(classname);
         self.styled_label_add_text(text);
         self.styled_label_end();
     }
 
+    /// Creates a styled text label.
+    ///
+    /// # Example
+    /// ```
+    /// use edit::framebuffer::IndexedColor;
+    /// use edit::tui::Context;
+    ///
+    /// fn draw(ctx: &mut Context) {
+    ///     ctx.styled_label_begin("label");
+    ///     // Shows "Hello" in the inherited foreground color.
+    ///     ctx.styled_label_add_text("Hello");
+    ///     // Shows ", World!" next to "Hello" in red.
+    ///     ctx.styled_label_set_foreground(ctx.indexed(IndexedColor::Red));
+    ///     ctx.styled_label_add_text(", World!");
+    /// }
+    /// ```
     pub fn styled_label_begin(&mut self, classname: &'static str) {
         self.block_begin(classname);
         self.tree.last_node.borrow_mut().content = NodeContent::Text(TextContent {
@@ -1519,6 +1815,7 @@ impl<'a> Context<'a, '_> {
         });
     }
 
+    /// Changes the active pencil color of the current label.
     pub fn styled_label_set_foreground(&mut self, fg: u32) {
         let mut node = self.tree.last_node.borrow_mut();
         let NodeContent::Text(content) = &mut node.content else {
@@ -1535,6 +1832,7 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Changes the active pencil attributes of the current label.
     pub fn styled_label_set_attributes(&mut self, attr: Attributes) {
         let mut node = self.tree.last_node.borrow_mut();
         let NodeContent::Text(content) = &mut node.content else {
@@ -1547,6 +1845,7 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Adds text to the current label.
     pub fn styled_label_add_text(&mut self, text: &str) {
         let mut node = self.tree.last_node.borrow_mut();
         let NodeContent::Text(content) = &mut node.content else {
@@ -1556,6 +1855,7 @@ impl<'a> Context<'a, '_> {
         content.text.push_str(text);
     }
 
+    /// Ends the current label block.
     pub fn styled_label_end(&mut self) {
         {
             let mut last_node = self.tree.last_node.borrow_mut();
@@ -1573,6 +1873,7 @@ impl<'a> Context<'a, '_> {
         self.block_end();
     }
 
+    /// Sets the overflow behavior of the current label.
     pub fn attr_overflow(&mut self, overflow: Overflow) {
         let mut last_node = self.tree.last_node.borrow_mut();
         let NodeContent::Text(content) = &mut last_node.content else {
@@ -1582,6 +1883,8 @@ impl<'a> Context<'a, '_> {
         content.overflow = overflow;
     }
 
+    /// Creates a button with the given text.
+    /// Returns true if the button was activated.
     pub fn button(&mut self, classname: &'static str, text: &str) -> bool {
         self.styled_label_begin(classname);
         self.attr_focusable();
@@ -1596,6 +1899,8 @@ impl<'a> Context<'a, '_> {
         self.button_activated()
     }
 
+    /// Creates a checkbox with the given text.
+    /// Returns true if the checkbox was activated.
     pub fn checkbox(&mut self, classname: &'static str, text: &str, checked: &mut bool) -> bool {
         self.styled_label_begin(classname);
         self.attr_focusable();
@@ -1628,6 +1933,8 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Creates a text input field.
+    /// Returns true if the text contents changed.
     pub fn editline<'s, 'b: 's>(
         &'s mut self,
         classname: &'static str,
@@ -1636,6 +1943,7 @@ impl<'a> Context<'a, '_> {
         self.textarea_internal(classname, TextBufferPayload::Editline(text))
     }
 
+    /// Creates a text area.
     pub fn textarea(&mut self, classname: &'static str, tb: RcTextBuffer) {
         self.textarea_internal(classname, TextBufferPayload::Textarea(tb));
     }
@@ -2244,6 +2552,7 @@ impl<'a> Context<'a, '_> {
         tc.scroll_offset.y = scroll_y;
     }
 
+    /// Creates a scrollable area.
     pub fn scrollarea_begin(&mut self, classname: &'static str, intrinsic_size: Size) {
         self.block_begin(classname);
 
@@ -2270,6 +2579,7 @@ impl<'a> Context<'a, '_> {
         self.tree.last_node = container_node;
     }
 
+    /// Scrolls the current scrollable area to the given position.
     pub fn scrollarea_scroll_to(&mut self, pos: Point) {
         let mut container = self.tree.last_node.borrow_mut();
         if let NodeContent::Scrollarea(sc) = &mut container.content {
@@ -2279,6 +2589,7 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Ends the current scrollarea block.
     pub fn scrollarea_end(&mut self) {
         self.block_end(); // content block
         self.block_end(); // outer container
@@ -2366,6 +2677,7 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Creates a list where exactly one items is selected.
     pub fn list_begin(&mut self, classname: &'static str) {
         self.block_begin(classname);
         self.attr_focusable();
@@ -2387,12 +2699,15 @@ impl<'a> Context<'a, '_> {
         last_node.content = NodeContent::List(content);
     }
 
+    /// Creates a list item with the given text.
     pub fn list_item(&mut self, select: bool, text: &str) -> ListSelection {
         self.styled_list_item_begin();
         self.styled_label_add_text(text);
         self.styled_list_item_end(select)
     }
 
+    /// Creates a list item consisting of a styled label.
+    /// See [`Context::styled_label_begin`].
     pub fn styled_list_item_begin(&mut self) {
         let list = self.tree.current_node;
         let idx = list.borrow().child_count;
@@ -2403,6 +2718,7 @@ impl<'a> Context<'a, '_> {
         self.attr_focusable();
     }
 
+    /// Ends the current styled list item.
     pub fn styled_list_item_end(&mut self, select: bool) -> ListSelection {
         self.styled_label_end();
 
@@ -2458,6 +2774,7 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Ends the current list block.
     pub fn list_end(&mut self) {
         self.block_end();
 
@@ -2565,12 +2882,16 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Creates a menubar, to be shown at the top of the screen.
     pub fn menubar_begin(&mut self) {
         self.table_begin("menubar");
         self.attr_focus_well();
         self.table_next_row();
     }
 
+    /// Appends a menu to the current menubar.
+    ///
+    /// Returns true if the menu is open. Continue appending items to it in that case.
     pub fn menubar_menu_begin(&mut self, text: &str, accelerator: char) -> bool {
         let mixin = self.tree.current_node.borrow().child_count as u64;
         self.next_block_id_mixin(mixin);
@@ -2614,6 +2935,7 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Appends a button to the current menu.
     pub fn menubar_menu_button(
         &mut self,
         text: &str,
@@ -2623,6 +2945,8 @@ impl<'a> Context<'a, '_> {
         self.menubar_menu_checkbox(text, accelerator, shortcut, false)
     }
 
+    /// Appends a checkbox to the current menu.
+    /// Returns true if the checkbox was activated.
     pub fn menubar_menu_checkbox(
         &mut self,
         text: &str,
@@ -2658,6 +2982,7 @@ impl<'a> Context<'a, '_> {
         clicked
     }
 
+    /// Ends the current menu.
     pub fn menubar_menu_end(&mut self) {
         self.table_end();
 
@@ -2688,6 +3013,7 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// Ends the current menubar.
     pub fn menubar_end(&mut self) {
         self.table_end();
     }
@@ -2766,6 +3092,7 @@ impl<'a> Context<'a, '_> {
     }
 }
 
+/// See [`Tree::visit_all`].
 #[derive(Clone, Copy)]
 enum VisitControl {
     Continue,
@@ -2773,6 +3100,7 @@ enum VisitControl {
     Stop,
 }
 
+/// Stores the root of the "DOM" tree of the UI.
 struct Tree<'a> {
     tail: &'a NodeCell<'a>,
     root_first: &'a NodeCell<'a>,
@@ -2785,6 +3113,8 @@ struct Tree<'a> {
 }
 
 impl<'a> Tree<'a> {
+    /// Creates a new tree inside the given arena.
+    /// A single root node is added for the main contents.
     fn new(arena: &'a Arena) -> Self {
         let root = Self::alloc_node(arena);
         {
@@ -2809,6 +3139,7 @@ impl<'a> Tree<'a> {
         arena.alloc_uninit().write(Default::default())
     }
 
+    /// Appends a child node to the current node.
     fn push_child(&mut self, node: &'a NodeCell<'a>) {
         let mut n = node.borrow_mut();
         n.parent = Some(self.current_node);
@@ -2844,6 +3175,8 @@ impl<'a> Tree<'a> {
         self.checksum = wymix(self.checksum, n.id);
     }
 
+    /// Removes the current node from its parent and appends it as a new root.
+    /// Used for [`Context::attr_float`].
     fn move_node_to_root(&mut self, node: &'a NodeCell<'a>, anchor: Option<&'a NodeCell<'a>>) {
         let mut n = node.borrow_mut();
         let Some(parent) = n.parent else {
@@ -2879,6 +3212,7 @@ impl<'a> Tree<'a> {
         self.root_last = node;
     }
 
+    /// Completes the current node and moves focus to the parent.
     fn pop_stack(&mut self) {
         let current_node = self.current_node.borrow();
         let stack_parent = current_node.stack_parent.unwrap();
@@ -2954,6 +3288,10 @@ impl<'a> Tree<'a> {
     }
 }
 
+/// A hashmap of node IDs to nodes.
+///
+/// This map uses a simple open addressing scheme with linear probing.
+/// It's fast, simple, and sufficient for the small number of nodes we have.
 struct NodeMap<'a> {
     slots: &'a [Option<&'a NodeCell<'a>>],
     shift: usize,
@@ -2967,7 +3305,10 @@ impl Default for NodeMap<'static> {
 }
 
 impl<'a> NodeMap<'a> {
+    /// Creates a new node map for the given tree.
     fn new(arena: &'a Arena, tree: &Tree<'a>) -> Self {
+        // Since we aren't expected to have millions of nodes,
+        // we allocate 4x the number of slots for a 25% fill factor.
         let width = (4 * tree.count + 1).ilog2().max(1) as usize;
         let slots = 1 << width;
         let shift = 64 - width;
@@ -2997,6 +3338,7 @@ impl<'a> NodeMap<'a> {
         Self { slots, shift, mask }
     }
 
+    /// Gets a node by its ID.
     fn get(&mut self, id: u64) -> Option<&'a NodeCell<'a>> {
         let shift = self.shift;
         let mask = self.mask;
@@ -3021,7 +3363,7 @@ struct FloatAttributes {
     offset_y: f32,
 }
 
-// NOTE: Must not contain items that require drop().
+/// NOTE: Must not contain items that require drop().
 #[derive(Default)]
 struct NodeAttributes {
     float: Option<FloatAttributes>,
@@ -3036,20 +3378,20 @@ struct NodeAttributes {
     focus_void: bool, // Prevents focus from entering via Tab
 }
 
-// NOTE: Must not contain items that require drop().
+/// NOTE: Must not contain items that require drop().
 struct ListContent<'a> {
     selected: u64,
     // Points to the Node that holds this ListContent instance, if any>.
     selected_node: Option<&'a NodeCell<'a>>,
 }
 
-// NOTE: Must not contain items that require drop().
+/// NOTE: Must not contain items that require drop().
 struct TableContent<'a> {
     columns: Vec<CoordType, &'a Arena>,
     cell_gap: Size,
 }
 
-// NOTE: Must not contain items that require drop().
+/// NOTE: Must not contain items that require drop().
 struct StyledTextChunk {
     offset: usize,
     fg: u32,
@@ -3059,14 +3401,14 @@ struct StyledTextChunk {
 const INVALID_STYLED_TEXT_CHUNK: StyledTextChunk =
     StyledTextChunk { offset: usize::MAX, fg: 0, attr: Attributes::None };
 
-// NOTE: Must not contain items that require drop().
+/// NOTE: Must not contain items that require drop().
 struct TextContent<'a> {
     text: ArenaString<'a>,
     chunks: Vec<StyledTextChunk, &'a Arena>,
     overflow: Overflow,
 }
 
-// NOTE: Must not contain items that require drop().
+/// NOTE: Must not contain items that require drop().
 struct TextareaContent<'a> {
     buffer: &'a TextBufferCell,
 
@@ -3081,7 +3423,7 @@ struct TextareaContent<'a> {
     has_focus: bool,
 }
 
-// NOTE: Must not contain items that require drop().
+/// NOTE: Must not contain items that require drop().
 #[derive(Clone)]
 struct ScrollareaContent {
     scroll_offset: Point,
@@ -3089,7 +3431,7 @@ struct ScrollareaContent {
     thumb_height: CoordType,
 }
 
-// NOTE: Must not contain items that require drop().
+/// NOTE: Must not contain items that require drop().
 #[derive(Default)]
 enum NodeContent<'a> {
     #[default]
@@ -3102,7 +3444,7 @@ enum NodeContent<'a> {
     Scrollarea(ScrollareaContent),
 }
 
-// NOTE: Must not contain items that require drop().
+/// NOTE: Must not contain items that require drop().
 #[derive(Default)]
 struct NodeSiblings<'a> {
     prev: Option<&'a NodeCell<'a>>,
@@ -3122,7 +3464,7 @@ impl<'a> NodeSiblings<'a> {
     }
 }
 
-// NOTE: Must not contain items that require drop().
+/// NOTE: Must not contain items that require drop().
 #[derive(Default)]
 struct NodeChildren<'a> {
     first: Option<&'a NodeCell<'a>>,
@@ -3144,7 +3486,9 @@ impl<'a> NodeChildren<'a> {
 
 type NodeCell<'a> = SemiRefCell<Node<'a>>;
 
-// NOTE: Must not contain items that require drop().
+/// A node in the UI tree.
+///
+/// NOTE: Must not contain items that require drop().
 #[derive(Default)]
 struct Node<'a> {
     prev: Option<&'a NodeCell<'a>>,
@@ -3171,6 +3515,8 @@ struct Node<'a> {
 }
 
 impl Node<'_> {
+    /// Given an outer rectangle (including padding and borders) of this node,
+    /// this returns the inner rectangle (excluding padding and borders).
     fn outer_to_inner(&self, mut outer: Rect) -> Rect {
         let l = self.attributes.bordered;
         let t = self.attributes.bordered;
@@ -3184,6 +3530,8 @@ impl Node<'_> {
         outer
     }
 
+    /// Given an intrinsic size (excluding padding and borders) of this node,
+    /// this returns the outer size (including padding and borders).
     fn intrinsic_to_outer(&self) -> Size {
         let l = self.attributes.bordered;
         let t = self.attributes.bordered;
@@ -3202,6 +3550,7 @@ impl Node<'_> {
         size
     }
 
+    /// Computes the intrinsic size of this node and its children.
     fn compute_intrinsic_size(&mut self) {
         match &mut self.content {
             NodeContent::Table(spec) => {

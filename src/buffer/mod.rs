@@ -1,13 +1,17 @@
+//! A text buffer for a text editor.
+//!
 //! Implements a Unicode-aware, layout-aware text buffer for terminals.
 //! It's based on a gap buffer. It has no line cache and instead relies
 //! on the performance of the ucd module for fast text navigation.
+//!
+//! ---
 //!
 //! If the project ever outgrows a basic gap buffer (e.g. to add time travel)
 //! an ideal, alternative architecture would be a piece table with immutable trees.
 //! The tree nodes can be allocated on the same arena allocator as the added chunks,
 //! making lifetime management fairly easy. The algorithm is described here:
-//! * https://cdacamar.github.io/data%20structures/algorithms/benchmarking/text%20editors/c++/editor-data-structures/
-//! * https://github.com/cdacamar/fredbuf
+//! * <https://cdacamar.github.io/data%20structures/algorithms/benchmarking/text%20editors/c++/editor-data-structures/>
+//! * <https://github.com/cdacamar/fredbuf>
 //!
 //! The downside is that text navigation & search takes a performance hit due to small chunks.
 //! The solution to the former is to keep line caches, which further complicates the architecture.
@@ -36,8 +40,8 @@ use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
 use crate::oklab::oklab_blend;
 use crate::simd::memchr2;
-use crate::unicode::{Cursor, MeasurementConfig};
-use crate::{apperr, icu, unicode};
+use crate::unicode::{self, Cursor, MeasurementConfig};
+use crate::{apperr, icu};
 
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,
@@ -47,16 +51,25 @@ const MARGIN_TEMPLATE: &str = "                    │ ";
 /// Happens to reuse MARGIN_TEMPLATE, because it has sufficient whitespace.
 const TAB_WHITESPACE: &str = MARGIN_TEMPLATE;
 
+/// Stores statistics about the whole document.
 #[derive(Copy, Clone)]
 pub struct TextBufferStatistics {
     logical_lines: CoordType,
     visual_lines: CoordType,
 }
 
+/// Stores the active text selection.
 #[derive(Copy, Clone)]
 enum TextBufferSelection {
+    /// No active selection.
     None,
+    /// The user is currently selecting text.
+    ///
+    /// Moving the cursor will update the selection.
     Active { beg: Point, end: Point },
+    /// The user stopped selecting text.
+    ///
+    /// Moving the cursor will destroy the selection.
     Done { beg: Point, end: Point },
 }
 
@@ -66,6 +79,9 @@ impl TextBufferSelection {
     }
 }
 
+/// In order to group actions into a single undo step,
+/// we need to know the type of action that was performed.
+/// This stores the action type.
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum HistoryType {
     Other,
@@ -73,11 +89,15 @@ enum HistoryType {
     Delete,
 }
 
+/// An undo/redo entry.
 struct HistoryEntry {
-    /// Logical cursor position before the change was made.
+    /// [`TextBuffer::cursor`] position before the change was made.
     cursor_before: Point,
+    /// [`TextBuffer::selection`] before the change was made.
     selection_before: TextBufferSelection,
+    /// [`TextBuffer::stats`] before the change was made.
     stats_before: TextBufferStatistics,
+    /// [`GapBuffer::generation`] before the change was made.
     generation_before: u32,
     /// Logical cursor position where the change took place.
     /// The position is at the start of the changed range.
@@ -88,21 +108,38 @@ struct HistoryEntry {
     added: Vec<u8>,
 }
 
+/// Caches an ICU search operation.
 struct ActiveSearch {
+    /// The search pattern.
     pattern: String,
+    /// The search options.
     options: SearchOptions,
+    /// The ICU `UText` object.
     text: icu::Text,
+    /// The ICU `URegularExpression` object.
     regex: icu::Regex,
+    /// [`GapBuffer::generation`] when the search was created.
+    /// This is used to detect if we need to refresh the
+    /// [`ActiveSearch::regex`] object.
     buffer_generation: u32,
+    /// [`TextBuffer::selection_generation`] when the search was
+    /// created. When the user manually selects text, we need to
+    /// refresh the [`ActiveSearch::pattern`] with it.
     selection_generation: u32,
+    /// Stores the text buffer offset in between searches.
     next_search_offset: usize,
+    /// If we know there were no hits, we can skip searching.
     no_matches: bool,
 }
 
+/// Options for a search operation.
 #[derive(Default, Clone, Copy, Eq, PartialEq)]
 pub struct SearchOptions {
+    /// If true, the search is case-sensitive.
     pub match_case: bool,
+    /// If true, the search matches whole words.
     pub whole_word: bool,
+    /// If true, the search uses regex.
     pub use_regex: bool,
 }
 
@@ -111,22 +148,36 @@ pub struct SearchOptions {
 struct ActiveEditLineInfo {
     /// Points to the start of the currently being edited line.
     safe_start: Cursor,
+    /// Number of visual rows of the line that starts
+    /// at [`ActiveEditLineInfo::safe_start`].
     line_height_in_rows: CoordType,
+    /// Byte distance from the start of the line at
+    /// [`ActiveEditLineInfo::safe_start`] to the next line.
     distance_next_line_start: usize,
 }
 
+/// Char- or word-wise navigation? Your choice.
 pub enum CursorMovement {
     Grapheme,
     Word,
 }
 
+/// The result of a call to [`TextBuffer::render()`].
 pub struct RenderResult {
+    /// The maximum visual X position we encountered during rendering.
     pub visual_pos_x_max: CoordType,
 }
 
+/// A [`TextBuffer`] with inner mutability.
 pub type TextBufferCell = SemiRefCell<TextBuffer>;
+
+/// A [`TextBuffer`] inside an [`Rc`].
+///
+/// We need this because the TUI system needs to borrow
+/// the given text buffer(s) until after the layout process.
 pub type RcTextBuffer = Rc<TextBufferCell>;
 
+/// A text buffer for a text editor.
 pub struct TextBuffer {
     buffer: GapBuffer,
 
@@ -167,11 +218,15 @@ pub struct TextBuffer {
 }
 
 impl TextBuffer {
+    /// Creates a new text buffer inside an [`Rc`].
+    /// See [`TextBuffer::new()`].
     pub fn new_rc(small: bool) -> apperr::Result<RcTextBuffer> {
         let buffer = TextBuffer::new(small)?;
         Ok(Rc::new(SemiRefCell::new(buffer)))
     }
 
+    /// Creates a new text buffer. With `small` you can control
+    /// if the buffer is optimized for <1MiB contents.
     pub fn new(small: bool) -> apperr::Result<Self> {
         Ok(Self {
             buffer: GapBuffer::new(small)?,
@@ -209,26 +264,36 @@ impl TextBuffer {
         })
     }
 
+    /// Length of the document in bytes.
     pub fn text_length(&self) -> usize {
         self.buffer.len()
     }
 
+    /// Number of logical lines in the document,
+    /// that is, lines separated by newlines.
     pub fn logical_line_count(&self) -> CoordType {
         self.stats.logical_lines
     }
 
+    /// Number of visual lines in the document,
+    /// that is, the number of lines after layout.
     pub fn visual_line_count(&self) -> CoordType {
         self.stats.visual_lines
     }
 
+    /// Does the buffer need to be saved?
     pub fn is_dirty(&self) -> bool {
         self.last_save_generation != self.buffer.generation()
     }
 
+    /// The buffer generation changes on every edit.
+    /// With this you can check if it has changed since
+    /// the last time you called this function.
     pub fn generation(&self) -> u32 {
         self.buffer.generation()
     }
 
+    /// Force the buffer to be dirty.
     pub fn mark_as_dirty(&mut self) {
         self.last_save_generation = self.buffer.generation().wrapping_sub(1);
     }
@@ -237,10 +302,12 @@ impl TextBuffer {
         self.last_save_generation = self.buffer.generation();
     }
 
+    /// The encoding used during reading/writing. "UTF-8" is the default.
     pub fn encoding(&self) -> &'static str {
         self.encoding
     }
 
+    /// Set the encoding used during reading/writing.
     pub fn set_encoding(&mut self, encoding: &'static str) {
         if self.encoding != encoding {
             self.encoding = encoding;
@@ -248,10 +315,14 @@ impl TextBuffer {
         }
     }
 
+    /// The newline type used in the document. LF or CRLF.
     pub fn is_crlf(&self) -> bool {
         self.newlines_are_crlf
     }
 
+    /// Changes the newline type used in the document.
+    ///
+    /// NOTE: Cannot be undone.
     pub fn normalize_newlines(&mut self, crlf: bool) {
         let newline: &[u8] = if crlf { b"\r\n" } else { b"\n" };
         let mut off = 0;
@@ -318,26 +389,34 @@ impl TextBuffer {
         self.newlines_are_crlf = crlf;
     }
 
+    /// Whether to insert or overtype text when writing.
     pub fn is_overtype(&self) -> bool {
         self.overtype
     }
 
+    /// Set the overtype mode.
     pub fn set_overtype(&mut self, overtype: bool) {
         self.overtype = overtype;
     }
 
+    /// Gets the logical cursor position, that is,
+    /// the position in lines and graphemes per line.
     pub fn cursor_logical_pos(&self) -> Point {
         self.cursor.logical_pos
     }
 
+    /// Gets the visual cursor position, that is,
+    /// the position in laid out rows and columns.
     pub fn cursor_visual_pos(&self) -> Point {
         self.cursor.visual_pos
     }
 
+    /// Gets the width of the left margin.
     pub fn margin_width(&self) -> CoordType {
         self.margin_width
     }
 
+    /// Is the left margin enabled?
     pub fn set_margin_enabled(&mut self, enabled: bool) -> bool {
         if self.margin_enabled == enabled {
             false
@@ -348,22 +427,38 @@ impl TextBuffer {
         }
     }
 
+    /// Gets the width of the text contents for layout.
     pub fn text_width(&self) -> CoordType {
         self.width - self.margin_width
     }
 
+    /// Ask the TUI system to scroll the buffer and make the cursor visible.
+    ///
+    /// TODO: This function shows that [`TextBuffer`] is poorly abstracted
+    /// away from the TUI system. The only reason this exists is so that
+    /// if someone outside the TUI code enables word-wrap, the TUI code
+    /// recognizes this and scrolls the cursor into view. But outside of this
+    /// scrolling, views, etc., are all UI concerns = this should not be here.
     pub fn make_cursor_visible(&mut self) {
         self.wants_cursor_visibility = true;
     }
 
+    /// For the TUI code to retrieve a prior [`TextBuffer::make_cursor_visible()`] request.
     pub fn take_cursor_visibility_request(&mut self) -> bool {
         mem::take(&mut self.wants_cursor_visibility)
     }
 
+    /// Is word-wrap enabled?
+    ///
+    /// Technically, this is a misnomer, because it's line-wrapping.
     pub fn is_word_wrap_enabled(&self) -> bool {
         self.word_wrap_enabled
     }
 
+    /// Enable or disable word-wrap.
+    ///
+    /// NOTE: It's expected that the tui code calls `set_width()` sometime after this.
+    /// This will then trigger the actual recalculation of the cursor position.
     pub fn set_word_wrap(&mut self, enabled: bool) {
         if self.word_wrap_enabled != enabled {
             self.word_wrap_enabled = enabled;
@@ -372,6 +467,11 @@ impl TextBuffer {
         }
     }
 
+    /// Set the width available for layout.
+    ///
+    /// Ideally this would be a pure UI concern, but the text buffer needs this
+    /// so that it can abstract away  visual cursor movement such as "go a line up".
+    /// What would that even mean if it didn't know how wide a line is?
     pub fn set_width(&mut self, width: CoordType) -> bool {
         if width <= 0 || width == self.width {
             false
@@ -382,10 +482,12 @@ impl TextBuffer {
         }
     }
 
+    /// Set the tab width. Could be anything, but is expected to be 1-8.
     pub fn tab_size(&self) -> CoordType {
         self.tab_size
     }
 
+    /// Set the tab size. Clamped to 1-8.
     pub fn set_tab_size(&mut self, width: CoordType) -> bool {
         let width = width.clamp(1, 8);
         if width == self.tab_size {
@@ -397,18 +499,22 @@ impl TextBuffer {
         }
     }
 
+    /// Returns whether tabs are used for indentation.
     pub fn indent_with_tabs(&self) -> bool {
         self.indent_with_tabs
     }
 
+    /// Sets whether tabs or spaces are used for indentation.
     pub fn set_indent_with_tabs(&mut self, indent_with_tabs: bool) {
         self.indent_with_tabs = indent_with_tabs;
     }
 
+    /// Sets whether the line the cursor is on should be highlighted.
     pub fn set_line_highlight_enabled(&mut self, enabled: bool) {
         self.line_highlight_enabled = enabled;
     }
 
+    /// Sets a ruler column, e.g. 80.
     pub fn set_ruler(&mut self, column: CoordType) {
         self.ruler = column;
     }
@@ -799,6 +905,7 @@ impl TextBuffer {
         Ok(())
     }
 
+    /// Returns the current selection.
     pub fn has_selection(&self) -> bool {
         self.selection.is_some()
     }
@@ -809,6 +916,7 @@ impl TextBuffer {
         self.selection_generation
     }
 
+    /// Moves the cursor to `visual_pos` and updates the selection to contain it.
     pub fn selection_update_visual(&mut self, visual_pos: Point) {
         let cursor = self.cursor;
         self.set_cursor_for_selection(self.cursor_move_to_visual_internal(cursor, visual_pos));
@@ -826,6 +934,7 @@ impl TextBuffer {
         }
     }
 
+    /// Moves the cursor to `logical_pos` and updates the selection to contain it.
     pub fn selection_update_logical(&mut self, logical_pos: Point) {
         let cursor = self.cursor;
         self.set_cursor_for_selection(self.cursor_move_to_logical_internal(cursor, logical_pos));
@@ -843,6 +952,7 @@ impl TextBuffer {
         }
     }
 
+    /// Moves the cursor by `delta` and updates the selection to contain it.
     pub fn selection_update_delta(&mut self, granularity: CursorMovement, delta: CoordType) {
         let cursor = self.cursor;
         self.set_cursor_for_selection(self.cursor_move_delta_internal(cursor, granularity, delta));
@@ -860,6 +970,7 @@ impl TextBuffer {
         }
     }
 
+    /// Select the current word.
     pub fn select_word(&mut self) {
         let Range { start, end } = navigation::word_select(&self.buffer, self.cursor.offset);
         let beg = self.cursor_move_to_offset_internal(self.cursor, start);
@@ -871,6 +982,7 @@ impl TextBuffer {
         });
     }
 
+    /// Select the current line.
     pub fn select_line(&mut self) {
         let beg = self.cursor_move_to_logical_internal(
             self.cursor,
@@ -885,6 +997,7 @@ impl TextBuffer {
         });
     }
 
+    /// Select the entire document.
     pub fn select_all(&mut self) {
         let beg = Default::default();
         let end = self.cursor_move_to_logical_internal(beg, Point::MAX);
@@ -895,18 +1008,23 @@ impl TextBuffer {
         });
     }
 
+    /// Turn an active selection into a finalized selection.
+    ///
+    /// Any future cursor movement will destroy the selection.
     pub fn selection_finalize(&mut self) {
         if let TextBufferSelection::Active { beg, end } = self.selection {
             self.set_selection(TextBufferSelection::Done { beg, end });
         }
     }
 
+    /// Destroy the current selection.
     pub fn clear_selection(&mut self) -> bool {
         let had_selection = self.selection.is_some();
         self.set_selection(TextBufferSelection::None);
         had_selection
     }
 
+    /// Find the next occurrence of the given `pattern` and select it.
     pub fn find_and_select(&mut self, pattern: &str, options: SearchOptions) -> apperr::Result<()> {
         if let Some(search) = &mut self.search {
             let search = search.get_mut();
@@ -959,6 +1077,7 @@ impl TextBuffer {
         Ok(())
     }
 
+    /// Find the next occurrence of the given `pattern` and replace it with `replacement`.
     pub fn find_and_replace(
         &mut self,
         pattern: &str,
@@ -978,6 +1097,7 @@ impl TextBuffer {
         self.find_and_select(pattern, options)
     }
 
+    /// Find all occurrences of the given `pattern` and replace them with `replacement`.
     pub fn find_and_replace_all(
         &mut self,
         pattern: &str,
@@ -1333,18 +1453,22 @@ impl TextBuffer {
         cursor
     }
 
+    /// Moves the cursor to the given offset.
     pub fn cursor_move_to_offset(&mut self, offset: usize) {
         unsafe { self.set_cursor(self.cursor_move_to_offset_internal(self.cursor, offset)) }
     }
 
+    /// Moves the cursor to the given logical position.
     pub fn cursor_move_to_logical(&mut self, pos: Point) {
         unsafe { self.set_cursor(self.cursor_move_to_logical_internal(self.cursor, pos)) }
     }
 
+    /// Moves the cursor to the given visual position.
     pub fn cursor_move_to_visual(&mut self, pos: Point) {
         unsafe { self.set_cursor(self.cursor_move_to_visual_internal(self.cursor, pos)) }
     }
 
+    /// Moves the cursor by the given delta.
     pub fn cursor_move_delta(&mut self, granularity: CursorMovement, delta: CoordType) {
         unsafe { self.set_cursor(self.cursor_move_delta_internal(self.cursor, granularity, delta)) }
     }
@@ -1847,11 +1971,13 @@ impl TextBuffer {
         self.edit_end();
     }
 
-    // TODO: This function is ripe for some optimizations:
-    // * Instead of replacing the entire selection,
-    //   it should unindent each line directly (as if multiple cursors had been used).
-    // * The cursor movement at the end is rather costly, but at least without word wrap
-    //   it should be possible to calculate it directly from the removed amount.
+    /// Unindents the current selection or line.
+    ///
+    /// TODO: This function is ripe for some optimizations:
+    /// * Instead of replacing the entire selection,
+    ///   it should unindent each line directly (as if multiple cursors had been used).
+    /// * The cursor movement at the end is rather costly, but at least without word wrap
+    ///   it should be possible to calculate it directly from the removed amount.
     pub fn unindent(&mut self) {
         let mut selection_beg = self.cursor.logical_pos;
         let mut selection_end = selection_beg;
@@ -1927,7 +2053,8 @@ impl TextBuffer {
         self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, selection_end));
     }
 
-    /// Extracts a chunk of text or a line if no selection is active. May optionally delete it.
+    /// Extracts the contents of the current selection.
+    /// May optionally delete it, if requested. This is meant to be used for Ctrl+X.
     pub fn extract_selection(&mut self, delete: bool) -> Vec<u8> {
         let Some((beg, end)) = self.selection_range_internal(true) else {
             return Vec::new();
@@ -1946,6 +2073,9 @@ impl TextBuffer {
         out
     }
 
+    /// Extracts the contents of the current selection the user made.
+    /// This differs from [`TextBuffer::extract_selection()`] in that
+    /// it does nothing if the selection was made by searching.
     pub fn extract_user_selection(&mut self, delete: bool) -> Option<Vec<u8>> {
         if !self.has_selection() {
             return None;
@@ -1961,10 +2091,17 @@ impl TextBuffer {
         Some(self.extract_selection(delete))
     }
 
+    /// Returns the current selection anchors, or `None` if there
+    /// is no selection. The returned logical positions are sorted.
     pub fn selection_range(&self) -> Option<(Cursor, Cursor)> {
         self.selection_range_internal(false)
     }
 
+    /// Returns the current selection anchors.
+    ///
+    /// If there's no selection and `line_fallback` is `true`,
+    /// the start/end of the current line are returned.
+    /// This is meant to be used for Ctrl+C / Ctrl+X.
     fn selection_range_internal(&self, line_fallback: bool) -> Option<(Cursor, Cursor)> {
         let [beg, end] = match self.selection {
             TextBufferSelection::None if !line_fallback => return None,
@@ -1983,6 +2120,8 @@ impl TextBuffer {
         if beg.offset < end.offset { Some((beg, end)) } else { None }
     }
 
+    /// Starts a new edit operation.
+    /// This is used for tracking the undo/redo history.
     fn edit_begin(&mut self, history_type: HistoryType, cursor: Cursor) {
         self.active_edit_depth += 1;
         if self.active_edit_depth > 1 {
@@ -2033,6 +2172,8 @@ impl TextBuffer {
         }
     }
 
+    /// Writes `text` into the buffer at the current cursor position.
+    /// It records the change in the undo stack.
     fn edit_write(&mut self, text: &[u8]) {
         let logical_y_before = self.cursor.logical_pos.y;
 
@@ -2052,6 +2193,8 @@ impl TextBuffer {
         self.stats.logical_lines += self.cursor.logical_pos.y - logical_y_before;
     }
 
+    /// Deletes the text between the current cursor position and `to`.
+    /// It records the change in the undo stack.
     fn edit_delete(&mut self, to: Cursor) {
         debug_assert!(to.offset >= self.active_edit_off);
 
@@ -2076,6 +2219,8 @@ impl TextBuffer {
         self.stats.logical_lines += logical_y_before - to.logical_pos.y;
     }
 
+    /// Finalizes the current edit operation
+    /// and recalculates the line statistics.
     fn edit_end(&mut self) {
         self.active_edit_depth -= 1;
         assert!(self.active_edit_depth >= 0);
@@ -2125,10 +2270,12 @@ impl TextBuffer {
         self.reflow(false);
     }
 
+    /// Undo the last edit operation.
     pub fn undo(&mut self) {
         self.undo_redo(true);
     }
 
+    /// Redo the last undo operation.
     pub fn redo(&mut self) {
         self.undo_redo(false);
     }
@@ -2238,10 +2385,12 @@ impl TextBuffer {
         self.reflow(false);
     }
 
+    /// For interfacing with ICU.
     pub(crate) fn read_backward(&self, off: usize) -> &[u8] {
         self.buffer.read_backward(off)
     }
 
+    /// For interfacing with ICU.
     pub fn read_forward(&self, off: usize) -> &[u8] {
         self.buffer.read_forward(off)
     }

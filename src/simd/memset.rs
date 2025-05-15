@@ -1,21 +1,25 @@
-//! This module provides a `memset` function for "arbitrary" sizes (1/2/4/8 bytes), as the regular `memset`
-//! is only implemented for byte-sized arrays. This allows us to more aggressively unroll loops and to
-//! use AVX2 on x64 for the non-byte-sized cases and opens the door to compiling with `-Copt-level=s`.
+//! `memchr` for arbitrary sizes (1/2/4/8 bytes).
 //!
-//! This implementation uses SWAR to only have a single implementation for all 4 sizes: By duplicating smaller
-//! types into a larger `u64` register we can treat all sizes as if they were `u64`. The only thing we need
-//! to take care of then, is the tail end of the array, where we need to write 0-7 additional bytes.
+//! Clang calls the C `memset` function only for byte-sized types (or 0 fills).
+//! We however need to fill other types as well. For that, clang generates
+//! SIMD loops under higher optimization levels. With `-Os` however, it only
+//! generates a trivial loop which is too slow for our needs.
+//!
+//! This implementation uses SWAR to only have a single implementation for all
+//! 4 sizes: By duplicating smaller types into a larger `u64` register we can
+//! treat all sizes as if they were `u64`. The only thing we need to take care
+//! of is the tail end of the array, which needs to write 0-7 additional bytes.
 
 use std::mem;
 
 use super::distance;
 
-/// A trait to mark types that are safe to use with `memset`.
+/// A marker trait for types that are safe to `memset`.
 ///
 /// # Safety
 ///
 /// Just like with C's `memset`, bad things happen
-/// if you use this with types that are non-trivial.
+/// if you use this with non-trivial types.
 pub unsafe trait MemsetSafe: Copy {}
 
 unsafe impl MemsetSafe for u8 {}
@@ -30,6 +34,7 @@ unsafe impl MemsetSafe for i32 {}
 unsafe impl MemsetSafe for i64 {}
 unsafe impl MemsetSafe for isize {}
 
+/// Fills a slice with the given value.
 #[inline]
 pub fn memset<T: MemsetSafe>(dst: &mut [T], val: T) {
     unsafe {

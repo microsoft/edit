@@ -73,6 +73,7 @@ extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> Foundation::BOOL {
     1
 }
 
+/// Initializes the platform-specific state.
 pub fn init() -> apperr::Result<Deinit> {
     unsafe {
         // Get the stdin and stdout handles first, so that if this function fails,
@@ -151,6 +152,7 @@ impl Drop for Deinit {
     }
 }
 
+/// Switches the terminal into raw mode, etc.
 pub fn switch_modes() -> apperr::Result<()> {
     unsafe {
         check_bool_return(Console::SetConsoleCtrlHandler(Some(console_ctrl_handler), 1))?;
@@ -180,6 +182,10 @@ pub fn switch_modes() -> apperr::Result<()> {
     }
 }
 
+/// During startup we need to get the window size from the terminal.
+/// Because I didn't want to type a bunch of code, this function tells
+/// [`read_stdin`] to inject a fake sequence, which gets picked up by
+/// the input parser and provided to the TUI code.
 pub fn inject_window_size_into_stdin() {
     unsafe {
         STATE.inject_resize = true;
@@ -202,9 +208,11 @@ fn get_console_size() -> Option<Size> {
 
 /// Reads from stdin.
 ///
-/// Returns `None` if there was an error reading from stdin.
-/// Returns `Some("")` if the given timeout was reached.
-/// Otherwise, it returns the read, non-empty string.
+/// # Returns
+///
+/// * `None` if there was an error reading from stdin.
+/// * `Some("")` if the given timeout was reached.
+/// * Otherwise, it returns the read, non-empty string.
 pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaString<'_>> {
     let scratch = scratch_arena(Some(arena));
 
@@ -351,6 +359,10 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
     Some(text)
 }
 
+/// Writes a string to stdout.
+///
+/// Use this instead of `print!` or `println!` to avoid
+/// the overhead of Rust's stdio handling. Don't need that.
 pub fn write_stdout(text: &str) {
     unsafe {
         let mut offset = 0;
@@ -368,6 +380,12 @@ pub fn write_stdout(text: &str) {
     }
 }
 
+/// Check if the stdin handle is redirected to a file, etc.
+///
+/// # Returns
+///
+/// * `Some(file)` if stdin is redirected.
+/// * Otherwise, `None`.
 pub fn open_stdin_if_redirected() -> Option<File> {
     unsafe {
         let handle = Console::GetStdHandle(Console::STD_INPUT_HANDLE);
@@ -376,12 +394,14 @@ pub fn open_stdin_if_redirected() -> Option<File> {
     }
 }
 
+/// A unique identifier for a file.
 #[derive(Clone)]
 #[repr(transparent)]
 pub struct FileId(FileSystem::FILE_ID_INFO);
 
 impl PartialEq for FileId {
     fn eq(&self, other: &Self) -> bool {
+        // Lowers to an efficient word-wise comparison.
         const SIZE: usize = std::mem::size_of::<FileSystem::FILE_ID_INFO>();
         let a: &[u8; SIZE] = unsafe { mem::transmute(&self.0) };
         let b: &[u8; SIZE] = unsafe { mem::transmute(&other.0) };
@@ -405,6 +425,10 @@ pub fn file_id(file: &File) -> apperr::Result<FileId> {
     }
 }
 
+/// Canonicalizes the given path.
+///
+/// This differs from [`fs::canonicalize`] in that it strips the `\\?\` UNC
+/// prefix on Windows. This is because it's confusing/ugly when displaying it.
 pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
     let mut path = fs::canonicalize(path)?;
     let path = path.as_mut_os_string();
@@ -421,8 +445,8 @@ pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
 }
 
 /// Reserves a virtual memory region of the given size.
-/// To commit the memory, use `virtual_commit`.
-/// To release the memory, use `virtual_release`.
+/// To commit the memory, use [`virtual_commit`].
+/// To release the memory, use [`virtual_release`].
 ///
 /// # Safety
 ///
@@ -456,7 +480,7 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
 /// # Safety
 ///
 /// This function is unsafe because it uses raw pointers.
-/// Make sure to only pass pointers acquired from `virtual_reserve`.
+/// Make sure to only pass pointers acquired from [`virtual_reserve`].
 pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
     unsafe {
         Memory::VirtualFree(base.as_ptr() as *mut _, size, Memory::MEM_RELEASE);
@@ -468,8 +492,8 @@ pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
 /// # Safety
 ///
 /// This function is unsafe because it uses raw pointers.
-/// Make sure to only pass pointers acquired from `virtual_reserve`
-/// and to pass a size less than or equal to the size passed to `virtual_reserve`.
+/// Make sure to only pass pointers acquired from [`virtual_reserve`]
+/// and to pass a size less than or equal to the size passed to [`virtual_reserve`].
 pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> apperr::Result<()> {
     unsafe {
         check_ptr_return(Memory::VirtualAlloc(
@@ -511,14 +535,17 @@ pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apper
     }
 }
 
+/// Loads the "common" portion of ICU4C.
 pub fn load_libicuuc() -> apperr::Result<NonNull<c_void>> {
     unsafe { load_library(w!("icuuc.dll")) }
 }
 
+/// Loads the internationalization portion of ICU4C.
 pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
     unsafe { load_library(w!("icuin.dll")) }
 }
 
+/// Returns a list of preferred languages for the current user.
 pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString, &Arena> {
     // If the GetUserPreferredUILanguages() don't fit into 512 characters,
     // honestly, just give up. How many languages do you realistically need?
@@ -606,6 +633,7 @@ pub(crate) fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
     gle_to_apperr(err.raw_os_error().unwrap_or(0) as u32)
 }
 
+/// Formats a platform error code into a human-readable string.
 pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
     unsafe {
         let mut ptr: *mut u8 = null_mut();
@@ -635,6 +663,7 @@ pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Re
     }
 }
 
+/// Checks if the given error is a "file not found" error.
 pub fn apperr_is_not_found(err: apperr::Error) -> bool {
     err == gle_to_apperr(Foundation::ERROR_FILE_NOT_FOUND)
 }

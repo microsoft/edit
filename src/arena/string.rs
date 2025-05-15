@@ -4,49 +4,63 @@ use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use super::Arena;
 use crate::helpers::*;
 
+/// A custom string type, because `std` lacks allocator support for [`String`].
+///
+/// To keep things simple, this one is hardcoded to [`Arena`].
 #[derive(Clone)]
 pub struct ArenaString<'a> {
     vec: Vec<u8, &'a Arena>,
 }
 
 impl<'a> ArenaString<'a> {
+    /// Creates a new [`ArenaString`] in the given arena.
     #[must_use]
     pub const fn new_in(arena: &'a Arena) -> Self {
         Self { vec: Vec::new_in(arena) }
     }
 
-    #[inline]
+    /// Turns a [`str`] into an [`ArenaString`].
+    #[must_use]
     pub fn from_str(arena: &'a Arena, s: &str) -> Self {
         let mut res = Self::new_in(arena);
         res.push_str(s);
         res
     }
 
+    /// It says right here that you checked if `bytes` is valid UTF-8
+    /// and you are sure it is. Presto! Here's an `ArenaString`!
+    ///
     /// # Safety
     ///
-    /// It says "unchecked" right there. What did you expect?
+    /// You fool! It says "unchecked" right there. Now the house is burning.
     #[inline]
     #[must_use]
     pub unsafe fn from_utf8_unchecked(bytes: Vec<u8, &'a Arena>) -> Self {
         Self { vec: bytes }
     }
 
-    pub fn from_utf8_lossy<'s>(arena: &'a Arena, v: &'s [u8]) -> Result<&'s str, ArenaString<'a>> {
-        let mut iter = v.utf8_chunks();
+    /// Checks whether `text` contains only valid UTF-8.
+    /// If the entire string is valid, it returns `Ok(text)`.
+    /// Otherwise, it returns `Err(ArenaString)` with all invalid sequences replaced with U+FFFD.
+    pub fn from_utf8_lossy<'s>(
+        arena: &'a Arena,
+        text: &'s [u8],
+    ) -> Result<&'s str, ArenaString<'a>> {
+        let mut iter = text.utf8_chunks();
         let Some(mut chunk) = iter.next() else {
             return Ok("");
         };
 
         let valid = chunk.valid();
         if chunk.invalid().is_empty() {
-            debug_assert_eq!(valid.len(), v.len());
-            return Ok(unsafe { str::from_utf8_unchecked(v) });
+            debug_assert_eq!(valid.len(), text.len());
+            return Ok(unsafe { str::from_utf8_unchecked(text) });
         }
 
         const REPLACEMENT: &str = "\u{FFFD}";
 
         let mut res = Self::new_in(arena);
-        res.reserve(v.len());
+        res.reserve(text.len());
 
         loop {
             res.push_str(chunk.valid());
@@ -62,6 +76,7 @@ impl<'a> ArenaString<'a> {
         Err(res)
     }
 
+    /// Turns a [`Vec<u8>`] into an [`ArenaString`], replacing invalid UTF-8 sequences with U+FFFD.
     #[must_use]
     pub fn from_utf8_lossy_owned(v: Vec<u8, &'a Arena>) -> Self {
         match Self::from_utf8_lossy(v.allocator(), &v) {
@@ -70,26 +85,32 @@ impl<'a> ArenaString<'a> {
         }
     }
 
+    /// It's empty.
     pub fn is_empty(&self) -> bool {
         self.vec.is_empty()
     }
 
+    /// It's lengthy.
     pub fn len(&self) -> usize {
         self.vec.len()
     }
 
+    /// It's capacatity.
     pub fn capacity(&self) -> usize {
         self.vec.capacity()
     }
 
+    /// It's a [`String`], now it's a [`str`]. Wow!
     pub fn as_str(&self) -> &str {
         unsafe { str::from_utf8_unchecked(self.vec.as_slice()) }
     }
 
+    /// It's a [`String`], now it's a [`str`]. And it's mutable! WOW!
     pub fn as_mut_str(&mut self) -> &mut str {
         unsafe { str::from_utf8_unchecked_mut(self.vec.as_mut_slice()) }
     }
 
+    /// Now it's bytes!
     pub fn as_bytes(&self) -> &[u8] {
         self.vec.as_slice()
     }
@@ -103,22 +124,32 @@ impl<'a> ArenaString<'a> {
         &mut self.vec
     }
 
+    /// Reserves *additional* memory. For you old folks out there (totally not me),
+    /// this is differrent from C++'s `reserve` which reserves a total size.
     pub fn reserve(&mut self, additional: usize) {
         self.vec.reserve(additional)
     }
 
+    /// Now it's small! Alarming!
+    ///
+    /// *Do not* call this unless this string is the last thing on the arena.
+    /// Arenas are stacks, they can't deallocate what's in the middle.
     pub fn shrink_to_fit(&mut self) {
         self.vec.shrink_to_fit()
     }
 
+    /// To no surprise, this clears the string.
     pub fn clear(&mut self) {
         self.vec.clear()
     }
 
+    /// Append some text.
     pub fn push_str(&mut self, string: &str) {
         self.vec.extend_from_slice(string.as_bytes())
     }
 
+    /// Append a single character.
+    #[inline]
     pub fn push(&mut self, ch: char) {
         match ch.len_utf8() {
             1 => self.vec.push(ch as u8),
@@ -156,6 +187,7 @@ impl<'a> ArenaString<'a> {
         }
     }
 
+    /// Replaces a range of characters with a new string.
     pub fn replace_range<R: RangeBounds<usize>>(&mut self, range: R, replace_with: &str) {
         match range.start_bound() {
             Bound::Included(&n) => assert!(self.is_char_boundary(n)),

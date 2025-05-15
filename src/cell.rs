@@ -1,4 +1,4 @@
-//! Like `RefCell`, but without any runtime checks in release mode.
+//! [`std::cell::RefCell`], but without runtime checks in release builds.
 
 #[cfg(debug_assertions)]
 pub use debug::*;

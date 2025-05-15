@@ -7,9 +7,34 @@ use std::ptr::NonNull;
 use super::release;
 use crate::apperr;
 
+/// A debug wrapper for [`release::Arena`].
+///
+/// The problem with [`super::ScratchArena`] is that it only "borrows" an underlying
+/// [`release::Arena`]. Once the [`super::ScratchArena`] is dropped it resets the watermark
+/// of the underlying [`release::Arena`], freeing all allocations done since borrowing it.
+///
+/// It is completely valid for the same [`release::Arena`] to be borrowed multiple times at once,
+/// *as long as* you only use the most recent borrow. Bad example:
+/// ```should_panic
+/// use edit::arena::scratch_arena;
+///
+/// let mut scratch1 = scratch_arena(None);
+/// let mut scratch2 = scratch_arena(None);
+///
+/// let foo = scratch1.alloc_uninit::<usize>();
+///
+/// // This will also reset `scratch1`'s allocation.
+/// drop(scratch2);
+///
+/// *foo; // BOOM! ...if it wasn't for our debug wrapper.
+/// ```
+///
+/// To avoid this, this wraps the real [`release::Arena`] in a "debug" one, which pretends as if every
+/// instance of itself is a distinct [`release::Arena`] instance. Then we use this "debug" [`release::Arena`]
+/// for [`super::ScratchArena`] which allows us to track which borrow is the most recent one.
 pub enum Arena {
     // Delegate is 'static, because release::Arena requires no lifetime
-    // annotations, and so this struct cannot use them either.
+    // annotations, and so this mere debug helper cannot use them either.
     Delegated { delegate: &'static release::Arena, borrow: usize },
     Owned { arena: release::Arena },
 }

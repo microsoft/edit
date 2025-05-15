@@ -1,3 +1,5 @@
+//! Random assortment of helpers I didn't know where to put.
+
 use std::alloc::Allocator;
 use std::cmp::Ordering;
 use std::io::Read;
@@ -15,11 +17,17 @@ pub const KIBI: usize = 1024;
 pub const MEBI: usize = 1024 * 1024;
 pub const GIBI: usize = 1024 * 1024 * 1024;
 
+/// A viewport coordinate type used throughout the application.
 pub type CoordType = i32;
 
+/// To avoid overflow issues because you're adding two [`CoordType::MAX`] values together,
+/// you can use [`COORD_TYPE_SAFE_MIN`] and [`COORD_TYPE_SAFE_MAX`].
 pub const COORD_TYPE_SAFE_MAX: CoordType = 32767;
+
+/// See [`COORD_TYPE_SAFE_MAX`].
 pub const COORD_TYPE_SAFE_MIN: CoordType = -32767 - 1;
 
+/// A 2D point. Uses [`CoordType`].
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Point {
     pub x: CoordType,
@@ -46,6 +54,7 @@ impl Ord for Point {
     }
 }
 
+/// A 2D size. Uses [`CoordType`].
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Size {
     pub width: CoordType,
@@ -58,6 +67,7 @@ impl Size {
     }
 }
 
+/// A 2D rectangle. Uses [`CoordType`].
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
     pub left: CoordType,
@@ -67,34 +77,44 @@ pub struct Rect {
 }
 
 impl Rect {
+    /// Mimics CSS's `padding` property where `padding: a` is `a a a a`.
     pub fn one(value: CoordType) -> Self {
         Self { left: value, top: value, right: value, bottom: value }
     }
 
+    /// Mimics CSS's `padding` property where `padding: a b` is `a b a b`,
+    /// and `a` is top/bottom and `b` is left/right.
     pub fn two(top_bottom: CoordType, left_right: CoordType) -> Self {
         Self { left: left_right, top: top_bottom, right: left_right, bottom: top_bottom }
     }
 
+    /// Mimics CSS's `padding` property where `padding: a b c` is `a b c b`,
+    /// and `a` is top, `b` is left/right, and `c` is bottom.
     pub fn three(top: CoordType, left_right: CoordType, bottom: CoordType) -> Self {
         Self { left: left_right, top, right: left_right, bottom }
     }
 
+    /// Is the rectangle empty?
     pub fn is_empty(&self) -> bool {
         self.left >= self.right || self.top >= self.bottom
     }
 
+    /// Width of the rectangle.
     pub fn width(&self) -> CoordType {
         self.right - self.left
     }
 
+    /// Height of the rectangle.
     pub fn height(&self) -> CoordType {
         self.bottom - self.top
     }
 
+    /// Check if it contains a point.
     pub fn contains(&self, point: Point) -> bool {
         point.x >= self.left && point.x < self.right && point.y >= self.top && point.y < self.bottom
     }
 
+    /// Intersect two rectangles.
     pub fn intersect(&self, rhs: Self) -> Self {
         let l = self.left.max(rhs.left);
         let t = self.top.max(rhs.top);
@@ -110,7 +130,7 @@ impl Rect {
     }
 }
 
-/// `std::cmp::minmax` is unstable, as per usual.
+/// [`std::cmp::minmax`] is unstable, as per usual.
 pub fn minmax<T>(v1: T, v2: T) -> [T; 2]
 where
     T: Ord,
@@ -145,12 +165,16 @@ pub const unsafe fn str_from_raw_parts<'a>(ptr: *const u8, len: usize) -> &'a st
     unsafe { str::from_utf8_unchecked(slice::from_raw_parts(ptr, len)) }
 }
 
+/// [`<[T]>::copy_from_slice`] panics if the two slices have different lengths.
+/// This one just returns the copied amount.
 pub fn slice_copy_safe<T: Copy>(dst: &mut [T], src: &[T]) -> usize {
     let len = src.len().min(dst.len());
     unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), len) };
     len
 }
 
+/// [`Vec::splice`] results in really bad assembly.
+/// This doesn't. Don't use [`Vec::splice`].
 pub trait ReplaceRange<T: Copy> {
     fn replace_range<R: RangeBounds<usize>>(&mut self, range: R, src: &[T]);
 }
@@ -205,6 +229,7 @@ fn vec_replace_impl<T: Copy, A: Allocator>(dst: &mut Vec<T, A>, range: Range<usi
     }
 }
 
+/// [`Read`] but with [`MaybeUninit<u8>`] buffers.
 pub fn file_read_uninit<T: Read>(
     file: &mut T,
     buf: &mut [MaybeUninit<u8>],
@@ -216,11 +241,13 @@ pub fn file_read_uninit<T: Read>(
     }
 }
 
+/// Turns a [`&[u8]`] into a [`&[MaybeUninit<T>]`].
 #[inline(always)]
 pub const fn slice_as_uninit_ref<T>(slice: &[T]) -> &[MaybeUninit<T>] {
     unsafe { slice::from_raw_parts(slice.as_ptr() as *const MaybeUninit<T>, slice.len()) }
 }
 
+/// Turns a [`&mut [T]`] into a [`&mut [MaybeUninit<T>]`].
 #[inline(always)]
 pub const fn slice_as_uninit_mut<T>(slice: &mut [T]) -> &mut [MaybeUninit<T>] {
     unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut MaybeUninit<T>, slice.len()) }

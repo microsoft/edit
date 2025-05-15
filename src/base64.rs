@@ -1,19 +1,31 @@
+//! Base64 facilities.
+
 use crate::arena::ArenaString;
 
 const CHARSET: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+/// Encodes the given bytes as base64 and appends them to the destination string.
 pub fn encode(dst: &mut ArenaString, src: &[u8]) {
     unsafe {
         let mut inp = src.as_ptr();
         let mut remaining = src.len();
         let dst = dst.as_mut_vec();
+
+        // One aspect of base64 is that the encoded length can be calculated accurately in advance.
         let out_len = src.len().div_ceil(3) * 4;
+        // ... we can then use this fact to reserve space all at once.
         dst.reserve(out_len);
 
+        // SAFETY: Getting a pointer to the reserved space is only safe
+        // *after* calling `reserve()` as it may change the pointer.
         let mut out = dst.as_mut_ptr().add(dst.len());
 
         if remaining != 0 {
+            // Translate chunks of 3 source bytes into 4 base64-encoded bytes.
             while remaining > 3 {
+                // SAFETY: Thanks to `remaining > 3`, reading 4 bytes at once is safe.
+                // This improves performance massively over a byte-by-byte approach,
+                // because it allows us to byte-swap the read and use simple bit-shifts below.
                 let val = u32::from_be((inp as *const u32).read_unaligned());
                 inp = inp.add(3);
                 remaining -= 3;
@@ -32,6 +44,8 @@ pub fn encode(dst: &mut ArenaString, src: &[u8]) {
             let mut in1 = 0;
             let mut in2 = 0;
 
+            // We can simplify the following logic by assuming that there's only 1
+            // byte left. If there's >1 byte left, these two '=' will be overwritten.
             *out.add(3) = b'=';
             *out.add(2) = b'=';
 
