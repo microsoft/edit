@@ -1,8 +1,9 @@
+use std::cmp::Ordering;
 use std::ffi::CStr;
+use std::mem;
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::ptr::{null, null_mut};
-use std::{cmp, mem};
 
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::TextBuffer;
@@ -610,7 +611,7 @@ impl Iterator for Regex {
 
 static mut ROOT_COLLATOR: Option<*mut icu_ffi::UCollator> = None;
 
-pub fn compare_strings(a: &[u8], b: &[u8]) -> cmp::Ordering {
+pub fn compare_strings(a: &[u8], b: &[u8]) -> Ordering {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     let coll = unsafe {
@@ -620,13 +621,13 @@ pub fn compare_strings(a: &[u8], b: &[u8]) -> cmp::Ordering {
                 (f.ucol_open)(c"".as_ptr(), &mut status)
             } else {
                 null_mut()
-            })
+            });
         }
         ROOT_COLLATOR.unwrap_unchecked()
     };
 
     if coll.is_null() {
-        a.cmp(b)
+        compare_strings_ascii(a, b)
     } else {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
@@ -642,11 +643,47 @@ pub fn compare_strings(a: &[u8], b: &[u8]) -> cmp::Ordering {
         };
 
         match res {
-            icu_ffi::UCollationResult::UCOL_EQUAL => cmp::Ordering::Equal,
-            icu_ffi::UCollationResult::UCOL_GREATER => cmp::Ordering::Greater,
-            icu_ffi::UCollationResult::UCOL_LESS => cmp::Ordering::Less,
+            icu_ffi::UCollationResult::UCOL_EQUAL => Ordering::Equal,
+            icu_ffi::UCollationResult::UCOL_GREATER => Ordering::Greater,
+            icu_ffi::UCollationResult::UCOL_LESS => Ordering::Less,
         }
     }
+}
+
+/// Unicode collation via `ucol_strcollUTF8`, now for ASCII!
+fn compare_strings_ascii(a: &[u8], b: &[u8]) -> Ordering {
+    let mut iter = a.iter().zip(b.iter());
+
+    // Low weight: Find the first character which differs.
+    //
+    // Remember that result in case all remaining characters are
+    // case-insensitive equal, because then we use that as a fallback.
+    while let Some((&a, &b)) = iter.next() {
+        if a != b {
+            let mut order = a.cmp(&b);
+            let la = a.to_ascii_lowercase();
+            let lb = b.to_ascii_lowercase();
+
+            if la == lb {
+                // High weight: Find the first character which
+                // differs case-insensitively.
+                for (a, b) in iter {
+                    let la = a.to_ascii_lowercase();
+                    let lb = b.to_ascii_lowercase();
+
+                    if la != lb {
+                        order = la.cmp(&lb);
+                        break;
+                    }
+                }
+            }
+
+            return order;
+        }
+    }
+
+    // Fallback: The shorter string wins.
+    a.len().cmp(&b.len())
 }
 
 static mut ROOT_CASEMAP: Option<*mut icu_ffi::UCaseMap> = None;
@@ -1129,4 +1166,25 @@ mod icu_ffi {
         group_num: i32,
         status: &mut UErrorCode,
     ) -> i64;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compare_strings_ascii() {
+        // Empty strings
+        assert_eq!(compare_strings_ascii(b"", b""), Ordering::Equal);
+        // Equal strings
+        assert_eq!(compare_strings_ascii(b"hello", b"hello"), Ordering::Equal);
+        // Different lengths
+        assert_eq!(compare_strings_ascii(b"abc", b"abcd"), Ordering::Less);
+        assert_eq!(compare_strings_ascii(b"abcd", b"abc"), Ordering::Greater);
+        // Same chars, different cases - 1st char wins
+        assert_eq!(compare_strings_ascii(b"AbC", b"aBc"), Ordering::Less);
+        // Different chars, different cases - 2nd char wins, because it differs
+        assert_eq!(compare_strings_ascii(b"hallo", b"Hello"), Ordering::Less);
+        assert_eq!(compare_strings_ascii(b"Hello", b"hallo"), Ordering::Greater);
+    }
 }
