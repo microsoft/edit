@@ -16,6 +16,14 @@ const HASH_MULTIPLIER: usize = 747796405; // https://doi.org/10.1090/S0025-5718-
 #[cfg(target_pointer_width = "64")]
 const HASH_MULTIPLIER: usize = 6364136223846793005; // Knuth's MMIX multiplier
 
+/// The size of our cache table. 1<<8 = 256.
+const CACHE_TABLE_LOG2_SIZE: usize = 8;
+const CACHE_TABLE_SIZE: usize = 1 << CACHE_TABLE_LOG2_SIZE;
+/// To index into the cache table, we use `color * HASH_MULTIPLIER` as the hash.
+/// Since the multiplication "shifts" the bits up, we don't just mask the lowest
+/// 8 bits out, but rather shift 56 bits down to get the best bits from the top.
+const CACHE_TABLE_SHIFT: usize = usize::BITS as usize - CACHE_TABLE_LOG2_SIZE;
+
 #[derive(Clone, Copy)]
 pub enum IndexedColor {
     Black,
@@ -52,7 +60,7 @@ pub struct Framebuffer {
     buffers: [Buffer; 2],
     frame_counter: usize,
     auto_colors: [u32; 2], // [dark, light]
-    contrast_colors: [Cell<(u32, u32)>; 256],
+    contrast_colors: [Cell<(u32, u32)>; CACHE_TABLE_SIZE],
 }
 
 impl Framebuffer {
@@ -252,14 +260,14 @@ impl Framebuffer {
     }
 
     pub fn contrasted(&self, color: u32) -> u32 {
-        let idx = (color as usize).wrapping_mul(HASH_MULTIPLIER) % self.contrast_colors.len();
+        let idx = (color as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
         let slot = self.contrast_colors[idx].get();
         if slot.0 == color { slot.1 } else { self.contrasted_slow(color) }
     }
 
     #[cold]
     fn contrasted_slow(&self, color: u32) -> u32 {
-        let idx = (color as usize).wrapping_mul(HASH_MULTIPLIER) % self.contrast_colors.len();
+        let idx = (color as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
         let contrast = self.auto_colors[Self::is_dark(color) as usize];
         self.contrast_colors[idx].set((color, contrast));
         contrast
