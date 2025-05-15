@@ -83,7 +83,7 @@ extends:
               #         - edit.exe
               #      - arm64/
               #         - edit.exe
-              ob_createvpack_enabled: false
+              ob_createvpack_enabled: true
               ob_createvpack_vpackdirectory: "$(ob_outputDirectory)/vpack"
               ob_createvpack_packagename: "windows_edit.$(Build.SourceBranchName)"
               ob_createvpack_owneralias: lhecker@microsoft.com
