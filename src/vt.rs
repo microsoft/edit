@@ -25,7 +25,7 @@ pub enum State {
 }
 
 pub struct Csi {
-    pub params: [i32; 32],
+    pub params: [u16; 32],
     pub param_count: usize,
     pub private_byte: char,
     pub final_byte: char,
@@ -179,20 +179,15 @@ impl<'parser, 'input> Stream<'parser, 'input> {
                         // If we still have slots left, parse the parameter.
                         if parser.csi.param_count < parser.csi.params.len() {
                             let dst = &mut parser.csi.params[parser.csi.param_count];
-                            while self.off < bytes.len()
-                                && bytes[self.off] >= b'0'
-                                && bytes[self.off] <= b'9'
-                            {
-                                let v = *dst * 10 + bytes[self.off] as i32 - b'0' as i32;
-                                *dst = v.min(0xffff);
+                            while self.off < bytes.len() && bytes[self.off].is_ascii_digit() {
+                                let add = bytes[self.off] as u32 - b'0' as u32;
+                                let value = *dst as u32 * 10 + add;
+                                *dst = value.min(u16::MAX as u32) as u16;
                                 self.off += 1;
                             }
                         } else {
                             // ...otherwise, skip the parameters until we find the final byte.
-                            while self.off < bytes.len()
-                                && bytes[self.off] >= b'0'
-                                && bytes[self.off] <= b'9'
-                            {
+                            while self.off < bytes.len() && bytes[self.off].is_ascii_digit() {
                                 self.off += 1;
                             }
                         }

@@ -1,4 +1,4 @@
-use crate::helpers::{Point, Size};
+use crate::helpers::{CoordType, Point, Size};
 use crate::vt;
 
 // TODO: Is this a good idea? I did it to allow typing `kbmod::CTRL | vk::A`.
@@ -379,7 +379,7 @@ impl<'input> Stream<'_, '_, 'input> {
                                 vk::F19.value() as u8, // 33
                                 vk::F20.value() as u8, // 34
                             ];
-                            const LUT_LEN: i32 = LUT.len() as i32;
+                            const LUT_LEN: u16 = LUT.len() as u16;
 
                             match csi.params[0] {
                                 0..LUT_LEN => {
@@ -425,8 +425,8 @@ impl<'input> Stream<'_, '_, 'input> {
                             mouse.modifiers |=
                                 if (btn & 0x10f) != 0 { kbmod::CTRL } else { kbmod::NONE };
 
-                            mouse.position.x = csi.params[1] - 1;
-                            mouse.position.y = csi.params[2] - 1;
+                            mouse.position.x = csi.params[1] as CoordType - 1;
+                            mouse.position.y = csi.params[2] as CoordType - 1;
                             return Some(Input::Mouse(mouse));
                         }
                         'M' if csi.param_count == 0 => {
@@ -434,8 +434,8 @@ impl<'input> Stream<'_, '_, 'input> {
                         }
                         't' if csi.params[0] == 8 => {
                             // Window Size
-                            let width = csi.params[2].clamp(1, 32767);
-                            let height = csi.params[1].clamp(1, 32767);
+                            let width = (csi.params[2] as CoordType).clamp(1, 32767);
+                            let height = (csi.params[1] as CoordType).clamp(1, 32767);
                             return Some(Input::Resize(Size { width, height }));
                         }
                         _ => {}
@@ -487,8 +487,8 @@ impl<'input> Stream<'_, '_, 'input> {
 
         let button = self.parser.x10_mouse_buf[0] & 0b11;
         let modifier = self.parser.x10_mouse_buf[0] & 0b11100;
-        let x = self.parser.x10_mouse_buf[1] as i32 - 0x21;
-        let y = self.parser.x10_mouse_buf[2] as i32 - 0x21;
+        let x = self.parser.x10_mouse_buf[1] as CoordType - 0x21;
+        let y = self.parser.x10_mouse_buf[2] as CoordType - 0x21;
         let action = match button {
             0 => InputMouseState::Left,
             1 => InputMouseState::Middle,
@@ -515,7 +515,7 @@ impl<'input> Stream<'_, '_, 'input> {
 
     fn parse_modifiers(csi: &vt::Csi) -> InputKeyMod {
         let mut modifiers = kbmod::NONE;
-        let p1 = (csi.params[1] - 1).max(0);
+        let p1 = csi.params[1].saturating_sub(1);
         if (p1 & 0x01) != 0 {
             modifiers |= kbmod::SHIFT;
         }
