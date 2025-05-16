@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use std::cmp::Ordering;
 use std::fs;
 use std::path::PathBuf;

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use std::{hint, iter};
 
 /// An iterator over UTF-8 encoded characters.

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Provides a transparent error type for edit.
 
 use std::{io, result};

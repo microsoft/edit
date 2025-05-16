@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Provides fast, non-cryptographic hash functions.
 
 /// The venerable wyhash hash function.

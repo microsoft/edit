@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! `memchr` for arbitrary sizes (1/2/4/8 bytes).
 //!
 //! Clang calls the C `memset` function only for byte-sized types (or 0 fills).

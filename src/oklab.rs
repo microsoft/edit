@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Oklab colorspace conversions.
 //!
 //! Implements Oklab as defined at: <https://bottosson.github.io/posts/oklab/>

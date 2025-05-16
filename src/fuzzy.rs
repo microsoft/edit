@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Fuzzy search algorithm based on the one used in VS Code (`/src/vs/base/common/fuzzyScorer.ts`).
 //! Other algorithms exist, such as Sublime Text's, or the one used in `fzf`,
 //! but I figured that this one is what lots of people may be familiar with.

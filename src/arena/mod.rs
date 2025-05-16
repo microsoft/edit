@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Arena allocators. Small and fast.
 
 #[cfg(debug_assertions)]

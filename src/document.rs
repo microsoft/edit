@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Abstractions over reading/writing arbitrary text containers.
 
 use std::ffi::OsString;

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use std::ffi::{CStr, OsString, c_void};
 use std::fmt::Write as _;
 use std::fs::{self, File};

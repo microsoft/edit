@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // Used as an indicator in our rules for ÷ ("does not join").
 // Underscore is one of the few characters that are permitted as an identifier,
 // are monospace in most fonts and also visually distinct from the digits.

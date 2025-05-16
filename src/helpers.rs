@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Random assortment of helpers I didn't know where to put.
 
 use std::alloc::Allocator;
