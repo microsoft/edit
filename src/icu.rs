@@ -9,7 +9,6 @@ use std::ptr::{null, null_mut};
 
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::TextBuffer;
-use crate::helpers::*;
 use crate::unicode::Utf8Chars;
 use crate::{apperr, arena_format, sys};
 
@@ -604,7 +603,6 @@ impl Regex {
             // and "typically [in] the order of milliseconds", but this claim seems
             // highly outdated. On my CPU from 2021, a limit of 4096 equals roughly 600ms.
             (f.uregex_setTimeLimit)(ptr, 4096, &mut status);
-            (f.uregex_setStackLimit)(ptr, 4 * MEBI as i32, &mut status);
             (f.uregex_setUText)(ptr, text.0 as *const _ as *mut _, &mut status);
             if status.is_failure() {
                 return Err(status.as_error());
@@ -827,17 +825,16 @@ struct LibraryFunctions {
     ucasemap_utf8FoldCase: icu_ffi::ucasemap_utf8FoldCase,
     utext_setup: icu_ffi::utext_setup,
     utext_close: icu_ffi::utext_close,
+
+    // LIBICUI18N_PROC_NAMES
     uregex_open: icu_ffi::uregex_open,
     uregex_close: icu_ffi::uregex_close,
-    uregex_setStackLimit: icu_ffi::uregex_setStackLimit,
     uregex_setTimeLimit: icu_ffi::uregex_setTimeLimit,
     uregex_setUText: icu_ffi::uregex_setUText,
     uregex_reset64: icu_ffi::uregex_reset64,
     uregex_findNext: icu_ffi::uregex_findNext,
     uregex_start64: icu_ffi::uregex_start64,
     uregex_end64: icu_ffi::uregex_end64,
-
-    // LIBICUI18N_PROC_NAMES
     ucol_open: icu_ffi::ucol_open,
     ucol_strcollUTF8: icu_ffi::ucol_strcollUTF8,
 }
@@ -855,12 +852,11 @@ const LIBICUUC_PROC_NAMES: [&CStr; 9] = [
     c"utext_close",
 ];
 
-const LIBICUI18N_PROC_NAMES: [&CStr; 11] = [
+const LIBICUI18N_PROC_NAMES: [&CStr; 10] = [
     // Found in libicui18n.so on UNIX, icuin.dll/icu.dll on Windows.
     c"uregex_open",
     c"uregex_close",
     c"uregex_setTimeLimit",
-    c"uregex_setStackLimit",
     c"uregex_setUText",
     c"uregex_reset64",
     c"uregex_findNext",
@@ -1199,8 +1195,6 @@ mod icu_ffi {
     ) -> *mut URegularExpression;
     pub type uregex_close = unsafe extern "C" fn(regexp: *mut URegularExpression);
     pub type uregex_setTimeLimit =
-        unsafe extern "C" fn(regexp: *mut URegularExpression, limit: i32, status: &mut UErrorCode);
-    pub type uregex_setStackLimit =
         unsafe extern "C" fn(regexp: *mut URegularExpression, limit: i32, status: &mut UErrorCode);
     pub type uregex_setUText = unsafe extern "C" fn(
         regexp: *mut URegularExpression,
