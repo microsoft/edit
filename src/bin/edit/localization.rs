@@ -51,6 +51,11 @@ pub enum LocId {
     AboutDialogTitle,
     AboutDialogVersion,
 
+    // Shown when the clipboard size exceeds the limit for OSC 52
+    LargeClipboardWarningLine1, // "Text you copy is shared with the terminal clipboard."
+    LargeClipboardWarningLine2, // "You copied {size} which may take a long time to share."
+    LargeClipboardWarningLine3, // "Do you want to send it anyway?"
+
     // Warning dialog
     WarningDialogTitle,
 
@@ -586,6 +591,50 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Версия: ",
         /* zh_hans */ "版本: ",
         /* zh_hant */ "版本: ",
+    ],
+
+    // Shown when the clipboard size exceeds the limit for OSC 52
+    // LargeClipboardWarningLine1
+    [
+        /* en      */ "Text you copy is shared with the terminal clipboard.",
+        /* de      */ "Der kopierte Text wird mit der Terminal-Zwischenablage geteilt.",
+        /* es      */ "El texto que copies se comparte con el portapapeles del terminal.",
+        /* fr      */ "Le texte que vous copiez est partagé avec le presse-papiers du terminal.",
+        /* it      */ "Il testo copiato viene condiviso con gli appunti del terminale.",
+        /* ja      */ "コピーしたテキストはターミナルのクリップボードと共有されます。",
+        /* ko      */ "복사한 텍스트가 터미널 클립보드와 공유됩니다.",
+        /* pt_br   */ "O texto copiado é compartilhado com a área de transferência do terminal.",
+        /* ru      */ "Скопированный текст передаётся в буфер обмена терминала.",
+        /* zh_hans */ "你复制的文本将共享到终端剪贴板。",
+        /* zh_hant */ "您複製的文字將會與終端機剪貼簿分享。",
+    ],
+    // LargeClipboardWarningLine2
+    [
+        /* en      */ "You copied {size} which may take a long time to share.",
+        /* de      */ "Sie haben {size} kopiert, das Weitergeben könnte lange dauern.",
+        /* es      */ "Copiaste {size}, lo que puede tardar en compartirse.",
+        /* fr      */ "Vous avez copié {size}, ce qui peut être long à partager.",
+        /* it      */ "Hai copiato {size}, potrebbe richiedere molto tempo per condividerlo.",
+        /* ja      */ "{size} をコピーしました。共有に時間がかかる可能性があります。",
+        /* ko      */ "{size}를 복사했습니다. 공유하는 데 시간이 오래 걸릴 수 있습니다.",
+        /* pt_br   */ "Você copiou {size}, o que pode demorar para compartilhar.",
+        /* ru      */ "Вы скопировали {size}; передача может занять много времени.",
+        /* zh_hans */ "你复制了 {size}，共享可能需要较长时间。",
+        /* zh_hant */ "您已複製 {size}，共享可能需要較長時間。",
+    ],
+    // LargeClipboardWarningLine3
+    [
+        /* en      */ "Do you want to send it anyway?",
+        /* de      */ "Möchten Sie es trotzdem senden?",
+        /* es      */ "¿Desea enviarlo de todas formas?",
+        /* fr      */ "Voulez-vous quand même l’envoyer ?",
+        /* it      */ "Vuoi inviarlo comunque?",
+        /* ja      */ "それでも送信しますか？",
+        /* ko      */ "그래도 전송하시겠습니까?",
+        /* pt_br   */ "Deseja enviar mesmo assim?",
+        /* ru      */ "Отправить в любом случае?",
+        /* zh_hans */ "仍要发送吗？",
+        /* zh_hant */ "仍要傳送嗎？",
     ],
 
     // WarningDialogTitle

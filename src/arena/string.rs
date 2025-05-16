@@ -19,6 +19,11 @@ impl<'a> ArenaString<'a> {
         Self { vec: Vec::new_in(arena) }
     }
 
+    #[must_use]
+    pub fn with_capacity_in(capacity: usize, arena: &'a Arena) -> Self {
+        Self { vec: Vec::with_capacity_in(capacity, arena) }
+    }
+
     /// Turns a [`str`] into an [`ArenaString`].
     #[must_use]
     pub fn from_str(arena: &'a Arena, s: &str) -> Self {
@@ -200,6 +205,14 @@ impl<'a> ArenaString<'a> {
             Bound::Unbounded => {}
         };
         unsafe { self.as_mut_vec() }.replace_range(range, replace_with.as_bytes());
+    }
+
+    /// Finds `old` in the string and replaces it with `new`.
+    /// Only performs one replacement.
+    pub fn replace_once_in_place(&mut self, old: &str, new: &str) {
+        if let Some(beg) = self.find(old) {
+            unsafe { self.as_mut_vec() }.replace_range(beg..beg + old.len(), new.as_bytes());
+        }
     }
 }
 

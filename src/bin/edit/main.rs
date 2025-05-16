@@ -19,15 +19,13 @@ use draw_filepicker::*;
 use draw_menubar::*;
 use draw_statusbar::*;
 use edit::arena::{self, ArenaString, scratch_arena};
-#[cfg(feature = "debug-latency")]
-use edit::arena_format;
 use edit::framebuffer::{self, IndexedColor};
-use edit::helpers::KIBI;
+use edit::helpers::{KIBI, MetricFormatter, Rect, Size};
 use edit::input::{self, kbmod, vk};
 use edit::oklab::oklab_blend;
 use edit::tui::*;
 use edit::vt::{self, Token};
-use edit::{apperr, base64, icu, path, sys};
+use edit::{apperr, arena_format, base64, icu, path, sys};
 use localization::*;
 use state::*;
 
@@ -179,8 +177,8 @@ fn run() -> apperr::Result<()> {
                 }
             }
 
-            if state.osc_clipboard_generation != tui.clipboard_generation() {
-                write_osc_clipboard(&mut output, &mut state, &tui);
+            if state.osc_clipboard_send_generation == tui.clipboard_generation() {
+                write_osc_clipboard(&mut output, &tui);
             }
 
             #[cfg(feature = "debug-latency")]
@@ -304,6 +302,9 @@ fn draw(ctx: &mut Context, state: &mut State) {
     if state.wants_about {
         draw_dialog_about(ctx, state);
     }
+    if state.osc_clipboard_seen_generation != ctx.clipboard_generation() {
+        draw_handle_clipboard_change(ctx, state);
+    }
     if state.error_log_count != 0 {
         draw_error_log(ctx, state);
     }
@@ -364,17 +365,87 @@ fn write_terminal_title(output: &mut ArenaString, filename: &str) {
     output.push_str("edit\x1b\\");
 }
 
-#[cold]
-fn write_osc_clipboard(output: &mut ArenaString, state: &mut State, tui: &Tui) {
-    let clipboard = tui.clipboard();
+const LARGE_CLIPBOARD_THRESHOLD: usize = 4 * KIBI;
 
-    if (1..128 * KIBI).contains(&clipboard.len()) {
+fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
+    let generation = ctx.clipboard_generation();
+
+    if state.osc_clipboard_always_send || ctx.clipboard().len() < LARGE_CLIPBOARD_THRESHOLD {
+        state.osc_clipboard_seen_generation = generation;
+        state.osc_clipboard_send_generation = generation;
+        return;
+    }
+
+    ctx.modal_begin("warning", loc(LocId::WarningDialogTitle));
+    {
+        ctx.block_begin("description");
+        ctx.attr_padding(Rect::three(1, 2, 1));
+        {
+            let label2 = {
+                let template = loc(LocId::LargeClipboardWarningLine2);
+                let size = arena_format!(ctx.arena(), "{}", MetricFormatter(ctx.clipboard().len()));
+
+                let mut label =
+                    ArenaString::with_capacity_in(template.len() + size.len(), ctx.arena());
+                label.push_str(template);
+                label.replace_once_in_place("{size}", &size);
+                label
+            };
+
+            ctx.label("line1", loc(LocId::LargeClipboardWarningLine1));
+            ctx.attr_position(Position::Center);
+            ctx.label("line2", &label2);
+            ctx.attr_position(Position::Center);
+            ctx.label("line3", loc(LocId::LargeClipboardWarningLine3));
+            ctx.attr_position(Position::Center);
+        }
+        ctx.block_end();
+
+        ctx.table_begin("choices");
+        ctx.inherit_focus();
+        ctx.attr_padding(Rect::three(0, 2, 1));
+        ctx.attr_position(Position::Center);
+        ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+        {
+            ctx.table_next_row();
+            ctx.inherit_focus();
+
+            if ctx.button("always", loc(LocId::Always)) {
+                state.osc_clipboard_always_send = true;
+                state.osc_clipboard_seen_generation = generation;
+                state.osc_clipboard_send_generation = generation;
+            }
+
+            if ctx.button("yes", loc(LocId::Yes)) {
+                state.osc_clipboard_seen_generation = generation;
+                state.osc_clipboard_send_generation = generation;
+            }
+            if ctx.clipboard().len() < 10 * LARGE_CLIPBOARD_THRESHOLD {
+                ctx.inherit_focus();
+            }
+
+            if ctx.button("no", loc(LocId::No)) {
+                state.osc_clipboard_seen_generation = generation;
+            }
+            if ctx.clipboard().len() >= 10 * LARGE_CLIPBOARD_THRESHOLD {
+                ctx.inherit_focus();
+            }
+        }
+        ctx.table_end();
+    }
+    if ctx.modal_end() {
+        state.osc_clipboard_seen_generation = generation;
+    }
+}
+
+#[cold]
+fn write_osc_clipboard(output: &mut ArenaString, tui: &Tui) {
+    let clipboard = tui.clipboard();
+    if !clipboard.is_empty() {
         output.push_str("\x1b]52;c;");
         base64::encode(output, clipboard);
         output.push_str("\x1b\\");
     }
-
-    state.osc_clipboard_generation = tui.clipboard_generation();
 }
 
 struct RestoreModes;

@@ -142,7 +142,9 @@ pub struct State {
     pub wants_exit: bool,
 
     pub osc_title_filename: String,
-    pub osc_clipboard_generation: u32,
+    pub osc_clipboard_seen_generation: u32,
+    pub osc_clipboard_send_generation: u32,
+    pub osc_clipboard_always_send: bool,
     pub exit: bool,
 }
 
@@ -188,7 +190,9 @@ impl State {
             wants_exit: false,
 
             osc_title_filename: Default::default(),
-            osc_clipboard_generation: 0,
+            osc_clipboard_seen_generation: 0,
+            osc_clipboard_send_generation: 0,
+            osc_clipboard_always_send: false,
             exit: false,
         })
     }
