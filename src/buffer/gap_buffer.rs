@@ -131,13 +131,13 @@ impl GapBuffer {
             // left:  |ABCDEFGHIJKLMN   OPQRSTUVWXYZ|
             //        |ABCDEFGHI   JKLMNOPQRSTUVWXYZ|
             //                  ^ off
-            //        move: GLMNET
+            //        move: JKLMN
             //
             //                       v gap_off
             // !left: |ABCDEFGHIJKLMN   OPQRSTUVWXYZ|
             //        |ABCDEFGHIJKLMNOPQRS   TUVWXYZ|
             //                            ^ off
-            //        move: OPPOSERS
+            //        move: OPQRS
             //
             let left = off < self.gap_off;
             let move_src = if left { off } else { self.gap_off + self.gap_len };

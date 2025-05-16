@@ -4,7 +4,34 @@ use std::mem;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
 use edit::simd::MemsetSafe;
-use edit::{hash, simd, unicode};
+use edit::{hash, oklab, simd, unicode};
+
+fn bench_hash(c: &mut Criterion) {
+    c.benchmark_group("hash")
+        .throughput(Throughput::Bytes(8))
+        .bench_function(BenchmarkId::new("hash", 8), |b| {
+            let data = [0u8; 8];
+            b.iter(|| hash::hash(0, black_box(&data)))
+        })
+        .throughput(Throughput::Bytes(16))
+        .bench_function(BenchmarkId::new("hash", 16), |b| {
+            let data = [0u8; 16];
+            b.iter(|| hash::hash(0, black_box(&data)))
+        })
+        .throughput(Throughput::Bytes(1024))
+        .bench_function(BenchmarkId::new("hash", 1024), |b| {
+            let data = [0u8; 1024];
+            b.iter(|| hash::hash(0, black_box(&data)))
+        });
+}
+
+fn bench_oklab(c: &mut Criterion) {
+    c.benchmark_group("oklab")
+        .bench_function("srgb_to_oklab", |b| b.iter(|| oklab::srgb_to_oklab(black_box(0xff212cbe))))
+        .bench_function("oklab_blend", |b| {
+            b.iter(|| oklab::oklab_blend(black_box(0x7f212cbe), black_box(0x7f3aae3f)))
+        });
+}
 
 fn bench_simd_memchr2(c: &mut Criterion) {
     let mut group = c.benchmark_group("simd");
@@ -73,36 +100,13 @@ fn bench_unicode(c: &mut Criterion) {
         });
 }
 
-fn bench_hash(c: &mut Criterion) {
-    c.benchmark_group("hash")
-        .throughput(Throughput::Bytes(4))
-        .bench_function(BenchmarkId::new("hash", 4), |b| {
-            let data = [0u8; 4];
-            b.iter(|| hash::hash(0, black_box(&data)))
-        })
-        .throughput(Throughput::Bytes(8))
-        .bench_function(BenchmarkId::new("hash", 8), |b| {
-            let data = [0u8; 8];
-            b.iter(|| hash::hash(0, black_box(&data)))
-        })
-        .throughput(Throughput::Bytes(16))
-        .bench_function(BenchmarkId::new("hash", 16), |b| {
-            let data = [0u8; 16];
-            b.iter(|| hash::hash(0, black_box(&data)))
-        })
-        .throughput(Throughput::Bytes(128 * 1024))
-        .bench_function(BenchmarkId::new("hash", 128 * 1024), |b| {
-            let data = [0u8; 128 * 1024];
-            b.iter(|| hash::hash(0, black_box(&data)))
-        });
-}
-
 fn bench(c: &mut Criterion) {
+    bench_hash(c);
+    bench_oklab(c);
     bench_simd_memchr2(c);
     bench_simd_memset::<u32>(c);
     bench_simd_memset::<u8>(c);
     bench_unicode(c);
-    bench_hash(c);
 }
 
 criterion_group!(benches, bench);
