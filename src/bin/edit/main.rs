@@ -178,7 +178,7 @@ fn run() -> apperr::Result<()> {
             }
 
             if state.osc_clipboard_send_generation == tui.clipboard_generation() {
-                write_osc_clipboard(&mut output, &tui);
+                write_osc_clipboard(&mut output, &mut state, &tui);
             }
 
             #[cfg(feature = "debug-latency")]
@@ -439,13 +439,14 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
 }
 
 #[cold]
-fn write_osc_clipboard(output: &mut ArenaString, tui: &Tui) {
+fn write_osc_clipboard(output: &mut ArenaString, state: &mut State, tui: &Tui) {
     let clipboard = tui.clipboard();
     if !clipboard.is_empty() {
         output.push_str("\x1b]52;c;");
         base64::encode(output, clipboard);
         output.push_str("\x1b\\");
     }
+    state.osc_clipboard_send_generation = tui.clipboard_generation().wrapping_sub(1);
 }
 
 struct RestoreModes;
