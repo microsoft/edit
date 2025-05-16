@@ -508,6 +508,7 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
             locales.extend(
                 val.split(':').filter(|s| !s.is_empty()).map(|s| ArenaString::from_str(arena, s)),
             );
+            break;
         }
     }
 
