@@ -4,6 +4,13 @@ use crate::arena::ArenaString;
 
 const CHARSET: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+/// One aspect of base64 is that the encoded length can be
+/// calculated accurately in advance, which is what this returns.
+#[inline]
+pub fn encode_len(src_len: usize) -> usize {
+    src_len.div_ceil(3) * 4
+}
+
 /// Encodes the given bytes as base64 and appends them to the destination string.
 pub fn encode(dst: &mut ArenaString, src: &[u8]) {
     unsafe {
@@ -11,8 +18,7 @@ pub fn encode(dst: &mut ArenaString, src: &[u8]) {
         let mut remaining = src.len();
         let dst = dst.as_mut_vec();
 
-        // One aspect of base64 is that the encoded length can be calculated accurately in advance.
-        let out_len = src.len().div_ceil(3) * 4;
+        let out_len = encode_len(src.len());
         // ... we can then use this fact to reserve space all at once.
         dst.reserve(out_len);
 
