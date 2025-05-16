@@ -424,6 +424,13 @@ impl Tui {
         mem::replace(&mut self.read_timeout, time::Duration::MAX)
     }
 
+    /// Returns the viewport size.
+    pub fn size(&self) -> Size {
+        // We don't use the size stored in the framebuffer, because until
+        // `render()` is called, the framebuffer will use a stale size.
+        self.size
+    }
+
     /// Returns an indexed color from the framebuffer.
     #[inline]
     pub fn indexed(&self, index: IndexedColor) -> u32 {
@@ -1390,9 +1397,7 @@ impl<'a> Context<'a, '_> {
 
     /// Returns the viewport size.
     pub fn size(&self) -> Size {
-        // We don't use the size stored in the framebuffer, because until
-        // `render()` is called, the framebuffer will use a stale size.
-        self.tui.size
+        self.tui.size()
     }
 
     /// Returns an indexed color from the framebuffer.
@@ -2053,11 +2058,13 @@ impl<'a> Context<'a, '_> {
 
         self.textarea_adjust_scroll_offset(content);
 
-        node.attributes.fg = self.indexed(IndexedColor::Foreground);
-        node.attributes.bg = self.indexed(IndexedColor::Background);
-        if single_line && !content.has_focus {
-            node.attributes.fg = self.contrasted(node.attributes.bg);
-            node.attributes.bg = self.indexed_alpha(IndexedColor::Background, 1, 2);
+        if single_line {
+            node.attributes.fg = self.indexed(IndexedColor::Foreground);
+            node.attributes.bg = self.indexed(IndexedColor::Background);
+            if !content.has_focus {
+                node.attributes.fg = self.contrasted(node.attributes.bg);
+                node.attributes.bg = self.indexed_alpha(IndexedColor::Background, 1, 2);
+            }
         }
 
         node.attributes.focusable = true;
@@ -2165,9 +2172,6 @@ impl<'a> Context<'a, '_> {
                                     }
                                     tc.preferred_column = tb.cursor_visual_pos().x;
                                     make_cursor_visible = true;
-                                }
-                                InputMouseState::Release => {
-                                    tb.selection_finalize();
                                 }
                                 _ => return false,
                             },
@@ -3300,7 +3304,7 @@ struct NodeMap<'a> {
 
 impl Default for NodeMap<'static> {
     fn default() -> Self {
-        Self { slots: &[None], shift: 0, mask: 0 }
+        Self { slots: &[None, None], shift: 63, mask: 0 }
     }
 }
 

@@ -241,7 +241,7 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
             if ctx.button("no", loc(LocId::UnsavedChangesDialogNo)) {
                 action = Action::Discard;
             }
-            if ctx.button("cancel", loc(LocId::UnsavedChangesDialogCancel)) {
+            if ctx.button("cancel", loc(LocId::Cancel)) {
                 action = Action::Cancel;
             }
 

@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::io::Read;
 use std::mem::{self, MaybeUninit};
 use std::ops::{Bound, Range, RangeBounds};
-use std::{ptr, slice, str};
+use std::{fmt, ptr, slice, str};
 
 use crate::apperr;
 
@@ -16,6 +16,26 @@ pub const GIGA: usize = 1000 * 1000 * 1000;
 pub const KIBI: usize = 1024;
 pub const MEBI: usize = 1024 * 1024;
 pub const GIBI: usize = 1024 * 1024 * 1024;
+
+pub struct MetricFormatter<T>(pub T);
+
+impl fmt::Display for MetricFormatter<usize> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut value = self.0;
+        let mut suffix = "B";
+        if value >= GIGA {
+            value /= GIGA;
+            suffix = "GB";
+        } else if value >= MEGA {
+            value /= MEGA;
+            suffix = "MB";
+        } else if value >= KILO {
+            value /= KILO;
+            suffix = "kB";
+        }
+        write!(f, "{value}{suffix}")
+    }
+}
 
 /// A viewport coordinate type used throughout the application.
 pub type CoordType = i32;
