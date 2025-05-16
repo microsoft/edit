@@ -58,25 +58,14 @@ pub struct TextBufferStatistics {
     visual_lines: CoordType,
 }
 
-/// Stores the active text selection.
+/// Stores the active text selection anchors.
+///
+/// The two points are not sorted. Instead, `beg` refers to where the selection
+/// started being made and `end` refers to the currently being updated position.
 #[derive(Copy, Clone)]
-enum TextBufferSelection {
-    /// No active selection.
-    None,
-    /// The user is currently selecting text.
-    ///
-    /// Moving the cursor will update the selection.
-    Active { beg: Point, end: Point },
-    /// The user stopped selecting text.
-    ///
-    /// Moving the cursor will destroy the selection.
-    Done { beg: Point, end: Point },
-}
-
-impl TextBufferSelection {
-    fn is_some(&self) -> bool {
-        !matches!(self, Self::None)
-    }
+struct TextBufferSelection {
+    beg: Point,
+    end: Point,
 }
 
 /// In order to group actions into a single undo step,
@@ -94,7 +83,7 @@ struct HistoryEntry {
     /// [`TextBuffer::cursor`] position before the change was made.
     cursor_before: Point,
     /// [`TextBuffer::selection`] before the change was made.
-    selection_before: TextBufferSelection,
+    selection_before: Option<TextBufferSelection>,
     /// [`TextBuffer::stats`] before the change was made.
     stats_before: TextBufferStatistics,
     /// [`GapBuffer::generation`] before the change was made.
@@ -197,7 +186,7 @@ pub struct TextBuffer {
     // To avoid this, we cache the cursor position for rendering.
     // Must be cleared on every edit or reflow.
     cursor_for_rendering: Option<Cursor>,
-    selection: TextBufferSelection,
+    selection: Option<TextBufferSelection>,
     selection_generation: u32,
     search: Option<UnsafeCell<ActiveSearch>>,
 
@@ -243,7 +232,7 @@ impl TextBuffer {
             stats: TextBufferStatistics { logical_lines: 1, visual_lines: 1 },
             cursor: Default::default(),
             cursor_for_rendering: None,
-            selection: TextBufferSelection::None,
+            selection: None,
             selection_generation: 0,
             search: None,
 
@@ -575,7 +564,7 @@ impl TextBuffer {
         self.last_history_type = HistoryType::Other;
         self.cursor = Default::default();
         self.cursor_for_rendering = None;
-        self.set_selection(TextBufferSelection::None);
+        self.set_selection(None);
         self.search = None;
         self.mark_as_clean();
         self.reflow(true);
@@ -910,7 +899,7 @@ impl TextBuffer {
         self.selection.is_some()
     }
 
-    fn set_selection(&mut self, selection: TextBufferSelection) -> u32 {
+    fn set_selection(&mut self, selection: Option<TextBufferSelection>) -> u32 {
         self.selection = selection;
         self.selection_generation = self.selection_generation.wrapping_add(1);
         self.selection_generation
@@ -918,56 +907,23 @@ impl TextBuffer {
 
     /// Moves the cursor to `visual_pos` and updates the selection to contain it.
     pub fn selection_update_visual(&mut self, visual_pos: Point) {
-        let cursor = self.cursor;
-        self.set_cursor_for_selection(self.cursor_move_to_visual_internal(cursor, visual_pos));
-
-        match &mut self.selection {
-            TextBufferSelection::None | TextBufferSelection::Done { .. } => {
-                self.set_selection(TextBufferSelection::Active {
-                    beg: cursor.logical_pos,
-                    end: self.cursor.logical_pos,
-                });
-            }
-            TextBufferSelection::Active { beg: _, end } => {
-                *end = self.cursor.logical_pos;
-            }
-        }
+        self.set_cursor_for_selection(self.cursor_move_to_visual_internal(self.cursor, visual_pos));
     }
 
     /// Moves the cursor to `logical_pos` and updates the selection to contain it.
     pub fn selection_update_logical(&mut self, logical_pos: Point) {
-        let cursor = self.cursor;
-        self.set_cursor_for_selection(self.cursor_move_to_logical_internal(cursor, logical_pos));
-
-        match &mut self.selection {
-            TextBufferSelection::None | TextBufferSelection::Done { .. } => {
-                self.set_selection(TextBufferSelection::Active {
-                    beg: cursor.logical_pos,
-                    end: self.cursor.logical_pos,
-                });
-            }
-            TextBufferSelection::Active { beg: _, end } => {
-                *end = self.cursor.logical_pos;
-            }
-        }
+        self.set_cursor_for_selection(
+            self.cursor_move_to_logical_internal(self.cursor, logical_pos),
+        );
     }
 
     /// Moves the cursor by `delta` and updates the selection to contain it.
     pub fn selection_update_delta(&mut self, granularity: CursorMovement, delta: CoordType) {
-        let cursor = self.cursor;
-        self.set_cursor_for_selection(self.cursor_move_delta_internal(cursor, granularity, delta));
-
-        match &mut self.selection {
-            TextBufferSelection::None | TextBufferSelection::Done { .. } => {
-                self.set_selection(TextBufferSelection::Active {
-                    beg: cursor.logical_pos,
-                    end: self.cursor.logical_pos,
-                });
-            }
-            TextBufferSelection::Active { beg: _, end } => {
-                *end = self.cursor.logical_pos;
-            }
-        }
+        self.set_cursor_for_selection(self.cursor_move_delta_internal(
+            self.cursor,
+            granularity,
+            delta,
+        ));
     }
 
     /// Select the current word.
@@ -975,11 +931,11 @@ impl TextBuffer {
         let Range { start, end } = navigation::word_select(&self.buffer, self.cursor.offset);
         let beg = self.cursor_move_to_offset_internal(self.cursor, start);
         let end = self.cursor_move_to_offset_internal(beg, end);
-        self.set_cursor_for_selection(end);
-        self.set_selection(TextBufferSelection::Done {
+        unsafe { self.set_cursor(end) };
+        self.set_selection(Some(TextBufferSelection {
             beg: beg.logical_pos,
             end: end.logical_pos,
-        });
+        }));
     }
 
     /// Select the current line.
@@ -990,37 +946,38 @@ impl TextBuffer {
         );
         let end = self
             .cursor_move_to_logical_internal(beg, Point { x: 0, y: self.cursor.logical_pos.y + 1 });
-        self.set_cursor_for_selection(end);
-        self.set_selection(TextBufferSelection::Done {
+        unsafe { self.set_cursor(end) };
+        self.set_selection(Some(TextBufferSelection {
             beg: beg.logical_pos,
             end: end.logical_pos,
-        });
+        }));
     }
 
     /// Select the entire document.
     pub fn select_all(&mut self) {
         let beg = Default::default();
         let end = self.cursor_move_to_logical_internal(beg, Point::MAX);
-        self.set_cursor_for_selection(end);
-        self.set_selection(TextBufferSelection::Done {
+        unsafe { self.set_cursor(end) };
+        self.set_selection(Some(TextBufferSelection {
             beg: beg.logical_pos,
             end: end.logical_pos,
-        });
+        }));
     }
 
-    /// Turn an active selection into a finalized selection.
-    ///
-    /// Any future cursor movement will destroy the selection.
-    pub fn selection_finalize(&mut self) {
-        if let TextBufferSelection::Active { beg, end } = self.selection {
-            self.set_selection(TextBufferSelection::Done { beg, end });
+    /// Starts a new selection, if there's none already.
+    pub fn start_selection(&mut self) {
+        if self.selection.is_none() {
+            self.set_selection(Some(TextBufferSelection {
+                beg: self.cursor.logical_pos,
+                end: self.cursor.logical_pos,
+            }));
         }
     }
 
     /// Destroy the current selection.
     pub fn clear_selection(&mut self) -> bool {
         let had_selection = self.selection.is_some();
-        self.set_selection(TextBufferSelection::None);
+        self.set_selection(None);
         had_selection
     }
 
@@ -1035,7 +992,7 @@ impl TextBuffer {
 
             // When transitioning from some search to no search, we must clear the selection.
             if pattern.is_empty()
-                && let TextBufferSelection::Done { beg, .. } = self.selection
+                && let Some(TextBufferSelection { beg, .. }) = self.selection
             {
                 self.cursor_move_to_logical(beg);
             }
@@ -1063,7 +1020,7 @@ impl TextBuffer {
         // If the user moved the cursor since the last search, but the needle remained the same,
         // we still need to move the start of the search to the new cursor position.
         let next_search_offset = match self.selection {
-            TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
+            Some(TextBufferSelection { beg, end }) => {
                 if self.selection_generation == search.selection_generation {
                     search.next_search_offset
                 } else {
@@ -1085,9 +1042,7 @@ impl TextBuffer {
         replacement: &str,
     ) -> apperr::Result<()> {
         // Editors traditionally replace the previous search hit, not the next possible one.
-        if let (Some(search), TextBufferSelection::Done { .. }) =
-            (&mut self.search, &self.selection)
-        {
+        if let (Some(search), Some(..)) = (&mut self.search, &self.selection) {
             let search = search.get_mut();
             if search.selection_generation == self.selection_generation {
                 self.write(replacement.as_bytes(), true);
@@ -1207,14 +1162,14 @@ impl TextBuffer {
             unsafe { self.set_cursor(end) };
             self.make_cursor_visible();
 
-            self.set_selection(TextBufferSelection::Done {
+            self.set_selection(Some(TextBufferSelection {
                 beg: beg.logical_pos,
                 end: end.logical_pos,
-            })
+            }))
         } else {
             // Avoid searching through the entire document again if we know there's nothing to find.
             search.no_matches = true;
-            self.set_selection(TextBufferSelection::None)
+            self.set_selection(None)
         };
     }
 
@@ -1482,12 +1437,20 @@ impl TextBuffer {
     pub unsafe fn set_cursor(&mut self, cursor: Cursor) {
         self.set_cursor_internal(cursor);
         self.last_history_type = HistoryType::Other;
-        self.set_selection(TextBufferSelection::None);
+        self.set_selection(None);
     }
 
     fn set_cursor_for_selection(&mut self, cursor: Cursor) {
+        let beg = match self.selection {
+            Some(TextBufferSelection { beg, .. }) => beg,
+            None => self.cursor.logical_pos,
+        };
+
         self.set_cursor_internal(cursor);
         self.last_history_type = HistoryType::Other;
+
+        let end = self.cursor.logical_pos;
+        self.set_selection(if beg == end { None } else { Some(TextBufferSelection { beg, end }) });
     }
 
     fn set_cursor_internal(&mut self, cursor: Cursor) {
@@ -1537,10 +1500,8 @@ impl TextBuffer {
         };
 
         let [selection_beg, selection_end] = match self.selection {
-            TextBufferSelection::None => [Point::MIN, Point::MIN],
-            TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
-                minmax(beg, end)
-            }
+            None => [Point::MIN, Point::MIN],
+            Some(TextBufferSelection { beg, end }) => minmax(beg, end),
         };
 
         line.reserve(width as usize * 2);
@@ -1813,7 +1774,7 @@ impl TextBuffer {
         if let Some((beg, end)) = self.selection_range_internal(false) {
             self.edit_begin(HistoryType::Write, beg);
             self.edit_delete(end);
-            self.set_selection(TextBufferSelection::None);
+            self.set_selection(None);
         }
         if self.active_edit_depth <= 0 {
             self.edit_begin(HistoryType::Write, self.cursor);
@@ -1947,7 +1908,7 @@ impl TextBuffer {
 
         if let Some(r) = self.selection_range_internal(false) {
             (beg, end) = r;
-            self.set_selection(TextBufferSelection::None);
+            self.set_selection(None);
         } else {
             if (delta == -1 && self.cursor.offset == 0)
                 || (delta == 1 && self.cursor.offset >= self.text_length())
@@ -1982,12 +1943,9 @@ impl TextBuffer {
         let mut selection_beg = self.cursor.logical_pos;
         let mut selection_end = selection_beg;
 
-        match self.selection {
-            TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
-                selection_beg = beg;
-                selection_end = end;
-            }
-            _ => {}
+        if let Some(TextBufferSelection { beg, end }) = self.selection {
+            selection_beg = beg;
+            selection_end = end;
         }
 
         let [beg, end] = minmax(selection_beg, selection_end);
@@ -2042,12 +2000,9 @@ impl TextBuffer {
         self.edit_write(&replacement);
         self.edit_end();
 
-        match &mut self.selection {
-            TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
-                *beg = selection_beg;
-                *end = selection_end;
-            }
-            _ => {}
+        if let Some(TextBufferSelection { beg, end }) = &mut self.selection {
+            *beg = selection_beg;
+            *end = selection_end;
         }
 
         self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, selection_end));
@@ -2067,7 +2022,7 @@ impl TextBuffer {
             self.edit_begin(HistoryType::Delete, beg);
             self.edit_delete(end);
             self.edit_end();
-            self.set_selection(TextBufferSelection::None);
+            self.set_selection(None);
         }
 
         out
@@ -2104,14 +2059,12 @@ impl TextBuffer {
     /// This is meant to be used for Ctrl+C / Ctrl+X.
     fn selection_range_internal(&self, line_fallback: bool) -> Option<(Cursor, Cursor)> {
         let [beg, end] = match self.selection {
-            TextBufferSelection::None if !line_fallback => return None,
-            TextBufferSelection::None => [
+            None if !line_fallback => return None,
+            None => [
                 Point { x: 0, y: self.cursor.logical_pos.y },
                 Point { x: 0, y: self.cursor.logical_pos.y + 1 },
             ],
-            TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
-                minmax(beg, end)
-            }
+            Some(TextBufferSelection { beg, end }) => minmax(beg, end),
         };
 
         let beg = self.cursor_move_to_logical_internal(self.cursor, beg);

@@ -2171,9 +2171,6 @@ impl<'a> Context<'a, '_> {
                                     tc.preferred_column = tb.cursor_visual_pos().x;
                                     make_cursor_visible = true;
                                 }
-                                InputMouseState::Release => {
-                                    tb.selection_finalize();
-                                }
                                 _ => return false,
                             },
                         }
