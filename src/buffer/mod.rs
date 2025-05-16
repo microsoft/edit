@@ -1932,6 +1932,32 @@ impl TextBuffer {
         self.edit_end();
     }
 
+    /// Returns the logical position of the first character on this line.
+    /// Return `.x == 0` if there are no non-whitespace characters.
+    pub fn indent_end_logical_pos(&self) -> Point {
+        let cursor = self.goto_line_start(self.cursor, self.cursor.logical_pos.y);
+        let mut chars = 0;
+        let mut offset = cursor.offset;
+
+        'outer: loop {
+            let chunk = self.read_forward(offset);
+            if chunk.is_empty() {
+                break;
+            }
+
+            for &c in chunk {
+                if c == b'\n' || c == b'\r' || (c != b' ' && c != b'\t') {
+                    break 'outer;
+                }
+                chars += 1;
+            }
+
+            offset += chunk.len();
+        }
+
+        Point { x: chars, y: cursor.logical_pos.y }
+    }
+
     /// Unindents the current selection or line.
     ///
     /// TODO: This function is ripe for some optimizations:
