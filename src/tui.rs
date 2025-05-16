@@ -424,6 +424,13 @@ impl Tui {
         mem::replace(&mut self.read_timeout, time::Duration::MAX)
     }
 
+    /// Returns the viewport size.
+    pub fn size(&self) -> Size {
+        // We don't use the size stored in the framebuffer, because until
+        // `render()` is called, the framebuffer will use a stale size.
+        self.size
+    }
+
     /// Returns an indexed color from the framebuffer.
     #[inline]
     pub fn indexed(&self, index: IndexedColor) -> u32 {
@@ -1390,9 +1397,7 @@ impl<'a> Context<'a, '_> {
 
     /// Returns the viewport size.
     pub fn size(&self) -> Size {
-        // We don't use the size stored in the framebuffer, because until
-        // `render()` is called, the framebuffer will use a stale size.
-        self.tui.size
+        self.tui.size()
     }
 
     /// Returns an indexed color from the framebuffer.
@@ -3300,7 +3305,7 @@ struct NodeMap<'a> {
 
 impl Default for NodeMap<'static> {
     fn default() -> Self {
-        Self { slots: &[None], shift: 0, mask: 0 }
+        Self { slots: &[None, None], shift: 63, mask: 0 }
     }
 }
 
