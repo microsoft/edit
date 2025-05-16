@@ -10,8 +10,8 @@ pub enum LocId {
     Ok,
     Yes,
     No,
-
-    ErrorIcuMissing,
+    Cancel,
+    Always,
 
     // File menu
     File,
@@ -46,11 +46,17 @@ pub enum LocId {
     UnsavedChangesDialogDescription,
     UnsavedChangesDialogYes,
     UnsavedChangesDialogNo,
-    UnsavedChangesDialogCancel,
 
     // About dialog
     AboutDialogTitle,
     AboutDialogVersion,
+
+    // Warning dialog
+    WarningDialogTitle,
+
+    // Error dialog
+    ErrorDialogTitle,
+    ErrorIcuMissing,
 
     SearchNeedleLabel,
     SearchReplacementLabel,
@@ -98,7 +104,7 @@ enum LangId {
 
 #[rustfmt::skip]
 const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
-    // Ctrl
+    // Ctrl (the keyboard key)
     [
         /* en      */ "Ctrl",
         /* de      */ "Strg",
@@ -112,7 +118,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "Ctrl",
         /* zh_hant */ "Ctrl",
     ],
-    // Alt
+    // Alt (the keyboard key)
     [
         /* en      */ "Alt",
         /* de      */ "Alt",
@@ -126,7 +132,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "Alt",
         /* zh_hant */ "Alt",
     ],
-    // Shift
+    // Shift (the keyboard key)
     [
         /* en      */ "Shift",
         /* de      */ "Umschalt",
@@ -141,7 +147,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "Shift",
     ],
 
-    // Ok
+    // Ok (used as a common dialog button)
     [
         /* en      */ "Ok",
         /* de      */ "OK",
@@ -155,7 +161,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "确定",
         /* zh_hant */ "確定",
     ],
-    // Yes
+    // Yes (used as a common dialog button)
     [
         /* en      */ "Yes",
         /* de      */ "Ja",
@@ -169,7 +175,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "是",
         /* zh_hant */ "是",
     ],
-    // No
+    // No (used as a common dialog button)
     [
         /* en      */ "No",
         /* de      */ "Nein",
@@ -183,23 +189,36 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "否",
         /* zh_hant */ "否",
     ],
-
-    // ErrorIcuMissing
+    // Cancel (used as a common dialog button)
     [
-        /* en      */ "This operation requires the ICU library",
-        /* de      */ "Diese Operation erfordert die ICU-Bibliothek",
-        /* es      */ "Esta operación requiere la biblioteca ICU",
-        /* fr      */ "Cette opération nécessite la bibliothèque ICU",
-        /* it      */ "Questa operazione richiede la libreria ICU",
-        /* ja      */ "この操作にはICUライブラリが必要です",
-        /* ko      */ "이 작업에는 ICU 라이브러리가 필요합니다",
-        /* pt_br   */ "Esta operação requer a biblioteca ICU",
-        /* ru      */ "Эта операция требует наличия библиотеки ICU",
-        /* zh_hans */ "此操作需要 ICU 库",
-        /* zh_hant */ "此操作需要 ICU 庫",
+        /* en      */ "Cancel",
+        /* de      */ "Abbrechen",
+        /* es      */ "Cancelar",
+        /* fr      */ "Annuler",
+        /* it      */ "Annulla",
+        /* ja      */ "キャンセル",
+        /* ko      */ "취소",
+        /* pt_br   */ "Cancelar",
+        /* ru      */ "Отмена",
+        /* zh_hans */ "取消",
+        /* zh_hant */ "取消",
+    ],
+    // Always (used as a common dialog button)
+    [
+        /* en      */ "Always",
+        /* de      */ "Immer",
+        /* es      */ "Siempre",
+        /* fr      */ "Toujours",
+        /* it      */ "Sempre",
+        /* ja      */ "常に",
+        /* ko      */ "항상",
+        /* pt_br   */ "Sempre",
+        /* ru      */ "Всегда",
+        /* zh_hans */ "总是",
+        /* zh_hant */ "總是",
     ],
 
-    // File
+    // File (a menu bar item)
     [
         /* en      */ "File",
         /* de      */ "Datei",
@@ -298,7 +317,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "退出",
     ],
 
-    // Edit
+    // Edit (a menu bar item)
     [
         /* en      */ "Edit",
         /* de      */ "Bearbeiten",
@@ -411,7 +430,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "取代",
     ],
 
-    // View
+    // View (a menu bar item)
     [
         /* en      */ "View",
         /* de      */ "Ansicht",
@@ -454,7 +473,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "自動換行",
     ],
 
-    // Help
+    // Help (a menu bar item)
     [
         /* en      */ "Help",
         /* de      */ "Hilfe",
@@ -539,20 +558,6 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "不保存",
         /* zh_hant */ "不儲存",
     ],
-    // UnsavedChangesDialogCancel
-    [
-        /* en      */ "Cancel",
-        /* de      */ "Abbrechen",
-        /* es      */ "Cancelar",
-        /* fr      */ "Annuler",
-        /* it      */ "Annulla",
-        /* ja      */ "キャンセル",
-        /* ko      */ "취소",
-        /* pt_br   */ "Cancelar",
-        /* ru      */ "Отмена",
-        /* zh_hans */ "取消",
-        /* zh_hant */ "取消",
-    ],
 
     // AboutDialogTitle
     [
@@ -581,6 +586,50 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Версия: ",
         /* zh_hans */ "版本: ",
         /* zh_hant */ "版本: ",
+    ],
+
+    // WarningDialogTitle
+    [
+        /* en      */ "Warning",
+        /* de      */ "Warnung",
+        /* es      */ "Advertencia",
+        /* fr      */ "Avertissement",
+        /* it      */ "Avviso",
+        /* ja      */ "警告",
+        /* ko      */ "경고",
+        /* pt_br   */ "Aviso",
+        /* ru      */ "Предупреждение",
+        /* zh_hans */ "警告",
+        /* zh_hant */ "警告",
+    ],
+
+    // ErrorDialogTitle
+    [
+        /* en      */ "Error",
+        /* de      */ "Fehler",
+        /* es      */ "Error",
+        /* fr      */ "Erreur",
+        /* it      */ "Errore",
+        /* ja      */ "エラー",
+        /* ko      */ "오류",
+        /* pt_br   */ "Erro",
+        /* ru      */ "Ошибка",
+        /* zh_hans */ "错误",
+        /* zh_hant */ "錯誤",
+    ],
+    // ErrorIcuMissing
+    [
+        /* en      */ "This operation requires the ICU library",
+        /* de      */ "Diese Operation erfordert die ICU-Bibliothek",
+        /* es      */ "Esta operación requiere la biblioteca ICU",
+        /* fr      */ "Cette opération nécessite la bibliothèque ICU",
+        /* it      */ "Questa operazione richiede la libreria ICU",
+        /* ja      */ "この操作にはICUライブラリが必要です",
+        /* ko      */ "이 작업에는 ICU 라이브러리가 필요합니다",
+        /* pt_br   */ "Esta operação requer a biblioteca ICU",
+        /* ru      */ "Эта операция требует наличия библиотеки ICU",
+        /* zh_hans */ "此操作需要 ICU 库",
+        /* zh_hant */ "此操作需要 ICU 庫",
     ],
 
     // SearchNeedleLabel (for input field)

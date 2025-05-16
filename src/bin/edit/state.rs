@@ -211,7 +211,7 @@ pub fn error_log_add(ctx: &mut Context, state: &mut State, err: apperr::Error) {
 }
 
 pub fn draw_error_log(ctx: &mut Context, state: &mut State) {
-    ctx.modal_begin("errors", "Error");
+    ctx.modal_begin("error", loc(LocId::ErrorDialogTitle));
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
     {
@@ -233,7 +233,7 @@ pub fn draw_error_log(ctx: &mut Context, state: &mut State) {
         }
         ctx.block_end();
 
-        if ctx.button("ok", "Ok") {
+        if ctx.button("ok", loc(LocId::Ok)) {
             state.error_log_count = 0;
         }
         ctx.attr_position(Position::Center);
