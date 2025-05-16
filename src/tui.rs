@@ -2058,11 +2058,13 @@ impl<'a> Context<'a, '_> {
 
         self.textarea_adjust_scroll_offset(content);
 
-        node.attributes.fg = self.indexed(IndexedColor::Foreground);
-        node.attributes.bg = self.indexed(IndexedColor::Background);
-        if single_line && !content.has_focus {
-            node.attributes.fg = self.contrasted(node.attributes.bg);
-            node.attributes.bg = self.indexed_alpha(IndexedColor::Background, 1, 2);
+        if single_line {
+            node.attributes.fg = self.indexed(IndexedColor::Foreground);
+            node.attributes.bg = self.indexed(IndexedColor::Background);
+            if !content.has_focus {
+                node.attributes.fg = self.contrasted(node.attributes.bg);
+                node.attributes.bg = self.indexed_alpha(IndexedColor::Background, 1, 2);
+            }
         }
 
         node.attributes.focusable = true;

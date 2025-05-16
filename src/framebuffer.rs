@@ -84,6 +84,8 @@ pub struct Framebuffer {
     /// A cache table for previously contrasted colors.
     /// See: <https://fgiesen.wordpress.com/2019/02/11/cache-tables/>
     contrast_colors: [Cell<(u32, u32)>; CACHE_TABLE_SIZE],
+    background_fill: u32,
+    foreground_fill: u32,
 }
 
 impl Framebuffer {
@@ -95,12 +97,19 @@ impl Framebuffer {
             frame_counter: 0,
             auto_colors: [0, 0],
             contrast_colors: [const { Cell::new((0, 0)) }; CACHE_TABLE_SIZE],
+            background_fill: DEFAULT_THEME[IndexedColor::Background as usize],
+            foreground_fill: DEFAULT_THEME[IndexedColor::Foreground as usize],
         }
     }
 
     /// Sets the base color palette.
+    ///
+    /// If you call this method, [`Framebuffer`] expects that you
+    /// successfully detect the light/dark mode of the terminal.
     pub fn set_indexed_colors(&mut self, colors: [u32; INDEXED_COLORS_COUNT]) {
         self.indexed_colors = colors;
+        self.background_fill = 0;
+        self.foreground_fill = 0;
 
         self.auto_colors = [
             self.indexed_colors[IndexedColor::Black as usize],
@@ -131,12 +140,10 @@ impl Framebuffer {
         self.frame_counter = self.frame_counter.wrapping_add(1);
 
         let back = &mut self.buffers[self.frame_counter & 1];
-        let bg = self.indexed_colors[IndexedColor::Background as usize];
-        let fg = self.indexed_colors[IndexedColor::Foreground as usize];
 
         back.text.fill_whitespace();
-        back.bg_bitmap.fill(bg);
-        back.fg_bitmap.fill(fg);
+        back.bg_bitmap.fill(self.background_fill);
+        back.fg_bitmap.fill(self.foreground_fill);
         back.attributes.reset();
         back.cursor = Cursor::new_disabled();
     }
@@ -397,8 +404,8 @@ impl Framebuffer {
         let mut back_attrs = back.attributes.iter();
 
         let mut result = ArenaString::new_in(arena);
-        let mut last_bg = self.indexed(IndexedColor::Background);
-        let mut last_fg = self.indexed(IndexedColor::Foreground);
+        let mut last_bg = u64::MAX;
+        let mut last_fg = u64::MAX;
         let mut last_attr = Attributes::None;
 
         for y in 0..front.text.size.height {
@@ -447,34 +454,14 @@ impl Framebuffer {
                         && back_attr[chunk_end] == attr
                 } {}
 
-                if last_bg != bg {
-                    last_bg = bg;
-                    if bg == self.indexed_colors[IndexedColor::Background as usize] {
-                        result.push_str("\x1b[49m");
-                    } else {
-                        _ = write!(
-                            result,
-                            "\x1b[48;2;{};{};{}m",
-                            bg & 0xff,
-                            (bg >> 8) & 0xff,
-                            (bg >> 16) & 0xff
-                        );
-                    }
+                if last_bg != bg as u64 {
+                    last_bg = bg as u64;
+                    self.format_color(&mut result, false, bg);
                 }
 
-                if last_fg != fg {
-                    last_fg = fg;
-                    if fg == self.indexed_colors[IndexedColor::Foreground as usize] {
-                        result.push_str("\x1b[39m");
-                    } else {
-                        _ = write!(
-                            result,
-                            "\x1b[38;2;{};{};{}m",
-                            fg & 0xff,
-                            (fg >> 8) & 0xff,
-                            (fg >> 16) & 0xff
-                        );
-                    }
+                if last_fg != fg as u64 {
+                    last_fg = fg as u64;
+                    self.format_color(&mut result, true, fg);
                 }
 
                 if last_attr != attr {
@@ -526,6 +513,39 @@ impl Framebuffer {
         }
 
         result
+    }
+
+    fn format_color(&self, dst: &mut ArenaString, fg: bool, mut color: u32) {
+        let typ = if fg { '3' } else { '4' };
+
+        // Some terminals support transparent backgrounds which are used
+        // if the default background color is active (CSI 49 m).
+        //
+        // If [`Framebuffer::set_indexed_colors`] was never called, we assume
+        // that the terminal doesn't support transparency and initialize the
+        // background bitmap with the `DEFAULT_THEME` default background color.
+        // Otherwise, we assume that the terminal supports transparency
+        // and initialize it with 0x00000000 (transparent).
+        //
+        // We also apply this to the foreground color, because it compresses
+        // the output slightly and ensures that we keep "default foreground"
+        // and "color that happens to be default foreground" separate.
+        // (This also applies to the background color by the way.)
+        if color == 0 {
+            _ = write!(dst, "\x1b[{typ}9m");
+            return;
+        }
+
+        if (color & 0xff000000) != 0xff000000 {
+            let idx = if fg { IndexedColor::Foreground } else { IndexedColor::Background };
+            let dst = self.indexed(idx);
+            color = oklab_blend(dst, color);
+        }
+
+        let r = color & 0xff;
+        let g = (color >> 8) & 0xff;
+        let b = (color >> 16) & 0xff;
+        _ = write!(dst, "\x1b[{typ}8;2;{r};{g};{b}m");
     }
 }
 

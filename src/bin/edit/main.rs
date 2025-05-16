@@ -481,6 +481,7 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
     let mut done = false;
     let mut osc_buffer = String::new();
     let mut indexed_colors = framebuffer::DEFAULT_THEME;
+    let mut responses = 0;
 
     while !done {
         let scratch = scratch_arena(None);
@@ -539,6 +540,7 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
                     }
 
                     *color = rgb | 0xff000000;
+                    responses += 1;
                     osc_buffer.clear();
                 }
                 _ => {}
@@ -546,7 +548,9 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
         }
     }
 
-    tui.setup_indexed_colors(indexed_colors);
+    if responses == indexed_colors.len() {
+        tui.setup_indexed_colors(indexed_colors);
+    }
 
     RestoreModes
 }
