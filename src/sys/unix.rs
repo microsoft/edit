@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Unix-specific platform code.
 //!
 //! Read the `windows` module for reference.

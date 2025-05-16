@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Base64 facilities.
 
 use crate::arena::ArenaString;

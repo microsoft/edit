@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use edit::framebuffer::{Attributes, IndexedColor};
 use edit::helpers::*;
 use edit::input::vk;

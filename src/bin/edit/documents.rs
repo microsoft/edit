@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use std::collections::LinkedList;
 use std::ffi::OsStr;
 use std::fs::File;

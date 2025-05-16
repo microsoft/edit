@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 mod rules;
 
 use crate::rules::{JOIN_RULES_GRAPHEME_CLUSTER, JOIN_RULES_LINE_BREAK};
