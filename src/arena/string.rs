@@ -135,6 +135,11 @@ impl<'a> ArenaString<'a> {
         self.vec.reserve(additional)
     }
 
+    /// Just like [`reserve`], but it doesn't overallocate.
+    pub fn reserve_exact(&mut self, additional: usize) {
+        self.vec.reserve_exact(additional)
+    }
+
     /// Now it's small! Alarming!
     ///
     /// *Do not* call this unless this string is the last thing on the arena.

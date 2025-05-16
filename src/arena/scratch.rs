@@ -9,11 +9,12 @@ use crate::helpers::*;
 static mut S_SCRATCH: [release::Arena; 2] =
     const { [release::Arena::empty(), release::Arena::empty()] };
 
+/// Initialize the scratch arenas with a given capacity.
 /// Call this before using [`scratch_arena`].
-pub fn init() -> apperr::Result<()> {
+pub fn init(capacity: usize) -> apperr::Result<()> {
     unsafe {
         for s in &mut S_SCRATCH[..] {
-            *s = release::Arena::new(128 * MEBI)?;
+            *s = release::Arena::new(capacity)?;
         }
     }
     Ok(())

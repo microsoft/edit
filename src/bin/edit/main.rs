@@ -20,7 +20,7 @@ use draw_menubar::*;
 use draw_statusbar::*;
 use edit::arena::{self, ArenaString, scratch_arena};
 use edit::framebuffer::{self, IndexedColor};
-use edit::helpers::{KIBI, MetricFormatter, Rect, Size};
+use edit::helpers::{KIBI, MEBI, MetricFormatter, Rect, Size};
 use edit::input::{self, kbmod, vk};
 use edit::oklab::oklab_blend;
 use edit::tui::*;
@@ -28,6 +28,11 @@ use edit::vt::{self, Token};
 use edit::{apperr, arena_format, base64, icu, path, sys};
 use localization::*;
 use state::*;
+
+#[cfg(target_pointer_width = "32")]
+const SCRATCH_ARENA_CAPACITY: usize = 128 * MEBI;
+#[cfg(target_pointer_width = "64")]
+const SCRATCH_ARENA_CAPACITY: usize = 512 * MEBI;
 
 fn main() -> process::ExitCode {
     if cfg!(debug_assertions) {
@@ -56,7 +61,7 @@ fn run() -> apperr::Result<()> {
     // Init `sys` first, as everything else may depend on its functionality (IO, function pointers, etc.).
     let _sys_deinit = sys::init()?;
     // Next init `arena`, so that `scratch_arena` works. `loc` depends on it.
-    arena::init()?;
+    arena::init(SCRATCH_ARENA_CAPACITY)?;
     // Init the `loc` module, so that error messages are localized.
     localization::init();
 
@@ -186,8 +191,10 @@ fn run() -> apperr::Result<()> {
                 // Print the number of passes and latency in the top right corner.
                 let time_end = std::time::Instant::now();
                 let status = time_end - time_beg;
+
+                let scratch_alt = scratch_arena(Some(&scratch));
                 let status = arena_format!(
-                    &scratch,
+                    &scratch_alt,
                     "{}P {}B {:.3}μs",
                     passes,
                     output.len(),
@@ -199,6 +206,11 @@ fn run() -> apperr::Result<()> {
 
                 // Since the status may shrink and grow, we may have to overwrite the previous one with whitespace.
                 let padding = (last_latency_width - cols).max(0);
+
+                // If the `output` is already very large,
+                // Rust may double the size during the write below.
+                // Let's avoid that by reserving the needed size in advance.
+                output.reserve_exact(128);
 
                 // To avoid moving the cursor, push and pop it onto the VT cursor stack.
                 _ = write!(
@@ -376,11 +388,19 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
         return;
     }
 
+    let over_limit = ctx.clipboard().len() >= SCRATCH_ARENA_CAPACITY / 4;
+
     ctx.modal_begin("warning", loc(LocId::WarningDialogTitle));
     {
         ctx.block_begin("description");
         ctx.attr_padding(Rect::three(1, 2, 1));
-        {
+
+        if over_limit {
+            ctx.label("line1", loc(LocId::LargeClipboardWarningLine1));
+            ctx.attr_position(Position::Center);
+            ctx.label("line2", loc(LocId::SuperLargeClipboardWarning));
+            ctx.attr_position(Position::Center);
+        } else {
             let label2 = {
                 let template = loc(LocId::LargeClipboardWarningLine2);
                 let size = arena_format!(ctx.arena(), "{}", MetricFormatter(ctx.clipboard().len()));
@@ -410,25 +430,32 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
             ctx.table_next_row();
             ctx.inherit_focus();
 
-            if ctx.button("always", loc(LocId::Always)) {
-                state.osc_clipboard_always_send = true;
-                state.osc_clipboard_seen_generation = generation;
-                state.osc_clipboard_send_generation = generation;
-            }
-
-            if ctx.button("yes", loc(LocId::Yes)) {
-                state.osc_clipboard_seen_generation = generation;
-                state.osc_clipboard_send_generation = generation;
-            }
-            if ctx.clipboard().len() < 10 * LARGE_CLIPBOARD_THRESHOLD {
+            if over_limit {
+                if ctx.button("ok", loc(LocId::Ok)) {
+                    state.osc_clipboard_seen_generation = generation;
+                }
                 ctx.inherit_focus();
-            }
+            } else {
+                if ctx.button("always", loc(LocId::Always)) {
+                    state.osc_clipboard_always_send = true;
+                    state.osc_clipboard_seen_generation = generation;
+                    state.osc_clipboard_send_generation = generation;
+                }
 
-            if ctx.button("no", loc(LocId::No)) {
-                state.osc_clipboard_seen_generation = generation;
-            }
-            if ctx.clipboard().len() >= 10 * LARGE_CLIPBOARD_THRESHOLD {
-                ctx.inherit_focus();
+                if ctx.button("yes", loc(LocId::Yes)) {
+                    state.osc_clipboard_seen_generation = generation;
+                    state.osc_clipboard_send_generation = generation;
+                }
+                if ctx.clipboard().len() < 10 * LARGE_CLIPBOARD_THRESHOLD {
+                    ctx.inherit_focus();
+                }
+
+                if ctx.button("no", loc(LocId::No)) {
+                    state.osc_clipboard_seen_generation = generation;
+                }
+                if ctx.clipboard().len() >= 10 * LARGE_CLIPBOARD_THRESHOLD {
+                    ctx.inherit_focus();
+                }
             }
         }
         ctx.table_end();
@@ -442,6 +469,11 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
 fn write_osc_clipboard(output: &mut ArenaString, state: &mut State, tui: &Tui) {
     let clipboard = tui.clipboard();
     if !clipboard.is_empty() {
+        // Rust doubles the size of a string when it needs to grow it.
+        // If `clipboard` is *really* large, this may then double
+        // the size of the `output` from e.g. 100MB to 200MB. Not good.
+        // We can avoid that by reserving the needed size in advance.
+        output.reserve_exact(base64::encode_len(clipboard.len()) + 16);
         output.push_str("\x1b]52;c;");
         base64::encode(output, clipboard);
         output.push_str("\x1b\\");

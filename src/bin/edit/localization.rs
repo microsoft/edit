@@ -52,9 +52,10 @@ pub enum LocId {
     AboutDialogVersion,
 
     // Shown when the clipboard size exceeds the limit for OSC 52
-    LargeClipboardWarningLine1, // "Text you copy is shared with the terminal clipboard."
-    LargeClipboardWarningLine2, // "You copied {size} which may take a long time to share."
-    LargeClipboardWarningLine3, // "Do you want to send it anyway?"
+    LargeClipboardWarningLine1,
+    LargeClipboardWarningLine2,
+    LargeClipboardWarningLine3,
+    SuperLargeClipboardWarning,
 
     // Warning dialog
     WarningDialogTitle,
@@ -627,7 +628,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "Do you want to send it anyway?",
         /* de      */ "Möchten Sie es trotzdem senden?",
         /* es      */ "¿Desea enviarlo de todas formas?",
-        /* fr      */ "Voulez-vous quand même l’envoyer ?",
+        /* fr      */ "Voulez-vous quand même l’envoyer?",
         /* it      */ "Vuoi inviarlo comunque?",
         /* ja      */ "それでも送信しますか？",
         /* ko      */ "그래도 전송하시겠습니까?",
@@ -635,6 +636,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Отправить в любом случае?",
         /* zh_hans */ "仍要发送吗？",
         /* zh_hant */ "仍要傳送嗎？",
+    ],
+    // SuperLargeClipboardWarning (as an alternative to LargeClipboardWarningLine2 and 3)
+    [
+        /* en      */ "The text you copied is too large to be shared.",
+        /* de      */ "Der kopierte Text ist zu groß, um geteilt zu werden.",
+        /* es      */ "El texto que copiaste es demasiado grande para compartirse.",
+        /* fr      */ "Le texte que vous avez copié est trop volumineux pour être partagé.",
+        /* it      */ "Il testo copiato è troppo grande per essere condiviso.",
+        /* ja      */ "コピーしたテキストは大きすぎて共有できません。",
+        /* ko      */ "복사한 텍스트가 너무 커서 공유할 수 없습니다.",
+        /* pt_br   */ "O texto copiado é grande demais para ser compartilhado.",
+        /* ru      */ "Скопированный текст слишком велик для передачи.",
+        /* zh_hans */ "你复制的文本过大，无法共享。",
+        /* zh_hant */ "您複製的文字過大，無法分享。",
     ],
 
     // WarningDialogTitle
