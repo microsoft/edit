@@ -2309,24 +2309,89 @@ impl<'a> Context<'a, '_> {
                         tc.preferred_column = tb.cursor_visual_pos().x;
                     }
                 }
-                vk::END => match modifiers {
-                    kbmod::CTRL => tb.cursor_move_to_logical(Point::MAX),
-                    kbmod::SHIFT => tb.selection_update_visual(Point {
-                        x: CoordType::MAX,
-                        y: tb.cursor_visual_pos().y,
-                    }),
-                    _ => tb.cursor_move_to_visual(Point {
-                        x: CoordType::MAX,
-                        y: tb.cursor_visual_pos().y,
-                    }),
-                },
-                vk::HOME => match modifiers {
-                    kbmod::CTRL => tb.cursor_move_to_logical(Default::default()),
-                    kbmod::SHIFT => {
-                        tb.selection_update_visual(Point { x: 0, y: tb.cursor_visual_pos().y })
+                vk::END => {
+                    if modifiers == kbmod::CTRL {
+                        tb.cursor_move_to_logical(Point::MAX);
+                    } else {
+                        let logical_before = tb.cursor_logical_pos();
+
+                        if modifiers == kbmod::SHIFT {
+                            tb.selection_update_visual(Point {
+                                x: CoordType::MAX,
+                                y: tb.cursor_visual_pos().y,
+                            });
+                        } else {
+                            tb.cursor_move_to_visual(Point {
+                                x: CoordType::MAX,
+                                y: tb.cursor_visual_pos().y,
+                            });
+                        }
+
+                        let logical_after = tb.cursor_logical_pos();
+
+                        // If word-wrap is enabled and the user presses End the first time,
+                        // it moves to the start of the visual line. The second time they
+                        // press it, it moves to the start of the logical line.
+                        if tb.is_word_wrap_enabled() && logical_after == logical_before {
+                            if modifiers == kbmod::SHIFT {
+                                tb.selection_update_logical(Point {
+                                    x: CoordType::MAX,
+                                    y: tb.cursor_logical_pos().y,
+                                });
+                            } else {
+                                tb.cursor_move_to_logical(Point {
+                                    x: CoordType::MAX,
+                                    y: tb.cursor_logical_pos().y,
+                                });
+                            }
+                        }
                     }
-                    _ => tb.cursor_move_to_visual(Point { x: 0, y: tb.cursor_visual_pos().y }),
-                },
+                }
+                vk::HOME => {
+                    if modifiers == kbmod::CTRL {
+                        tb.cursor_move_to_logical(Default::default());
+                    } else {
+                        let logical_before = tb.cursor_logical_pos();
+
+                        if modifiers == kbmod::SHIFT {
+                            tb.selection_update_visual(Point { x: 0, y: tb.cursor_visual_pos().y });
+                        } else {
+                            tb.cursor_move_to_visual(Point { x: 0, y: tb.cursor_visual_pos().y });
+                        }
+
+                        let mut logical_after = tb.cursor_logical_pos();
+
+                        // If word-wrap is enabled and the user presses Home the first time,
+                        // it moves to the start of the visual line. The second time they
+                        // press it, it moves to the start of the logical line.
+                        if tb.is_word_wrap_enabled() && logical_after == logical_before {
+                            if modifiers == kbmod::SHIFT {
+                                tb.selection_update_logical(Point {
+                                    x: 0,
+                                    y: tb.cursor_logical_pos().y,
+                                });
+                            } else {
+                                tb.cursor_move_to_logical(Point {
+                                    x: 0,
+                                    y: tb.cursor_logical_pos().y,
+                                });
+                            }
+                            logical_after = tb.cursor_logical_pos();
+                        }
+
+                        // If the line has some indentation and the user pressed Home,
+                        // the first time it'll stop at the indentation. The second time
+                        // they press it, it'll move to the true start of the line.
+                        let indent_end = tb.indent_end_logical_pos();
+                        if logical_after.x == 0 && logical_before > indent_end {
+                            if modifiers == kbmod::SHIFT {
+                                tb.selection_update_logical(indent_end);
+                            } else {
+                                tb.cursor_move_to_logical(indent_end);
+                            }
+                        }
+                    }
+                }
                 vk::LEFT => {
                     let granularity = if modifiers.contains(kbmod::CTRL) {
                         CursorMovement::Word
