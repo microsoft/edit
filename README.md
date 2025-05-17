@@ -1,8 +1,10 @@
-# Microsoft Edit
+# Edit
 
 A simple editor for simple needs.
 
-This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/wiki/MS-DOS_Editor), but with a modern interface and modern input controls similar to VS Code. The goal is to provide an accessible editor, even those largely unfamiliar with terminals can use.
+This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/wiki/MS-DOS_Editor), but with a modern interface and input controls similar to VS Code. The goal is to provide an accessible editor that even users largely unfamiliar with terminals can easily use.
+
+![image](./assets/edit_hero_image.png)
 
 ## Installation
 
@@ -17,4 +19,4 @@ This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/
 * Install the nightly toolchain: `rustup install nightly`
   * Alternatively, set the environment variable `RUSTC_BOOTSTRAP=1`
 * Clone the repository
-* For a release build run: `cargo build --config .cargo/release.toml --release`
+* For a release build, run: `cargo build --config .cargo/release.toml --release`
