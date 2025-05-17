@@ -653,6 +653,7 @@ impl Tui {
         // out where is to do a binary search of commenting out code in main.rs.
         debug_assert!(ctx.tree.current_node.borrow().stack_parent.is_none());
 
+        // Ensure that focus doesn't escape the active modal.
         if let Some(node) = ctx.last_modal
             && !self.is_subtree_focused(&node.borrow())
         {
@@ -1712,10 +1713,20 @@ impl<'a> Context<'a, '_> {
     }
 
     /// Ends the current modal window block.
+    /// Returns true if the user pressed Escape (a request to close).
     pub fn modal_end(&mut self) -> bool {
         self.block_end();
         self.block_end();
-        self.contains_focus() && self.consume_shortcut(vk::ESCAPE)
+
+        // Consume the input unconditionally, so that the root (the "main window")
+        // doesn't accidentally receive any input via `consume_shortcut()`.
+        if self.contains_focus() {
+            let exit = !self.input_consumed && self.input_keyboard == Some(vk::ESCAPE);
+            self.set_input_consumed_unchecked();
+            exit
+        } else {
+            false
+        }
     }
 
     /// Begins a table block. Call [`Context::table_end()`].
