@@ -98,7 +98,10 @@ impl Framebuffer {
             indexed_colors: DEFAULT_THEME,
             buffers: Default::default(),
             frame_counter: 0,
-            auto_colors: [0, 0],
+            auto_colors: [
+                DEFAULT_THEME[IndexedColor::Black as usize],
+                DEFAULT_THEME[IndexedColor::White as usize],
+            ],
             contrast_colors: [const { Cell::new((0, 0)) }; CACHE_TABLE_SIZE],
             background_fill: DEFAULT_THEME[IndexedColor::Background as usize],
             foreground_fill: DEFAULT_THEME[IndexedColor::Foreground as usize],
