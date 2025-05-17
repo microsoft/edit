@@ -2313,23 +2313,20 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::END => {
-                    if modifiers == kbmod::CTRL {
-                        tb.cursor_move_to_logical(Point::MAX);
+                    let logical_before = tb.cursor_logical_pos();
+                    let destination = if modifiers.contains(kbmod::CTRL) {
+                        Point::MAX
                     } else {
-                        let logical_before = tb.cursor_logical_pos();
+                        Point { x: CoordType::MAX, y: tb.cursor_visual_pos().y }
+                    };
 
-                        if modifiers == kbmod::SHIFT {
-                            tb.selection_update_visual(Point {
-                                x: CoordType::MAX,
-                                y: tb.cursor_visual_pos().y,
-                            });
-                        } else {
-                            tb.cursor_move_to_visual(Point {
-                                x: CoordType::MAX,
-                                y: tb.cursor_visual_pos().y,
-                            });
-                        }
+                    if modifiers.contains(kbmod::SHIFT) {
+                        tb.selection_update_visual(destination);
+                    } else {
+                        tb.cursor_move_to_visual(destination);
+                    }
 
+                    if !modifiers.contains(kbmod::CTRL) {
                         let logical_after = tb.cursor_logical_pos();
 
                         // If word-wrap is enabled and the user presses End the first time,
@@ -2351,17 +2348,20 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::HOME => {
-                    if modifiers == kbmod::CTRL {
-                        tb.cursor_move_to_logical(Default::default());
+                    let logical_before = tb.cursor_logical_pos();
+                    let destination = if modifiers.contains(kbmod::CTRL) {
+                        Default::default()
                     } else {
-                        let logical_before = tb.cursor_logical_pos();
+                        Point { x: 0, y: tb.cursor_visual_pos().y }
+                    };
 
-                        if modifiers == kbmod::SHIFT {
-                            tb.selection_update_visual(Point { x: 0, y: tb.cursor_visual_pos().y });
-                        } else {
-                            tb.cursor_move_to_visual(Point { x: 0, y: tb.cursor_visual_pos().y });
-                        }
+                    if modifiers.contains(kbmod::SHIFT) {
+                        tb.selection_update_visual(destination);
+                    } else {
+                        tb.cursor_move_to_visual(destination);
+                    }
 
+                    if !modifiers.contains(kbmod::CTRL) {
                         let mut logical_after = tb.cursor_logical_pos();
 
                         // If word-wrap is enabled and the user presses Home the first time,
