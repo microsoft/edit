@@ -289,8 +289,6 @@ fn print_version() {
 }
 
 fn draw(ctx: &mut Context, state: &mut State) {
-    let root_focused = ctx.contains_focus();
-
     draw_menubar(ctx, state);
     draw_editor(ctx, state);
     draw_statusbar(ctx, state);
@@ -323,33 +321,38 @@ fn draw(ctx: &mut Context, state: &mut State) {
         draw_error_log(ctx, state);
     }
 
-    if root_focused {
+    if let Some(key) = ctx.keyboard_input() {
         // Shortcuts that are not handled as part of the textarea, etc.
-        if ctx.consume_shortcut(kbmod::CTRL | vk::N) {
+
+        if key == kbmod::CTRL | vk::N {
             draw_add_untitled_document(ctx, state);
-        } else if ctx.consume_shortcut(kbmod::CTRL | vk::O) {
+        } else if key == kbmod::CTRL | vk::O {
             state.wants_file_picker = StateFilePicker::Open;
-        } else if ctx.consume_shortcut(kbmod::CTRL | vk::S) {
+        } else if key == kbmod::CTRL | vk::S {
             state.wants_save = true;
-        } else if ctx.consume_shortcut(kbmod::CTRL_SHIFT | vk::S) {
+        } else if key == kbmod::CTRL_SHIFT | vk::S {
             state.wants_file_picker = StateFilePicker::SaveAs;
-        } else if ctx.consume_shortcut(kbmod::CTRL | vk::W) {
+        } else if key == kbmod::CTRL | vk::W {
             state.wants_close = true;
-        } else if ctx.consume_shortcut(kbmod::CTRL | vk::P) {
+        } else if key == kbmod::CTRL | vk::P {
             state.wants_document_picker = true;
-        } else if ctx.consume_shortcut(kbmod::CTRL | vk::Q) {
+        } else if key == kbmod::CTRL | vk::Q {
             state.wants_exit = true;
-        } else if state.wants_search.kind != StateSearchKind::Disabled
-            && ctx.consume_shortcut(kbmod::CTRL | vk::F)
+        } else if key == kbmod::CTRL | vk::F && state.wants_search.kind != StateSearchKind::Disabled
         {
             state.wants_search.kind = StateSearchKind::Search;
             state.wants_search.focus = true;
-        } else if state.wants_search.kind != StateSearchKind::Disabled
-            && ctx.consume_shortcut(kbmod::CTRL | vk::R)
+        } else if key == kbmod::CTRL | vk::R && state.wants_search.kind != StateSearchKind::Disabled
         {
             state.wants_search.kind = StateSearchKind::Replace;
             state.wants_search.focus = true;
+        } else {
+            return;
         }
+
+        // All of the above shortcuts happen to require a rerender.
+        ctx.needs_rerender();
+        ctx.set_input_consumed();
     }
 }
 

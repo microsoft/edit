@@ -695,11 +695,13 @@ impl Tui {
             needs_settling |= self.move_focus(input);
         }
 
+        // `needs_more_settling()` depends on the current value
+        // of `settling_have` and so we increment it first.
+        self.settling_have += 1;
+
         if needs_settling {
             self.needs_more_settling();
         }
-
-        self.settling_have += 1;
 
         // Remove cached text editors that are no longer in use.
         self.cached_text_buffers.retain(|c| c.seen);
@@ -1649,8 +1651,20 @@ impl<'a> Context<'a, '_> {
         }
     }
 
-    fn set_input_consumed(&mut self) {
+    /// Returns current keyboard input, if any.
+    /// Returns None if the input was already consumed.
+    pub fn keyboard_input(&self) -> Option<InputKey> {
+        if self.input_consumed { None } else { self.input_keyboard }
+    }
+
+    #[inline]
+    pub fn set_input_consumed(&mut self) {
         debug_assert!(!self.input_consumed);
+        self.set_input_consumed_unchecked();
+    }
+
+    #[inline]
+    fn set_input_consumed_unchecked(&mut self) {
         self.input_consumed = true;
     }
 
