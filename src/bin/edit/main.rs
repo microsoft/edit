@@ -569,7 +569,8 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
                                 continue;
                             };
                             if part.len() == 4 {
-                                val = (val * 0xff + 0x80) / 0xffff;
+                                // Round from 16 bits to 8 bits.
+                                val = (val * 0xff + 0x7fff) / 0xffff;
                             }
                             rgb = (rgb >> 8) | ((val as u32) << 16);
                         }
