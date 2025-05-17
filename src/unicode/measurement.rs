@@ -229,9 +229,8 @@ impl<'doc> MeasurementConfig<'doc> {
                 };
 
                 // Get the properties of the next cluster.
-                let props_lead = props_next_cluster;
                 props_next_cluster = ucd_grapheme_cluster_lookup(ch);
-                state = ucd_grapheme_cluster_joins(state, props_lead, props_next_cluster);
+                state = ucd_grapheme_cluster_joins(state, props_last_char, props_next_cluster);
 
                 // Stop if the next character does not join.
                 if ucd_grapheme_cluster_joins_done(state) {
@@ -253,7 +252,7 @@ impl<'doc> MeasurementConfig<'doc> {
 
             // Tabs require special handling because they can have a variable width.
             if props_last_char == ucd_tab_properties() {
-                // SAFETY: `tab_size` is clamped to >= 1 at the start of this method.
+                // SAFETY: `tab_size` is clamped to >= 1 in `with_tab_size`.
                 // This assert ensures that Rust doesn't insert panicking null checks.
                 unsafe { std::hint::assert_unchecked(tab_size >= 1) };
                 width = tab_size - (column % tab_size);
@@ -356,8 +355,6 @@ impl<'doc> MeasurementConfig<'doc> {
 
         // If we're here, we hit our target. Now the only question is:
         // Is the word we're currently on so wide that it will be wrapped further down the document?
-        // This only applies if we already had a wrap opportunity on this line,
-        // because if there was none yet, the start column of the word is 0 and it can't be wrapped.
         if word_wrap_column > 0 {
             if !wrap_opp {
                 // If the current layouted line had no wrap opportunities, it means we had an input
@@ -410,9 +407,9 @@ impl<'doc> MeasurementConfig<'doc> {
                         };
 
                         // Get the properties of the next cluster.
-                        let props_lead = props_next_cluster;
                         props_next_cluster = ucd_grapheme_cluster_lookup(ch);
-                        state = ucd_grapheme_cluster_joins(state, props_lead, props_next_cluster);
+                        state =
+                            ucd_grapheme_cluster_joins(state, props_last_char, props_next_cluster);
 
                         // Stop if the next character does not join.
                         if ucd_grapheme_cluster_joins_done(state) {
@@ -434,7 +431,7 @@ impl<'doc> MeasurementConfig<'doc> {
 
                     // Tabs require special handling because they can have a variable width.
                     if props_last_char == ucd_tab_properties() {
-                        // SAFETY: `tab_size` is clamped to >= 1 at the start of this method.
+                        // SAFETY: `tab_size` is clamped to >= 1 in `with_tab_size`.
                         // This assert ensures that Rust doesn't insert panicking null checks.
                         unsafe { std::hint::assert_unchecked(tab_size >= 1) };
                         width = tab_size - (column % tab_size);

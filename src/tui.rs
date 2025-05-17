@@ -77,7 +77,7 @@
 //! current node? Each node needs to be constructed with a "classname".
 //! The classname is hashed with the parent node ID as the seed. This derived
 //! hash is then used as the new child node ID. Under the assumption that the
-//! collision likelihood of the hash function is low, this services as true IDs.
+//! collision likelihood of the hash function is low, this serves as true IDs.
 //!
 //! This has the nice added property that finding a node with the same ID
 //! guarantees that all of the parent nodes must have equivalent IDs as well.
@@ -99,7 +99,7 @@
 //! }
 //!
 //! fn main() {
-//!     arena::init().unwrap();
+//!     arena::init(128 * 1024 * 1024).unwrap();
 //!
 //!     // Create a `Tui` instance which holds state across frames.
 //!     let mut tui = Tui::new().unwrap();
@@ -1229,7 +1229,7 @@ impl Tui {
         // Figure out if we're inside a focus void (a container that doesn't
         // allow tabbing inside), and in that case, toss the focus to it.
         //
-        // Also, figure out the container within which the focuse must be contained.
+        // Also, figure out the container within which the focus must be contained.
         // This way, tab/shift-tab only moves within the same window.
         // The ROOT_ID node has no parent, and the others have a float attribute.
         // If the root is the focused node, it should of course not move upward.
@@ -2415,7 +2415,7 @@ impl<'a> Context<'a, '_> {
                             let mut x = tc.preferred_column;
                             let mut y = tb.cursor_visual_pos().y - 1;
 
-                            // If there's a selection we the cursor above the start of the selection.
+                            // If there's a selection we put the cursor above it.
                             if let Some((beg, _)) = tb.selection_range() {
                                 x = beg.visual_pos.x;
                                 y = beg.visual_pos.y - 1;
@@ -2472,7 +2472,7 @@ impl<'a> Context<'a, '_> {
                         let mut x = tc.preferred_column;
                         let mut y = tb.cursor_visual_pos().y + 1;
 
-                        // If there's a selection we the cursor below the end of the selection.
+                        // If there's a selection we put the cursor below it.
                         if let Some((_, end)) = tb.selection_range() {
                             x = end.visual_pos.x;
                             y = end.visual_pos.y + 1;
@@ -2749,7 +2749,7 @@ impl<'a> Context<'a, '_> {
         }
     }
 
-    /// Creates a list where exactly one items is selected.
+    /// Creates a list where exactly one item is selected.
     pub fn list_begin(&mut self, classname: &'static str) {
         self.block_begin(classname);
         self.attr_focusable();
@@ -3116,14 +3116,14 @@ impl<'a> Context<'a, '_> {
         }
 
         if off < text.len() {
-            // Highlight the accelerator in red.
+            // Add an underline to the accelerator.
             self.styled_label_add_text(&text[..off]);
             self.styled_label_set_attributes(Attributes::Underlined);
             self.styled_label_add_text(&text[off..off + 1]);
             self.styled_label_set_attributes(Attributes::None);
             self.styled_label_add_text(&text[off + 1..]);
         } else {
-            // Add the accelerator in parentheses (still in red).
+            // Add the accelerator in parentheses and underline it.
             let ch = accelerator as u8;
             self.styled_label_add_text(text);
             self.styled_label_add_text("(");

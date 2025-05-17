@@ -226,7 +226,6 @@ fn run() -> apperr::Result<()> {
                 );
 
                 last_latency_width = cols;
-                sys::write_stdout(&output);
             }
 
             sys::write_stdout(&output);
@@ -517,7 +516,7 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
     let mut done = false;
     let mut osc_buffer = String::new();
     let mut indexed_colors = framebuffer::DEFAULT_THEME;
-    let mut responses = 0;
+    let mut color_responses = 0;
 
     while !done {
         let scratch = scratch_arena(None);
@@ -577,7 +576,7 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
                     }
 
                     *color = rgb | 0xff000000;
-                    responses += 1;
+                    color_responses += 1;
                     osc_buffer.clear();
                 }
                 _ => {}
@@ -585,7 +584,7 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
         }
     }
 
-    if responses == indexed_colors.len() {
+    if color_responses == indexed_colors.len() {
         tui.setup_indexed_colors(indexed_colors);
     }
 
