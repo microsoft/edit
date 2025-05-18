@@ -14,7 +14,7 @@ use std::ptr::{self, NonNull, null, null_mut};
 use std::{thread, time};
 
 use crate::arena::{Arena, ArenaString, scratch_arena};
-use crate::helpers::KIBI;
+use crate::helpers::*;
 use crate::{apperr, arena_format};
 
 struct State {
@@ -210,13 +210,9 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                 timeout = timeout.saturating_sub(beg.elapsed());
             };
 
-            // If we're asked for a non-blocking read we need to manipulate `O_NONBLOCK` and vice versa.
-            // This uses `STATE.stdin_flags` to track and skip unnecessary `fcntl` calls.
-            let is_nonblock = (STATE.stdin_flags & libc::O_NONBLOCK) != 0;
-            if read_poll != is_nonblock {
-                STATE.stdin_flags ^= libc::O_NONBLOCK;
-                let _ = libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
-            }
+            // If we're asked for a non-blocking read we need
+            // to manipulate `O_NONBLOCK` and vice versa.
+            set_tty_nonblocking(read_poll);
 
             // Read from stdin.
             let spare = buf.spare_capacity_mut();
@@ -287,11 +283,20 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
 }
 
 pub fn write_stdout(text: &str) {
+    if text.is_empty() {
+        return;
+    }
+
+    // If we don't set the TTY to blocking mode,
+    // the write will potentially fail with EAGAIN.
+    set_tty_nonblocking(false);
+
     let buf = text.as_bytes();
     let mut written = 0;
 
     while written < buf.len() {
         let w = &buf[written..];
+        let w = &buf[..w.len().min(GIBI)];
         let n = unsafe { libc::write(STATE.stdout, w.as_ptr() as *const _, w.len()) };
 
         if n >= 0 {
@@ -302,6 +307,20 @@ pub fn write_stdout(text: &str) {
         let err = unsafe { *libc::__errno_location() };
         if err != libc::EINTR {
             return;
+        }
+    }
+}
+
+/// Sets/Resets `O_NONBLOCK` on the TTY handle.
+///
+/// Note that setting this flag applies to both stdin and stdout, because the
+/// TTY is a bidirectional device and both handles refer to the same thing.
+fn set_tty_nonblocking(nonblock: bool) {
+    unsafe {
+        let is_nonblock = (STATE.stdin_flags & libc::O_NONBLOCK) != 0;
+        if is_nonblock != nonblock {
+            STATE.stdin_flags ^= libc::O_NONBLOCK;
+            let _ = libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
         }
     }
 }
