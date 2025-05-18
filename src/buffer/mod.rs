@@ -1911,7 +1911,6 @@ impl TextBuffer {
 
         if let Some(r) = self.selection_range_internal(false) {
             (beg, end) = r;
-            self.set_selection(None);
         } else {
             if (delta == -1 && self.cursor.offset == 0)
                 || (delta == 1 && self.cursor.offset >= self.text_length())
@@ -1933,6 +1932,8 @@ impl TextBuffer {
         self.edit_begin(HistoryType::Delete, beg);
         self.edit_delete(end);
         self.edit_end();
+
+        self.set_selection(None);
     }
 
     /// Returns the logical position of the first character on this line.
