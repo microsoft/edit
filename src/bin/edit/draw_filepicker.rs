@@ -16,11 +16,13 @@ use crate::state::*;
 
 pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     // The save dialog is pre-filled with the current document filename.
-    if state.file_picker_pending_name.as_os_str().is_empty()
-        && state.wants_file_picker == StateFilePicker::SaveAs
-    {
-        state.file_picker_pending_name =
-            state.documents.active().map_or("Untitled.txt", |doc| doc.filename.as_str()).into();
+    if state.wants_file_picker == StateFilePicker::SaveAs {
+        state.wants_file_picker = StateFilePicker::SaveAsShown;
+
+        if state.file_picker_pending_name.as_os_str().is_empty() {
+            state.file_picker_pending_name =
+                state.documents.active().map_or("Untitled.txt", |doc| doc.filename.as_str()).into();
+        }
     }
 
     let width = (ctx.size().width - 20).max(10);
@@ -110,7 +112,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             doit = draw_file_picker_update_path(state);
 
             // Check if the file already exists and show an overwrite warning in that case.
-            if state.wants_file_picker == StateFilePicker::SaveAs
+            if state.wants_file_picker != StateFilePicker::Open
                 && let Some(path) = doit.as_deref()
                 && let Some(doc) = state.documents.active()
                 && let Some(file_id) = &doc.file_id

@@ -102,6 +102,8 @@ pub enum StateFilePicker {
     None,
     Open,
     SaveAs,
+
+    SaveAsShown, // Transitioned from SaveAs
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
