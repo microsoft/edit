@@ -28,7 +28,7 @@ use edit::input::{self, kbmod, vk};
 use edit::oklab::oklab_blend;
 use edit::tui::*;
 use edit::vt::{self, Token};
-use edit::{apperr, arena_format, base64, icu, path, sys};
+use edit::{apperr, arena_format, base64, path, sys};
 use localization::*;
 use state::*;
 
@@ -57,10 +57,6 @@ fn main() -> process::ExitCode {
 }
 
 fn run() -> apperr::Result<()> {
-    let items = vec!["hello.txt", "hallo.txt", "world.txt", "Hello, world.txt"];
-    let mut sorted = items.clone();
-    sorted.sort_by(|a, b| icu::compare_strings(a.as_bytes(), b.as_bytes()));
-
     // Init `sys` first, as everything else may depend on its functionality (IO, function pointers, etc.).
     let _sys_deinit = sys::init()?;
     // Next init `arena`, so that `scratch_arena` works. `loc` depends on it.
