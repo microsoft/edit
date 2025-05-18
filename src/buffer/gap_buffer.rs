@@ -305,12 +305,15 @@ impl GapBuffer {
         // Update the buffer starting at `off`.
         loop {
             let chunk = src.read_forward(off);
-            if chunk.is_empty() {
-                return true; // No more data to copy. -> Done.
-            }
-
             self.replace(off..usize::MAX, chunk);
             off += chunk.len();
+
+            // No more data to copy -> Done. By checking this _after_ the replace()
+            // call, we ensure that the initial `off..usize::MAX` range is deleted.
+            // This fixes going from some buffer contents to being empty.
+            if chunk.is_empty() {
+                return true;
+            }
         }
     }
 
