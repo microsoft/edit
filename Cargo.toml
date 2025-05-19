@@ -4,6 +4,9 @@ version = "1.0.0"
 edition = "2024"
 rust-version = "1.87" # Enforces minimum required installed Rust version, equivalent of global.json for .NET environments.
 repository = "https://github.com/microsoft/edit"
+homepage = "https://github.com/microsoft/edit"
+documentation = "https://devblogs.microsoft.com/commandline/edit-is-now-open-source"
+description = "Edit is a command-line text editor in Windows."
 license = "MIT"
 
 [[bench]]
