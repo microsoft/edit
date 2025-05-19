@@ -2,6 +2,7 @@
 name = "edit"
 version = "1.0.0"
 edition = "2024"
+rust-version = "1.87"
 
 [[bench]]
 name = "lib"
