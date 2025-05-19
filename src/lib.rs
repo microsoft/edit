@@ -1,19 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#![allow(clippy::missing_transmute_annotations, clippy::new_without_default, stable_features)]
 #![feature(
     allocator_api,
     breakpoint,
     cold_path,
-    inherent_str_constructors,
-    let_chains,
-    linked_list_cursors,
-    maybe_uninit_fill,
+    os_string_truncate,
     maybe_uninit_slice,
     maybe_uninit_uninit_array_transpose,
-    os_string_truncate
+    linked_list_cursors,
+    maybe_uninit_fill
 )]
-#![allow(clippy::missing_transmute_annotations, clippy::new_without_default, stable_features)]
 
 #[macro_use]
 pub mod arena;
