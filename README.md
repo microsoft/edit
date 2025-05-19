@@ -1,10 +1,10 @@
-# Edit
+# ![Application Icon for Edit](./assets/edit.svg) Edit
 
 A simple editor for simple needs.
 
 This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/wiki/MS-DOS_Editor), but with a modern interface and input controls similar to VS Code. The goal is to provide an accessible editor that even users largely unfamiliar with terminals can easily use.
 
-![image](./assets/edit_hero_image.png)
+![Screenshot of Edit with the About dialog in the foreground](./assets/edit_hero_image.png)
 
 ## Installation
 
