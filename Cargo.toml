@@ -6,7 +6,7 @@ rust-version = "1.87" # Enforces minimum required installed Rust version, equiva
 repository = "https://github.com/microsoft/edit"
 homepage = "https://github.com/microsoft/edit"
 documentation = "https://devblogs.microsoft.com/commandline/edit-is-now-open-source"
-description = "Edit is a command-line text editor in Windows."
+description = "Edit is a multi-platform command-line text editor."
 license = "MIT"
 
 [[bench]]
