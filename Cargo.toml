@@ -2,6 +2,9 @@
 name = "edit"
 version = "1.0.0"
 edition = "2024"
+rust-version = "1.87" # Enforces minimum required installed Rust version, equivalent of global.json for .NET environments.
+repository = "https://github.com/microsoft/edit"
+license = "MIT"
 
 [[bench]]
 name = "lib"
@@ -22,6 +25,8 @@ opt-level = "s"             # reduces binary size by ~25%
 panic = "abort"             # reduces binary size by ~50% in combination with -Zbuild-std-features=panic_immediate_abort
 split-debuginfo = "packed"  # generates a seperate *.dwp/*.dSYM so the binary can get stripped
 strip = "symbols"           # See split-debuginfo - allows us to drop the size by ~65%
+overflow-checks = true      # Disabled by default in Release
+incremental = true          # Improves re-compile times
 
 [profile.bench]
 codegen-units = 16          # Make compiling criterion faster (16 is the default, but profile.release sets it to 1)
