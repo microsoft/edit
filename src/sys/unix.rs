@@ -17,6 +17,7 @@ use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::helpers::*;
 use crate::{apperr, arena_format};
 
+
 struct State {
     stdin: libc::c_int,
     stdin_flags: libc::c_int,
@@ -225,7 +226,11 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                 return None; // EOF
             }
             if ret < 0 {
-                match *libc::__errno_location() {
+                #[cfg(target_os = "linux")]
+                let errno = *libc::__errno_location();
+                #[cfg(not(target_os = "linux"))]
+                let errno = *libc::__errno();
+                match errno {
                     libc::EINTR if STATE.inject_resize => break,
                     libc::EAGAIN if timeout == time::Duration::ZERO => break,
                     libc::EINTR | libc::EAGAIN => {}
@@ -303,8 +308,12 @@ pub fn write_stdout(text: &str) {
             written += n as usize;
             continue;
         }
-
+        
+        #[cfg(target_os = "linux")]
         let err = unsafe { *libc::__errno_location() };
+        #[cfg(not(target_os = "linux"))]
+        let err = unsafe { *libc::__errno() };
+                        
         if err != libc::EINTR {
             return;
         }
@@ -406,8 +415,13 @@ pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> apperr::Result<(
 
 unsafe fn load_library(name: &CStr) -> apperr::Result<NonNull<c_void>> {
     unsafe {
-        NonNull::new(libc::dlopen(name.as_ptr(), libc::RTLD_LAZY))
-            .ok_or_else(|| errno_to_apperr(libc::ELIBACC))
+        // There is no ELIBACC on Unix, so we just do ENOENT
+        #[cfg(target_os = "linux")]
+        return NonNull::new(libc::dlopen(name.as_ptr(), libc::RTLD_LAZY))
+            .ok_or_else(|| errno_to_apperr(libc::ELIBACC));
+        #[cfg(not(target_os = "linux"))]
+        return NonNull::new(libc::dlopen(name.as_ptr(), libc::RTLD_LAZY))
+            .ok_or_else(|| errno_to_apperr(libc::ENOENT));
     }
 }
 
@@ -422,14 +436,21 @@ unsafe fn load_library(name: &CStr) -> apperr::Result<NonNull<c_void>> {
 pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apperr::Result<T> {
     unsafe {
         let sym = libc::dlsym(handle.as_ptr(), name.as_ptr());
+        #[cfg(target_os = "linux")]
         if sym.is_null() {
-            Err(errno_to_apperr(libc::ELIBACC))
+            Err(errno_to_apperr(libc::ELIBACC))        
         } else {
             Ok(mem::transmute_copy(&sym))
         }
-    }
-}
-
+        #[cfg(not(target_os = "linux"))]
+        if sym.is_null() {
+            Err(errno_to_apperr(libc::ENOENT))        
+        } else {
+            Ok(mem::transmute_copy(&sym))
+        }
+   }
+} 
+ 
 pub fn load_libicuuc() -> apperr::Result<NonNull<c_void>> {
     unsafe { load_library(c"libicuuc.so") }
 }
@@ -559,11 +580,15 @@ pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Re
 pub fn apperr_is_not_found(err: apperr::Error) -> bool {
     err == errno_to_apperr(libc::ENOENT)
 }
-
+ 
 const fn errno_to_apperr(no: c_int) -> apperr::Error {
     apperr::Error::new_sys(if no < 0 { 0 } else { no as u32 })
 }
 
 fn check_int_return(ret: libc::c_int) -> apperr::Result<libc::c_int> {
-    if ret < 0 { Err(errno_to_apperr(unsafe { *libc::__errno_location() })) } else { Ok(ret) }
+    #[cfg(target_os = "linux")]
+    let errno = unsafe { *libc::__errno_location() };
+    #[cfg(not(target_os = "linux"))]
+    let errno = unsafe { *libc::__errno() };
+    if ret < 0 { Err(errno_to_apperr(errno)) } else { Ok(ret) }
 }
