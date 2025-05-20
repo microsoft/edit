@@ -24,6 +24,7 @@ pub enum LocId {
     FileSaveAs,
     FileClose,
     FileExit,
+    FileGoto,
 
     // Edit menu
     Edit,
@@ -324,6 +325,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Выход",
         /* zh_hans */ "退出",
         /* zh_hant */ "退出",
+    ],
+    // FileGoto
+    [
+        /* en      */ "Go to line/column",
+        /* de      */ "Go to line/column",
+        /* es      */ "Go to line/column",
+        /* fr      */ "Go to line/column",
+        /* it      */ "Go to line/column",
+        /* ja      */ "Go to line/column",
+        /* ko      */ "Go to line/column",
+        /* pt_br   */ "Go to line/column",
+        /* ru      */ "Go to line/column",
+        /* zh_hans */ "Go to line/column",
+        /* zh_hant */ "Go to line/column",
     ],
 
     // Edit (a menu bar item)

@@ -145,6 +145,9 @@ pub struct State {
     pub wants_about: bool,
     pub wants_close: bool,
     pub wants_exit: bool,
+    pub wants_goto: bool,
+    pub goto_target: String,
+    pub goto_invalid: bool,
 
     pub osc_title_filename: String,
     pub osc_clipboard_seen_generation: u32,
@@ -193,6 +196,9 @@ impl State {
             wants_about: false,
             wants_close: false,
             wants_exit: false,
+            wants_goto: false,
+            goto_target: Default::default(),
+            goto_invalid: false,
 
             osc_title_filename: Default::default(),
             osc_clipboard_seen_generation: 0,
