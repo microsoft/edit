@@ -196,17 +196,17 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
 
                 let mut pollfd = libc::pollfd { fd: STATE.stdin, events: libc::POLLIN, revents: 0 };
                 let ret;
-                #[cfg(target_os = "macos")]
-                {
-                    ret = libc::poll(&mut pollfd, 1, timeout.as_millis() as libc::c_int);
-                }
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(target_os = "linux")]
                 {
                     let ts = libc::timespec {
                         tv_sec: timeout.as_secs() as libc::time_t,
                         tv_nsec: timeout.subsec_nanos() as libc::c_long,
                     };
                     ret = libc::ppoll(&mut pollfd, 1, &ts, ptr::null());
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    ret = libc::poll(&mut pollfd, 1, timeout.as_millis() as libc::c_int);
                 }
                 if ret < 0 {
                     return None; // Error? Let's assume it's an EOF.
