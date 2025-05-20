@@ -5,7 +5,7 @@ use edit::arena::scratch_arena;
 use edit::sys;
 
 const LOCID_COUNT: usize = std::mem::variant_count::<LocId>();
-const LANDID_COUNT: usize = std::mem::variant_count::<LangId>();
+const LANGID_COUNT: usize = std::mem::variant_count::<LangId>();
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LocId {
@@ -111,7 +111,7 @@ enum LangId {
 }
 
 #[rustfmt::skip]
-const S_LANG_LUT: [[&str; LANDID_COUNT]; LOCID_COUNT] = [
+const S_LANG_LUT: [[&str; LANGID_COUNT]; LOCID_COUNT] = [
     // Ctrl (the keyboard key)
     [
         /* en      */ "Ctrl",
@@ -923,17 +923,17 @@ pub fn init() {
 
     for l in langs {
         lang = match l.as_str() {
-            "en" => LangId::en,
-            "de" => LangId::de,
-            "es" => LangId::es,
-            "fr" => LangId::fr,
-            "it" => LangId::it,
-            "ja" => LangId::ja,
-            "ko" => LangId::ko,
-            "pt-br" => LangId::pt_br,
-            "ru" => LangId::ru,
-            "zh-hant" => LangId::zh_hant,
-            "zh" => LangId::zh_hans,
+            l if l.starts_with("en") => LangId::en,
+            l if l.starts_with("de") => LangId::de,
+            l if l.starts_with("es") => LangId::es,
+            l if l.starts_with("fr") => LangId::fr,
+            l if l.starts_with("it") => LangId::it,
+            l if l.starts_with("ja") => LangId::ja,
+            l if l.starts_with("ko") => LangId::ko,
+            l if l.starts_with("pt-br") => LangId::pt_br,
+            l if l.starts_with("ru") => LangId::ru,
+            l if l.starts_with("zh-hant") => LangId::zh_hant,
+            l if l.starts_with("zh-hans") => LangId::zh_hans,
             _ => continue,
         };
         break;
