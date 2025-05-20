@@ -271,3 +271,68 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     state.wants_close = false;
     ctx.toss_focus_up();
 }
+
+
+fn validate_goto_point(line: &str, current: Point) -> Result<Point, ()> {
+    let parts: Vec<_> = line.splitn(2, ':').collect();
+    Ok(match parts.len() {
+        1 => {
+            if let Ok(line) = parts[0].parse::<i32>() {
+                Point { y: line - 1, x: current.x }
+            } else {
+                return Err(());
+            }
+        }
+        2 => {
+            if let Ok(line) = parts[0].parse::<i32>() {
+                if let Ok(column) = parts[1].parse::<i32>() {
+                    Point { y: line - 1, x: column }
+                } else {
+                    return Err(());
+                }
+            } else {
+                return Err(());
+            }
+        }
+        _ => unreachable!()
+    })
+}
+
+
+pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
+    ctx.modal_begin("goto", loc(LocId::FileGoto));
+    {
+        if ctx.editline("goto-line", &mut state.goto_target) {
+            state.goto_invalid = false;
+        }
+        if state.goto_invalid {
+            ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+        }
+
+        ctx.attr_intrinsic_size(Size { width: 24, height: 1 });
+        ctx.steal_focus();
+
+        if ctx.consume_shortcut(vk::RETURN) {
+            let Some(doc) = state.documents.active_mut() else {
+                state.wants_goto = false;
+                return;
+            };
+            let mut buf = doc.buffer.borrow_mut();
+            match validate_goto_point(&state.goto_target, buf.cursor_logical_pos()) {
+                Ok(point) => {
+                    buf.cursor_move_to_logical(point);
+                    state.wants_goto = false;
+                    state.goto_target.clear();
+                    state.goto_invalid = false;
+                },
+                Err(_) => {
+                    state.goto_invalid = true;
+                }
+            };
+        }
+    }
+    if ctx.modal_end() {
+        state.wants_goto = false;
+    }
+}
