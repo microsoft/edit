@@ -21,7 +21,7 @@ This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/
   winget install Microsoft.Edit
   ```
   
-* Winget will be automatically added to path. If typing ```edit``` doesn't work, restart or open a new terminal shell
+* Winget will be automatically added to path. If typing `edit` doesn't work, restart or open a new terminal shell
 
 ## Build Instructions
 
