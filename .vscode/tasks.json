@@ -6,6 +6,7 @@
             "type": "process",
             "command": "cargo",
             "args": [
+                "+nightly",
                 "build",
                 "--package",
                 "edit",
