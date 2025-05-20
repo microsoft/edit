@@ -148,7 +148,6 @@ use std::arch::breakpoint;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::{iter, mem, ptr, time};
-
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::{CursorMovement, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
@@ -913,13 +912,36 @@ impl Tui {
                 };
 
                 if !tc.single_line {
+                    if let Some(ghost) = &tc.suggestion {
+                        let cursor = tb.cursor_visual_pos();
+                        let scroll_y = tc.scroll_offset.y;
+                        let ghost_cols = unicode::MeasurementConfig::new(&ghost.as_bytes())
+                            .goto_visual(Point { x: CoordType::MAX, y: 0 })
+                            .visual_pos
+                            .x;
+                        let start_x = destination.right - ghost_cols - 2;
+                        let start_y = destination.top + cursor.y - scroll_y;
+
+                        let rect = Rect {
+                            left: start_x,
+                            top: start_y,
+                            right: start_x + ghost_cols,
+                            bottom: start_y + 1,
+                        };
+
+                        let grey = self.indexed_alpha(IndexedColor::MutedForeground, 1, 2);
+                        self.framebuffer.replace_text(start_y, rect.left, rect.right, ghost);
+                        self.framebuffer.blend_fg(rect, grey);
+                    }
+                }
+
+                if !tc.single_line {
                     // Account for the scrollbar.
                     destination.right -= 1;
                 }
 
-                if let Some(res) =
-                    tb.render(tc.scroll_offset, destination, tc.has_focus, &mut self.framebuffer)
-                {
+                let render_res = tb.render(tc.scroll_offset, destination, tc.has_focus, &mut self.framebuffer);
+                if let Some(ref res) = render_res {
                     tc.scroll_offset_x_max = res.visual_pos_x_max;
                 }
 
@@ -2032,6 +2054,7 @@ impl<'a> Context<'a, '_> {
             preferred_column: 0,
             single_line,
             has_focus: self.tui.is_node_focused(node.id),
+            suggestion: Some("AI completion output here".to_string()),
         });
 
         let content = match node.content {
@@ -3518,6 +3541,7 @@ struct TextareaContent<'a> {
 
     single_line: bool,
     has_focus: bool,
+    suggestion: Option<String>,
 }
 
 /// NOTE: Must not contain items that require drop().
