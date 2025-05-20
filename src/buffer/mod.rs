@@ -1142,8 +1142,10 @@ impl TextBuffer {
 
         if search.next_search_offset != offset {
             search.next_search_offset = offset;
-            search.regex.reset(offset);
         }
+
+        // Make the regexp matching process starts here.
+        search.regex.reset(offset);
 
         let mut hit = search.regex.next();
 
