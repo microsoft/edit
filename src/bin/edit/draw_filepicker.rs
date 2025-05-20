@@ -62,6 +62,10 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             let filename_changed: bool = ctx.editline("name", &mut state.file_picker_pending_name);
 
             ctx.focus_on_first_present();
+            if state.wants_file_picker_file_name_focus {
+                ctx.steal_focus();
+                state.wants_file_picker_file_name_focus = false;
+            }
             let filename_focused = ctx.is_focused();
 
             if filename_changed && filename_focused {
@@ -77,6 +81,9 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                             state.file_picker_autocomplete = None;
                             ctx.needs_rerender();
                         }
+                    } else {
+                        // If there are no suggestions, we can just move to the next field
+                        state.wants_file_picker_file_list_focus = true;
                     }
                 }
             }
@@ -141,6 +148,10 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         {
             ctx.list_begin("files");
             ctx.inherit_focus();
+            if state.wants_file_picker_file_list_focus {
+                ctx.steal_focus();
+                state.wants_file_picker_file_list_focus = false;
+            }
             for entry in files {
                 match ctx
                     .list_item(state.file_picker_pending_name == entry.as_path(), entry.as_str())
@@ -158,6 +169,9 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             if ctx.contains_focus() && ctx.consume_shortcut(vk::BACK) {
                 state.file_picker_pending_name = "..".into();
                 activated = true;
+            }
+            if ctx.contains_focus() && ctx.consume_shortcut(vk::TAB) {
+                state.wants_file_picker_file_name_focus = true;
             }
         }
         ctx.scrollarea_end();
