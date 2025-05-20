@@ -97,6 +97,7 @@ enum LangId {
     en,
 
     // Other languages. Sorted alphabetically.
+    da,
     de,
     es,
     fr,
@@ -116,6 +117,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Ctrl (the keyboard key)
     [
         /* en      */ "Ctrl",
+        /* da      */ "Ctrl",
         /* de      */ "Strg",
         /* es      */ "Ctrl",
         /* fr      */ "Ctrl",
@@ -130,6 +132,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Alt (the keyboard key)
     [
         /* en      */ "Alt",
+        /* da      */ "Alt",
         /* de      */ "Alt",
         /* es      */ "Alt",
         /* fr      */ "Alt",
@@ -144,6 +147,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Shift (the keyboard key)
     [
         /* en      */ "Shift",
+        /* da      */ "Skift",
         /* de      */ "Umschalt",
         /* es      */ "Mayús",
         /* fr      */ "Maj",
@@ -159,6 +163,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Ok (used as a common dialog button)
     [
         /* en      */ "Ok",
+        /* da      */ "OK",
         /* de      */ "OK",
         /* es      */ "Aceptar",
         /* fr      */ "OK",
@@ -173,6 +178,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Yes (used as a common dialog button)
     [
         /* en      */ "Yes",
+        /* da      */ "Ja",
         /* de      */ "Ja",
         /* es      */ "Sí",
         /* fr      */ "Oui",
@@ -187,6 +193,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // No (used as a common dialog button)
     [
         /* en      */ "No",
+        /* da      */ "Nej",
         /* de      */ "Nein",
         /* es      */ "No",
         /* fr      */ "Non",
@@ -201,6 +208,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Cancel (used as a common dialog button)
     [
         /* en      */ "Cancel",
+        /* da      */ "Annuller",
         /* de      */ "Abbrechen",
         /* es      */ "Cancelar",
         /* fr      */ "Annuler",
@@ -215,6 +223,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Always (used as a common dialog button)
     [
         /* en      */ "Always",
+        /* da      */ "Altid",
         /* de      */ "Immer",
         /* es      */ "Siempre",
         /* fr      */ "Toujours",
@@ -230,6 +239,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // File (a menu bar item)
     [
         /* en      */ "File",
+        /* da      */ "Filer",
         /* de      */ "Datei",
         /* es      */ "Archivo",
         /* fr      */ "Fichier",
@@ -244,6 +254,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileNew
     [
         /* en      */ "New File…",
+        /* da      */ "Ny fil…",
         /* de      */ "Neue Datei…",
         /* es      */ "Nuevo archivo…",
         /* fr      */ "Nouveau fichier…",
@@ -258,6 +269,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileOpen
     [
         /* en      */ "Open File…",
+        /* da      */ "Åbn fil…",
         /* de      */ "Datei öffnen…",
         /* es      */ "Abrir archivo…",
         /* fr      */ "Ouvrir un fichier…",
@@ -272,6 +284,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileSave
     [
         /* en      */ "Save",
+        /* da      */ "Gem",
         /* de      */ "Speichern",
         /* es      */ "Guardar",
         /* fr      */ "Enregistrer",
@@ -286,6 +299,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileSaveAs
     [
         /* en      */ "Save As…",
+        /* da      */ "Gem som…",
         /* de      */ "Speichern unter…",
         /* es      */ "Guardar como…",
         /* fr      */ "Enregistrer sous…",
@@ -300,6 +314,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileClose
     [
         /* en      */ "Close Editor",
+        /* da      */ "Luk editor",
         /* de      */ "Editor schließen",
         /* es      */ "Cerrar editor",
         /* fr      */ "Fermer l'éditeur",
@@ -314,6 +329,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileExit
     [
         /* en      */ "Exit",
+        /* da      */ "Afslut",
         /* de      */ "Beenden",
         /* es      */ "Salir",
         /* fr      */ "Quitter",
@@ -329,6 +345,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Edit (a menu bar item)
     [
         /* en      */ "Edit",
+        /* da      */ "Rediger",
         /* de      */ "Bearbeiten",
         /* es      */ "Editar",
         /* fr      */ "Éditer",
@@ -343,6 +360,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditUndo
     [
         /* en      */ "Undo",
+        /* da      */ "Fortryd",
         /* de      */ "Rückgängig",
         /* es      */ "Deshacer",
         /* fr      */ "Annuler",
@@ -357,6 +375,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditRedo
     [
         /* en      */ "Redo",
+        /* da      */ "Gentag",
         /* de      */ "Wiederholen",
         /* es      */ "Rehacer",
         /* fr      */ "Rétablir",
@@ -371,6 +390,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditCut
     [
         /* en      */ "Cut",
+        /* da      */ "Klip",
         /* de      */ "Ausschneiden",
         /* es      */ "Cortar",
         /* fr      */ "Couper",
@@ -385,6 +405,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditCopy
     [
         /* en      */ "Copy",
+        /* da      */ "Kopier",
         /* de      */ "Kopieren",
         /* es      */ "Copiar",
         /* fr      */ "Copier",
@@ -399,6 +420,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditPaste
     [
         /* en      */ "Paste",
+        /* da      */ "Sæt ind",
         /* de      */ "Einfügen",
         /* es      */ "Pegar",
         /* fr      */ "Coller",
@@ -413,6 +435,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditFind
     [
         /* en      */ "Find",
+        /* da      */ "Find",
         /* de      */ "Suchen",
         /* es      */ "Buscar",
         /* fr      */ "Rechercher",
@@ -427,6 +450,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditReplace
     [
         /* en      */ "Replace",
+        /* da      */ "Erstat",
         /* de      */ "Ersetzen",
         /* es      */ "Reemplazar",
         /* fr      */ "Remplacer",
@@ -442,6 +466,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // View (a menu bar item)
     [
         /* en      */ "View",
+        /* da      */ "Vis",
         /* de      */ "Ansicht",
         /* es      */ "Ver",
         /* fr      */ "Affichage",
@@ -456,6 +481,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // ViewFocusStatusbar
     [
         /* en      */ "Focus Statusbar",
+        /* da      */ "Fokuser statuslinje",
         /* de      */ "Statusleiste fokussieren",
         /* es      */ "Enfocar barra de estado",
         /* fr      */ "Focus sur la barre d'état",
@@ -470,6 +496,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // ViewWordWrap
     [
         /* en      */ "Word Wrap",
+        /* da      */ "Tekstombrydning",
         /* de      */ "Zeilenumbruch",
         /* es      */ "Ajuste de línea",
         /* fr      */ "Retour à la ligne",
@@ -485,6 +512,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Help (a menu bar item)
     [
         /* en      */ "Help",
+        /* da      */ "Hjælp",
         /* de      */ "Hilfe",
         /* es      */ "Ayuda",
         /* fr      */ "Aide",
@@ -499,6 +527,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // HelpAbout
     [
         /* en      */ "About",
+        /* da      */ "Om",
         /* de      */ "Über",
         /* es      */ "Acerca de",
         /* fr      */ "À propos",
@@ -514,6 +543,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // UnsavedChangesDialogTitle
     [
         /* en      */ "Unsaved Changes",
+        /* da      */ "Ikke gemte ændringer",
         /* de      */ "Ungespeicherte Änderungen",
         /* es      */ "Cambios sin guardar",
         /* fr      */ "Modifications non enregistrées",
@@ -528,6 +558,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // UnsavedChangesDialogDescription
     [
         /* en      */ "Do you want to save the changes you made?",
+        /* da      */ "Vil du gemme de ændringer, du har foretaget?",
         /* de      */ "Möchten Sie die vorgenommenen Änderungen speichern?",
         /* es      */ "¿Desea guardar los cambios realizados?",
         /* fr      */ "Voulez-vous enregistrer les modifications apportées?",
@@ -542,6 +573,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // UnsavedChangesDialogYes
     [
         /* en      */ "Save",
+        /* da      */ "Gem",
         /* de      */ "Speichern",
         /* es      */ "Guardar",
         /* fr      */ "Enregistrer",
@@ -556,6 +588,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // UnsavedChangesDialogNo
     [
         /* en      */ "Don't Save",
+        /* da      */ "Gem ikke",
         /* de      */ "Nicht speichern",
         /* es      */ "No guardar",
         /* fr      */ "Ne pas enregistrer",
@@ -571,6 +604,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // AboutDialogTitle
     [
         /* en      */ "About",
+        /* da      */ "Om",
         /* de      */ "Über",
         /* es      */ "Acerca de",
         /* fr      */ "À propos",
@@ -585,6 +619,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // AboutDialogVersion
     [
         /* en      */ "Version: ",
+        /* da      */ "Version: ",
         /* de      */ "Version: ",
         /* es      */ "Versión: ",
         /* fr      */ "Version: ",
@@ -601,6 +636,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // LargeClipboardWarningLine1
     [
         /* en      */ "Text you copy is shared with the terminal clipboard.",
+        /* da      */ "Tekst, du kopierer, deles med terminalens udklipsholder.",
         /* de      */ "Der kopierte Text wird mit der Terminal-Zwischenablage geteilt.",
         /* es      */ "El texto que copies se comparte con el portapapeles del terminal.",
         /* fr      */ "Le texte que vous copiez est partagé avec le presse-papiers du terminal.",
@@ -615,6 +651,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // LargeClipboardWarningLine2
     [
         /* en      */ "You copied {size} which may take a long time to share.",
+        /* da      */ "Du har kopieret {size}, som muligvis tager lang tid at dele.",
         /* de      */ "Sie haben {size} kopiert, das Weitergeben könnte lange dauern.",
         /* es      */ "Copiaste {size}, lo que puede tardar en compartirse.",
         /* fr      */ "Vous avez copié {size}, ce qui peut être long à partager.",
@@ -629,6 +666,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // LargeClipboardWarningLine3
     [
         /* en      */ "Do you want to send it anyway?",
+        /* da      */ "Vil du sende det alligevel?",
         /* de      */ "Möchten Sie es trotzdem senden?",
         /* es      */ "¿Desea enviarlo de todas formas?",
         /* fr      */ "Voulez-vous quand même l’envoyer?",
@@ -643,6 +681,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SuperLargeClipboardWarning (as an alternative to LargeClipboardWarningLine2 and 3)
     [
         /* en      */ "The text you copied is too large to be shared.",
+        /* da      */ "Den kopierede tekst er for stor til at blive delt.",
         /* de      */ "Der kopierte Text ist zu groß, um geteilt zu werden.",
         /* es      */ "El texto que copiaste es demasiado grande para compartirse.",
         /* fr      */ "Le texte que vous avez copié est trop volumineux pour être partagé.",
@@ -658,6 +697,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // WarningDialogTitle
     [
         /* en      */ "Warning",
+        /* da      */ "Advarsel",
         /* de      */ "Warnung",
         /* es      */ "Advertencia",
         /* fr      */ "Avertissement",
@@ -673,6 +713,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // ErrorDialogTitle
     [
         /* en      */ "Error",
+        /* da      */ "Fejl",
         /* de      */ "Fehler",
         /* es      */ "Error",
         /* fr      */ "Erreur",
@@ -687,6 +728,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // ErrorIcuMissing
     [
         /* en      */ "This operation requires the ICU library",
+        /* da      */ "Denne operation kræver ICU-biblioteket",
         /* de      */ "Diese Operation erfordert die ICU-Bibliothek",
         /* es      */ "Esta operación requiere la biblioteca ICU",
         /* fr      */ "Cette opération nécessite la bibliothèque ICU",
@@ -702,6 +744,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchNeedleLabel (for input field)
     [
         /* en      */ "Find:",
+        /* da      */ "Find:",
         /* de      */ "Suchen:",
         /* es      */ "Buscar:",
         /* fr      */ "Rechercher:",
@@ -716,6 +759,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchReplacementLabel (for input field)
     [
         /* en      */ "Replace:",
+        /* da      */ "Erstat:",
         /* de      */ "Ersetzen:",
         /* es      */ "Reemplazar:",
         /* fr      */ "Remplacer:",
@@ -730,6 +774,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchMatchCase (toggle)
     [
         /* en      */ "Match Case",
+        /* da      */ "Store/små",
         /* de      */ "Groß/Klein",
         /* es      */ "May/Min",
         /* fr      */ "Casse",
@@ -744,6 +789,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchWholeWord (toggle)
     [
         /* en      */ "Whole Word",
+        /* da      */ "Hele ordet",
         /* de      */ "Ganzes Wort",
         /* es      */ "Palabra",
         /* fr      */ "Mot entier",
@@ -758,6 +804,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchUseRegex (toggle)
     [
         /* en      */ "Use Regex",
+        /* da      */ "RegEx",
         /* de      */ "RegEx",
         /* es      */ "RegEx",
         /* fr      */ "RegEx",
@@ -772,6 +819,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchReplaceAll (button)
     [
         /* en      */ "Replace All",
+        /* da      */ "Erstat alle",
         /* de      */ "Alle ersetzen",
         /* es      */ "Reemplazar todo",
         /* fr      */ "Remplacer tout",
@@ -786,6 +834,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchClose (button)
     [
         /* en      */ "Close",
+        /* da      */ "Luk",
         /* de      */ "Schließen",
         /* es      */ "Cerrar",
         /* fr      */ "Fermer",
@@ -801,6 +850,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EncodingReopen
     [
         /* en      */ "Reopen with encoding",
+        /* da      */ "Genåbn med enkodning",
         /* de      */ "Mit Kodierung erneut öffnen",
         /* es      */ "Reabrir con codificación",
         /* fr      */ "Rouvrir avec un encodage différent",
@@ -815,6 +865,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EncodingConvert
     [
         /* en      */ "Convert to encoding",
+        /* da      */ "Konverter til enkodning",
         /* de      */ "In Kodierung konvertieren",
         /* es      */ "Convertir a otra codificación",
         /* fr      */ "Convertir en encodage",
@@ -830,6 +881,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // IndentationTabs
     [
         /* en      */ "Tabs",
+        /* da      */ "Tabs",
         /* de      */ "Tabs",
         /* es      */ "Tabulaciones",
         /* fr      */ "Tabulations",
@@ -844,6 +896,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // IndentationSpaces
     [
         /* en      */ "Spaces",
+        /* da      */ "Mellemrum",
         /* de      */ "Leerzeichen",
         /* es      */ "Espacios",
         /* fr      */ "Espaces",
@@ -859,6 +912,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SaveAsDialogPathLabel
     [
         /* en      */ "Folder:",
+        /* da      */ "Mappe:",
         /* de      */ "Ordner:",
         /* es      */ "Carpeta:",
         /* fr      */ "Dossier:",
@@ -873,6 +927,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SaveAsDialogNameLabel
     [
         /* en      */ "File name:",
+        /* da      */ "Filnavn:",
         /* de      */ "Dateiname:",
         /* es      */ "Nombre de archivo:",
         /* fr      */ "Nom de fichier:",
@@ -888,6 +943,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileOverwriteWarning
     [
         /* en      */ "Confirm Save As",
+        /* da      */ "Bekræft gem som",
         /* de      */ "Speichern unter bestätigen",
         /* es      */ "Confirmar Guardar como",
         /* fr      */ "Confirmer Enregistrer sous",
@@ -902,6 +958,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileOverwriteWarningDescription
     [
         /* en      */ "File already exists. Do you want to overwrite it?",
+        /* da      */ "Filen eksisterer allerede. Vil du overskrive den?",
         /* de      */ "Datei existiert bereits. Möchten Sie sie überschreiben?",
         /* es      */ "El archivo ya existe. ¿Desea sobrescribirlo?",
         /* fr      */ "Le fichier existe déjà. Voulez-vous l’écraser?",
@@ -925,6 +982,7 @@ pub fn init() {
     for l in langs {
         lang = match l.as_str() {
             "en" => LangId::en,
+            "da" => LangId::da,
             "de" => LangId::de,
             "es" => LangId::es,
             "fr" => LangId::fr,
