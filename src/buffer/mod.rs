@@ -1990,6 +1990,10 @@ impl TextBuffer {
         let mut y = beg.logical_pos.y;
 
         loop {
+            if offset >= replacement.len() {
+                break;
+            }
+
             let mut remove = 0;
 
             if replacement[offset] == b'\t' {
