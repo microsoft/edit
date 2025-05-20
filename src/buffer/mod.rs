@@ -2019,9 +2019,6 @@ impl TextBuffer {
             }
 
             (offset, y) = unicode::newlines_forward(&replacement, offset, y, y + 1);
-            if offset >= replacement.len() {
-                break;
-            }
         }
 
         if replacement.len() == initial_len {
