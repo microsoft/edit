@@ -2472,6 +2472,37 @@ impl<'a> Context<'a, '_> {
                                 y: tb.cursor_visual_pos().y - 1,
                             });
                         }
+                        kbmod::ALT => {
+                            // Shift line up
+                            if tb.cursor_visual_pos().y > 0 {
+                                let current_line = tb.cursor_visual_pos().y;
+                                let prev_line = current_line - 1;
+                                let original_cursor = tb.cursor_visual_pos();
+                                
+                                // Get the current line's content
+                                tb.cursor_move_to_logical(Point { x: 0, y: current_line });
+                                tb.select_line();
+                                let current_line_content = tb.extract_selection(true);
+                                
+                                // Get the previous line's content
+                                tb.cursor_move_to_logical(Point { x: 0, y: prev_line });
+                                tb.select_line();
+                                let prev_line_content = tb.extract_selection(true);
+                                
+                                // Swap the lines
+                                tb.cursor_move_to_logical(Point { x: 0, y: prev_line });
+                                tb.write(&current_line_content, false);
+                                
+                                tb.cursor_move_to_logical(Point { x: 0, y: current_line });
+                                tb.write(&prev_line_content, false);
+                                
+                                // Restore cursor position
+                                tb.cursor_move_to_visual(Point {
+                                    x: original_cursor.x,
+                                    y: original_cursor.y - 1,
+                                });
+                            }
+                        }
                         kbmod::CTRL_ALT => {
                             // TODO: Add cursor above
                         }
@@ -2538,6 +2569,46 @@ impl<'a> Context<'a, '_> {
                             tc.preferred_column = tb.cursor_visual_pos().x;
                         }
                     }
+                    kbmod::ALT => {
+                        // Shift line down
+                        if tb.cursor_visual_pos().y < tb.visual_line_count() - 1 {
+                            let current_line: i32 = tb.cursor_visual_pos().y;
+                            let next_line: i32 = current_line + 1;
+                            let original_cursor: Point = tb.cursor_visual_pos();
+                        
+                            // Phase 1: Extract content (without deleting)
+                            tb.cursor_move_to_logical(Point { x: 0, y: current_line });
+                            tb.select_line();
+                            let current_line_content: Vec<u8> = tb.extract_selection(false);
+                        
+                            tb.cursor_move_to_logical(Point { x: 0, y: next_line });
+                            tb.select_line();
+                            let next_line_content: Vec<u8> = tb.extract_selection(false);
+                        
+                            // Phase 2: Delete in reverse order
+                            tb.cursor_move_to_logical(Point { x: 0, y: next_line });
+                            tb.select_line();
+                            tb.extract_selection(true);
+                        
+                            tb.cursor_move_to_logical(Point { x: 0, y: current_line });
+                            tb.select_line();
+                            tb.extract_selection(true);
+                        
+                            // Phase 3: Write the lines swapped
+                            tb.cursor_move_to_logical(Point { x: 0, y: current_line });
+                            tb.write(&next_line_content, false);
+                        
+                            tb.cursor_move_to_logical(Point { x: 0, y: next_line });
+                            tb.write(&current_line_content, false);
+                        
+                            // Restore cursor position
+                            tb.cursor_move_to_visual(Point {
+                                x: original_cursor.x,
+                                y: original_cursor.y + 1,
+                            });
+                        }
+                    }
+
                     kbmod::CTRL_ALT => {
                         // TODO: Add cursor above
                     }
