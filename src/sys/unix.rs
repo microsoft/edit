@@ -596,7 +596,6 @@ const fn errno_to_apperr(no: c_int) -> apperr::Error {
 }
 
 // Get the error number from a different location based on OS
-// Get the error number from a different location based on OS
 #[cfg(target_os = "macos")]
 unsafe fn get_errno() -> c_int {
     unsafe { *libc::__error() }
