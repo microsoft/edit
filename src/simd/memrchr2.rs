@@ -5,8 +5,6 @@
 
 use std::ptr;
 
-use super::distance;
-
 /// `memchr`, but with two needles.
 ///
 /// If no needle is found, 0 is returned.
@@ -18,7 +16,7 @@ pub fn memrchr2(needle1: u8, needle2: u8, haystack: &[u8], offset: usize) -> Opt
         let beg = haystack.as_ptr();
         let it = beg.add(offset.min(haystack.len()));
         let it = memrchr2_raw(needle1, needle2, beg, it);
-        if it.is_null() { None } else { Some(distance(it, beg)) }
+        if it.is_null() { None } else { Some(it.offset_from_unsigned(beg)) }
     }
 }
 
@@ -75,7 +73,7 @@ unsafe fn memrchr2_avx2(needle1: u8, needle2: u8, beg: *const u8, mut end: *cons
         #[cfg(target_arch = "x86_64")]
         use std::arch::x86_64::*;
 
-        if distance(end, beg) >= 32 {
+        if end.offset_from_unsigned(beg) >= 32 {
             let n1 = _mm256_set1_epi8(needle1 as i8);
             let n2 = _mm256_set1_epi8(needle2 as i8);
 
@@ -92,7 +90,7 @@ unsafe fn memrchr2_avx2(needle1: u8, needle2: u8, beg: *const u8, mut end: *cons
                     return end.add(31 - m.leading_zeros() as usize);
                 }
 
-                if distance(end, beg) < 32 {
+                if end.offset_from_unsigned(beg) < 32 {
                     break;
                 }
             }
@@ -107,7 +105,7 @@ unsafe fn memrchr2_neon(needle1: u8, needle2: u8, beg: *const u8, mut end: *cons
     unsafe {
         use std::arch::aarch64::*;
 
-        if distance(end, beg) >= 16 {
+        if end.offset_from_unsigned(beg) >= 16 {
             let n1 = vdupq_n_u8(needle1);
             let n2 = vdupq_n_u8(needle2);
 
@@ -129,7 +127,7 @@ unsafe fn memrchr2_neon(needle1: u8, needle2: u8, beg: *const u8, mut end: *cons
                     return end.add(15 - (m.leading_zeros() as usize >> 2));
                 }
 
-                if distance(end, beg) < 16 {
+                if end.offset_from_unsigned(beg) < 16 {
                     break;
                 }
             }

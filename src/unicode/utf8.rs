@@ -203,10 +203,7 @@ impl<'a> Utf8Chars<'a> {
         self.offset += 1;
 
         // SAFETY: If `cp` wasn't a valid codepoint, we already returned U+FFFD above.
-        #[allow(clippy::transmute_int_to_char)]
-        unsafe {
-            char::from_u32_unchecked(cp)
-        }
+        unsafe { char::from_u32_unchecked(cp) }
     }
 
     // This simultaneously serves as a `cold_path` marker.
