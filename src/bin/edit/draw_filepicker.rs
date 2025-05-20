@@ -72,13 +72,15 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             }
             
             // Handle completion with Tab key
-            if filename_focused && ctx.consume_shortcut(vk::TAB) && state.file_picker_autocomplete.is_some() {
-                if let Some(suggestions) = &state.file_picker_autocomplete {
-                    if !suggestions.is_empty() {
-                        // Use the first suggestion on Tab
-                        state.file_picker_pending_name = suggestions[0].as_path().into();
-                        // Clear suggestions after completing
-                        state.file_picker_autocomplete = None;
+            if filename_focused {
+                if ctx.consume_shortcut(vk::TAB) {
+                    if let Some(suggestions) = &state.file_picker_autocomplete {
+                        if !suggestions.is_empty() {
+                            // Use the first suggestion on Tab
+                            state.file_picker_pending_name = suggestions[0].as_path().into();
+                            // Clear suggestions after completing
+                            state.file_picker_autocomplete = None;
+                        }
                     }
                 }
             }
@@ -271,10 +273,7 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
 
     state.file_picker_pending_name = name;
     
-    // Update autocomplete suggestions after directory/name changes
-    if !state.file_picker_pending_name.as_os_str().is_empty() {
-        update_filename_autocomplete(state);
-    }
+    update_autocomplete_if_needed(state);
     if state.file_picker_pending_name.as_os_str().is_empty() { None } else { Some(path) }
 }
 
@@ -317,10 +316,15 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     });
 
     state.file_picker_entries = Some(files);
-    
-    // Update autocomplete suggestions after refreshing file list
+    update_autocomplete_if_needed(state);
+}
+
+// Updates the autocomplete suggestions based on the current input if needed
+fn update_autocomplete_if_needed(state: &mut State) {
     if !state.file_picker_pending_name.as_os_str().is_empty() {
         update_filename_autocomplete(state);
+    } else {
+        state.file_picker_autocomplete = None;
     }
 }
 
@@ -360,13 +364,17 @@ fn update_filename_autocomplete(state: &mut State) {
                 matches.push(entry.clone());
             }
         }
-        
-        // Sort matches by their score in descending order
-        matches.sort_by(|a, b| {
-            let (score_a, _) = score_fuzzy(&scratch, a.as_str(), &filename_input, true);
-            let (score_b, _) = score_fuzzy(&scratch, b.as_str(), &filename_input, true);
-            
-            // Higher scores come first
+        let mut scored_matches: Vec<(DisplayablePathBuf, i32)> = matches
+            .into_iter()
+            .map(|entry| {
+                let (score, _) = score_fuzzy(&scratch, entry.as_str(), &filename_input, true);
+                (entry, score)
+            })
+            .collect();
+
+        scored_matches.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by score in descending order
+
+        matches = scored_matches.into_iter().map(|(entry, _)| entry).collect();
             score_b.cmp(&score_a)
         });
         
