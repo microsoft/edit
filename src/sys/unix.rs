@@ -8,8 +8,7 @@
 
 use std::ffi::{CStr, c_int, c_void};
 use std::fs::{self, File};
-use std::io::Error;
-use std::mem::{self, MaybeUninit};
+use std::mem::{self, ManuallyDrop, MaybeUninit};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
 use std::ptr::{self, NonNull, null_mut};
 use std::{thread, time};
@@ -234,7 +233,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                 return None; // EOF
             }
             if ret < 0 {
-                match Error::last_os_error().raw_os_error().unwrap_or(0) {
+                match errno() {
                     libc::EINTR if STATE.inject_resize => break,
                     libc::EAGAIN if timeout == time::Duration::ZERO => break,
                     libc::EINTR | libc::EAGAIN => {}
@@ -313,7 +312,7 @@ pub fn write_stdout(text: &str) {
             continue;
         }
 
-        let err = Error::last_os_error().raw_os_error().unwrap_or(0);
+        let err = errno();
         if err != libc::EINTR {
             return;
         }
@@ -547,6 +546,14 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
 }
 
 #[inline]
+fn errno() -> i32 {
+    // Under `-O -Copt-level=s` the 1.87 compiler fails to fully inline and
+    // remove the raw_os_error() call. This leaves us with the drop() call.
+    // ManuallyDrop fixes that and results in a direct `std::sys::os::errno` call.
+    ManuallyDrop::new(std::io::Error::last_os_error()).raw_os_error().unwrap_or(0)
+}
+
+#[inline]
 pub(crate) fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
     errno_to_apperr(err.raw_os_error().unwrap_or(0))
 }
@@ -574,9 +581,5 @@ const fn errno_to_apperr(no: c_int) -> apperr::Error {
 }
 
 fn check_int_return(ret: libc::c_int) -> apperr::Result<libc::c_int> {
-    if ret < 0 {
-        Err(errno_to_apperr(std::io::Error::last_os_error().raw_os_error().unwrap_or(0)))
-    } else {
-        Ok(ret)
-    }
+    if ret < 0 { Err(errno_to_apperr(errno())) } else { Ok(ret) }
 }
