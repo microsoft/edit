@@ -11,7 +11,7 @@ harness = false
 debug-layout = []
 debug-latency = []
 
-# `opt-level = "s"` may be useful in the future as it significantly reduces binary size.
+# We use `opt-level = "s"` as it significantly reduces binary size.
 # We could then use the `#[optimize(speed)]` attribute for spot optimizations.
 # Unfortunately, that attribute currently doesn't work on intrinsics such as memset.
 [profile.release]

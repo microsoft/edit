@@ -77,6 +77,35 @@ fn memset_raw(beg: *mut u8, end: *mut u8, val: u64) {
 
     #[cfg(target_arch = "aarch64")]
     return unsafe { memset_neon(beg, end, val) };
+
+    #[allow(unreachable_code)]
+    return unsafe { memset_fallback(beg, end, val) };
+}
+
+#[inline(never)]
+unsafe fn memset_fallback(mut beg: *mut u8, end: *mut u8, val: u64) {
+    unsafe {
+        let mut remaining = end.offset_from_unsigned(beg);
+
+        while remaining >= 8 {
+            (beg as *mut u64).write_unaligned(val);
+            beg = beg.add(8);
+            remaining -= 8;
+        }
+
+        if remaining >= 4 {
+            // 4-7 bytes remaining
+            (beg as *mut u32).write_unaligned(val as u32);
+            (end.sub(4) as *mut u32).write_unaligned(val as u32);
+        } else if remaining >= 2 {
+            // 2-3 bytes remaining
+            (beg as *mut u16).write_unaligned(val as u16);
+            (end.sub(2) as *mut u16).write_unaligned(val as u16);
+        } else if remaining >= 1 {
+            // 1 byte remaining
+            beg.write(val as u8);
+        }
+    }
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
