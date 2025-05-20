@@ -17,6 +17,11 @@ use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::helpers::*;
 use crate::{apperr, arena_format};
 
+#[cfg(target_os = "linux")]
+use libc::ELIBACC;
+#[cfg(not(target_os = "linux"))]
+use libc::ENOENT as ELIBACC;
+
 struct State {
     stdin: libc::c_int,
     stdin_flags: libc::c_int,
@@ -199,7 +204,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                     tv_sec: timeout.as_secs() as libc::time_t,
                     tv_nsec: timeout.subsec_nanos() as libc::c_long,
                 };
-                let ret = libc::ppoll(&mut pollfd, 1, &ts, null());
+                let ret = ppoll(&mut pollfd, 1, ts);
                 if ret < 0 {
                     return None; // Error? Let's assume it's an EOF.
                 }
@@ -225,7 +230,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                 return None; // EOF
             }
             if ret < 0 {
-                match *libc::__errno_location() {
+                match errno() {
                     libc::EINTR if STATE.inject_resize => break,
                     libc::EAGAIN if timeout == time::Duration::ZERO => break,
                     libc::EINTR | libc::EAGAIN => {}
@@ -304,7 +309,7 @@ pub fn write_stdout(text: &str) {
             continue;
         }
 
-        let err = unsafe { *libc::__errno_location() };
+        let err = errno();
         if err != libc::EINTR {
             return;
         }
@@ -407,7 +412,7 @@ pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> apperr::Result<(
 unsafe fn load_library(name: &CStr) -> apperr::Result<NonNull<c_void>> {
     unsafe {
         NonNull::new(libc::dlopen(name.as_ptr(), libc::RTLD_LAZY))
-            .ok_or_else(|| errno_to_apperr(libc::ELIBACC))
+            .ok_or_else(|| errno_to_apperr(ELIBACC))
     }
 }
 
@@ -422,11 +427,7 @@ unsafe fn load_library(name: &CStr) -> apperr::Result<NonNull<c_void>> {
 pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apperr::Result<T> {
     unsafe {
         let sym = libc::dlsym(handle.as_ptr(), name.as_ptr());
-        if sym.is_null() {
-            Err(errno_to_apperr(libc::ELIBACC))
-        } else {
-            Ok(mem::transmute_copy(&sym))
-        }
+        if sym.is_null() { Err(errno_to_apperr(ELIBACC)) } else { Ok(mem::transmute_copy(&sym)) }
     }
 }
 
@@ -565,5 +566,20 @@ const fn errno_to_apperr(no: c_int) -> apperr::Error {
 }
 
 fn check_int_return(ret: libc::c_int) -> apperr::Result<libc::c_int> {
-    if ret < 0 { Err(errno_to_apperr(unsafe { *libc::__errno_location() })) } else { Ok(ret) }
+    if ret < 0 { Err(errno_to_apperr(errno())) } else { Ok(ret) }
+}
+
+fn errno() -> c_int {
+    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn ppoll(fds: *mut libc::pollfd, nfds: libc::nfds_t, timeout: libc::timespec) -> c_int {
+    libc::ppoll(fds, nfds, &timeout, null())
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe fn ppoll(fds: *mut libc::pollfd, nfds: libc::nfds_t, timeout: libc::timespec) -> c_int {
+    let timeout = timeout.tv_sec * 1000 + timeout.tv_nsec / 1_000_000;
+    libc::poll(fds, nfds, timeout as i32)
 }
