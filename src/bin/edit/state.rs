@@ -129,6 +129,7 @@ pub struct State {
     pub file_picker_pending_name: PathBuf,
     pub file_picker_entries: Option<Vec<DisplayablePathBuf>>,
     pub file_picker_overwrite_warning: Option<PathBuf>, // The path the warning is about.
+    pub file_picker_autocomplete: Option<Vec<DisplayablePathBuf>>, // Autocomplete suggestions for the filename
 
     pub wants_search: StateSearch,
     pub search_needle: String,
@@ -177,6 +178,7 @@ impl State {
             file_picker_pending_name: Default::default(),
             file_picker_entries: None,
             file_picker_overwrite_warning: None,
+            file_picker_autocomplete: None,
 
             wants_search: StateSearch { kind: StateSearchKind::Hidden, focus: false },
             search_needle: Default::default(),

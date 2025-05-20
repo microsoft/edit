@@ -9,7 +9,8 @@ use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::input::vk;
 use edit::tui::*;
-use edit::{icu, path, sys};
+use edit::{arena, icu, path, sys};
+use edit::fuzzy::score_fuzzy;
 
 use crate::localization::*;
 use crate::state::*;
@@ -58,7 +59,61 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.inherit_focus();
 
             ctx.label("name-label", loc(LocId::SaveAsDialogNameLabel));
-            ctx.editline("name", &mut state.file_picker_pending_name);
+            let filename_changed = ctx.editline_begin("name");
+            ctx.editline_text(&mut state.file_picker_pending_name);
+            
+            // Record if the editline is focused for autocomplete display
+            let filename_focused = ctx.is_focused();
+            
+            // Check if the filename has changed to update autocomplete
+            if filename_changed && filename_focused {
+                // Update autocomplete suggestions whenever the filename changes
+                update_filename_autocomplete(state);
+            }
+            
+            // Handle completion with Tab key
+            if filename_focused && ctx.consume_shortcut(vk::TAB) && state.file_picker_autocomplete.is_some() {
+                if let Some(suggestions) = &state.file_picker_autocomplete {
+                    if !suggestions.is_empty() {
+                        // Use the first suggestion on Tab
+                        state.file_picker_pending_name = suggestions[0].as_path().into();
+                        // Clear suggestions after completing
+                        state.file_picker_autocomplete = None;
+                    }
+                }
+            }
+            
+            ctx.editline_end();
+            
+            // Display autocomplete suggestions as a floating panel
+            if filename_focused && let Some(suggestions) = &state.file_picker_autocomplete {
+                if !suggestions.is_empty() {
+                    ctx.block_begin("autocomplete-panel");
+                    ctx.attr_float(FloatSpec {
+                        anchor: Anchor::Last,
+                        gravity_x: 0.0,
+                        gravity_y: 1.0,
+                        offset_x: 0.0,
+                        offset_y: 1.0,
+                    });
+                    ctx.attr_border();
+                    ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
+                    ctx.attr_padding(Rect::two(0, 1));
+                    
+                    ctx.list_begin("autocomplete-suggestions");
+                    for suggestion in suggestions {
+                        if ctx.list_item(false, suggestion.as_str()) == ListSelection::Activated {
+                            state.file_picker_pending_name = suggestion.as_path().into();
+                            // Clear suggestions after selecting one
+                            state.file_picker_autocomplete = None;
+                        }
+                    }
+                    ctx.list_end();
+                    
+                    ctx.block_end();
+                }
+            }
+            
             ctx.inherit_focus();
             if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
                 activated = true;
@@ -191,6 +246,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         state.file_picker_pending_name = Default::default();
         state.file_picker_entries = Default::default();
         state.file_picker_overwrite_warning = Default::default();
+        state.file_picker_autocomplete = Default::default();
     }
 }
 
@@ -210,9 +266,15 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     if dir != state.file_picker_pending_dir.as_path() {
         state.file_picker_pending_dir = DisplayablePathBuf::new(dir.to_path_buf());
         state.file_picker_entries = None;
+        state.file_picker_autocomplete = None;
     }
 
     state.file_picker_pending_name = name;
+    
+    // Update autocomplete suggestions after directory/name changes
+    if !state.file_picker_pending_name.as_os_str().is_empty() {
+        update_filename_autocomplete(state);
+    }
     if state.file_picker_pending_name.as_os_str().is_empty() { None } else { Some(path) }
 }
 
@@ -255,4 +317,67 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     });
 
     state.file_picker_entries = Some(files);
+    
+    // Update autocomplete suggestions after refreshing file list
+    if !state.file_picker_pending_name.as_os_str().is_empty() {
+        update_filename_autocomplete(state);
+    }
+}
+
+// Updates the autocomplete suggestions based on the current input
+fn update_filename_autocomplete(state: &mut State) {
+    // Don't show autocomplete suggestions if the filename is empty
+    if state.file_picker_pending_name.as_os_str().is_empty() {
+        state.file_picker_autocomplete = None;
+        return;
+    }
+    
+    let filename_input = state.file_picker_pending_name.to_string_lossy().to_string();
+    
+    // Don't show autocomplete for directory navigation
+    if filename_input == ".." || filename_input.ends_with('/') || filename_input.ends_with('\\') {
+        state.file_picker_autocomplete = None;
+        return;
+    }
+    
+    if let Some(files) = &state.file_picker_entries {
+        let scratch = arena::scratch_arena(None);
+        let mut matches = Vec::new();
+        
+        for entry in files {
+            let entry_str = entry.as_str();
+            
+            // Don't include directories in autocomplete
+            if entry_str.ends_with('/') || entry_str == ".." {
+                continue;
+            }
+            
+            // Score using fuzzy matching
+            let (score, _) = score_fuzzy(&scratch, entry_str, &filename_input, true);
+            
+            // If there's a match (score > 0), add it to our suggestions
+            if score > 0 {
+                matches.push(entry.clone());
+            }
+        }
+        
+        // Sort matches by their score in descending order
+        matches.sort_by(|a, b| {
+            let (score_a, _) = score_fuzzy(&scratch, a.as_str(), &filename_input, true);
+            let (score_b, _) = score_fuzzy(&scratch, b.as_str(), &filename_input, true);
+            
+            // Higher scores come first
+            score_b.cmp(&score_a)
+        });
+        
+        // Limit the number of suggestions
+        let max_suggestions = 5;
+        if matches.len() > max_suggestions {
+            matches.truncate(max_suggestions);
+        }
+        
+        state.file_picker_autocomplete = if matches.is_empty() { None } else { Some(matches) };
+    } else {
+        state.file_picker_autocomplete = None;
+    }
 }
