@@ -321,6 +321,17 @@ impl<'input> Stream<'_, '_, 'input> {
                 return self.parse_x10_mouse_coordinates();
             }
 
+            const KEYPAD_LUT: [u8; 8] = [
+                vk::UP.value() as u8,    // A
+                vk::DOWN.value() as u8,  // B
+                vk::RIGHT.value() as u8, // C
+                vk::LEFT.value() as u8,  // D
+                0,                       // E
+                vk::END.value() as u8,   // F
+                0,                       // G
+                vk::HOME.value() as u8,  // H
+            ];
+
             match self.stream.next()? {
                 vt::Token::Text(text) => {
                     return Some(Input::Text(InputText { text, bracketed: false }));
@@ -350,26 +361,23 @@ impl<'input> Stream<'_, '_, 'input> {
                         _ => {}
                     }
                 }
-                vt::Token::SS3(ch) => {
-                    if ('P'..='S').contains(&ch) {
+                vt::Token::SS3(ch) => match ch {
+                    'A'..='H' => {
+                        let vk = KEYPAD_LUT[ch as usize - 'A' as usize];
+                        if vk != 0 {
+                            return Some(Input::Keyboard(InputKey::new(vk as u32)));
+                        }
+                    }
+                    'P'..='S' => {
                         let key = vk::F1.value() + ch as u32 - 'P' as u32;
                         return Some(Input::Keyboard(InputKey::new(key)));
                     }
-                }
+                    _ => {}
+                },
                 vt::Token::Csi(csi) => {
                     match csi.final_byte {
                         'A'..='H' => {
-                            const LUT: [u8; 8] = [
-                                vk::UP.value() as u8,    // A
-                                vk::DOWN.value() as u8,  // B
-                                vk::RIGHT.value() as u8, // C
-                                vk::LEFT.value() as u8,  // D
-                                0,                       // E
-                                vk::END.value() as u8,   // F
-                                0,                       // G
-                                vk::HOME.value() as u8,  // H
-                            ];
-                            let vk = LUT[csi.final_byte as usize - 'A' as usize];
+                            let vk = KEYPAD_LUT[csi.final_byte as usize - 'A' as usize];
                             if vk != 0 {
                                 return Some(Input::Keyboard(
                                     InputKey::new(vk as u32) | Self::parse_modifiers(csi),
