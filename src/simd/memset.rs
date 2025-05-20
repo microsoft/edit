@@ -89,8 +89,6 @@ unsafe fn memset_fallback(mut beg: *mut u8, end: *mut u8, val: u64) {
 
         while remaining >= 8 {
             (beg as *mut u64).write_unaligned(val);
-            (end.sub(8) as *mut u64).write_unaligned(val);
-
             beg = beg.add(8);
             remaining -= 8;
         }
