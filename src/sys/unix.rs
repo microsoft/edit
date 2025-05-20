@@ -526,7 +526,9 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
     let mut locales = Vec::new_in(arena);
 
     for key in ["LANGUAGE", "LC_ALL", "LANG"] {
-        if let Ok(val) = std::env::var(key) {
+        if let Ok(val) = std::env::var(key)
+            && !val.is_empty()
+        {
             locales.extend(
                 val.split(':').filter(|s| !s.is_empty()).map(|s| ArenaString::from_str(arena, s)),
             );
