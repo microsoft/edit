@@ -15,8 +15,6 @@
 
 use std::mem;
 
-use super::distance;
-
 /// A marker trait for types that are safe to `memset`.
 ///
 /// # Safety
@@ -100,7 +98,7 @@ unsafe fn memset_sse2(mut beg: *mut u8, end: *mut u8, val: u64) {
         #[cfg(target_arch = "x86_64")]
         use std::arch::x86_64::*;
 
-        let mut remaining = distance(end, beg);
+        let mut remaining = end.offset_from_unsigned(beg);
 
         if remaining >= 16 {
             let fill = _mm_set1_epi64x(val as i64);
@@ -150,7 +148,7 @@ fn memset_avx2(mut beg: *mut u8, end: *mut u8, val: u64) {
         use std::arch::x86_64::*;
         use std::hint::black_box;
 
-        let mut remaining = distance(end, beg);
+        let mut remaining = end.offset_from_unsigned(beg);
 
         if remaining >= 128 {
             let fill = _mm256_set1_epi64x(val as i64);
@@ -212,7 +210,7 @@ fn memset_avx2(mut beg: *mut u8, end: *mut u8, val: u64) {
 unsafe fn memset_neon(mut beg: *mut u8, end: *mut u8, val: u64) {
     unsafe {
         use std::arch::aarch64::*;
-        let mut remaining = distance(end, beg);
+        let mut remaining = end.offset_from_unsigned(beg);
 
         if remaining >= 32 {
             let fill = vdupq_n_u64(val);
