@@ -10,7 +10,7 @@ use std::ffi::{CStr, c_int, c_void};
 use std::fs::{self, File};
 use std::mem::{self, MaybeUninit};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
-use std::ptr::{self, NonNull, null, null_mut};
+use std::ptr::{self, NonNull, null_mut};
 use std::{thread, time};
 
 use crate::arena::{Arena, ArenaString, scratch_arena};
@@ -195,11 +195,20 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                 let beg = time::Instant::now();
 
                 let mut pollfd = libc::pollfd { fd: STATE.stdin, events: libc::POLLIN, revents: 0 };
-                let ts = libc::timespec {
-                    tv_sec: timeout.as_secs() as libc::time_t,
-                    tv_nsec: timeout.subsec_nanos() as libc::c_long,
-                };
-                let ret = libc::ppoll(&mut pollfd, 1, &ts, null());
+                let ret;
+
+                #[cfg(target_os = "macos")]
+                {
+                    ret = libc::poll(&mut pollfd, 1, timeout.as_millis() as libc::c_int);
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let ts = libc::timespec {
+                        tv_sec: timeout.as_secs() as libc::time_t,
+                        tv_nsec: timeout.subsec_nanos() as libc::c_long,
+                    };
+                    ret = libc::ppoll(&mut pollfd, 1, &ts, null());
+                }
                 if ret < 0 {
                     return None; // Error? Let's assume it's an EOF.
                 }
@@ -225,7 +234,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                 return None; // EOF
             }
             if ret < 0 {
-                match *libc::__errno_location() {
+                match get_errno() {
                     libc::EINTR if STATE.inject_resize => break,
                     libc::EAGAIN if timeout == time::Duration::ZERO => break,
                     libc::EINTR | libc::EAGAIN => {}
@@ -304,7 +313,7 @@ pub fn write_stdout(text: &str) {
             continue;
         }
 
-        let err = unsafe { *libc::__errno_location() };
+        let err = get_errno();
         if err != libc::EINTR {
             return;
         }
@@ -407,7 +416,7 @@ pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> apperr::Result<(
 unsafe fn load_library(name: &CStr) -> apperr::Result<NonNull<c_void>> {
     unsafe {
         NonNull::new(libc::dlopen(name.as_ptr(), libc::RTLD_LAZY))
-            .ok_or_else(|| errno_to_apperr(libc::ELIBACC))
+            .ok_or_else(|| errno_to_apperr(libc::ENOENT))
     }
 }
 
@@ -423,7 +432,7 @@ pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apper
     unsafe {
         let sym = libc::dlsym(handle.as_ptr(), name.as_ptr());
         if sym.is_null() {
-            Err(errno_to_apperr(libc::ELIBACC))
+            Err(errno_to_apperr(libc::ENOENT))
         } else {
             Ok(mem::transmute_copy(&sym))
         }
@@ -565,5 +574,15 @@ const fn errno_to_apperr(no: c_int) -> apperr::Error {
 }
 
 fn check_int_return(ret: libc::c_int) -> apperr::Result<libc::c_int> {
-    if ret < 0 { Err(errno_to_apperr(unsafe { *libc::__errno_location() })) } else { Ok(ret) }
+    if ret < 0 { Err(errno_to_apperr(get_errno())) } else { Ok(ret) }
+}
+
+#[cfg(target_os = "macos")]
+pub fn get_errno() -> libc::c_int {
+    unsafe { *libc::__error() }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn get_errno() -> libc::c_int {
+    unsafe { *libc::__errno_location() };
 }
