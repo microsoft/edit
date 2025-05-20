@@ -97,6 +97,7 @@ enum LangId {
     en,
 
     // Other languages. Sorted alphabetically.
+    bn,
     de,
     es,
     fr,
@@ -116,6 +117,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Ctrl (the keyboard key)
     [
         /* en      */ "Ctrl",
+        /* bn      */ "Ctrl",
         /* de      */ "Strg",
         /* es      */ "Ctrl",
         /* fr      */ "Ctrl",
@@ -130,6 +132,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Alt (the keyboard key)
     [
         /* en      */ "Alt",
+        /* bn      */ "Alt",
         /* de      */ "Alt",
         /* es      */ "Alt",
         /* fr      */ "Alt",
@@ -144,6 +147,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Shift (the keyboard key)
     [
         /* en      */ "Shift",
+        /* bn      */ "Shift",
         /* de      */ "Umschalt",
         /* es      */ "Mayús",
         /* fr      */ "Maj",
@@ -159,6 +163,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Ok (used as a common dialog button)
     [
         /* en      */ "Ok",
+        /* bn      */ "ঠিক আছে",
         /* de      */ "OK",
         /* es      */ "Aceptar",
         /* fr      */ "OK",
@@ -173,6 +178,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Yes (used as a common dialog button)
     [
         /* en      */ "Yes",
+        /* bn      */ "হ্যাঁ",
         /* de      */ "Ja",
         /* es      */ "Sí",
         /* fr      */ "Oui",
@@ -187,6 +193,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // No (used as a common dialog button)
     [
         /* en      */ "No",
+        /* bn      */ "না",
         /* de      */ "Nein",
         /* es      */ "No",
         /* fr      */ "Non",
@@ -201,6 +208,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Cancel (used as a common dialog button)
     [
         /* en      */ "Cancel",
+        /* bn      */ "বাতিল",
         /* de      */ "Abbrechen",
         /* es      */ "Cancelar",
         /* fr      */ "Annuler",
@@ -215,6 +223,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Always (used as a common dialog button)
     [
         /* en      */ "Always",
+        /* bn      */ "সবসময়",
         /* de      */ "Immer",
         /* es      */ "Siempre",
         /* fr      */ "Toujours",
@@ -230,6 +239,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // File (a menu bar item)
     [
         /* en      */ "File",
+        /* bn      */ "ফাইল",
         /* de      */ "Datei",
         /* es      */ "Archivo",
         /* fr      */ "Fichier",
@@ -244,6 +254,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileNew
     [
         /* en      */ "New File…",
+        /* bn      */ "নতুন ফাইল…",
         /* de      */ "Neue Datei…",
         /* es      */ "Nuevo archivo…",
         /* fr      */ "Nouveau fichier…",
@@ -258,6 +269,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileOpen
     [
         /* en      */ "Open File…",
+        /* bn      */ "ফাইল খুলুন…",
         /* de      */ "Datei öffnen…",
         /* es      */ "Abrir archivo…",
         /* fr      */ "Ouvrir un fichier…",
@@ -272,6 +284,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileSave
     [
         /* en      */ "Save",
+        /* bn      */ "সংরক্ষণ",
         /* de      */ "Speichern",
         /* es      */ "Guardar",
         /* fr      */ "Enregistrer",
@@ -286,6 +299,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileSaveAs
     [
         /* en      */ "Save As…",
+        /* bn      */ "অন্য নামে সংরক্ষণ…",
         /* de      */ "Speichern unter…",
         /* es      */ "Guardar como…",
         /* fr      */ "Enregistrer sous…",
@@ -300,6 +314,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileClose
     [
         /* en      */ "Close Editor",
+        /* bn      */ "এডিটর বন্ধ করুন",
         /* de      */ "Editor schließen",
         /* es      */ "Cerrar editor",
         /* fr      */ "Fermer l'éditeur",
@@ -314,6 +329,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileExit
     [
         /* en      */ "Exit",
+        /* bn      */ "প্রস্থান",
         /* de      */ "Beenden",
         /* es      */ "Salir",
         /* fr      */ "Quitter",
@@ -329,6 +345,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Edit (a menu bar item)
     [
         /* en      */ "Edit",
+        /* bn      */ "সম্পাদনা",
         /* de      */ "Bearbeiten",
         /* es      */ "Editar",
         /* fr      */ "Édition",
@@ -343,6 +360,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditUndo
     [
         /* en      */ "Undo",
+        /* bn      */ "পূর্বাবস্থায় ফেরান",
         /* de      */ "Rückgängig",
         /* es      */ "Deshacer",
         /* fr      */ "Annuler",
@@ -357,6 +375,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditRedo
     [
         /* en      */ "Redo",
+        /* bn      */ "পুনরায় করুন",
         /* de      */ "Wiederholen",
         /* es      */ "Rehacer",
         /* fr      */ "Rétablir",
@@ -371,6 +390,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditCut
     [
         /* en      */ "Cut",
+        /* bn      */ "কাট",
         /* de      */ "Ausschneiden",
         /* es      */ "Cortar",
         /* fr      */ "Couper",
@@ -385,6 +405,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditCopy
     [
         /* en      */ "Copy",
+        /* bn      */ "কপি",
         /* de      */ "Kopieren",
         /* es      */ "Copiar",
         /* fr      */ "Copier",
@@ -399,6 +420,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditPaste
     [
         /* en      */ "Paste",
+        /* bn      */ "পেস্ট",
         /* de      */ "Einfügen",
         /* es      */ "Pegar",
         /* fr      */ "Coller",
@@ -413,6 +435,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditFind
     [
         /* en      */ "Find",
+        /* bn      */ "অনুসন্ধান",
         /* de      */ "Suchen",
         /* es      */ "Buscar",
         /* fr      */ "Rechercher",
@@ -427,6 +450,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EditReplace
     [
         /* en      */ "Replace",
+        /* bn      */ "প্রতিস্থাপন",
         /* de      */ "Ersetzen",
         /* es      */ "Reemplazar",
         /* fr      */ "Remplacer",
@@ -442,6 +466,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // View (a menu bar item)
     [
         /* en      */ "View",
+        /* bn      */ "দেখুন",
         /* de      */ "Ansicht",
         /* es      */ "Ver",
         /* fr      */ "Affichage",
@@ -456,6 +481,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // ViewFocusStatusbar
     [
         /* en      */ "Focus Statusbar",
+        /* bn      */ "স্ট্যাটাসবারে ফোকাস করুন",
         /* de      */ "Statusleiste fokussieren",
         /* es      */ "Enfocar barra de estado",
         /* fr      */ "Activer la barre d’état",
@@ -470,6 +496,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // ViewWordWrap
     [
         /* en      */ "Word Wrap",
+        /* bn      */ "শব্দ মোড়ানো",
         /* de      */ "Zeilenumbruch",
         /* es      */ "Ajuste de línea",
         /* fr      */ "Retour à la ligne",
@@ -485,6 +512,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Help (a menu bar item)
     [
         /* en      */ "Help",
+        /* bn      */ "সাহায্য",
         /* de      */ "Hilfe",
         /* es      */ "Ayuda",
         /* fr      */ "Aide",
@@ -499,6 +527,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // HelpAbout
     [
         /* en      */ "About",
+        /* bn      */ "সম্পর্কে",
         /* de      */ "Über",
         /* es      */ "Acerca de",
         /* fr      */ "À propos",
@@ -514,6 +543,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // UnsavedChangesDialogTitle
     [
         /* en      */ "Unsaved Changes",
+        /* bn      */ "অসংরক্ষিত পরিবর্তন",
         /* de      */ "Ungespeicherte Änderungen",
         /* es      */ "Cambios sin guardar",
         /* fr      */ "Modifications non enregistrées",
@@ -528,9 +558,10 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // UnsavedChangesDialogDescription
     [
         /* en      */ "Do you want to save the changes you made?",
+        /* bn      */ "আপনি কি আপনার করা পরিবর্তনগুলি সংরক্ষণ করতে চান?",
         /* de      */ "Möchten Sie die vorgenommenen Änderungen speichern?",
         /* es      */ "¿Desea guardar los cambios realizados?",
-        /* fr      */ "Voulez-vous enregistrer les modifications apportées ?",
+        /* fr      */ "Voulez-vous enregistrer les modifications apportées?",
         /* it      */ "Vuoi salvare le modifiche apportate?",
         /* ja      */ "変更内容を保存しますか？",
         /* ko      */ "변경한 내용을 저장하시겠습니까?",
@@ -542,6 +573,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // UnsavedChangesDialogYes
     [
         /* en      */ "Save",
+        /* bn      */ "সংরক্ষণ",
         /* de      */ "Speichern",
         /* es      */ "Guardar",
         /* fr      */ "Enregistrer",
@@ -556,6 +588,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // UnsavedChangesDialogNo
     [
         /* en      */ "Don't Save",
+        /* bn      */ "সংরক্ষণ করবেন না",
         /* de      */ "Nicht speichern",
         /* es      */ "No guardar",
         /* fr      */ "Ne pas enregistrer",
@@ -571,6 +604,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // AboutDialogTitle
     [
         /* en      */ "About",
+        /* bn      */ "সম্পর্কে",
         /* de      */ "Über",
         /* es      */ "Acerca de",
         /* fr      */ "À propos",
@@ -585,9 +619,10 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // AboutDialogVersion
     [
         /* en      */ "Version: ",
+        /* bn      */ "সংস্করণ: ",
         /* de      */ "Version: ",
         /* es      */ "Versión: ",
-        /* fr      */ "Version : ",
+        /* fr      */ "Version: ",
         /* it      */ "Versione: ",
         /* ja      */ "バージョン: ",
         /* ko      */ "버전: ",
@@ -601,6 +636,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // LargeClipboardWarningLine1
     [
         /* en      */ "Text you copy is shared with the terminal clipboard.",
+        /* bn      */ "আপনার কপি করা টেক্সট টার্মিনাল ক্লিপবোর্ডের সাথে শেয়ার করা হয়।",
         /* de      */ "Der kopierte Text wird mit der Terminal-Zwischenablage geteilt.",
         /* es      */ "El texto que copies se comparte con el portapapeles del terminal.",
         /* fr      */ "Le texte que vous copiez est partagé avec le presse-papiers du terminal.",
@@ -615,6 +651,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // LargeClipboardWarningLine2
     [
         /* en      */ "You copied {size} which may take a long time to share.",
+        /* bn      */ "আপনি {size} কপি করেছেন যা শেয়ার করতে দীর্ঘ সময় লাগতে পারে।",
         /* de      */ "Sie haben {size} kopiert, das Weitergeben könnte lange dauern.",
         /* es      */ "Copiaste {size}, lo que puede tardar en compartirse.",
         /* fr      */ "Vous avez copié {size}, ce qui peut être long à partager.",
@@ -629,6 +666,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // LargeClipboardWarningLine3
     [
         /* en      */ "Do you want to send it anyway?",
+        /* bn      */ "আপনি কি এটি যাইহোক পাঠাতে চান?",
         /* de      */ "Möchten Sie es trotzdem senden?",
         /* es      */ "¿Desea enviarlo de todas formas?",
         /* fr      */ "Voulez-vous quand même l’envoyer?",
@@ -643,6 +681,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SuperLargeClipboardWarning (as an alternative to LargeClipboardWarningLine2 and 3)
     [
         /* en      */ "The text you copied is too large to be shared.",
+        /* bn      */ "আপনার কপি করা টেক্সট শেয়ার করার জন্য খুব বড়।",
         /* de      */ "Der kopierte Text ist zu groß, um geteilt zu werden.",
         /* es      */ "El texto que copiaste es demasiado grande para compartirse.",
         /* fr      */ "Le texte que vous avez copié est trop volumineux pour être partagé.",
@@ -658,6 +697,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // WarningDialogTitle
     [
         /* en      */ "Warning",
+        /* bn      */ "সতর্কবার্তা",
         /* de      */ "Warnung",
         /* es      */ "Advertencia",
         /* fr      */ "Avertissement",
@@ -673,6 +713,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // ErrorDialogTitle
     [
         /* en      */ "Error",
+        /* bn      */ "ত্রুটি",
         /* de      */ "Fehler",
         /* es      */ "Error",
         /* fr      */ "Erreur",
@@ -687,6 +728,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // ErrorIcuMissing
     [
         /* en      */ "This operation requires the ICU library",
+        /* bn      */ "এই অপারেশনের জন্য ICU লাইব্রেরি প্রয়োজন",
         /* de      */ "Diese Operation erfordert die ICU-Bibliothek",
         /* es      */ "Esta operación requiere la biblioteca ICU",
         /* fr      */ "Cette opération nécessite la bibliothèque ICU",
@@ -702,9 +744,10 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchNeedleLabel (for input field)
     [
         /* en      */ "Find:",
+        /* bn      */ "অনুসন্ধান:",
         /* de      */ "Suchen:",
         /* es      */ "Buscar:",
-        /* fr      */ "Rechercher :",
+        /* fr      */ "Rechercher:",
         /* it      */ "Trova:",
         /* ja      */ "検索:",
         /* ko      */ "찾기:",
@@ -716,9 +759,10 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchReplacementLabel (for input field)
     [
         /* en      */ "Replace:",
+        /* bn      */ "প্রতিস্থাপন:",
         /* de      */ "Ersetzen:",
         /* es      */ "Reemplazar:",
-        /* fr      */ "Remplacer :",
+        /* fr      */ "Remplacer:",
         /* it      */ "Sostituire:",
         /* ja      */ "置換:",
         /* ko      */ "바꾸기:",
@@ -730,6 +774,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchMatchCase (toggle)
     [
         /* en      */ "Match Case",
+        /* bn      */ "কেস মিলান",
         /* de      */ "Groß/Klein",
         /* es      */ "May/Min",
         /* fr      */ "Casse",
@@ -744,6 +789,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchWholeWord (toggle)
     [
         /* en      */ "Whole Word",
+        /* bn      */ "সম্পূর্ণ শব্দ",
         /* de      */ "Ganzes Wort",
         /* es      */ "Palabra",
         /* fr      */ "Mot entier",
@@ -758,6 +804,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchUseRegex (toggle)
     [
         /* en      */ "Use Regex",
+        /* bn      */ "Regex ব্যবহার করুন",
         /* de      */ "RegEx",
         /* es      */ "RegEx",
         /* fr      */ "RegEx",
@@ -772,6 +819,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchReplaceAll (button)
     [
         /* en      */ "Replace All",
+        /* bn      */ "সব প্রতিস্থাপন করুন",
         /* de      */ "Alle ersetzen",
         /* es      */ "Reemplazar todo",
         /* fr      */ "Remplacer tout",
@@ -786,6 +834,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchClose (button)
     [
         /* en      */ "Close",
+        /* bn      */ "বন্ধ করুন",
         /* de      */ "Schließen",
         /* es      */ "Cerrar",
         /* fr      */ "Fermer",
@@ -801,6 +850,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EncodingReopen
     [
         /* en      */ "Reopen with encoding",
+        /* bn      */ "এনকোডিং সহ পুনরায় খুলুন",
         /* de      */ "Mit Kodierung erneut öffnen",
         /* es      */ "Reabrir con codificación",
         /* fr      */ "Rouvrir avec un encodage différent",
@@ -815,6 +865,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // EncodingConvert
     [
         /* en      */ "Convert to encoding",
+        /* bn      */ "এনকোডিং-এ রূপান্তর করুন",
         /* de      */ "In Kodierung konvertieren",
         /* es      */ "Convertir a otra codificación",
         /* fr      */ "Convertir en encodage",
@@ -830,6 +881,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // IndentationTabs
     [
         /* en      */ "Tabs",
+        /* bn      */ "ট্যাব",
         /* de      */ "Tabs",
         /* es      */ "Tabulaciones",
         /* fr      */ "Tabulations",
@@ -844,6 +896,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // IndentationSpaces
     [
         /* en      */ "Spaces",
+        /* bn      */ "স্পেস",
         /* de      */ "Leerzeichen",
         /* es      */ "Espacios",
         /* fr      */ "Espaces",
@@ -859,9 +912,10 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SaveAsDialogPathLabel
     [
         /* en      */ "Folder:",
+        /* bn      */ "ফোল্ডার:",
         /* de      */ "Ordner:",
         /* es      */ "Carpeta:",
-        /* fr      */ "Dossier :",
+        /* fr      */ "Dossier:",
         /* it      */ "Cartella:",
         /* ja      */ "フォルダ:",
         /* ko      */ "폴더:",
@@ -873,9 +927,10 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SaveAsDialogNameLabel
     [
         /* en      */ "File name:",
+        /* bn      */ "ফাইলের নাম:",
         /* de      */ "Dateiname:",
         /* es      */ "Nombre de archivo:",
-        /* fr      */ "Nom de fichier :",
+        /* fr      */ "Nom de fichier:",
         /* it      */ "Nome del file:",
         /* ja      */ "ファイル名:",
         /* ko      */ "파일 이름:",
@@ -888,6 +943,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileOverwriteWarning
     [
         /* en      */ "Confirm Save As",
+        /* bn      */ "অন্য নামে সংরক্ষণ নিশ্চিত করুন",
         /* de      */ "Speichern unter bestätigen",
         /* es      */ "Confirmar Guardar como",
         /* fr      */ "Confirmer Enregistrer sous",
@@ -902,6 +958,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // FileOverwriteWarningDescription
     [
         /* en      */ "File already exists. Do you want to overwrite it?",
+        /* bn      */ "ফাইল ইতিমধ্যে বিদ্যমান। আপনি কি এটি ওভাররাইট করতে চান?",
         /* de      */ "Datei existiert bereits. Möchten Sie sie überschreiben?",
         /* es      */ "El archivo ya existe. ¿Desea sobrescribirlo?",
         /* fr      */ "Le fichier existe déjà. Voulez-vous l’écraser?",
@@ -925,6 +982,7 @@ pub fn init() {
     for l in langs {
         lang = match l.as_str() {
             "en" => LangId::en,
+            "bn" => LangId::bn,
             "de" => LangId::de,
             "es" => LangId::es,
             "fr" => LangId::fr,
