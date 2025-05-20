@@ -8,6 +8,7 @@
 
 use std::ffi::{CStr, c_int, c_void};
 use std::fs::{self, File};
+use std::io::Error;
 use std::mem::{self, MaybeUninit};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
 use std::ptr::{self, NonNull, null_mut};
@@ -16,10 +17,6 @@ use std::{thread, time};
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::helpers::*;
 use crate::{apperr, arena_format};
-
-unsafe extern "C" {
-    fn __error() -> *mut libc::c_int;
-}
 
 struct State {
     stdin: libc::c_int,
@@ -225,7 +222,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                 return None; // EOF
             }
             if ret < 0 {
-                match *__error() {
+                match Error::last_os_error().raw_os_error().unwrap_or(0) {
                     libc::EINTR if STATE.inject_resize => break,
                     libc::EAGAIN if timeout == time::Duration::ZERO => break,
                     libc::EINTR | libc::EAGAIN => {}
@@ -304,7 +301,7 @@ pub fn write_stdout(text: &str) {
             continue;
         }
 
-        let err = unsafe { *__error() };
+        let err = Error::last_os_error().raw_os_error().unwrap_or(0);
         if err != libc::EINTR {
             return;
         }
@@ -565,5 +562,9 @@ const fn errno_to_apperr(no: c_int) -> apperr::Error {
 }
 
 fn check_int_return(ret: libc::c_int) -> apperr::Result<libc::c_int> {
-    if ret < 0 { Err(errno_to_apperr(unsafe { *__error() })) } else { Ok(ret) }
+    if ret < 0 {
+        Err(errno_to_apperr(std::io::Error::last_os_error().raw_os_error().unwrap_or(0)))
+    } else {
+        Ok(ret)
+    }
 }
