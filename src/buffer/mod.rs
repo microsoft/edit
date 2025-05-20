@@ -1072,6 +1072,7 @@ impl TextBuffer {
                 break;
             }
             self.write(replacement, true);
+            search.text = unsafe { icu::Text::new(self)? };
             offset = self.cursor.offset;
         }
 
