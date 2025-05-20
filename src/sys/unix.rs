@@ -207,7 +207,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                         tv_sec: timeout.as_secs() as libc::time_t,
                         tv_nsec: timeout.subsec_nanos() as libc::c_long,
                     };
-                    ret = libc::ppoll(&mut pollfd, 1, &ts, null());
+                    ret = libc::ppoll(&mut pollfd, 1, &ts, ptr::null());
                 }
                 if ret < 0 {
                     return None; // Error? Let's assume it's an EOF.
