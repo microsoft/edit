@@ -15,13 +15,11 @@ This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/
 
 ### Winget
 
-* Open up a terminal of your choice and run the following command
-
+* Open up a terminal of your choice and run the following command:
   ```powershell
   winget install Microsoft.Edit
   ```
-  
-* Winget will be automatically added to path. If typing `edit` doesn't work, restart or open a new terminal shell
+* `edit` will be automatically added to your `PATH`. If typing `edit` doesn't work, open a new terminal.
 
 ## Build Instructions
 
