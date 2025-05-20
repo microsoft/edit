@@ -28,6 +28,9 @@ unsafe fn memchr2_raw(needle1: u8, needle2: u8, beg: *const u8, end: *const u8) 
 
     #[cfg(target_arch = "aarch64")]
     return unsafe { memchr2_neon(needle1, needle2, beg, end) };
+
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
+    return unsafe { memchr2_fallback(needle1, needle2, beg, end) };
 }
 
 unsafe fn memchr2_fallback(
