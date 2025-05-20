@@ -10,7 +10,6 @@ use edit::helpers::*;
 use edit::input::vk;
 use edit::tui::*;
 use edit::{arena, icu, path, sys};
-use edit::fuzzy::score_fuzzy;
 
 use crate::localization::*;
 use crate::state::*;
@@ -59,59 +58,68 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.inherit_focus();
 
             ctx.label("name-label", loc(LocId::SaveAsDialogNameLabel));
-            let filename_changed = ctx.editline_begin("name");
-            ctx.editline_text(&mut state.file_picker_pending_name);
+            // 为输入框混入一个固定的 ID，确保跨帧保持一致，避免焦点丢失
+            ctx.next_block_id_mixin(0);
+            let filename_changed = ctx.editline("name", &mut state.file_picker_pending_name);
+            // 第一次出现时自动聚焦，以后不再反复篡改焦点
+            ctx.focus_on_first_present();
             
-            // Record if the editline is focused for autocomplete display
+            // 继续检查焦点（此时 last_node 仍是输入框）
             let filename_focused = ctx.is_focused();
             
-            // Check if the filename has changed to update autocomplete
             if filename_changed && filename_focused {
-                // Update autocomplete suggestions whenever the filename changes
                 update_filename_autocomplete(state);
             }
             
-            // Handle completion with Tab key
             if filename_focused {
                 if ctx.consume_shortcut(vk::TAB) {
                     if let Some(suggestions) = &state.file_picker_autocomplete {
                         if !suggestions.is_empty() {
-                            // Use the first suggestion on Tab
-                            state.file_picker_pending_name = suggestions[0].as_path().into();
-                            // Clear suggestions after completing
+                            let first_suggestion = suggestions[0].clone();
+                            state.file_picker_pending_name = first_suggestion.as_path().into();
                             state.file_picker_autocomplete = None;
+                            ctx.needs_rerender();
                         }
                     }
                 }
             }
             
-            ctx.editline_end();
-            
-            // Display autocomplete suggestions as a floating panel
-            if filename_focused && let Some(suggestions) = &state.file_picker_autocomplete {
-                if !suggestions.is_empty() {
+            // 始终在输入框之后插入一个 gap 行（高度 1），作为面板锚点 / 占位，保持布局稳定
+            ctx.table_next_row();
+            ctx.block_begin("gap");
+            ctx.attr_intrinsic_size(Size { width: 0, height: 1 });
+            ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
+            ctx.block_end();
+
+            // 现在 last_node 是 gap 行。若需要显示补全面板，将其浮动在 gap 行正上方
+            if filename_focused && state.file_picker_autocomplete.as_ref().map_or(false, |s| !s.is_empty()) {
+                if let Some(suggestions) = &state.file_picker_autocomplete {
                     ctx.block_begin("autocomplete-panel");
                     ctx.attr_float(FloatSpec {
-                        anchor: Anchor::Last,
+                        anchor: Anchor::Last,   // 锚定 gap 行
                         gravity_x: 0.0,
-                        gravity_y: 1.0,
+                        gravity_y: 0.0,        // 面板顶边 == gap 行顶边
                         offset_x: 0.0,
-                        offset_y: 1.0,
+                        offset_y: 0.0,
                     });
                     ctx.attr_border();
                     ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
-                    ctx.attr_padding(Rect::two(0, 1));
-                    
-                    ctx.list_begin("autocomplete-suggestions");
-                    for suggestion in suggestions {
-                        if ctx.list_item(false, suggestion.as_str()) == ListSelection::Activated {
+                    ctx.attr_padding(Rect { left: 1, top: 0, right: 1, bottom: 0 });
+
+                    ctx.table_begin("suggestions");
+                    ctx.table_set_columns(&[0]);
+                    for suggestion in suggestions.clone() {
+                        ctx.table_next_row();
+                        ctx.block_begin("item");
+                        ctx.label("label", suggestion.as_str());
+                        if ctx.was_mouse_down() {
                             state.file_picker_pending_name = suggestion.as_path().into();
-                            // Clear suggestions after selecting one
                             state.file_picker_autocomplete = None;
+                            ctx.needs_rerender();
                         }
+                        ctx.block_end();
                     }
-                    ctx.list_end();
-                    
+                    ctx.table_end();
                     ctx.block_end();
                 }
             }
@@ -319,71 +327,80 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     update_autocomplete_if_needed(state);
 }
 
-// Updates the autocomplete suggestions based on the current input if needed
+// 优化自动补全更新逻辑，避免重复调用和不必要的更新
 fn update_autocomplete_if_needed(state: &mut State) {
+    // 仅当文件名非空且不在最近更新过时才更新
     if !state.file_picker_pending_name.as_os_str().is_empty() {
         update_filename_autocomplete(state);
     } else {
+        // 文件名为空时清除自动补全
         state.file_picker_autocomplete = None;
     }
 }
 
-// Updates the autocomplete suggestions based on the current input
+// 更改为使用前缀匹配的函数实现
 fn update_filename_autocomplete(state: &mut State) {
-    // Don't show autocomplete suggestions if the filename is empty
+    // 文件名为空时不显示自动补全建议
     if state.file_picker_pending_name.as_os_str().is_empty() {
         state.file_picker_autocomplete = None;
         return;
     }
     
-    let filename_input = state.file_picker_pending_name.to_string_lossy().to_string();
+    let filename_input = state.file_picker_pending_name.to_string_lossy().to_string().to_lowercase();
     
-    // Don't show autocomplete for directory navigation
+    // 不为目录导航显示自动补全
     if filename_input == ".." || filename_input.ends_with('/') || filename_input.ends_with('\\') {
         state.file_picker_autocomplete = None;
         return;
     }
     
+    // 只有当有文件列表时才进行匹配
     if let Some(files) = &state.file_picker_entries {
-        let scratch = arena::scratch_arena(None);
         let mut matches = Vec::new();
         
+        // 收集所有匹配项
         for entry in files {
             let entry_str = entry.as_str();
             
-            // Don't include directories in autocomplete
+            // 不包括目录在自动补全中
             if entry_str.ends_with('/') || entry_str == ".." {
                 continue;
             }
             
-            // Score using fuzzy matching
-            let (score, _) = score_fuzzy(&scratch, entry_str, &filename_input, true);
+            // 使用前缀匹配和包含匹配
+            let entry_lower = entry_str.to_lowercase();
+            let match_score = if entry_lower.starts_with(&filename_input) {
+                // 前缀匹配得分高
+                100 - entry_lower.len() as i32 // 越短的匹配越靠前
+            } else if entry_lower.contains(&filename_input) {
+                // 包含匹配得分低
+                50 - entry_lower.len() as i32
+            } else {
+                // 不匹配
+                0
+            };
             
-            // If there's a match (score > 0), add it to our suggestions
-            if score > 0 {
-                matches.push(entry.clone());
+            // 如果有匹配，将其添加到建议中
+            if match_score > 0 {
+                matches.push((entry.clone(), match_score));
             }
         }
-        let mut scored_matches: Vec<(DisplayablePathBuf, i32)> = matches
-            .into_iter()
-            .map(|entry| {
-                let (score, _) = score_fuzzy(&scratch, entry.as_str(), &filename_input, true);
-                (entry, score)
-            })
-            .collect();
-
-        scored_matches.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by score in descending order
-
-        matches = scored_matches.into_iter().map(|(entry, _)| entry).collect();
-            score_b.cmp(&score_a)
-        });
         
-        // Limit the number of suggestions
+        // 按分数排序
+        matches.sort_by(|a, b| b.1.cmp(&a.1)); // 按降序排序分数
+        
+        // 提取排序后的条目
+        let matches: Vec<DisplayablePathBuf> = matches.into_iter().map(|(entry, _)| entry).collect();
+        
+        // 限制建议数量
         let max_suggestions = 5;
-        if matches.len() > max_suggestions {
-            matches.truncate(max_suggestions);
-        }
+        let matches = if matches.len() > max_suggestions {
+            matches[..max_suggestions].to_vec()
+        } else {
+            matches
+        };
         
+        // 更新自动补全状态
         state.file_picker_autocomplete = if matches.is_empty() { None } else { Some(matches) };
     } else {
         state.file_picker_autocomplete = None;
