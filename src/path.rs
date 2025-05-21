@@ -40,7 +40,7 @@ pub fn normalize(path: &Path) -> PathBuf {
                     // - since `parent` is also a valid `OsStr`, trimming at its byte length must also be at a valid
                     //   boundary.
                     // This is very similar the example given in `OsStr::from_encoded_bytes_unchecked`'s documentation.
-                    res = unsafe { OsString::from_encoded_bytes_unchecked(bytes).into() };
+                    res = PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(bytes) });
                 }
             }
             Component::Normal(p) => res.push(p),
