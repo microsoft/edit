@@ -276,29 +276,21 @@ pub const fn slice_as_uninit_mut<T>(slice: &mut [T]) -> &mut [MaybeUninit<T>] {
     unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut MaybeUninit<T>, slice.len()) }
 }
 
-/// Tests if a string starts with a given ASCII prefix.
-pub fn starts_with_ascii(text: &str, prefix: &str) -> bool {
-    // If the prefix is longer than the text, it cannot be a prefix.
-    if prefix.len() > text.len() {
-        return false;
+/// Helpers for ASCII string comparisons.
+pub trait AsciiStringHelpers {
+    /// Tests if a string starts with a given ASCII prefix.
+    ///
+    /// This function name really is a mouthful, but it's a combination
+    /// of [`str::starts_with`] and [`str::eq_ignore_ascii_case`].
+    fn starts_with_ignore_ascii_case(&self, prefix: &str) -> bool;
+}
+
+impl AsciiStringHelpers for str {
+    fn starts_with_ignore_ascii_case(&self, prefix: &str) -> bool {
+        // Casting to bytes first ensures we skip any UTF8 boundary checks.
+        // Since the comparison is ASCII, we don't need to worry about that.
+        let s = self.as_bytes();
+        let p = prefix.as_bytes();
+        p.len() <= s.len() && s[..p.len()].eq_ignore_ascii_case(p)
     }
-
-    let text_bytes = text.as_bytes();
-    let prefix_bytes = prefix.as_bytes();
-
-    // Iterate over the bytes of both string slices
-    // We only need to compare up to the length of the prefix
-    for i in 0..prefix.len() {
-        // Get the ASCII byte from both text and prefix
-        let text_byte = text_bytes[i];
-        let prefix_byte = prefix_bytes[i];
-
-        // If the bytes don't match, it's not a prefix
-        if text_byte != prefix_byte {
-            return false;
-        }
-    }
-
-    // If we've gone through all prefix bytes and they all matched, then it's a prefix
-    true
 }
