@@ -421,7 +421,26 @@ impl PartialEq for FileId {
 
 impl Eq for FileId {}
 
-fn _file_id_from_handle(file: &File) -> apperr::Result<FileId> {
+
+/// Returns a unique identifier for the given file by handle or path.
+pub fn file_id(file: Option<&File>, path: Option<&Path>) -> apperr::Result<FileId> {
+    let file = match file {
+        Some(f) => f,
+        None if path.is_some() => &File::open(path.unwrap())?,
+        None => {
+            // Neither open file nor path provided.
+            return Err(gle_to_apperr(Foundation::ERROR_FILE_NOT_FOUND));
+        }
+    };
+
+    match file_id_from_handle(&file) {
+        Ok(i) => Ok(i),
+        Err(_) if path.is_some() => Ok(FileId::Path(canonicalize(path.unwrap())?)),
+        Err(v) => Err(v),
+    }
+}
+
+fn file_id_from_handle(file: &File) -> apperr::Result<FileId> {
     unsafe {
         let mut info = MaybeUninit::<FileSystem::FILE_ID_INFO>::uninit();
         check_bool_return(FileSystem::GetFileInformationByHandleEx(
@@ -433,25 +452,6 @@ fn _file_id_from_handle(file: &File) -> apperr::Result<FileId> {
         Ok(FileId::Id(info.assume_init()))
     }
 }
-
-/// Returns a unique identifier for the given file by handle or path.
-pub fn file_id(file: Option<&File>, path: Option<&Path>) -> apperr::Result<FileId> {
-    let handle = match file {
-        Some(f) => f,
-        None if path.is_some() => &File::open(path.unwrap())?,
-        None => {
-            // Neither open file nor path provided.
-            return Err(gle_to_apperr(Foundation::ERROR_FILE_NOT_FOUND));
-        }
-    };
-
-    match _file_id_from_handle(&handle) {
-        Ok(i) => Ok(i),
-        Err(_) if path.is_some() => Ok(FileId::Path(canonicalize(path.unwrap())?)),
-        Err(v) => Err(v),
-    }
-}
-
 /// Canonicalizes the given path.
 ///
 /// This differs from [`fs::canonicalize`] in that it strips the `\\?\` UNC

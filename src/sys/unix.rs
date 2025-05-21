@@ -8,9 +8,9 @@
 
 use std::ffi::{CStr, c_int, c_void};
 use std::fs::{self, File};
-use std::path::Path;
 use std::mem::{self, ManuallyDrop, MaybeUninit};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
+use std::path::Path;
 use std::ptr::{self, NonNull, null_mut};
 use std::{thread, time};
 
@@ -351,18 +351,9 @@ pub struct FileId {
     st_ino: libc::ino_t,
 }
 
-fn _file_id_from_handle(file: &File) -> apperr::Result<FileId> {
-    unsafe {
-        let mut stat = MaybeUninit::<libc::stat>::uninit();
-        check_int_return(libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()))?;
-        let stat = stat.assume_init();
-        Ok(FileId { st_dev: stat.st_dev, st_ino: stat.st_ino })
-    }
-}
-
 /// Returns a unique identifier for the given file by handle or path.
 pub fn file_id(file: Option<&File>, path: Option<&Path>) -> apperr::Result<FileId> {
-    let handle = match file {
+    let file = match file {
         Some(f) => f,
         None if path.is_some() => &File::open(path.unwrap())?,
         None => {
@@ -371,7 +362,12 @@ pub fn file_id(file: Option<&File>, path: Option<&Path>) -> apperr::Result<FileI
         }
     };
 
-    _file_id_from_handle(&handle)
+    unsafe {
+        let mut stat = MaybeUninit::<libc::stat>::uninit();
+        check_int_return(libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()))?;
+        let stat = stat.assume_init();
+        Ok(FileId { st_dev: stat.st_dev, st_ino: stat.st_ino })
+    }
 }
 
 /// Reserves a virtual memory region of the given size.
