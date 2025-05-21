@@ -345,11 +345,6 @@ fn update_autocomplete_suggestions(state: &mut State) {
     let filename_input =
         state.file_picker_pending_name.to_string_lossy().to_string().to_lowercase();
 
-    // Do not suggest directories
-    if filename_input == ".." || filename_input.ends_with('/') || filename_input.ends_with('\\') {
-        state.file_picker_autocomplete = None;
-        return;
-    }
 
     if let Some(files) = &state.file_picker_entries {
         let mut matches = Vec::new();
