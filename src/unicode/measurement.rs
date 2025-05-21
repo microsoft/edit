@@ -486,7 +486,7 @@ impl<'doc> MeasurementConfig<'doc> {
     }
 }
 
-/// Seeks forward to to the given line start.
+/// Seeks forward to the given line start.
 ///
 /// If given a piece of `text`, and assuming you're currently at `offset` which
 /// is on the logical line `line`, this will seek forward until the logical line

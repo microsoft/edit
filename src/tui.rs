@@ -16,7 +16,7 @@
 //! set up callbacks for when it is clicked, and then stop worrying about it.
 //!
 //! The downside of immediate mode is that your UI code _may_ become cluttered.
-//! The upside however is that that you cannot leak UI elements, you don't need to
+//! The upside however is that you cannot leak UI elements, you don't need to
 //! worry about lifetimes nor callbacks, and that simple UIs are simple to write.
 //!
 //! More importantly though, the primary reason for this is that the
