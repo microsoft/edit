@@ -594,7 +594,7 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
     RestoreModes
 }
 
-/// Strips all C0 control characters from the string an replaces them with "_".
+/// Strips all C0 control characters from the string and replaces them with "_".
 ///
 /// Jury is still out on whether this should also strip C1 control characters.
 /// That requires parsing UTF8 codepoints, which is annoying.
