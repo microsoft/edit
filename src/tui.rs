@@ -2410,16 +2410,13 @@ impl<'a> Context<'a, '_> {
                         // If the line has some indentation and the user pressed Home,
                         // the first time it'll stop at the indentation. The second time
                         // they press it, it'll move to the true start of the line.
-                        let indent_end = tb.indent_end_logical_pos();
-                        if logical_after.x == 0 && logical_before > indent_end {
-                            if modifiers == kbmod::SHIFT {
-                                tb.selection_update_logical(indent_end);
-                            } else {
-                                tb.cursor_move_to_logical(indent_end);
-                            }
-                        }
-                        // If the cursor is at the start of the line (column 0), move it to the indentation position
-                        else if logical_after.x == 0 && indent_end.x > 0 {
+                        //
+                        // If the cursor is already at the start of the line,
+                        // we move it back to the end of the indentation.
+                        if logical_after.x == 0
+                            && let indent_end = tb.indent_end_logical_pos()
+                            && (logical_before > indent_end || logical_before.x == 0)
+                        {
                             if modifiers == kbmod::SHIFT {
                                 tb.selection_update_logical(indent_end);
                             } else {
