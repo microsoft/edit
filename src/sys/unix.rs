@@ -360,7 +360,7 @@ fn _file_id_from_handle(file: &File) -> apperr::Result<FileId> {
     }
 }
 
-/// Returns a unique identifier for the given file, by handle or path.
+/// Returns a unique identifier for the given file by handle or path.
 pub fn file_id(file: Option<&File>, path: Option<&Path>) -> apperr::Result<FileId> {
     let handle = match file {
         Some(f) => f,

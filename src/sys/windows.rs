@@ -421,8 +421,7 @@ impl PartialEq for FileId {
 
 impl Eq for FileId {}
 
-/// Returns a unique identifier for the given file, by open handle.
-pub fn _file_id_from_handle(file: &File) -> apperr::Result<FileId> {
+fn _file_id_from_handle(file: &File) -> apperr::Result<FileId> {
     unsafe {
         let mut info = MaybeUninit::<FileSystem::FILE_ID_INFO>::uninit();
         check_bool_return(FileSystem::GetFileInformationByHandleEx(
@@ -435,6 +434,7 @@ pub fn _file_id_from_handle(file: &File) -> apperr::Result<FileId> {
     }
 }
 
+/// Returns a unique identifier for the given file by handle or path.
 pub fn file_id(file: Option<&File>, path: Option<&Path>) -> apperr::Result<FileId> {
     let handle = match file {
         Some(f) => f,
