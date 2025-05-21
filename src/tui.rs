@@ -2636,20 +2636,20 @@ impl<'a> Context<'a, '_> {
         
         // Save the original cursor position
         let original_cursor = tb.cursor_visual_pos();
+
+        // Get target line content
+        tb.cursor_move_to_logical(Point { x: 0, y: target_line });
+        tb.select_line();
+        let target_line_content = tb.extract_selection(false);
+        
+        // Get current line content
+        tb.cursor_move_to_logical(Point { x: 0, y: current_line });
+        tb.select_line();
+        let current_line_content = tb.extract_selection(false);
         
         // Instead of closures, use direct operations to avoid borrow checker issues
         if direction < 0 {
             // Moving line up
-            // Get current line content
-            tb.cursor_move_to_logical(Point { x: 0, y: current_line });
-            tb.select_line();
-            let current_line_content = tb.extract_selection(false);
-            
-            // Get target line content
-            tb.cursor_move_to_logical(Point { x: 0, y: target_line });
-            tb.select_line();
-            let target_line_content = tb.extract_selection(false);
-            
             // Delete both lines (bottom to top to preserve line numbers)
             tb.cursor_move_to_logical(Point { x: 0, y: current_line });
             tb.select_line();
@@ -2668,16 +2668,6 @@ impl<'a> Context<'a, '_> {
             tb.write(&target_line_content, true);
         } else {
             // Moving line down
-            // Get target line content first
-            tb.cursor_move_to_logical(Point { x: 0, y: target_line });
-            tb.select_line();
-            let target_line_content = tb.extract_selection(false);
-            
-            // Get current line content
-            tb.cursor_move_to_logical(Point { x: 0, y: current_line });
-            tb.select_line();
-            let current_line_content = tb.extract_selection(false);
-            
             // Delete both lines (bottom to top to preserve line numbers)
             tb.cursor_move_to_logical(Point { x: 0, y: target_line });
             tb.select_line();
