@@ -352,14 +352,10 @@ pub struct FileId {
 }
 
 /// Returns a unique identifier for the given file by handle or path.
-pub fn file_id(file: Option<&File>, path: Option<&Path>) -> apperr::Result<FileId> {
+pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
     let file = match file {
         Some(f) => f,
-        None if path.is_some() => &File::open(path.unwrap())?,
-        None => {
-            // Neither open file nor path provided.
-            return Err(errno_to_apperr(libc::ENOENT));
-        }
+        None => &File::open(path)?,
     };
 
     unsafe {

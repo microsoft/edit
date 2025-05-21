@@ -421,23 +421,14 @@ impl PartialEq for FileId {
 
 impl Eq for FileId {}
 
-
 /// Returns a unique identifier for the given file by handle or path.
-pub fn file_id(file: Option<&File>, path: Option<&Path>) -> apperr::Result<FileId> {
+pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
     let file = match file {
         Some(f) => f,
-        None if path.is_some() => &File::open(path.unwrap())?,
-        None => {
-            // Neither open file nor path provided.
-            return Err(gle_to_apperr(Foundation::ERROR_FILE_NOT_FOUND));
-        }
+        None => &File::open(path)?,
     };
 
-    match file_id_from_handle(file) {
-        Ok(i) => Ok(i),
-        Err(_) if path.is_some() => Ok(FileId::Path(canonicalize(path.unwrap())?)),
-        Err(v) => Err(v),
-    }
+    file_id_from_handle(file).or_else(|_| Ok(FileId::Path(canonicalize(path)?)))
 }
 
 fn file_id_from_handle(file: &File) -> apperr::Result<FileId> {
@@ -452,6 +443,7 @@ fn file_id_from_handle(file: &File) -> apperr::Result<FileId> {
         Ok(FileId::Id(info.assume_init()))
     }
 }
+
 /// Canonicalizes the given path.
 ///
 /// This differs from [`fs::canonicalize`] in that it strips the `\\?\` UNC
