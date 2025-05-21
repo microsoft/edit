@@ -499,7 +499,7 @@ impl<'input> Stream<'_, '_, 'input> {
     /// ```
     ///
     /// That text inbetween is then expected to be taken literally.
-    /// It can inbetween be anything though, including other escape sequences.
+    /// It can be in between anything though, including other escape sequences.
     /// This is the reason why this is a separate method.
     #[cold]
     fn handle_bracketed_paste(&mut self) -> Option<Input<'input>> {
