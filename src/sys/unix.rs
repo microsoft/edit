@@ -8,6 +8,7 @@
 
 use std::ffi::{CStr, c_int, c_void};
 use std::fs::{self, File};
+use std::path::Path;
 use std::mem::{self, ManuallyDrop, MaybeUninit};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
 use std::ptr::{self, NonNull, null_mut};
@@ -360,19 +361,17 @@ fn _file_id_from_handle(file: &File) -> apperr::Result<FileId> {
 }
 
 /// Returns a unique identifier for the given file, by handle or path.
-pub fn file_id(file: &Option<File>, path: &Option<Path>) -> apperr::Result<FileId> {
-    if let Some(f) = file {
-        if let Ok(id) = _file_id_from_handle(&f) {
-            return Ok(id);
+pub fn file_id(file: Option<&File>, path: Option<&Path>) -> apperr::Result<FileId> {
+    let handle = match file {
+        Some(f) => f,
+        None if path.is_some() => &File::open(path.unwrap())?,
+        None => {
+            // Neither open file nor path provided.
+            return Err(errno_to_apperr(libc::ENOENT));
         }
-    }
+    };
 
-    if let Some(p) = path {
-        let file = File::open(p)?;
-        _file_id_from_handle(&file)
-    }
-
-    Err(errno_to_apperr(libc::ENOENT))
+    _file_id_from_handle(&handle)
 }
 
 /// Reserves a virtual memory region of the given size.
