@@ -13,6 +13,13 @@ This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/
 * Copy the `edit` binary to a directory in your `PATH`
 * You may delete any other files in the archive if you don't need them
 
+### Windows
+
+You can install `edit` with winget:
+```
+winget install Microsoft.Edit
+```
+
 ## Build Instructions
 
 * [Install Rust](https://www.rust-lang.org/tools/install)
