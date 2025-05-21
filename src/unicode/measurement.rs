@@ -968,7 +968,7 @@ mod test {
 
         for (y, &expected) in expected.iter().enumerate() {
             let y = y as CoordType;
-            // In order for `goto_visual()` to hit columnn 0 after a word wrap,
+            // In order for `goto_visual()` to hit column 0 after a word wrap,
             // it MUST be able to go back by 1 grapheme, which is what this tests.
             let beg = cfg.goto_visual(Point { x: 0, y });
             let end = cfg.goto_visual(Point { x: 5, y });
@@ -1069,7 +1069,7 @@ mod test {
 
         for (y, &expected) in expected.iter().enumerate() {
             let y = y as CoordType;
-            // In order for `goto_visual()` to hit columnn 0 after a word wrap,
+            // In order for `goto_visual()` to hit column 0 after a word wrap,
             // it MUST be able to go back by 1 grapheme, which is what this tests.
             let beg = cfg.goto_visual(Point { x: 0, y });
             let end = cfg.goto_visual(Point { x: 5, y });
