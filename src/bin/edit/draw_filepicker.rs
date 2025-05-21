@@ -105,6 +105,9 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                         offset_x: 0.0,
                         offset_y: 0.0,
                     });
+                    ctx.attr_border();
+                    ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Background, 3, 4));
+                    ctx.attr_foreground_rgba(ctx.contrasted(ctx.indexed_alpha(IndexedColor::Background, 3, 4)));
                     ctx.attr_padding(Rect { left: 0, top: 0, right: 0, bottom: 0 });
 
                     ctx.table_begin("suggestions");
