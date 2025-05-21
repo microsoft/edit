@@ -129,7 +129,7 @@ pub struct State {
     pub file_picker_pending_name: PathBuf,
     pub file_picker_entries: Option<Vec<DisplayablePathBuf>>,
     pub file_picker_overwrite_warning: Option<PathBuf>, // The path the warning is about.
-    pub file_picker_autocomplete: Option<Vec<DisplayablePathBuf>>, // Autocomplete suggestions for the filename
+    pub file_picker_autocomplete: Option<Vec<DisplayablePathBuf>>,
     pub wants_file_picker_file_name_focus: bool,
     pub wants_file_picker_file_list_focus: bool,
 
