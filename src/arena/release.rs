@@ -30,7 +30,7 @@ const ALLOC_CHUNK_SIZE: usize = 64 * KIBI;
 ///
 /// The biggest benefit though is that it sometimes massively simplifies lifetime
 /// and memory management. This can best be seen by this project's UI code, which
-/// uses an arena to allocate a tree of UI nodes. This is infameously difficult
+/// uses an arena to allocate a tree of UI nodes. This is infamously difficult
 /// to do in Rust, but not so when you got an arena allocator:
 /// All nodes have the same lifetime, so you can just use references.
 ///
