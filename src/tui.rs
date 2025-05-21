@@ -2637,9 +2637,14 @@ impl<'a> Context<'a, '_> {
         let first_line = current_line.min(target_line);
         let second_line = current_line.max(target_line);
 
-        tb.cursor_move_to_logical(Point { x: 0, y: second_line });
-        let content = tb.extract_selection(true);
         tb.cursor_move_to_logical(Point { x: 0, y: first_line });
+        let mut content = tb.extract_selection(true);
+        tb.cursor_move_to_logical(Point { x: 0, y: second_line });
+        if second_line == line_count - 1 {
+            tb.write(b"\n", true);
+            tb.cursor_move_to_logical(Point { x: 0, y: second_line });
+            content.pop();
+        }
         tb.write(&content, true);
 
         tb.cursor_move_to_logical(Point { x: original_cursor.x, y: target_line });
