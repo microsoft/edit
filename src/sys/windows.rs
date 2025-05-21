@@ -633,25 +633,6 @@ pub(crate) fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
     gle_to_apperr(err.raw_os_error().unwrap_or(0) as u32)
 }
 
-pub fn preferred_languages2(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
-    let mut locales = Vec::new_in(arena);
-
-    for key in ["LANGUAGE", "LC_ALL", "LANG"] {
-        if let Ok(val) = std::env::var(key) {
-            locales.extend(val.split(':').filter(|s| !s.is_empty()).map(|s| {
-                // Replace all underscores with dashes,
-                // because the localization code expects pt-br, not pt_BR.
-                let mut res = Vec::new_in(arena);
-                res.extend(s.as_bytes().iter().map(|&b| if b == b'_' { b'-' } else { b }));
-                unsafe { ArenaString::from_utf8_unchecked(res) }
-            }));
-            break;
-        }
-    }
-
-    locales
-}
-
 /// Formats a platform error code into a human-readable string.
 pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
     unsafe {
