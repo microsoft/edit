@@ -2418,6 +2418,14 @@ impl<'a> Context<'a, '_> {
                                 tb.cursor_move_to_logical(indent_end);
                             }
                         }
+                        // If the cursor is at the start of the line (column 0), move it to the indentation position
+                        else if logical_after.x == 0 && indent_end.x > 0 {
+                            if modifiers == kbmod::SHIFT {
+                                tb.selection_update_logical(indent_end);
+                            } else {
+                                tb.cursor_move_to_logical(indent_end);
+                            }
+                        }
                     }
                 }
                 vk::LEFT => {
