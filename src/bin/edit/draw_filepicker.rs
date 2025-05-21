@@ -101,11 +101,11 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                     ctx.attr_float(FloatSpec {
                         anchor: Anchor::Last,
                         gravity_x: 0.0,
-                        gravity_y: 0.0,
+                        gravity_y: 1.0,
                         offset_x: 0.0,
-                        offset_y: 1.0,
+                        offset_y: 0.0,
                     });
-                    ctx.attr_padding(Rect { left: 1, top: 0, right: 1, bottom: 0 });
+                    ctx.attr_padding(Rect { left: 0, top: 0, right: 0, bottom: 0 });
 
                     ctx.table_begin("suggestions");
                     ctx.table_set_columns(&[0]);
