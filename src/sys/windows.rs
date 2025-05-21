@@ -428,7 +428,7 @@ pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
         None => &File::open(path)?,
     };
 
-    file_id_from_handle(file).or_else(|_| Ok(FileId::Path(canonicalize(path)?)))
+    file_id_from_handle(file).or_else(|_| Ok(FileId::Path(std::fs::canonicalize(path)?)))
 }
 
 fn file_id_from_handle(file: &File) -> apperr::Result<FileId> {
