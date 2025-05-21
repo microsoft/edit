@@ -273,10 +273,13 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
 
 fn print_help() {
     sys::write_stdout(concat!(
-        "Usage: edit [OPTIONS] [FILE]\r\n",
+        "Usage: edit [OPTIONS] [FILE[:LINE[:COLUMN]]]\r\n",
         "Options:\r\n",
         "    -h, --help       Print this help message\r\n",
         "    -v, --version    Print the version number\r\n",
+        "\r\n",
+        "Arguments:\r\n",
+        "    FILE[:LINE[:COLUMN]]    The file to open, optionally with line and column (e.g., foo.txt:123:45)\r\n",
     ));
 }
 
