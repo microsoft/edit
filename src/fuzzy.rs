@@ -101,7 +101,7 @@ pub fn score_fuzzy<'a>(
                     // We don't need to check if it's contiguous if we allow non-contiguous matches
                     allow_non_contiguous_matches ||
                         // We must be looking for a contiguous match.
-                        // Looking at an index higher than 0 in the query means we must have already
+                        // Looking at an index above 0 in the query means we must have already
                         // found out this is contiguous otherwise there wouldn't have been a score
                         query_index > 0 ||
                         // lastly check if the query is completely contiguous at this index in the target
