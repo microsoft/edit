@@ -32,7 +32,7 @@ pub struct Cursor {
     pub column: CoordType,
     /// When `measure_forward` hits the `word_wrap_column`, the question is:
     /// Was there a wrap opportunity on this line? Because if there wasn't,
-    /// a hard-wrap is required, otherwise the word that is being layouted is
+    /// a hard-wrap is required; otherwise, the word that is being layouted is
     /// moved to the next line. This boolean carries this state between calls.
     pub wrap_opp: bool,
 }
