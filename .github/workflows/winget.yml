@@ -23,7 +23,7 @@ jobs:
           $packageVersion = (${{ toJSON(github.event.release.tag_name) }}).Trim('v')
 
           # Update package using wingetcreate
-          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          curl.exe -JLO https://aka.ms/wingetcreate/latest
           .\wingetcreate.exe update Microsoft.Edit `
             --version $packageVersion `
             --urls $x64InstallerUrl $arm64InstallerUrl `
