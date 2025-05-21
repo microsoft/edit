@@ -154,6 +154,11 @@ pub enum CursorMovement {
     Word,
 }
 
+pub enum MoveLineDirection {
+    Up,
+    Down,
+}
+
 /// The result of a call to [`TextBuffer::render()`].
 pub struct RenderResult {
     /// The maximum visual X position we encountered during rendering.
@@ -552,6 +557,141 @@ impl TextBuffer {
         }
 
         self.cursor_for_rendering = None;
+    }
+
+    /// Displaces the current, cursor or the selection, line(s) in the given direction.
+    pub fn move_selected_lines(&mut self, direction: MoveLineDirection) -> bool {
+        let original_cursor_pos = self.cursor.logical_pos;
+        let original_selection = self.selection;
+        let logical_line_limit = self.stats.logical_lines - 1;
+
+        // Determine line(s) to be moved & validate boundaries
+        let (first_line, last_line) = match self.selection {
+            None => {
+                // No selection, so we move the cursor line
+                let current_line = original_cursor_pos.y;
+                match direction {
+                    MoveLineDirection::Up => {
+                        if current_line <= 0 {
+                            return false;
+                        }
+                    }
+                    MoveLineDirection::Down => {
+                        if current_line >= logical_line_limit {
+                            return false;
+                        }
+                    }
+                }
+                (current_line, current_line)
+            }
+            Some(existing_selection) => {
+                let [start, mut end] = minmax(existing_selection.beg, existing_selection.end);
+                match direction {
+                    MoveLineDirection::Up => {
+                        if start.y <= 0 {
+                            return false;
+                        }
+                    }
+                    MoveLineDirection::Down => {
+                        if end.y >= logical_line_limit {
+                            return false;
+                        }
+                    }
+                }
+                // If end cursor is at the start of a new line, don't include that line in the range (vscode behavior)
+                if end.x == 0 {
+                    end.y -= 1
+                }
+                (start.y, end.y)
+            }
+        };
+
+        let target_line = match direction {
+            MoveLineDirection::Up => first_line - 1,
+            MoveLineDirection::Down => last_line + 1,
+        };
+
+        // Extract the text we want to move
+        let mut source_text = Vec::new();
+        let source_beg =
+            self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: first_line });
+        let source_end =
+            self.cursor_move_to_logical_internal(source_beg, Point { x: 0, y: last_line + 1 });
+        self.buffer.extract_raw(source_beg.offset, source_end.offset, &mut source_text, 0);
+
+        // Move to the target line & extract it's text
+        let target_beg =
+            self.cursor_move_to_logical_internal(source_beg, Point { x: 0, y: target_line });
+        let target_end =
+            self.cursor_move_to_logical_internal(target_beg, Point { x: 0, y: target_line + 1 });
+        let mut target_text = Vec::new();
+        self.buffer.extract_raw(target_beg.offset, target_end.offset, &mut target_text, 0);
+
+        // Prepare the combined text based on direction
+        // note: care to handle EOL tokens when moving around the bottom lines of a document
+        let eol_offset = if self.is_crlf() { 2 } else { 1 };
+        let mut reordered_text = Vec::new();
+        match direction {
+            MoveLineDirection::Up => {
+                if last_line == logical_line_limit {
+                    // Moving selection up when it contains the last line
+                    let (target_content, target_eol) =
+                        target_text.split_at(target_text.len() - eol_offset);
+                    reordered_text.extend(source_text);
+                    reordered_text.extend_from_slice(target_eol);
+                    reordered_text.extend(target_content);
+                } else {
+                    reordered_text.extend(source_text);
+                    reordered_text.extend(target_text);
+                }
+            }
+            MoveLineDirection::Down => {
+                if target_line == logical_line_limit {
+                    // Moving selection down when target is the last line
+                    let (source_content, source_eol) =
+                        source_text.split_at(source_text.len() - eol_offset);
+                    reordered_text.extend(target_text);
+                    reordered_text.extend_from_slice(source_eol);
+                    reordered_text.extend(source_content);
+                } else {
+                    reordered_text.extend(target_text);
+                    reordered_text.extend(source_text);
+                }
+            }
+        }
+        // Replace the original texts in the buffer with the reordered texts
+        let (replacement_start, replacement_end) = match direction {
+            MoveLineDirection::Up => (target_beg, source_end),
+            MoveLineDirection::Down => (source_beg, target_end),
+        };
+        self.edit_begin(HistoryType::Write, replacement_start);
+        self.set_selection(Some(TextBufferSelection {
+            beg: replacement_start.logical_pos,
+            end: replacement_end.logical_pos,
+        }));
+        self.write(&reordered_text, true);
+        self.edit_end();
+
+        // Restore original selection range and/or original cursor position (shifted by direction)
+        let direction_offset = match direction {
+            MoveLineDirection::Up => -1,
+            MoveLineDirection::Down => 1,
+        };
+        self.cursor_move_to_logical(Point {
+            y: original_cursor_pos.y + direction_offset,
+            x: original_cursor_pos.x,
+        });
+        if let Some(original_selection) = original_selection {
+            // Normalize the selection (ensure beg comes before end logically)
+            let [normalized_beg, normalized_end] =
+                minmax(original_selection.beg, original_selection.end);
+            let restored_selection = TextBufferSelection {
+                beg: Point { y: normalized_beg.y + direction_offset, x: normalized_beg.x },
+                end: Point { y: normalized_end.y + direction_offset, x: normalized_end.x },
+            };
+            self.set_selection(Some(restored_selection));
+        }
+        true
     }
 
     /// Replaces the entire buffer contents with the given `text`.
