@@ -133,7 +133,7 @@ impl<'a> ArenaString<'a> {
     }
 
     /// Reserves *additional* memory. For you old folks out there (totally not me),
-    /// this is differrent from C++'s `reserve` which reserves a total size.
+    /// this is different from C++'s `reserve` which reserves a total size.
     pub fn reserve(&mut self, additional: usize) {
         self.vec.reserve(additional)
     }
