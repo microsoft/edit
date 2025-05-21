@@ -2628,69 +2628,21 @@ impl<'a> Context<'a, '_> {
         let line_count = tb.visual_line_count() as i32;
         let current_line = tb.cursor_visual_pos().y;
         let target_line = current_line + direction;
-        
-        // Check boundaries
+
         if target_line < 0 || target_line >= line_count {
             return;
         }
-        
-        // Save the original cursor position
-        let original_cursor = tb.cursor_visual_pos();
 
-        // Get target line content
-        tb.cursor_move_to_logical(Point { x: 0, y: target_line });
-        tb.select_line();
-        let target_line_content = tb.extract_selection(false);
-        
-        // Get current line content
-        tb.cursor_move_to_logical(Point { x: 0, y: current_line });
-        tb.select_line();
-        let current_line_content = tb.extract_selection(false);
-        
-        // Instead of closures, use direct operations to avoid borrow checker issues
-        if direction < 0 {
-            // Moving line up
-            // Delete both lines (bottom to top to preserve line numbers)
-            tb.cursor_move_to_logical(Point { x: 0, y: current_line });
-            tb.select_line();
-            tb.extract_selection(true);
-            
-            tb.cursor_move_to_logical(Point { x: 0, y: target_line });
-            tb.select_line();
-            tb.extract_selection(true);
-            
-            // Write current line content at target position
-            tb.cursor_move_to_logical(Point { x: 0, y: target_line });
-            tb.write(&current_line_content, true);
-            
-            // Write target line content at the position below
-            tb.cursor_move_to_logical(Point { x: 0, y: target_line + 1 });
-            tb.write(&target_line_content, true);
-        } else {
-            // Moving line down
-            // Delete both lines (bottom to top to preserve line numbers)
-            tb.cursor_move_to_logical(Point { x: 0, y: target_line });
-            tb.select_line();
-            tb.extract_selection(true);
-            
-            tb.cursor_move_to_logical(Point { x: 0, y: current_line });
-            tb.select_line();
-            tb.extract_selection(true);
-            
-            // Write target line content at current position
-            tb.cursor_move_to_logical(Point { x: 0, y: current_line });
-            tb.write(&target_line_content, true);
-            
-            // Write current line content at position below
-            tb.cursor_move_to_logical(Point { x: 0, y: current_line + 1 });
-            tb.write(&current_line_content, true);
-        }
-        
-        // Restore cursor position with appropriate shift
-        tb.cursor_move_to_visual(Point {
-            x: original_cursor.x,
-            y: original_cursor.y + direction,
-        });
+        let original_cursor = tb.cursor_visual_pos();
+        let first_line = current_line.min(target_line);
+        let second_line = current_line.max(target_line);
+
+        tb.cursor_move_to_logical(Point { x: 0, y: second_line });
+        let content = tb.extract_selection(true);
+        tb.cursor_move_to_logical(Point { x: 0, y: first_line });
+        tb.write(&content, true);
+
+        tb.cursor_move_to_logical(Point { x: original_cursor.x, y: target_line });
     }
 
     fn textarea_make_cursor_visible(&self, tc: &mut TextareaContent, node_prev: &Node) {
