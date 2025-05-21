@@ -156,13 +156,10 @@ impl DocumentManager {
             Err(err) => return Err(err),
         };
 
-        let file_id = match sys::file_id(file.as_ref(), Some(&path)) {
-            Ok(id) => Some(id),
-            Err(err) => return Err(err),
-        };
+        let file_id = sys::file_id(file.as_ref(), Some(&path))?;
 
         // Check if the file is already open.
-        if file_id.is_some() && self.update_active(|doc| doc.file_id == file_id) {
+        if self.update_active(|doc| doc.file_id.is_some_and(|i| i == file_id)) {
             let doc = self.active_mut().unwrap();
             if let Some(goto) = goto {
                 doc.buffer.borrow_mut().cursor_move_to_logical(goto);
