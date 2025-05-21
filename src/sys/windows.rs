@@ -581,10 +581,7 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString, &Arena> {
     };
 
     // Convert UTF16 to UTF8.
-    let mut langs = wide_to_utf8(&scratch, langs);
-
-    // Turn "de-DE" into "de-de" for easier comparisons.
-    langs.make_ascii_lowercase();
+    let langs = wide_to_utf8(&scratch, langs);
 
     // Split the null-delimited string into individual chunks
     // and copy them into the given arena.

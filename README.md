@@ -13,12 +13,13 @@ This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/
 * Copy the `edit` binary to a directory in your `PATH`
 * You may delete any other files in the archive if you don't need them
 
-### Windows
+### WinGet (Windows)
 
-You can install `edit` with winget:
-```
-winget install Microsoft.Edit
-```
+* Open up a terminal of your choice and run the following command:
+  ```powershell
+  winget install Microsoft.Edit
+  ```
+* `edit` will be automatically added to your `PATH`. If typing `edit` doesn't work, open a new terminal.
 
 ## Build Instructions
 

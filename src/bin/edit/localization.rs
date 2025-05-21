@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use edit::arena::scratch_arena;
+use edit::helpers::AsciiStringHelpers;
 use edit::sys;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -918,26 +919,33 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
 static mut S_LANG: LangId = LangId::en;
 
 pub fn init() {
+    const LANG_MAP: &[(&str, LangId)] = &[
+        ("en", LangId::en),
+        // ----------------
+        ("de", LangId::de),
+        ("es", LangId::es),
+        ("fr", LangId::fr),
+        ("it", LangId::it),
+        ("ja", LangId::ja),
+        ("ko", LangId::ko),
+        ("pt-br", LangId::pt_br),
+        ("ru", LangId::ru),
+        ("zh-hant", LangId::zh_hant),
+        ("zh-tw", LangId::zh_hant),
+        ("zh", LangId::zh_hans),
+    ];
+
     let scratch = scratch_arena(None);
     let langs = sys::preferred_languages(&scratch);
     let mut lang = LangId::en;
 
     for l in langs {
-        lang = match l.as_str() {
-            "en" => LangId::en,
-            "de" => LangId::de,
-            "es" => LangId::es,
-            "fr" => LangId::fr,
-            "it" => LangId::it,
-            "ja" => LangId::ja,
-            "ko" => LangId::ko,
-            "pt-br" => LangId::pt_br,
-            "ru" => LangId::ru,
-            "zh-hant" => LangId::zh_hant,
-            "zh" => LangId::zh_hans,
-            _ => continue,
-        };
-        break;
+        for (prefix, id) in LANG_MAP {
+            if l.starts_with_ignore_ascii_case(prefix) {
+                lang = *id;
+                break;
+            }
+        }
     }
 
     unsafe {

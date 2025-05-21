@@ -534,10 +534,16 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
     let mut locales = Vec::new_in(arena);
 
     for key in ["LANGUAGE", "LC_ALL", "LANG"] {
-        if let Ok(val) = std::env::var(key) {
-            locales.extend(
-                val.split(':').filter(|s| !s.is_empty()).map(|s| ArenaString::from_str(arena, s)),
-            );
+        if let Ok(val) = std::env::var(key)
+            && !val.is_empty()
+        {
+            locales.extend(val.split(':').filter(|s| !s.is_empty()).map(|s| {
+                // Replace all underscores with dashes,
+                // because the localization code expects pt-br, not pt_BR.
+                let mut res = Vec::new_in(arena);
+                res.extend(s.as_bytes().iter().map(|&b| if b == b'_' { b'-' } else { b }));
+                unsafe { ArenaString::from_utf8_unchecked(res) }
+            }));
             break;
         }
     }
