@@ -422,7 +422,7 @@ impl PartialEq for FileId {
 impl Eq for FileId {}
 
 /// Returns a unique identifier for the given file, by open handle.
-pub fn file_id(file: &File) -> apperr::Result<FileId> {
+pub fn _file_id_from_handle(file: &File) -> apperr::Result<FileId> {
     unsafe {
         let mut info = MaybeUninit::<FileSystem::FILE_ID_INFO>::uninit();
         check_bool_return(FileSystem::GetFileInformationByHandleEx(
@@ -435,15 +435,23 @@ pub fn file_id(file: &File) -> apperr::Result<FileId> {
     }
 }
 
-/// Returns a unique identifier for the given file, by path.
-pub fn file_id_at(path: &Path) -> apperr::Result<FileId> {
-    let file = File::open(path)?;
-    match file_id(&file) {
-        Ok(v) => Ok(v),
-        // Propagate file not found
-        Err(err) if apperr_is_not_found(err) => Err(err),
-        Err(_) => Ok(FileId::Path(path.to_path_buf())),
+pub fn file_id(file: &Option<File>, path: &Option<PathBuf>) -> apperr::Result<FileId> {
+    if let Some(f) = file {
+        if let Ok(id) = _file_id_from_handle(&f) {
+            return Ok(id);
+        }
     }
+
+    if let Some(p) = path {
+        let file = File::open(p)?;
+        return match _file_id_from_handle(&file) {
+            Ok(v) => Ok(v),
+            Err(err) if apperr_is_not_found(err) => Err(err),
+            Err(_) => Ok(FileId::Path(canonicalize(p)?)),
+        };
+    }
+
+    Err(gle_to_apperr(Foundation::ERROR_FILE_NOT_FOUND))
 }
 
 /// Canonicalizes the given path.

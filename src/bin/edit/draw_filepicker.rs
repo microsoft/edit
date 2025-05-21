@@ -113,10 +113,9 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
             // Check if the file already exists and show an overwrite warning in that case.
             if state.wants_file_picker != StateFilePicker::Open
-                && let Some(path) = doit.as_deref()
                 && let Some(doc) = state.documents.active()
                 && let Some(file_id) = &doc.file_id
-                && sys::file_id_at(path).is_ok_and(|id| &id == file_id)
+                && sys::file_id(&None, &doit).is_ok_and(|id| &id == file_id)
             {
                 state.file_picker_overwrite_warning = doit.take();
             }

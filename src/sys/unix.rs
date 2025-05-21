@@ -350,8 +350,7 @@ pub struct FileId {
     st_ino: libc::ino_t,
 }
 
-/// Returns a unique identifier for the given file, by handle.
-pub fn file_id(file: &File) -> apperr::Result<FileId> {
+fn _file_id_from_handle(file: &File) -> apperr::Result<FileId> {
     unsafe {
         let mut stat = MaybeUninit::<libc::stat>::uninit();
         check_int_return(libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()))?;
@@ -360,11 +359,20 @@ pub fn file_id(file: &File) -> apperr::Result<FileId> {
     }
 }
 
-/// Returns a unique identifier for the given file, by path.
-pub fn file_id_at(path: &Path) -> apperr::Result<FileId> {
-    let file = File::open(path)?;
-    let file_id = file_id(&file)?;
-    Ok(file_id)
+/// Returns a unique identifier for the given file, by handle or path.
+pub fn file_id(file: &Option<File>, path: &Option<Path>) -> apperr::Result<FileId> {
+    if let Some(f) = file {
+        if let Ok(id) = _file_id_from_handle(&f) {
+            return Ok(id);
+        }
+    }
+
+    if let Some(p) = path {
+        let file = File::open(p)?;
+        _file_id_from_handle(&file)
+    }
+
+    Err(errno_to_apperr(libc::ENOENT))
 }
 
 /// Reserves a virtual memory region of the given size.
