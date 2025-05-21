@@ -1,4 +1,5 @@
 # ![Application Icon for Edit](./assets/edit.svg) Edit
+English | [简体中文](./docs/ZH_CN/README.md)
 
 A simple editor for simple needs.
 
