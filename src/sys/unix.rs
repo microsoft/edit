@@ -10,6 +10,7 @@ use std::ffi::{CStr, c_int, c_void};
 use std::fs::{self, File};
 use std::mem::{self, ManuallyDrop, MaybeUninit};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
+use std::path::Path;
 use std::ptr::{self, NonNull, null_mut};
 use std::{thread, time};
 
@@ -350,8 +351,13 @@ pub struct FileId {
     st_ino: libc::ino_t,
 }
 
-/// Returns a unique identifier for the given file.
-pub fn file_id(file: &File) -> apperr::Result<FileId> {
+/// Returns a unique identifier for the given file by handle or path.
+pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
+    let file = match file {
+        Some(f) => f,
+        None => &File::open(path)?,
+    };
+
     unsafe {
         let mut stat = MaybeUninit::<libc::stat>::uninit();
         check_int_return(libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()))?;

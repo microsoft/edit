@@ -398,24 +398,40 @@ pub fn open_stdin_if_redirected() -> Option<File> {
 }
 
 /// A unique identifier for a file.
-#[derive(Clone)]
-#[repr(transparent)]
-pub struct FileId(FileSystem::FILE_ID_INFO);
+pub enum FileId {
+    Id(FileSystem::FILE_ID_INFO),
+    Path(PathBuf),
+}
 
 impl PartialEq for FileId {
     fn eq(&self, other: &Self) -> bool {
-        // Lowers to an efficient word-wise comparison.
-        const SIZE: usize = std::mem::size_of::<FileSystem::FILE_ID_INFO>();
-        let a: &[u8; SIZE] = unsafe { mem::transmute(&self.0) };
-        let b: &[u8; SIZE] = unsafe { mem::transmute(&other.0) };
-        a == b
+        match (self, other) {
+            (FileId::Id(left), FileId::Id(right)) => {
+                // Lowers to an efficient word-wise comparison.
+                const SIZE: usize = std::mem::size_of::<FileSystem::FILE_ID_INFO>();
+                let a: &[u8; SIZE] = unsafe { mem::transmute(left) };
+                let b: &[u8; SIZE] = unsafe { mem::transmute(right) };
+                a == b
+            }
+            (FileId::Path(left), FileId::Path(right)) => left == right,
+            _ => false,
+        }
     }
 }
 
 impl Eq for FileId {}
 
-/// Returns a unique identifier for the given file.
-pub fn file_id(file: &File) -> apperr::Result<FileId> {
+/// Returns a unique identifier for the given file by handle or path.
+pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
+    let file = match file {
+        Some(f) => f,
+        None => &File::open(path)?,
+    };
+
+    file_id_from_handle(file).or_else(|_| Ok(FileId::Path(std::fs::canonicalize(path)?)))
+}
+
+fn file_id_from_handle(file: &File) -> apperr::Result<FileId> {
     unsafe {
         let mut info = MaybeUninit::<FileSystem::FILE_ID_INFO>::uninit();
         check_bool_return(FileSystem::GetFileInformationByHandleEx(
@@ -424,7 +440,7 @@ pub fn file_id(file: &File) -> apperr::Result<FileId> {
             info.as_mut_ptr() as *mut _,
             mem::size_of::<FileSystem::FILE_ID_INFO>() as u32,
         ))?;
-        Ok(FileId(info.assume_init()))
+        Ok(FileId::Id(info.assume_init()))
     }
 }
 
