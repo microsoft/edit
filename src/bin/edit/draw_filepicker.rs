@@ -115,6 +115,9 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                     for suggestion in suggestions.clone() {
                         ctx.table_next_row();
                         ctx.block_begin("item");
+                        if suggestion.as_str().ends_with('/') {
+                            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Blue));
+                        }
                         ctx.label("label", suggestion.as_str());
                         if ctx.was_mouse_down() {
                             state.file_picker_pending_name = suggestion.as_path().into();
@@ -354,8 +357,8 @@ fn update_autocomplete_suggestions(state: &mut State) {
         for entry in files {
             let entry_str = entry.as_str();
 
-            // Do not suggest directories
-            if entry_str.ends_with('/') || entry_str == ".." {
+            // Skip the parent directory entry ".." only.
+            if entry_str == ".." {
                 continue;
             }
 
