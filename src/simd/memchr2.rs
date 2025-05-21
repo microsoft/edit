@@ -5,8 +5,6 @@
 
 use std::ptr;
 
-use super::distance;
-
 /// `memchr`, but with two needles.
 ///
 /// Returns the index of the first occurrence of either needle in the
@@ -18,7 +16,7 @@ pub fn memchr2(needle1: u8, needle2: u8, haystack: &[u8], offset: usize) -> usiz
         let end = beg.add(haystack.len());
         let it = beg.add(offset.min(haystack.len()));
         let it = memchr2_raw(needle1, needle2, it, end);
-        distance(it, beg)
+        it.offset_from_unsigned(beg)
     }
 }
 
@@ -28,6 +26,9 @@ unsafe fn memchr2_raw(needle1: u8, needle2: u8, beg: *const u8, end: *const u8) 
 
     #[cfg(target_arch = "aarch64")]
     return unsafe { memchr2_neon(needle1, needle2, beg, end) };
+
+    #[allow(unreachable_code)]
+    return unsafe { memchr2_fallback(needle1, needle2, beg, end) };
 }
 
 unsafe fn memchr2_fallback(
@@ -80,7 +81,7 @@ unsafe fn memchr2_avx2(needle1: u8, needle2: u8, mut beg: *const u8, end: *const
 
         let n1 = _mm256_set1_epi8(needle1 as i8);
         let n2 = _mm256_set1_epi8(needle2 as i8);
-        let mut remaining = distance(end, beg);
+        let mut remaining = end.offset_from_unsigned(beg);
 
         while remaining >= 32 {
             let v = _mm256_loadu_si256(beg as *const _);
@@ -106,7 +107,7 @@ unsafe fn memchr2_neon(needle1: u8, needle2: u8, mut beg: *const u8, end: *const
     unsafe {
         use std::arch::aarch64::*;
 
-        if distance(end, beg) >= 16 {
+        if end.offset_from_unsigned(beg) >= 16 {
             let n1 = vdupq_n_u8(needle1);
             let n2 = vdupq_n_u8(needle2);
 
@@ -127,7 +128,7 @@ unsafe fn memchr2_neon(needle1: u8, needle2: u8, mut beg: *const u8, end: *const
                 }
 
                 beg = beg.add(16);
-                if distance(end, beg) < 16 {
+                if end.offset_from_unsigned(beg) < 16 {
                     break;
                 }
             }

@@ -15,8 +15,6 @@
 
 use std::mem;
 
-use super::distance;
-
 /// A marker trait for types that are safe to `memset`.
 ///
 /// # Safety
@@ -79,6 +77,35 @@ fn memset_raw(beg: *mut u8, end: *mut u8, val: u64) {
 
     #[cfg(target_arch = "aarch64")]
     return unsafe { memset_neon(beg, end, val) };
+
+    #[allow(unreachable_code)]
+    return unsafe { memset_fallback(beg, end, val) };
+}
+
+#[inline(never)]
+unsafe fn memset_fallback(mut beg: *mut u8, end: *mut u8, val: u64) {
+    unsafe {
+        let mut remaining = end.offset_from_unsigned(beg);
+
+        while remaining >= 8 {
+            (beg as *mut u64).write_unaligned(val);
+            beg = beg.add(8);
+            remaining -= 8;
+        }
+
+        if remaining >= 4 {
+            // 4-7 bytes remaining
+            (beg as *mut u32).write_unaligned(val as u32);
+            (end.sub(4) as *mut u32).write_unaligned(val as u32);
+        } else if remaining >= 2 {
+            // 2-3 bytes remaining
+            (beg as *mut u16).write_unaligned(val as u16);
+            (end.sub(2) as *mut u16).write_unaligned(val as u16);
+        } else if remaining >= 1 {
+            // 1 byte remaining
+            beg.write(val as u8);
+        }
+    }
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -100,7 +127,7 @@ unsafe fn memset_sse2(mut beg: *mut u8, end: *mut u8, val: u64) {
         #[cfg(target_arch = "x86_64")]
         use std::arch::x86_64::*;
 
-        let mut remaining = distance(end, beg);
+        let mut remaining = end.offset_from_unsigned(beg);
 
         if remaining >= 16 {
             let fill = _mm_set1_epi64x(val as i64);
@@ -150,7 +177,7 @@ fn memset_avx2(mut beg: *mut u8, end: *mut u8, val: u64) {
         use std::arch::x86_64::*;
         use std::hint::black_box;
 
-        let mut remaining = distance(end, beg);
+        let mut remaining = end.offset_from_unsigned(beg);
 
         if remaining >= 128 {
             let fill = _mm256_set1_epi64x(val as i64);
@@ -212,7 +239,7 @@ fn memset_avx2(mut beg: *mut u8, end: *mut u8, val: u64) {
 unsafe fn memset_neon(mut beg: *mut u8, end: *mut u8, val: u64) {
     unsafe {
         use std::arch::aarch64::*;
-        let mut remaining = distance(end, beg);
+        let mut remaining = end.offset_from_unsigned(beg);
 
         if remaining >= 32 {
             let fill = vdupq_n_u64(val);

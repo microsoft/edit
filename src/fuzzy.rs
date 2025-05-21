@@ -202,7 +202,7 @@ fn compute_char_score(
 
 fn consider_as_equal(a: char, b: char) -> bool {
     // Special case path separators: ignore platform differences
-    a == b || a == '/' || a == '\\' && b == '/' || b == '\\'
+    a == b || (a == '/' && b == '\\') || (a == '\\' && b == '/')
 }
 
 fn score_separator_at_pos(ch: char) -> i32 {
