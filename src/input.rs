@@ -12,7 +12,7 @@ use crate::vt;
 /// Represents a key/modifier combination.
 ///
 /// TODO: Is this a good idea? I did it to allow typing `kbmod::CTRL | vk::A`.
-/// The reason it's an awkard u32 and not a struct is to hopefully make ABIs easier later.
+/// The reason it's an awkward u32 and not a struct is to hopefully make ABIs easier later.
 /// Of course you could just translate on the ABI boundary, but my hope is that this
 /// design lets me realize some restrictions early on that I can't foresee yet.
 #[repr(transparent)]
