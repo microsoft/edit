@@ -74,7 +74,7 @@ pub fn score_fuzzy<'a>(
             let matches_sequence_len =
                 if query_index > 0 && target_index > 0 { matches[diag_index] } else { 0 };
 
-            // If we are not matching on the first query character any more, we only produce a
+            // If we are not matching on the first query character anymore, we only produce a
             // score if we had a score previously for the last query index (by looking at the diagScore).
             // This makes sure that the query always matches in sequence on the target. For example
             // given a target of "ede" and a query of "de", we would otherwise produce a wrong high score
