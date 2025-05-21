@@ -39,7 +39,7 @@ pub fn normalize(path: &Path) -> PathBuf {
                     // - the provided bytes came directly from a known-to-be-valid `OsStr`, `res`.
                     // - since `parent` is also a valid `OsStr`, trimming at its byte length must also be at a valid
                     //   boundary.
-                    // This is very similar the example given in `OsStr::from_encoded_bytes_unchecked`'s documentation.
+                    // This is very similar to the example from `OsStr::from_encoded_bytes_unchecked`'s documentation.
                     res = PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(bytes) });
                 }
             }
