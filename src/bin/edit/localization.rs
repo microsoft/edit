@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use edit::arena::scratch_arena;
+use edit::helpers::starts_with_ascii;
 use edit::sys;
 
 const LOCID_COUNT: usize = std::mem::variant_count::<LocId>();
@@ -922,18 +923,20 @@ pub fn init() {
     let mut lang = LangId::en;
 
     for l in langs {
+        println!("lang: {}", l);
+
         lang = match l.as_str() {
-            l if l.starts_with("en") => LangId::en,
-            l if l.starts_with("de") => LangId::de,
-            l if l.starts_with("es") => LangId::es,
-            l if l.starts_with("fr") => LangId::fr,
-            l if l.starts_with("it") => LangId::it,
-            l if l.starts_with("ja") => LangId::ja,
-            l if l.starts_with("ko") => LangId::ko,
-            l if l.starts_with("pt-br") => LangId::pt_br,
-            l if l.starts_with("ru") => LangId::ru,
-            l if l.starts_with("zh-hant") => LangId::zh_hant,
-            l if l.starts_with("zh-hans") => LangId::zh_hans,
+            l if starts_with_ascii(l, "en") => LangId::en,
+            l if starts_with_ascii(l, "de") => LangId::de,
+            l if starts_with_ascii(l, "es") => LangId::es,
+            l if starts_with_ascii(l, "fr") => LangId::fr,
+            l if starts_with_ascii(l, "it") => LangId::it,
+            l if starts_with_ascii(l, "ja") => LangId::ja,
+            l if starts_with_ascii(l, "ko") => LangId::ko,
+            l if starts_with_ascii(l, "pt-br") => LangId::pt_br,
+            l if starts_with_ascii(l, "ru") => LangId::ru,
+            l if starts_with_ascii(l, "zh-hant") => LangId::zh_hant,
+            l if starts_with_ascii(l, "zh") => LangId::zh_hans,
             _ => continue,
         };
         break;

@@ -275,3 +275,30 @@ pub const fn slice_as_uninit_ref<T>(slice: &[T]) -> &[MaybeUninit<T>] {
 pub const fn slice_as_uninit_mut<T>(slice: &mut [T]) -> &mut [MaybeUninit<T>] {
     unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut MaybeUninit<T>, slice.len()) }
 }
+
+/// Tests if a string starts with a given ASCII prefix.
+pub fn starts_with_ascii(text: &str, prefix: &str) -> bool {
+    // If the prefix is longer than the text, it cannot be a prefix.
+    if prefix.len() > text.len() {
+        return false;
+    }
+
+    let text_bytes = text.as_bytes();
+    let prefix_bytes = prefix.as_bytes();
+
+    // Iterate over the bytes of both string slices
+    // We only need to compare up to the length of the prefix
+    for i in 0..prefix.len() {
+        // Get the ASCII byte from both text and prefix
+        let text_byte = text_bytes[i];
+        let prefix_byte = prefix_bytes[i];
+
+        // If the bytes don't match, it's not a prefix
+        if text_byte != prefix_byte {
+            return false;
+        }
+    }
+
+    // If we've gone through all prefix bytes and they all matched, then it's a prefix
+    true
+}
