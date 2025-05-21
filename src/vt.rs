@@ -80,7 +80,7 @@ impl Parser {
 
     /// Suggests a timeout for the next call to `read()`.
     ///
-    /// We need this because of the ambiguouity of whether a trailing
+    /// We need this because of the ambiguity of whether a trailing
     /// escape character in an input is starting another escape sequence or
     /// is just the result of the user literally pressing the Escape key.
     pub fn read_timeout(&mut self) -> std::time::Duration {
