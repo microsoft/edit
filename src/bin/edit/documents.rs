@@ -32,7 +32,7 @@ impl Document {
             tb.write_file(&mut file)?;
         }
 
-        if let Ok(id) = sys::file_id(None, Some(&path)) {
+        if let Ok(id) = sys::file_id(None, Some(path)) {
             self.file_id = Some(id);
         }
 
@@ -52,7 +52,7 @@ impl Document {
             tb.read_file(&mut file, encoding)?;
         }
 
-        if let Ok(id) = sys::file_id(None, Some(&path)) {
+        if let Ok(id) = sys::file_id(None, Some(path)) {
             self.file_id = Some(id);
         }
 

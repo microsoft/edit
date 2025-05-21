@@ -433,7 +433,7 @@ pub fn file_id(file: Option<&File>, path: Option<&Path>) -> apperr::Result<FileI
         }
     };
 
-    match file_id_from_handle(&file) {
+    match file_id_from_handle(file) {
         Ok(i) => Ok(i),
         Err(_) if path.is_some() => Ok(FileId::Path(canonicalize(path.unwrap())?)),
         Err(v) => Err(v),
