@@ -5,9 +5,6 @@ use edit::arena::scratch_arena;
 use edit::helpers::AsciiStringHelpers;
 use edit::sys;
 
-const LOCID_COUNT: usize = std::mem::variant_count::<LocId>();
-const LANGID_COUNT: usize = std::mem::variant_count::<LangId>();
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LocId {
     Ctrl,
@@ -90,6 +87,8 @@ pub enum LocId {
 
     FileOverwriteWarning,
     FileOverwriteWarningDescription,
+
+    Count,
 }
 
 #[allow(non_camel_case_types)]
@@ -109,10 +108,12 @@ enum LangId {
     ru,
     zh_hans,
     zh_hant,
+
+    Count,
 }
 
 #[rustfmt::skip]
-const S_LANG_LUT: [[&str; LANGID_COUNT]; LOCID_COUNT] = [
+const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // Ctrl (the keyboard key)
     [
         /* en      */ "Ctrl",
