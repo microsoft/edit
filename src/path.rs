@@ -3,7 +3,7 @@
 
 //! Path related helpers.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Component, MAIN_SEPARATOR_STR, Path, PathBuf};
 
 /// Normalizes a given path by removing redundant components.
@@ -23,14 +23,24 @@ pub fn normalize(path: &Path) -> PathBuf {
             }
             Component::CurDir => {}
             Component::ParentDir => {
-                // Get the length up to the parent directory
-                if let Some(len) = res
-                    .parent()
-                    .map(|p| p.as_os_str().as_encoded_bytes().len())
-                    // Ensure we don't pop the root directory
-                    && len >= root_len
+                // Get length up to the parent directory and truncate, but ensure we don't pop the root directory.
+                // NB: this compares the system-dependent "encoded length" as discussed in OsString's documentation.
+                if let Some(parent) = res.parent()
+                    && parent.as_os_str().len() >= root_len
                 {
-                    res.as_mut_os_string().truncate(len);
+                    // To actually truncate the OsString, convert it to raw bytes first, truncate the Vec, then convert
+                    // it back.
+                    // [FIXME] Can be replaced with a plain `res.as_mut_os_string().truncate(parent_len)` once
+                    // `os_string_truncate` is stabilized (#133262)
+                    let byte_len = parent.as_os_str().as_encoded_bytes().len();
+                    let mut bytes = res.into_os_string().into_encoded_bytes();
+                    bytes.truncate(byte_len);
+                    // SAFETY: All encoding concerns of `OsString` are met:
+                    // - the provided bytes came directly from a known-to-be-valid `OsStr`, `res`.
+                    // - since `parent` is also a valid `OsStr`, trimming at its byte length must also be at a valid
+                    //   boundary.
+                    // This is very similar the example given in `OsStr::from_encoded_bytes_unchecked`'s documentation.
+                    res = unsafe { OsString::from_encoded_bytes_unchecked(bytes).into() };
                 }
             }
             Component::Normal(p) => res.push(p),
