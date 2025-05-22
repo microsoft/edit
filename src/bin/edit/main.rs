@@ -99,6 +99,11 @@ fn run() -> apperr::Result<()> {
         alt: loc(LocId::Alt),
         shift: loc(LocId::Shift),
     });
+
+    state.menubar_color_bg = tui.indexed(IndexedColor::Blue);
+    state.menubar_color_fg = tui.indexed(IndexedColor::BrightWhite);
+    let floater_bg = tui.indexed(IndexedColor::White);
+    let floater_fg = tui.indexed(IndexedColor::Black);
     tui.set_floater_default_bg(floater_bg);
     tui.set_floater_default_fg(floater_fg);
     tui.set_modal_default_bg(floater_bg);
