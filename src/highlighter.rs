@@ -63,13 +63,13 @@ impl Highlighter {
                     });
                 }
 
-                b'"' => {
+                b'"' | b'\'' => {
                     let start = i;
                     i += 1;
                     while i < bytes.len() {
                         if bytes[i] == b'\\' {
                             i += 2;
-                        } else if bytes[i] == b'"' {
+                        } else if bytes[i] == b'"' || bytes[i] == b'\'' {
                             i += 1;
                             break;
                         } else {
