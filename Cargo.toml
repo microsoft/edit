@@ -35,8 +35,8 @@ lto = "thin"                # Similarly, speed up linking by a ton
 [dependencies]
 
 [target.'cfg(target_os = "uefi")'.dependencies]
-uefi = { version = "0.34.1", features = [ "alloc", "global_allocator", "logger", "log-debugcon" ] }
-uefi-raw = { version = "0.10.0" }
+uefi = { version = "0.35.0", features = [ "alloc", "global_allocator", "logger", "log-debugcon" ] }
+uefi-raw = { version = "0.11.0" }
 qemu-exit = { version = "3.0.2" }
 r-efi = { version = "5.2.0" }
 
