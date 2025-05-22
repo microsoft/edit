@@ -1048,7 +1048,8 @@ impl TextBuffer {
         if let (Some(search), Some(..)) = (&mut self.search, &self.selection) {
             let search = search.get_mut();
             if search.selection_generation == self.selection_generation {
-                self.write(replacement.as_bytes(), true);
+                let processed_replacement = self.get_regex_replacement(replacement);
+                self.write(processed_replacement.as_bytes(), true);
             }
         }
 
@@ -1062,7 +1063,6 @@ impl TextBuffer {
         options: SearchOptions,
         replacement: &str,
     ) -> apperr::Result<()> {
-        let replacement = replacement.as_bytes();
         let mut search = self.find_construct_search(pattern, options)?;
         let mut offset = 0;
 
@@ -1071,7 +1071,9 @@ impl TextBuffer {
             if !self.has_selection() {
                 break;
             }
-            self.write(replacement, true);
+
+            let processed_replacement = self.get_regex_replacement(replacement);
+            self.write(processed_replacement.as_bytes(), true);
             offset = self.cursor.offset;
         }
 
@@ -2377,6 +2379,61 @@ impl TextBuffer {
     /// For interfacing with ICU.
     pub fn read_forward(&self, off: usize) -> &[u8] {
         self.buffer.read_forward(off)
+    }
+
+    /// Processes the replacement string when using regex for capture groups.
+    fn get_regex_replacement<'a>(&mut self, replacement: &'a str) -> Cow<'a, str> {
+        let search = if let Some(search) = &mut self.search {
+            search.get_mut()
+        } else {
+            return Cow::Borrowed(replacement);
+        };
+
+        if !search.options.use_regex || !replacement.contains('$') {
+            return Cow::Borrowed(replacement);
+        }
+
+        let scratch = scratch_arena(None);
+        let mut result = String::with_capacity(replacement.len());
+        let mut chars = replacement.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            match ch {
+                '$' => {
+                    let mut digits = ArenaString::new_in(&scratch);
+
+                    while let Some(&next_ch) = chars.peek() {
+                        if digits.is_empty() && next_ch == '$' {
+                            // Consume the escaped dollar sign.
+                            chars.next();
+                            break;
+                        }
+
+                        if !next_ch.is_ascii_digit() {
+                            break;
+                        }
+
+                        digits.push(next_ch);
+                        chars.next();
+                    }
+
+                    if !digits.is_empty() {
+                        if let Ok(group_num) = digits.parse::<i32>() {
+                            if let Some(range) = search.regex.get_captured_group_range(group_num) {
+                                let mut out = Vec::new();
+                                self.buffer.extract_raw(range.start, range.end, &mut out, 0);
+                                result.push_str(&String::from_utf8_lossy(&out));
+                            }
+                        }
+                    } else {
+                        result.push(ch);
+                    }
+                }
+                _ => result.push(ch),
+            }
+        }
+
+        Cow::Owned(result)
     }
 }
 

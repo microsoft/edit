@@ -634,6 +634,22 @@ impl Regex {
         let mut status = icu_ffi::U_ZERO_ERROR;
         unsafe { (f.uregex_reset64)(self.0, index as i64, &mut status) };
     }
+
+    /// Gets the text range of a captured group by index.
+    pub fn get_captured_group_range(&mut self, group: i32) -> Option<Range<usize>> {
+        let f = assume_loaded();
+
+        let mut status = icu_ffi::U_ZERO_ERROR;
+        let start = unsafe { (f.uregex_start64)(self.0, group, &mut status) };
+        let end = unsafe { (f.uregex_end64)(self.0, group, &mut status) };
+        if status.is_failure() {
+            return None;
+        }
+
+        let start = start.max(0);
+        let end = end.max(start);
+        Some(start as usize..end as usize)
+    }
 }
 
 impl Iterator for Regex {
