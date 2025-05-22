@@ -37,6 +37,13 @@ unsafe impl MemsetSafe for isize {}
 
 /// Fills a slice with the given value.
 #[inline]
+#[cfg(target_os="uefi")]
+pub fn memset<T: MemsetSafe>(dst: &mut [T], val: T) {
+    dst.fill(val);
+}
+
+#[inline]
+#[cfg(not(target_os="uefi"))]
 pub fn memset<T: MemsetSafe>(dst: &mut [T], val: T) {
     unsafe {
         match mem::size_of::<T>() {
