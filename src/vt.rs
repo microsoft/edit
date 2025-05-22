@@ -3,7 +3,7 @@
 
 //! Our VT parser.
 
-use std::{mem, time};
+use std::time;
 
 use crate::simd::memchr2;
 
@@ -114,7 +114,7 @@ pub struct Stream<'parser, 'input> {
     off: usize,
 }
 
-impl<'parser, 'input> Stream<'parser, 'input> {
+impl<'input> Stream<'_, 'input> {
     /// Returns the input that is being parsed.
     pub fn input(&self) -> &'input str {
         self.input
@@ -136,11 +136,12 @@ impl<'parser, 'input> Stream<'parser, 'input> {
     }
 
     /// Parses the next VT sequence from the previously given input.
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<Token<'parser, 'input>> {
-        // I don't know how to tell Rust that `self.parser` and its lifetime
-        // `'parser` outlives `self`, and at this point I don't care.
-        let parser = unsafe { mem::transmute::<_, &'parser mut Parser>(&mut *self.parser) };
+    #[allow(
+        clippy::should_implement_trait,
+        reason = "can't implement Iterator because this is a lending iterator"
+    )]
+    pub fn next(&mut self) -> Option<Token<'_, 'input>> {
+        let parser = &mut *self.parser;
         let input = self.input;
         let bytes = input.as_bytes();
 
@@ -242,7 +243,7 @@ impl<'parser, 'input> Stream<'parser, 'input> {
                                 if parser.csi.param_count != 0 || parser.csi.params[0] != 0 {
                                     parser.csi.param_count += 1;
                                 }
-                                return Some(Token::Csi(&parser.csi as &'parser Csi));
+                                return Some(Token::Csi(&parser.csi));
                             }
                             b';' => parser.csi.param_count += 1,
                             b'<'..=b'?' => parser.csi.private_byte = c as char,

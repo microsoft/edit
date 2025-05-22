@@ -302,16 +302,15 @@ impl Parser {
 }
 
 /// An iterator that parses VT sequences into input events.
-///
-/// Can't implement [`Iterator`], because this is a "lending iterator".
 pub struct Stream<'parser, 'vt, 'input> {
     parser: &'parser mut Parser,
     stream: vt::Stream<'vt, 'input>,
 }
 
-impl<'input> Stream<'_, '_, 'input> {
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<Input<'input>> {
+impl<'input> Iterator for Stream<'_, '_, 'input> {
+    type Item = Input<'input>;
+
+    fn next(&mut self) -> Option<Input<'input>> {
         loop {
             if self.parser.bracketed_paste {
                 return self.handle_bracketed_paste();
@@ -489,7 +488,9 @@ impl<'input> Stream<'_, '_, 'input> {
             }
         }
     }
+}
 
+impl<'input> Stream<'_, '_, 'input> {
     /// Once we encounter the start of a bracketed paste
     /// we seek to the end of the paste in this function.
     ///
