@@ -406,14 +406,14 @@ pub enum FileId {
 impl PartialEq for FileId {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (FileId::Id(left), FileId::Id(right)) => {
+            (Self::Id(left), Self::Id(right)) => {
                 // Lowers to an efficient word-wise comparison.
                 const SIZE: usize = std::mem::size_of::<FileSystem::FILE_ID_INFO>();
                 let a: &[u8; SIZE] = unsafe { mem::transmute(left) };
                 let b: &[u8; SIZE] = unsafe { mem::transmute(right) };
                 a == b
             }
-            (FileId::Path(left), FileId::Path(right)) => left == right,
+            (Self::Path(left), Self::Path(right)) => left == right,
             _ => false,
         }
     }
