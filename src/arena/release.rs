@@ -62,11 +62,11 @@ impl Arena {
         }
     }
 
-    pub fn new(capacity: usize) -> apperr::Result<Arena> {
+    pub fn new(capacity: usize) -> apperr::Result<Self> {
         let capacity = (capacity.max(1) + ALLOC_CHUNK_SIZE - 1) & !(ALLOC_CHUNK_SIZE - 1);
         let base = unsafe { sys::virtual_reserve(capacity)? };
 
-        Ok(Arena {
+        Ok(Self {
             base,
             capacity,
             commit: Cell::new(0),
@@ -177,7 +177,7 @@ impl Drop for Arena {
 
 impl Default for Arena {
     fn default() -> Self {
-        Arena::empty()
+        Self::empty()
     }
 }
 

@@ -53,7 +53,7 @@ impl<'a> ArenaString<'a> {
     pub fn from_utf8_lossy<'s>(
         arena: &'a Arena,
         text: &'s [u8],
-    ) -> Result<&'s str, ArenaString<'a>> {
+    ) -> Result<&'s str, Self> {
         let mut iter = text.utf8_chunks();
         let Some(mut chunk) = iter.next() else {
             return Ok("");
