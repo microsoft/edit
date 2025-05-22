@@ -10,7 +10,7 @@
 //! fairly minimal, and for that purpose an immediate mode design is much simpler to use.
 //!
 //! So what's "immediate mode"? The primary alternative is called "retained mode".
-//! The diference is that when you create a button in this framework in one frame,
+//! The difference is that when you create a button in this framework in one frame,
 //! and you stop telling this framework in the next frame, the button will vanish.
 //! When you use a regular retained mode UI framework, you create the button once,
 //! set up callbacks for when it is clicked, and then stop worrying about it.
