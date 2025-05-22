@@ -84,6 +84,10 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             }
 
             if filename_focused {
+                // When the panel is available and the ↓ key is pressed, move focus to the first item in the panel.
+                if suggestions_open && ctx.consume_shortcut(vk::DOWN) {
+                    state.wants_file_picker_autocomplete_focus = true;
+                }
                 if ctx.consume_shortcut(vk::TAB) {
                     if let Some(suggestions) = &state.file_picker_autocomplete {
                         if !suggestions.is_empty() {
@@ -104,10 +108,12 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 activated = true;
             }
 
+            // We may need to clear the panel after traversing the suggestions, so use a flag to delay the write back.
+            let mut autocomplete_clear = false;
+
             if let Some(suggestions) = &state.file_picker_autocomplete {
                 ctx.block_begin("autocomplete-panel");
-                if filename_focused
-                    && state.file_picker_autocomplete.as_ref()
+                if state.file_picker_autocomplete.as_ref()
                         .map_or(false, |s| !s.is_empty()) {
                     ctx.attr_float(FloatSpec {
                         anchor: Anchor::Last,
@@ -121,36 +127,58 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                     ctx.attr_foreground_rgba(ctx.contrasted(ctx.indexed_alpha(IndexedColor::Background, 3, 4)));
                     ctx.attr_padding(Rect { left: 0, top: 0, right: 0, bottom: 0 });
 
-                    ctx.table_begin("suggestions");
-                    ctx.table_set_columns(&[0]);
-                    for (idx, suggestion) in suggestions.clone().into_iter().enumerate() {
-                        ctx.table_next_row();
-                        ctx.block_begin("item");
-                        ctx.inherit_focus();
-                        // If we requested focus for the autocomplete list, steal it for first item.
-                        if state.wants_file_picker_autocomplete_focus && idx == 0 {
+                    ctx.list_begin("suggestions");
+                    ctx.inherit_focus();
+
+                    // If we want to give focus to the autocomplete panel (after pressing ↓),
+                    // then steal focus immediately after creating the first item.
+                    let mut need_focus_steal = state.wants_file_picker_autocomplete_focus;
+
+                    for (idx, suggestion) in suggestions.iter().enumerate() {
+                        let selected_now = state.file_picker_pending_name == suggestion.as_path();
+
+                        match ctx.list_item(selected_now, suggestion.as_str()) {
+                            ListSelection::Unchanged => {}
+                            ListSelection::Selected => {
+                                state.file_picker_pending_name = suggestion.as_path().into();
+                            }
+                            ListSelection::Activated => {
+                                state.file_picker_pending_name = suggestion.as_path().into();
+                                autocomplete_clear = true;
+                            }
+                        }
+
+                        // Steal focus when entering the list for the first time.
+                        if need_focus_steal {
                             ctx.steal_focus();
                             state.wants_file_picker_autocomplete_focus = false;
+                            need_focus_steal = false;
                         }
-                        if suggestion.as_str().ends_with('/') {
+
+                        // Selected item style: when the node is focused, ListContent is already colored,
+                        // but we still need to know when synchronizing the text.
+                        if ctx.is_focused() {
+                            state.file_picker_pending_name = suggestion.as_path().into();
+                        } else if suggestion.as_str().ends_with('/') {
                             ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Blue));
                         }
-                        ctx.label("label", suggestion.as_str());
-                        // If focused on the first suggestion and Up arrow pressed, move focus back to the filename field.
+
+                        // If focused on the first item and the up arrow is pressed, return to the input box.
                         if idx == 0 && ctx.is_focused() && ctx.consume_shortcut(vk::UP) {
                             state.wants_file_picker_file_name_focus = true;
                             ctx.toss_focus_up();
                         }
-                        if ctx.was_mouse_down() {
-                            state.file_picker_pending_name = suggestion.as_path().into();
-                            state.file_picker_autocomplete = None;
-                            ctx.needs_rerender();
-                        }
-                        ctx.block_end();
                     }
-                    ctx.table_end();
+
+                    ctx.list_end();
                 }
                 ctx.block_end();
+            }
+
+            // If we need to clear the autocomplete panel, do it now to avoid borrowing conflicts.
+            if autocomplete_clear {
+                state.file_picker_autocomplete = None;
+                ctx.needs_rerender();
             }
         }
         ctx.table_end();
