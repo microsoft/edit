@@ -40,8 +40,8 @@ impl InputKey {
         self.0
     }
 
-    pub(crate) const fn key(&self) -> InputKey {
-        InputKey(self.0 & 0x00FFFFFF)
+    pub(crate) const fn key(&self) -> Self {
+        Self(self.0 & 0x00FFFFFF)
     }
 
     pub(crate) const fn modifiers(&self) -> InputKeyMod {
@@ -52,8 +52,8 @@ impl InputKey {
         (self.0 & modifier.0) != 0
     }
 
-    pub(crate) const fn with_modifiers(&self, modifiers: InputKeyMod) -> InputKey {
-        InputKey(self.0 | modifiers.0)
+    pub(crate) const fn with_modifiers(&self, modifiers: InputKeyMod) -> Self {
+        Self(self.0 | modifiers.0)
     }
 }
 
@@ -67,16 +67,16 @@ impl InputKeyMod {
         Self(v)
     }
 
-    pub(crate) const fn contains(&self, modifier: InputKeyMod) -> bool {
+    pub(crate) const fn contains(&self, modifier: Self) -> bool {
         (self.0 & modifier.0) != 0
     }
 }
 
 impl std::ops::BitOr<InputKeyMod> for InputKey {
-    type Output = InputKey;
+    type Output = Self;
 
-    fn bitor(self, rhs: InputKeyMod) -> InputKey {
-        InputKey(self.0 | rhs.0)
+    fn bitor(self, rhs: InputKeyMod) -> Self {
+        Self(self.0 | rhs.0)
     }
 }
 

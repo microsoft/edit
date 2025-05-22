@@ -213,7 +213,7 @@ impl TextBuffer {
     /// Creates a new text buffer inside an [`Rc`].
     /// See [`TextBuffer::new()`].
     pub fn new_rc(small: bool) -> apperr::Result<RcTextBuffer> {
-        let buffer = TextBuffer::new(small)?;
+        let buffer = Self::new(small)?;
         Ok(Rc::new(SemiRefCell::new(buffer)))
     }
 

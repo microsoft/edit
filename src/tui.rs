@@ -1319,7 +1319,7 @@ impl Tui {
         if ptr::eq(focused_next, focused_start) {
             false
         } else {
-            Tui::build_node_path(Some(focused_next), &mut self.focused_node_path);
+            Self::build_node_path(Some(focused_next), &mut self.focused_node_path);
             true
         }
     }

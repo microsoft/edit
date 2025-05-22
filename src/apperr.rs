@@ -23,15 +23,15 @@ pub enum Error {
 
 impl Error {
     pub const fn new_app(code: u32) -> Self {
-        Error::App(code)
+        Self::App(code)
     }
 
     pub const fn new_icu(code: u32) -> Self {
-        Error::Icu(code)
+        Self::Icu(code)
     }
 
     pub const fn new_sys(code: u32) -> Self {
-        Error::Sys(code)
+        Self::Sys(code)
     }
 }
 
