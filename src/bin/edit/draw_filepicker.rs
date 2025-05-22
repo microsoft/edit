@@ -59,7 +59,18 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
             ctx.label("name-label", loc(LocId::SaveAsDialogNameLabel));
 
-            let filename_changed: bool = ctx.editline("name", &mut state.file_picker_pending_name);
+            // If suggestions are open, allow Down/Up arrows to move focus into/out of them.
+            let suggestions_open = state
+                .file_picker_autocomplete
+                .as_ref()
+                .map_or(false, |s| !s.is_empty());
+
+            if suggestions_open && ctx.consume_shortcut(vk::DOWN) {
+                state.wants_file_picker_autocomplete_focus = true;
+            }
+
+            let filename_changed: bool =
+                ctx.editline("name", &mut state.file_picker_pending_name);
 
             ctx.focus_on_first_present();
             if state.wants_file_picker_file_name_focus {
@@ -101,9 +112,9 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                     ctx.attr_float(FloatSpec {
                         anchor: Anchor::Last,
                         gravity_x: 0.0,
-                        gravity_y: 1.0,
+                        gravity_y: 0.0,
                         offset_x: 0.0,
-                        offset_y: 0.0,
+                        offset_y: 1.0,
                     });
                     ctx.attr_border();
                     ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Background, 3, 4));
@@ -112,13 +123,24 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
                     ctx.table_begin("suggestions");
                     ctx.table_set_columns(&[0]);
-                    for suggestion in suggestions.clone() {
+                    for (idx, suggestion) in suggestions.clone().into_iter().enumerate() {
                         ctx.table_next_row();
                         ctx.block_begin("item");
+                        ctx.inherit_focus();
+                        // If we requested focus for the autocomplete list, steal it for first item.
+                        if state.wants_file_picker_autocomplete_focus && idx == 0 {
+                            ctx.steal_focus();
+                            state.wants_file_picker_autocomplete_focus = false;
+                        }
                         if suggestion.as_str().ends_with('/') {
                             ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Blue));
                         }
                         ctx.label("label", suggestion.as_str());
+                        // If focused on the first suggestion and Up arrow pressed, move focus back to the filename field.
+                        if idx == 0 && ctx.is_focused() && ctx.consume_shortcut(vk::UP) {
+                            state.wants_file_picker_file_name_focus = true;
+                            ctx.toss_focus_up();
+                        }
                         if ctx.was_mouse_down() {
                             state.file_picker_pending_name = suggestion.as_path().into();
                             state.file_picker_autocomplete = None;

@@ -3407,11 +3407,21 @@ impl<'a> NodeMap<'a> {
         // Since we aren't expected to have millions of nodes,
         // we allocate 4x the number of slots for a 25% fill factor.
         let width = (4 * tree.count + 1).ilog2().max(1) as usize;
-        let slots = 1 << width;
+        let slot_count = 1 << width;
         let shift = 64 - width;
-        let mask = (slots - 1) as u64;
+        let mask = (slot_count - 1) as u64;
 
-        let slots = arena.alloc_uninit_slice(slots).write_filled(None);
+        // Allocate the backing slice inside the arena and initialise all slots with `None`.
+        // We manually write the default value because the helper that previously did this
+        // (`write_filled`) no longer exists.
+        let slots_uninit = arena.alloc_uninit_slice::<Option<&'a NodeCell<'a>>>(slot_count);
+        for slot in slots_uninit.iter_mut() {
+            slot.write(None);
+        }
+        // SAFETY: At this point every element of the slice is initialised (we just wrote `None`),
+        // so it is safe to reinterpret it as a slice of initialised values.
+        // Convert the slice to its initialised form (mutable for population).
+        let slots_slice_mut: &'a mut [Option<&'a NodeCell<'a>>] = unsafe { &mut *(slots_uninit as *mut [_] as *mut [Option<&'a NodeCell<'a>>]) };
         let mut node = tree.root_first;
 
         loop {
@@ -3419,8 +3429,8 @@ impl<'a> NodeMap<'a> {
             let mut slot = n.id >> shift;
 
             loop {
-                if slots[slot as usize].is_none() {
-                    slots[slot as usize] = Some(node);
+                if slots_slice_mut[slot as usize].is_none() {
+                    slots_slice_mut[slot as usize] = Some(node);
                     break;
                 }
                 slot = (slot + 1) & mask;
@@ -3432,7 +3442,8 @@ impl<'a> NodeMap<'a> {
             };
         }
 
-        Self { slots, shift, mask }
+        let slots_slice = &*slots_slice_mut; // Reborrow as immutable for storage.
+        Self { slots: slots_slice, shift, mask }
     }
 
     /// Gets a node by its ID.
