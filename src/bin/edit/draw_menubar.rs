@@ -81,6 +81,10 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
         tb.write(ctx.clipboard(), true);
         ctx.needs_rerender();
     }
+    if ctx.menubar_menu_button(loc(LocId::EditSelectAll), 'A', kbmod::CTRL | vk::A) {
+        tb.select_all();
+        ctx.needs_rerender();
+    }
     if state.wants_search.kind != StateSearchKind::Disabled {
         if ctx.menubar_menu_button(loc(LocId::EditFind), 'F', kbmod::CTRL | vk::F) {
             state.wants_search.kind = StateSearchKind::Search;
