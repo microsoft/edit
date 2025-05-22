@@ -3426,9 +3426,6 @@ impl<'a> NodeMap<'a> {
         let shift = 64 - width;
         let mask = (slot_count - 1) as u64;
 
-        // Allocate the backing slice inside the arena and initialise all slots with `None`.
-        // We manually write the default value because the helper that previously did this
-        // (`write_filled`) no longer exists.
         let slots_uninit = arena.alloc_uninit_slice::<Option<&'a NodeCell<'a>>>(slot_count);
         for slot in slots_uninit.iter_mut() {
             slot.write(None);
@@ -3457,7 +3454,7 @@ impl<'a> NodeMap<'a> {
             };
         }
 
-        let slots_slice = &*slots_slice_mut; // Reborrow as immutable for storage.
+        let slots_slice = &*slots_slice_mut;
         Self { slots: slots_slice, shift, mask }
     }
 
