@@ -733,7 +733,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "Match Case",
         /* de      */ "Groß/Klein",
         /* es      */ "May/Min",
-        /* fr      */ "Respecter la casse",
+        /* fr      */ "Resp. la casse",
         /* it      */ "Maius/minus",
         /* ja      */ "大/小文字",
         /* ko      */ "대소문자",
