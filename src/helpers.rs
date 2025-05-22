@@ -70,10 +70,7 @@ impl PartialOrd<Self> for Point {
 
 impl Ord for Point {
     fn cmp(&self, other: &Self) -> Ordering {
-        match self.y.cmp(&other.y) {
-            Ordering::Equal => self.x.cmp(&other.x),
-            ord => ord,
-        }
+        self.y.cmp(&other.y).then(self.x.cmp(&other.x))
     }
 }
 
