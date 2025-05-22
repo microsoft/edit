@@ -50,10 +50,7 @@ impl<'a> ArenaString<'a> {
     /// Checks whether `text` contains only valid UTF-8.
     /// If the entire string is valid, it returns `Ok(text)`.
     /// Otherwise, it returns `Err(ArenaString)` with all invalid sequences replaced with U+FFFD.
-    pub fn from_utf8_lossy<'s>(
-        arena: &'a Arena,
-        text: &'s [u8],
-    ) -> Result<&'s str, Self> {
+    pub fn from_utf8_lossy<'s>(arena: &'a Arena, text: &'s [u8]) -> Result<&'s str, Self> {
         let mut iter = text.utf8_chunks();
         let Some(mut chunk) = iter.next() else {
             return Ok("");
