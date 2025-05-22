@@ -2250,6 +2250,21 @@ impl<'a> Context<'a, '_> {
 
             make_cursor_visible = true;
 
+
+            
+            // In textarea_handle_input(), if it's a single-line input field and receives ↑/↓ keys,
+            // directly return false, let the key bubble up to the outer layer.
+
+            // Logic:
+            // 1. When the cursor is in the file name input field, pressing ↓ will be captured by the outer
+            // layer logic and the focus will be switched to the autocomplete floating window;
+            // 2. After the floating window gains focus, the list component continues to receive and process
+            // subsequent ↑/↓ navigation;
+            // 3. Pressing ↑ from the top of the floating window will return to the input box.
+            if single_line && matches!(key, vk::UP | vk::DOWN) {
+                return false;
+            }
+
             match key {
                 vk::BACK => {
                     let granularity = if modifiers == kbmod::CTRL {

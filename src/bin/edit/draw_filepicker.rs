@@ -65,10 +65,6 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 .as_ref()
                 .map_or(false, |s| !s.is_empty());
 
-            if suggestions_open && ctx.consume_shortcut(vk::DOWN) {
-                state.wants_file_picker_autocomplete_focus = true;
-            }
-
             let filename_changed: bool =
                 ctx.editline("name", &mut state.file_picker_pending_name);
 
