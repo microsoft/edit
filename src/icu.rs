@@ -30,7 +30,15 @@ pub fn get_available_encodings() -> &'static [&'static str] {
                     if name.is_null() {
                         break;
                     }
-                    ENCODINGS.push(CStr::from_ptr(name).to_str().unwrap_unchecked());
+
+                    let name = CStr::from_ptr(name).to_str().unwrap_unchecked();
+                    ENCODINGS.push(name);
+
+                    // Push the encoding for UTF-8 BOM separately since ICU does not distinguish it from the regular UTF-8 encoding.
+                    if name == "UTF-8" {
+                        ENCODINGS.push("UTF-8 BOM");
+                    }
+
                     n += 1;
                 }
             }
