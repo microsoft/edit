@@ -1,4 +1,9 @@
-use crate::sys;
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+use edit::arena::scratch_arena;
+use edit::helpers::AsciiStringHelpers;
+use edit::sys;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LocId {
@@ -6,16 +11,19 @@ pub enum LocId {
     Alt,
     Shift,
 
+    Ok,
     Yes,
     No,
-
-    ErrorIcuMissing,
+    Cancel,
+    Always,
 
     // File menu
     File,
+    FileNew,
     FileOpen,
     FileSave,
     FileSaveAs,
+    FileClose,
     FileExit,
 
     // Edit menu
@@ -42,11 +50,23 @@ pub enum LocId {
     UnsavedChangesDialogDescription,
     UnsavedChangesDialogYes,
     UnsavedChangesDialogNo,
-    UnsavedChangesDialogCancel,
 
     // About dialog
     AboutDialogTitle,
     AboutDialogVersion,
+
+    // Shown when the clipboard size exceeds the limit for OSC 52
+    LargeClipboardWarningLine1,
+    LargeClipboardWarningLine2,
+    LargeClipboardWarningLine3,
+    SuperLargeClipboardWarning,
+
+    // Warning dialog
+    WarningDialogTitle,
+
+    // Error dialog
+    ErrorDialogTitle,
+    ErrorIcuMissing,
 
     SearchNeedleLabel,
     SearchReplacementLabel,
@@ -94,7 +114,7 @@ enum LangId {
 
 #[rustfmt::skip]
 const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
-    // Ctrl
+    // Ctrl (the keyboard key)
     [
         /* en      */ "Ctrl",
         /* de      */ "Strg",
@@ -108,7 +128,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "Ctrl",
         /* zh_hant */ "Ctrl",
     ],
-    // Alt
+    // Alt (the keyboard key)
     [
         /* en      */ "Alt",
         /* de      */ "Alt",
@@ -122,7 +142,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "Alt",
         /* zh_hant */ "Alt",
     ],
-    // Shift
+    // Shift (the keyboard key)
     [
         /* en      */ "Shift",
         /* de      */ "Umschalt",
@@ -137,7 +157,21 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "Shift",
     ],
 
-    // Yes
+    // Ok (used as a common dialog button)
+    [
+        /* en      */ "Ok",
+        /* de      */ "OK",
+        /* es      */ "Aceptar",
+        /* fr      */ "OK",
+        /* it      */ "OK",
+        /* ja      */ "OK",
+        /* ko      */ "확인",
+        /* pt_br   */ "OK",
+        /* ru      */ "ОК",
+        /* zh_hans */ "确定",
+        /* zh_hant */ "確定",
+    ],
+    // Yes (used as a common dialog button)
     [
         /* en      */ "Yes",
         /* de      */ "Ja",
@@ -151,7 +185,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "是",
         /* zh_hant */ "是",
     ],
-    // No
+    // No (used as a common dialog button)
     [
         /* en      */ "No",
         /* de      */ "Nein",
@@ -165,23 +199,36 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "否",
         /* zh_hant */ "否",
     ],
-
-    // ErrorIcuMissing
+    // Cancel (used as a common dialog button)
     [
-        /* en      */ "ICU library not found",
-        /* de      */ "ICU-Bibliothek nicht gefunden",
-        /* es      */ "Biblioteca ICU no encontrada",
-        /* fr      */ "Bibliothèque ICU introuvable",
-        /* it      */ "Libreria ICU non trovata",
-        /* ja      */ "ICUライブラリが見つかりません",
-        /* ko      */ "ICU 라이브러리를 찾을 수 없습니다",
-        /* pt_br   */ "Biblioteca ICU não encontrada",
-        /* ru      */ "Библиотека ICU не найдена",
-        /* zh_hans */ "未找到ICU库",
-        /* zh_hant */ "未找到ICU庫",
+        /* en      */ "Cancel",
+        /* de      */ "Abbrechen",
+        /* es      */ "Cancelar",
+        /* fr      */ "Annuler",
+        /* it      */ "Annulla",
+        /* ja      */ "キャンセル",
+        /* ko      */ "취소",
+        /* pt_br   */ "Cancelar",
+        /* ru      */ "Отмена",
+        /* zh_hans */ "取消",
+        /* zh_hant */ "取消",
+    ],
+    // Always (used as a common dialog button)
+    [
+        /* en      */ "Always",
+        /* de      */ "Immer",
+        /* es      */ "Siempre",
+        /* fr      */ "Toujours",
+        /* it      */ "Sempre",
+        /* ja      */ "常に",
+        /* ko      */ "항상",
+        /* pt_br   */ "Sempre",
+        /* ru      */ "Всегда",
+        /* zh_hans */ "总是",
+        /* zh_hant */ "總是",
     ],
 
-    // File
+    // File (a menu bar item)
     [
         /* en      */ "File",
         /* de      */ "Datei",
@@ -194,6 +241,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Файл",
         /* zh_hans */ "文件",
         /* zh_hant */ "檔案",
+    ],
+    // FileNew
+    [
+        /* en      */ "New File…",
+        /* de      */ "Neue Datei…",
+        /* es      */ "Nuevo archivo…",
+        /* fr      */ "Nouveau fichier…",
+        /* it      */ "Nuovo file…",
+        /* ja      */ "新規ファイル…",
+        /* ko      */ "새 파일…",
+        /* pt_br   */ "Novo arquivo…",
+        /* ru      */ "Новый файл…",
+        /* zh_hans */ "新建文件…",
+        /* zh_hant */ "新增檔案…",
     ],
     // FileOpen
     [
@@ -237,6 +298,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "另存为…",
         /* zh_hant */ "另存新檔…",
     ],
+    // FileClose
+    [
+        /* en      */ "Close Editor",
+        /* de      */ "Editor schließen",
+        /* es      */ "Cerrar editor",
+        /* fr      */ "Fermer l'éditeur",
+        /* it      */ "Chiudi editor",
+        /* ja      */ "エディターを閉じる",
+        /* ko      */ "편집기 닫기",
+        /* pt_br   */ "Fechar editor",
+        /* ru      */ "Закрыть редактор",
+        /* zh_hans */ "关闭编辑器",
+        /* zh_hant */ "關閉編輯器",
+    ],
     // FileExit
     [
         /* en      */ "Exit",
@@ -252,12 +327,12 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "退出",
     ],
 
-    // Edit
+    // Edit (a menu bar item)
     [
         /* en      */ "Edit",
         /* de      */ "Bearbeiten",
         /* es      */ "Editar",
-        /* fr      */ "Éditer",
+        /* fr      */ "Édition",
         /* it      */ "Modifica",
         /* ja      */ "編集",
         /* ko      */ "편집",
@@ -365,7 +440,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "取代",
     ],
 
-    // View
+    // View (a menu bar item)
     [
         /* en      */ "View",
         /* de      */ "Ansicht",
@@ -384,7 +459,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "Focus Statusbar",
         /* de      */ "Statusleiste fokussieren",
         /* es      */ "Enfocar barra de estado",
-        /* fr      */ "Focus sur la barre d'état",
+        /* fr      */ "Activer la barre d’état",
         /* it      */ "Attiva barra di stato",
         /* ja      */ "ステータスバーにフォーカス",
         /* ko      */ "상태 표시줄로 포커스 이동",
@@ -408,7 +483,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "自動換行",
     ],
 
-    // Help
+    // Help (a menu bar item)
     [
         /* en      */ "Help",
         /* de      */ "Hilfe",
@@ -456,7 +531,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "Do you want to save the changes you made?",
         /* de      */ "Möchten Sie die vorgenommenen Änderungen speichern?",
         /* es      */ "¿Desea guardar los cambios realizados?",
-        /* fr      */ "Voulez-vous enregistrer les modifications apportées?",
+        /* fr      */ "Voulez-vous enregistrer les modifications apportées ?",
         /* it      */ "Vuoi salvare le modifiche apportate?",
         /* ja      */ "変更内容を保存しますか？",
         /* ko      */ "변경한 내용을 저장하시겠습니까?",
@@ -493,20 +568,6 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "不保存",
         /* zh_hant */ "不儲存",
     ],
-    // UnsavedChangesDialogCancel
-    [
-        /* en      */ "Cancel",
-        /* de      */ "Abbrechen",
-        /* es      */ "Cancelar",
-        /* fr      */ "Annuler",
-        /* it      */ "Annulla",
-        /* ja      */ "キャンセル",
-        /* ko      */ "취소",
-        /* pt_br   */ "Cancelar",
-        /* ru      */ "Отмена",
-        /* zh_hans */ "取消",
-        /* zh_hant */ "取消",
-    ],
 
     // AboutDialogTitle
     [
@@ -527,7 +588,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "Version: ",
         /* de      */ "Version: ",
         /* es      */ "Versión: ",
-        /* fr      */ "Version: ",
+        /* fr      */ "Version : ",
         /* it      */ "Versione: ",
         /* ja      */ "バージョン: ",
         /* ko      */ "버전: ",
@@ -537,12 +598,114 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "版本: ",
     ],
 
+    // Shown when the clipboard size exceeds the limit for OSC 52
+    // LargeClipboardWarningLine1
+    [
+        /* en      */ "Text you copy is shared with the terminal clipboard.",
+        /* de      */ "Der kopierte Text wird mit der Terminal-Zwischenablage geteilt.",
+        /* es      */ "El texto que copies se comparte con el portapapeles del terminal.",
+        /* fr      */ "Le texte que vous copiez est partagé avec le presse-papiers du terminal.",
+        /* it      */ "Il testo copiato viene condiviso con gli appunti del terminale.",
+        /* ja      */ "コピーしたテキストはターミナルのクリップボードと共有されます。",
+        /* ko      */ "복사한 텍스트가 터미널 클립보드와 공유됩니다.",
+        /* pt_br   */ "O texto copiado é compartilhado com a área de transferência do terminal.",
+        /* ru      */ "Скопированный текст передаётся в буфер обмена терминала.",
+        /* zh_hans */ "你复制的文本将共享到终端剪贴板。",
+        /* zh_hant */ "您複製的文字將會與終端機剪貼簿分享。",
+    ],
+    // LargeClipboardWarningLine2
+    [
+        /* en      */ "You copied {size} which may take a long time to share.",
+        /* de      */ "Sie haben {size} kopiert, das Weitergeben könnte lange dauern.",
+        /* es      */ "Copiaste {size}, lo que puede tardar en compartirse.",
+        /* fr      */ "Vous avez copié {size}, ce qui peut être long à partager.",
+        /* it      */ "Hai copiato {size}, potrebbe richiedere molto tempo per condividerlo.",
+        /* ja      */ "{size} をコピーしました。共有に時間がかかる可能性があります。",
+        /* ko      */ "{size}를 복사했습니다. 공유하는 데 시간이 오래 걸릴 수 있습니다.",
+        /* pt_br   */ "Você copiou {size}, o que pode demorar para compartilhar.",
+        /* ru      */ "Вы скопировали {size}; передача может занять много времени.",
+        /* zh_hans */ "你复制了 {size}，共享可能需要较长时间。",
+        /* zh_hant */ "您已複製 {size}，共享可能需要較長時間。",
+    ],
+    // LargeClipboardWarningLine3
+    [
+        /* en      */ "Do you want to send it anyway?",
+        /* de      */ "Möchten Sie es trotzdem senden?",
+        /* es      */ "¿Desea enviarlo de todas formas?",
+        /* fr      */ "Voulez-vous quand même l’envoyer?",
+        /* it      */ "Vuoi inviarlo comunque?",
+        /* ja      */ "それでも送信しますか？",
+        /* ko      */ "그래도 전송하시겠습니까?",
+        /* pt_br   */ "Deseja enviar mesmo assim?",
+        /* ru      */ "Отправить в любом случае?",
+        /* zh_hans */ "仍要发送吗？",
+        /* zh_hant */ "仍要傳送嗎？",
+    ],
+    // SuperLargeClipboardWarning (as an alternative to LargeClipboardWarningLine2 and 3)
+    [
+        /* en      */ "The text you copied is too large to be shared.",
+        /* de      */ "Der kopierte Text ist zu groß, um geteilt zu werden.",
+        /* es      */ "El texto que copiaste es demasiado grande para compartirse.",
+        /* fr      */ "Le texte que vous avez copié est trop volumineux pour être partagé.",
+        /* it      */ "Il testo copiato è troppo grande per essere condiviso.",
+        /* ja      */ "コピーしたテキストは大きすぎて共有できません。",
+        /* ko      */ "복사한 텍스트가 너무 커서 공유할 수 없습니다.",
+        /* pt_br   */ "O texto copiado é grande demais para ser compartilhado.",
+        /* ru      */ "Скопированный текст слишком велик для передачи.",
+        /* zh_hans */ "你复制的文本过大，无法共享。",
+        /* zh_hant */ "您複製的文字過大，無法分享。",
+    ],
+
+    // WarningDialogTitle
+    [
+        /* en      */ "Warning",
+        /* de      */ "Warnung",
+        /* es      */ "Advertencia",
+        /* fr      */ "Avertissement",
+        /* it      */ "Avviso",
+        /* ja      */ "警告",
+        /* ko      */ "경고",
+        /* pt_br   */ "Aviso",
+        /* ru      */ "Предупреждение",
+        /* zh_hans */ "警告",
+        /* zh_hant */ "警告",
+    ],
+
+    // ErrorDialogTitle
+    [
+        /* en      */ "Error",
+        /* de      */ "Fehler",
+        /* es      */ "Error",
+        /* fr      */ "Erreur",
+        /* it      */ "Errore",
+        /* ja      */ "エラー",
+        /* ko      */ "오류",
+        /* pt_br   */ "Erro",
+        /* ru      */ "Ошибка",
+        /* zh_hans */ "错误",
+        /* zh_hant */ "錯誤",
+    ],
+    // ErrorIcuMissing
+    [
+        /* en      */ "This operation requires the ICU library",
+        /* de      */ "Diese Operation erfordert die ICU-Bibliothek",
+        /* es      */ "Esta operación requiere la biblioteca ICU",
+        /* fr      */ "Cette opération nécessite la bibliothèque ICU",
+        /* it      */ "Questa operazione richiede la libreria ICU",
+        /* ja      */ "この操作にはICUライブラリが必要です",
+        /* ko      */ "이 작업에는 ICU 라이브러리가 필요합니다",
+        /* pt_br   */ "Esta operação requer a biblioteca ICU",
+        /* ru      */ "Эта операция требует наличия библиотеки ICU",
+        /* zh_hans */ "此操作需要 ICU 库",
+        /* zh_hant */ "此操作需要 ICU 庫",
+    ],
+
     // SearchNeedleLabel (for input field)
     [
         /* en      */ "Find:",
         /* de      */ "Suchen:",
         /* es      */ "Buscar:",
-        /* fr      */ "Rechercher:",
+        /* fr      */ "Rechercher :",
         /* it      */ "Trova:",
         /* ja      */ "検索:",
         /* ko      */ "찾기:",
@@ -556,7 +719,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "Replace:",
         /* de      */ "Ersetzen:",
         /* es      */ "Reemplazar:",
-        /* fr      */ "Remplacer:",
+        /* fr      */ "Remplacer :",
         /* it      */ "Sostituire:",
         /* ja      */ "置換:",
         /* ko      */ "바꾸기:",
@@ -699,7 +862,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "Folder:",
         /* de      */ "Ordner:",
         /* es      */ "Carpeta:",
-        /* fr      */ "Dossier:",
+        /* fr      */ "Dossier :",
         /* it      */ "Cartella:",
         /* ja      */ "フォルダ:",
         /* ko      */ "폴더:",
@@ -713,7 +876,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "File name:",
         /* de      */ "Dateiname:",
         /* es      */ "Nombre de archivo:",
-        /* fr      */ "Nom de fichier:",
+        /* fr      */ "Nom de fichier :",
         /* it      */ "Nome del file:",
         /* ja      */ "ファイル名:",
         /* ko      */ "파일 이름:",
@@ -756,25 +919,33 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
 static mut S_LANG: LangId = LangId::en;
 
 pub fn init() {
-    let langs = sys::preferred_languages();
+    const LANG_MAP: &[(&str, LangId)] = &[
+        ("en", LangId::en),
+        // ----------------
+        ("de", LangId::de),
+        ("es", LangId::es),
+        ("fr", LangId::fr),
+        ("it", LangId::it),
+        ("ja", LangId::ja),
+        ("ko", LangId::ko),
+        ("pt-br", LangId::pt_br),
+        ("ru", LangId::ru),
+        ("zh-hant", LangId::zh_hant),
+        ("zh-tw", LangId::zh_hant),
+        ("zh", LangId::zh_hans),
+    ];
+
+    let scratch = scratch_arena(None);
+    let langs = sys::preferred_languages(&scratch);
     let mut lang = LangId::en;
 
     for l in langs {
-        lang = match l.as_str() {
-            "en" => LangId::en,
-            "de" => LangId::de,
-            "es" => LangId::es,
-            "fr" => LangId::fr,
-            "it" => LangId::it,
-            "ja" => LangId::ja,
-            "ko" => LangId::ko,
-            "pt-br" => LangId::pt_br,
-            "ru" => LangId::ru,
-            "zh-hant" => LangId::zh_hant,
-            "zh" => LangId::zh_hans,
-            _ => continue,
-        };
-        break;
+        for (prefix, id) in LANG_MAP {
+            if l.starts_with_ignore_ascii_case(prefix) {
+                lang = *id;
+                break;
+            }
+        }
     }
 
     unsafe {

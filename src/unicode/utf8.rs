@@ -1,5 +1,17 @@
-use std::{hint, iter, mem};
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
 
+use std::{hint, iter};
+
+/// An iterator over UTF-8 encoded characters.
+///
+/// This differs from [`std::str::Chars`] in that it works on unsanitized
+/// byte slices and transparently replaces invalid UTF-8 sequences with U+FFFD.
+///
+/// This follows ICU's bitmask approach for `U8_NEXT_OR_FFFD` relatively
+/// closely. This is important for compatibility, because it implements the
+/// WHATWG recommendation for UTF8 error recovery. It's also helpful, because
+/// the excellent folks at ICU have probably spent a lot of time optimizing it.
 #[derive(Clone, Copy)]
 pub struct Utf8Chars<'a> {
     source: &'a [u8],
@@ -7,30 +19,39 @@ pub struct Utf8Chars<'a> {
 }
 
 impl<'a> Utf8Chars<'a> {
+    /// Creates a new `Utf8Chars` iterator starting at the given `offset`.
     pub fn new(source: &'a [u8], offset: usize) -> Self {
         Self { source, offset }
     }
 
+    /// Returns the byte slice this iterator was created with.
     pub fn source(&self) -> &'a [u8] {
         self.source
     }
 
-    pub fn offset(&self) -> usize {
-        self.offset
-    }
-
+    /// Checks if the source is empty.
     pub fn is_empty(&self) -> bool {
         self.source.is_empty()
     }
 
+    /// Returns the length of the source.
     pub fn len(&self) -> usize {
         self.source.len()
     }
 
+    /// Returns the current offset in the byte slice.
+    ///
+    /// This will be past the last returned character.
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
+    /// Sets the offset to continue iterating from.
     pub fn seek(&mut self, offset: usize) {
         self.offset = offset;
     }
 
+    /// Returns true if `next` will return another character.
     pub fn has_next(&self) -> bool {
         self.offset < self.source.len()
     }
@@ -39,9 +60,6 @@ impl<'a> Utf8Chars<'a> {
     // performance actually suffers when this gets inlined.
     #[cold]
     fn next_slow(&mut self, c: u8) -> char {
-        // See: https://datatracker.ietf.org/doc/html/rfc3629
-        // as well as ICU's `utf8.h` for the bitmask approach.
-
         if self.offset >= self.source.len() {
             return Self::fffd();
         }
@@ -94,11 +112,11 @@ impl<'a> Utf8Chars<'a> {
             // -> Strip off the 1110 prefix
             cp &= !0xF0;
 
-            let t = self.source[self.offset];
+            let t = self.source[self.offset] as u32;
             if LEAD_TRAIL1_BITS[cp as usize] & (1 << (t >> 5)) == 0 {
                 return Self::fffd();
             }
-            cp = (cp << 6) | (t as u32 & 0x3F);
+            cp = (cp << 6) | (t & 0x3F);
 
             self.offset += 1;
             if self.offset >= self.source.len() {
@@ -114,12 +132,10 @@ impl<'a> Utf8Chars<'a> {
             // The trail byte is the index and the lead byte mask is the value.
             // This is because the split at 0x90 requires more bits than fit into an u8.
             const TRAIL1_LEAD_BITS: [u8; 16] = [
-                // +------ 0xF4 lead
-                // |+----- 0xF3 lead
-                // ||+---- 0xF2 lead
-                // |||+--- 0xF1 lead
-                // ||||+-- 0xF0 lead
-                // vvvvv
+                // --------- 0xF4 lead
+                // |         ...
+                // |   +---- 0xF0 lead
+                // v   v
                 0b_00000, //
                 0b_00000, //
                 0b_00000, //
@@ -143,15 +159,17 @@ impl<'a> Utf8Chars<'a> {
             cp &= !0xF0;
 
             // Now we can verify if it's actually <= 0xF4.
+            // Curiously, this if condition does a lot of heavy lifting for
+            // performance (+13%). I think it's just a coincidence though.
             if cp > 4 {
                 return Self::fffd();
             }
 
-            let t = self.source[self.offset];
+            let t = self.source[self.offset] as u32;
             if TRAIL1_LEAD_BITS[(t >> 4) as usize] & (1 << cp) == 0 {
                 return Self::fffd();
             }
-            cp = (cp << 6) | (t as u32 & 0x3F);
+            cp = (cp << 6) | (t & 0x3F);
 
             self.offset += 1;
             if self.offset >= self.source.len() {
@@ -159,7 +177,7 @@ impl<'a> Utf8Chars<'a> {
             }
 
             // UTF8-tail = %x80-BF
-            let t = self.source[self.offset] as u32 - 0x80;
+            let t = (self.source[self.offset] as u32).wrapping_sub(0x80);
             if t > 0x3F {
                 return Self::fffd();
             }
@@ -176,7 +194,7 @@ impl<'a> Utf8Chars<'a> {
         unsafe { hint::assert_unchecked(self.offset < self.source.len()) };
 
         // UTF8-tail = %x80-BF
-        let t = self.source[self.offset] as u32 - 0x80;
+        let t = (self.source[self.offset] as u32).wrapping_sub(0x80);
         if t > 0x3F {
             return Self::fffd();
         }
@@ -185,13 +203,11 @@ impl<'a> Utf8Chars<'a> {
         self.offset += 1;
 
         // SAFETY: If `cp` wasn't a valid codepoint, we already returned U+FFFD above.
-        #[allow(clippy::transmute_int_to_char)]
-        unsafe {
-            mem::transmute(cp)
-        }
+        unsafe { char::from_u32_unchecked(cp) }
     }
 
-    // Improves performance by ~5% and reduces code size.
+    // This simultaneously serves as a `cold_path` marker.
+    // It improves performance by ~5% and reduces code size.
     #[cold]
     #[inline(always)]
     fn fffd() -> char {
@@ -202,8 +218,6 @@ impl<'a> Utf8Chars<'a> {
 impl Iterator for Utf8Chars<'_> {
     type Item = char;
 
-    // At opt-level="s", this function doesn't get inlined,
-    // but performance greatly suffers in that case.
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.offset >= self.source.len() {
@@ -219,6 +233,8 @@ impl Iterator for Utf8Chars<'_> {
             // UTF8-1 = %x00-7F
             Some(c as char)
         } else {
+            // Weirdly enough, adding a hint here to assert that `next_slow`
+            // only returns codepoints >= 0x80 makes `ucd` ~5% slower.
             Some(self.next_slow(c))
         }
     }

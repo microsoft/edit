@@ -1,10 +1,5 @@
-*.profraw
-*.user
 .idea
 .vs
-CMakeSettings.json
-bin
+*.profraw
 lcov.info
-obj
-out
 target

@@ -1,59 +1,32 @@
-use crate::helpers::{self, CoordType, Point};
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+use std::hint::cold_path;
+
+use super::Utf8Chars;
+use super::tables::*;
+use crate::document::ReadableDocument;
+use crate::helpers::{CoordType, Point};
 use crate::simd::{memchr2, memrchr2};
-use crate::ucd_gen::*;
-use crate::utf8::Utf8Chars;
-use std::ops::Range;
 
-/// An abstraction over potentially chunked text containers.
-pub trait Document {
-    /// Read some bytes starting at (including) the given absolute offset.
-    ///
-    /// # Warning
-    ///
-    /// * Be lenient on inputs:
-    ///   * The given offset may be out of bounds and you MUST clamp it.
-    ///   * You SHOULD NOT assume that offsets are at grapheme cluster boundaries.
-    /// * Be strict on outputs:
-    ///   * You MUST NOT break grapheme clusters across chunks.
-    ///   * You MUST NOT return an empty slice unless the offset is at or beyond the end.
-    fn read_forward(&self, off: usize) -> &[u8];
-
-    /// Read some bytes before (but not including) the given absolute offset.
-    ///
-    /// # Warning
-    ///
-    /// * Be lenient on inputs:
-    ///   * The given offset may be out of bounds and you MUST clamp it.
-    ///   * You SHOULD NOT assume that offsets are at grapheme cluster boundaries.
-    /// * Be strict on outputs:
-    ///   * You MUST NOT break grapheme clusters across chunks.
-    ///   * You MUST NOT return an empty slice unless the offset is zero.
-    fn read_backward(&self, off: usize) -> &[u8];
-}
-
-impl Document for &[u8] {
-    fn read_forward(&self, off: usize) -> &[u8] {
-        let s = *self;
-        &s[off.min(s.len())..]
-    }
-
-    fn read_backward(&self, off: usize) -> &[u8] {
-        let s = *self;
-        &s[..off.min(s.len())]
-    }
-}
-
+/// Stores a position inside a [`ReadableDocument`].
+///
+/// The cursor tracks both the absolute byte-offset,
+/// as well as the position in terminal-related coordinates.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UcdCursor {
+pub struct Cursor {
     /// Offset in bytes within the buffer.
     pub offset: usize,
     /// Position in the buffer in lines (.y) and grapheme clusters (.x).
+    ///
     /// Line wrapping has NO influence on this.
     pub logical_pos: Point,
     /// Position in the buffer in laid out rows (.y) and columns (.x).
+    ///
     /// Line wrapping has an influence on this.
     pub visual_pos: Point,
     /// Horizontal position in visual columns.
+    ///
     /// Line wrapping has NO influence on this and if word wrap is disabled,
     /// it's identical to `visual_pos.x`. This is useful for calculating tab widths.
     pub column: CoordType,
@@ -64,40 +37,52 @@ pub struct UcdCursor {
     pub wrap_opp: bool,
 }
 
+/// Your entrypoint to navigating inside a [`ReadableDocument`].
 #[derive(Clone)]
 pub struct MeasurementConfig<'doc> {
-    buffer: &'doc dyn Document,
+    buffer: &'doc dyn ReadableDocument,
     tab_size: CoordType,
     word_wrap_column: CoordType,
-    cursor: UcdCursor,
+    cursor: Cursor,
 }
 
 impl<'doc> MeasurementConfig<'doc> {
-    pub fn new(buffer: &'doc dyn Document) -> Self {
-        Self {
-            buffer,
-            tab_size: 8,
-            word_wrap_column: 0,
-            cursor: UcdCursor::default(),
-        }
+    /// Creates a new [`MeasurementConfig`] for the given document.
+    pub fn new(buffer: &'doc dyn ReadableDocument) -> Self {
+        Self { buffer, tab_size: 8, word_wrap_column: 0, cursor: Default::default() }
     }
 
+    /// Sets the tab size.
+    ///
+    /// Defaults to 8, because that's what a tab in terminals evaluates to.
     pub fn with_tab_size(mut self, tab_size: CoordType) -> Self {
         self.tab_size = tab_size.max(1);
         self
     }
 
+    /// You want word wrap? Set it here!
+    ///
+    /// Defaults to 0, which means no word wrap.
     pub fn with_word_wrap_column(mut self, word_wrap_column: CoordType) -> Self {
         self.word_wrap_column = word_wrap_column;
         self
     }
 
-    pub fn with_cursor(mut self, cursor: UcdCursor) -> Self {
+    /// Sets the initial cursor to the given position.
+    ///
+    /// WARNING: While the code doesn't panic if the cursor is invalid,
+    /// the results will obviously be complete garbage.
+    pub fn with_cursor(mut self, cursor: Cursor) -> Self {
         self.cursor = cursor;
         self
     }
 
-    pub fn goto_offset(&mut self, offset: usize) -> UcdCursor {
+    /// Navigates **forward** to the given absolute offset.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position after the navigation.
+    pub fn goto_offset(&mut self, offset: usize) -> Cursor {
         self.cursor = Self::measure_forward(
             self.tab_size,
             self.word_wrap_column,
@@ -110,7 +95,14 @@ impl<'doc> MeasurementConfig<'doc> {
         self.cursor
     }
 
-    pub fn goto_logical(&mut self, logical_target: Point) -> UcdCursor {
+    /// Navigates **forward** to the given logical position.
+    ///
+    /// Logical positions are in lines and grapheme clusters.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position after the navigation.
+    pub fn goto_logical(&mut self, logical_target: Point) -> Cursor {
         self.cursor = Self::measure_forward(
             self.tab_size,
             self.word_wrap_column,
@@ -123,7 +115,14 @@ impl<'doc> MeasurementConfig<'doc> {
         self.cursor
     }
 
-    pub fn goto_visual(&mut self, visual_target: Point) -> UcdCursor {
+    /// Navigates **forward** to the given visual position.
+    ///
+    /// Visual positions are in laid out rows and columns.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position after the navigation.
+    pub fn goto_visual(&mut self, visual_target: Point) -> Cursor {
         self.cursor = Self::measure_forward(
             self.tab_size,
             self.word_wrap_column,
@@ -136,7 +135,8 @@ impl<'doc> MeasurementConfig<'doc> {
         self.cursor
     }
 
-    pub fn cursor(&self) -> UcdCursor {
+    /// Returns the current cursor position.
+    pub fn cursor(&self) -> Cursor {
         self.cursor
     }
 
@@ -154,9 +154,9 @@ impl<'doc> MeasurementConfig<'doc> {
         offset_target: usize,
         logical_target: Point,
         visual_target: Point,
-        cursor: UcdCursor,
-        buffer: &dyn Document,
-    ) -> UcdCursor {
+        cursor: Cursor,
+        buffer: &dyn ReadableDocument,
+    ) -> Cursor {
         if cursor.offset >= offset_target
             || cursor.logical_pos >= logical_target
             || cursor.visual_pos >= visual_target
@@ -208,7 +208,7 @@ impl<'doc> MeasurementConfig<'doc> {
             // the next iteration of the this (outer) loop (`props_next_cluster`).
             loop {
                 if !chunk_iter.has_next() {
-                    helpers::cold_path();
+                    cold_path();
                     chunk_iter = Utf8Chars::new(buffer.read_forward(chunk_range.end), 0);
                     chunk_range = chunk_range.end..chunk_range.end + chunk_iter.len();
                 }
@@ -229,9 +229,8 @@ impl<'doc> MeasurementConfig<'doc> {
                 };
 
                 // Get the properties of the next cluster.
-                let props_lead = props_next_cluster;
                 props_next_cluster = ucd_grapheme_cluster_lookup(ch);
-                state = ucd_grapheme_cluster_joins(state, props_lead, props_next_cluster);
+                state = ucd_grapheme_cluster_joins(state, props_last_char, props_next_cluster);
 
                 // Stop if the next character does not join.
                 if ucd_grapheme_cluster_joins_done(state) {
@@ -253,7 +252,7 @@ impl<'doc> MeasurementConfig<'doc> {
 
             // Tabs require special handling because they can have a variable width.
             if props_last_char == ucd_tab_properties() {
-                // SAFETY: `tab_size` is clamped to >= 1 at the start of this method.
+                // SAFETY: `tab_size` is clamped to >= 1 in `with_tab_size`.
                 // This assert ensures that Rust doesn't insert panicking null checks.
                 unsafe { std::hint::assert_unchecked(tab_size >= 1) };
                 width = tab_size - (column % tab_size);
@@ -261,7 +260,7 @@ impl<'doc> MeasurementConfig<'doc> {
 
             // Hard wrap: Both the logical and visual position advance by one line.
             if props_last_char == ucd_linefeed_properties() {
-                helpers::cold_path();
+                cold_path();
 
                 wrap_opp = false;
 
@@ -324,7 +323,7 @@ impl<'doc> MeasurementConfig<'doc> {
                 // Imagine the word is "hello" and on the "o" we notice it wraps.
                 // If the target however was the "e", then we must revert back to "h" and search for it.
                 if visual_pos_x > visual_target_x {
-                    helpers::cold_path();
+                    cold_path();
 
                     offset = wrap_opp_offset;
                     logical_pos_x = wrap_opp_logical_pos_x;
@@ -356,8 +355,6 @@ impl<'doc> MeasurementConfig<'doc> {
 
         // If we're here, we hit our target. Now the only question is:
         // Is the word we're currently on so wide that it will be wrapped further down the document?
-        // This only applies if we already had a wrap opportunity on this line,
-        // because if there was none yet, the start column of the word is 0 and it can't be wrapped.
         if word_wrap_column > 0 {
             if !wrap_opp {
                 // If the current layouted line had no wrap opportunities, it means we had an input
@@ -388,7 +385,7 @@ impl<'doc> MeasurementConfig<'doc> {
                     // the next iteration of the this (outer) loop (`props_next_cluster`).
                     loop {
                         if !chunk_iter.has_next() {
-                            helpers::cold_path();
+                            cold_path();
                             chunk_iter = Utf8Chars::new(buffer.read_forward(chunk_range.end), 0);
                             chunk_range = chunk_range.end..chunk_range.end + chunk_iter.len();
                         }
@@ -410,9 +407,9 @@ impl<'doc> MeasurementConfig<'doc> {
                         };
 
                         // Get the properties of the next cluster.
-                        let props_lead = props_next_cluster;
                         props_next_cluster = ucd_grapheme_cluster_lookup(ch);
-                        state = ucd_grapheme_cluster_joins(state, props_lead, props_next_cluster);
+                        state =
+                            ucd_grapheme_cluster_joins(state, props_last_char, props_next_cluster);
 
                         // Stop if the next character does not join.
                         if ucd_grapheme_cluster_joins_done(state) {
@@ -434,7 +431,7 @@ impl<'doc> MeasurementConfig<'doc> {
 
                     // Tabs require special handling because they can have a variable width.
                     if props_last_char == ucd_tab_properties() {
-                        // SAFETY: `tab_size` is clamped to >= 1 at the start of this method.
+                        // SAFETY: `tab_size` is clamped to >= 1 in `with_tab_size`.
                         // This assert ensures that Rust doesn't insert panicking null checks.
                         unsafe { std::hint::assert_unchecked(tab_size >= 1) };
                         width = tab_size - (column % tab_size);
@@ -470,16 +467,10 @@ impl<'doc> MeasurementConfig<'doc> {
             }
         }
 
-        UcdCursor {
+        Cursor {
             offset,
-            logical_pos: Point {
-                x: logical_pos_x,
-                y: logical_pos_y,
-            },
-            visual_pos: Point {
-                x: visual_pos_x,
-                y: visual_pos_y,
-            },
+            logical_pos: Point { x: logical_pos_x, y: logical_pos_y },
+            visual_pos: Point { x: visual_pos_x, y: visual_pos_y },
             column,
             wrap_opp,
         }
@@ -495,286 +486,33 @@ impl<'doc> MeasurementConfig<'doc> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CharClass {
-    Whitespace,
-    Newline,
-    Separator,
-    Word,
-}
-
-const fn construct_classifier(seperators: &[u8]) -> [CharClass; 256] {
-    let mut classifier = [CharClass::Word; 256];
-
-    classifier[b' ' as usize] = CharClass::Whitespace;
-    classifier[b'\t' as usize] = CharClass::Whitespace;
-    classifier[b'\n' as usize] = CharClass::Newline;
-    classifier[b'\r' as usize] = CharClass::Newline;
-
-    let mut i = 0;
-    let len = seperators.len();
-    while i < len {
-        let ch = seperators[i];
-        assert!(ch < 128, "Only ASCII separators are supported.");
-        classifier[ch as usize] = CharClass::Separator;
-        i += 1;
-    }
-
-    classifier
-}
-
-const WORD_CLASSIFIER: [CharClass; 256] =
-    construct_classifier(br#"`~!@#$%^&*()-=+[{]}\|;:'",.<>/?"#);
-
-/// Finds the next word boundary given a document cursor offset.
-/// Returns the offset of the next word boundary.
-pub fn word_forward(doc: &dyn Document, offset: usize) -> usize {
-    word_navigation(WordForward {
-        doc,
-        offset,
-        chunk: &[],
-        chunk_off: 0,
-    })
-}
-
-/// The backward version of `word_forward`.
-pub fn word_backward(doc: &dyn Document, offset: usize) -> usize {
-    word_navigation(WordBackward {
-        doc,
-        offset,
-        chunk: &[],
-        chunk_off: 0,
-    })
-}
-
-/// Word navigation implementation. Matches the behavior of VS Code.
-fn word_navigation<T: WordNavigation>(mut nav: T) -> usize {
-    // First, fill `self.chunk` with at least 1 grapheme.
-    nav.read();
-
-    // Skip one newline, if any.
-    nav.skip_newline();
-
-    // Skip any whitespace.
-    nav.skip_class(CharClass::Whitespace);
-
-    // Skip one word or seperator and take note of the class.
-    let class = nav.peek(CharClass::Whitespace);
-    if matches!(class, CharClass::Separator | CharClass::Word) {
-        nav.next();
-
-        let off = nav.offset();
-
-        // Continue skipping the same class.
-        nav.skip_class(class);
-
-        // If the class was a separator and we only moved one character,
-        // continue skipping characters of the word class.
-        if off == nav.offset() && class == CharClass::Separator {
-            nav.skip_class(CharClass::Word);
-        }
-    }
-
-    nav.offset()
-}
-
-trait WordNavigation {
-    fn read(&mut self);
-    fn skip_newline(&mut self);
-    fn skip_class(&mut self, class: CharClass);
-    fn peek(&self, default: CharClass) -> CharClass;
-    fn next(&mut self);
-    fn offset(&self) -> usize;
-}
-
-struct WordForward<'a> {
-    doc: &'a dyn Document,
-    offset: usize,
-    chunk: &'a [u8],
-    chunk_off: usize,
-}
-
-impl WordNavigation for WordForward<'_> {
-    fn read(&mut self) {
-        self.chunk = self.doc.read_forward(self.offset);
-        self.chunk_off = 0;
-    }
-
-    fn skip_newline(&mut self) {
-        // We can rely on the fact that the document does not split graphemes across chunks.
-        // = If there's a newline it's wholly contained in this chunk.
-        // Unlike with `WordBackward`, we can't check for CR and LF separately as only a CR followed
-        // by a LF is a newline. A lone CR in the document is just a regular control character.
-        self.chunk_off += match self.chunk.get(self.chunk_off) {
-            Some(&b'\n') => 1,
-            Some(&b'\r') if self.chunk.get(self.chunk_off + 1) == Some(&b'\n') => 2,
-            _ => 0,
-        }
-    }
-
-    fn skip_class(&mut self, class: CharClass) {
-        while !self.chunk.is_empty() {
-            while self.chunk_off < self.chunk.len() {
-                if WORD_CLASSIFIER[self.chunk[self.chunk_off] as usize] != class {
-                    return;
-                }
-                self.chunk_off += 1;
-            }
-
-            self.offset += self.chunk.len();
-            self.chunk = self.doc.read_forward(self.offset);
-            self.chunk_off = 0;
-        }
-    }
-
-    fn peek(&self, default: CharClass) -> CharClass {
-        if self.chunk_off < self.chunk.len() {
-            WORD_CLASSIFIER[self.chunk[self.chunk_off] as usize]
-        } else {
-            default
-        }
-    }
-
-    fn next(&mut self) {
-        self.chunk_off += 1;
-    }
-
-    fn offset(&self) -> usize {
-        self.offset + self.chunk_off
-    }
-}
-
-struct WordBackward<'a> {
-    doc: &'a dyn Document,
-    offset: usize,
-    chunk: &'a [u8],
-    chunk_off: usize,
-}
-
-impl WordNavigation for WordBackward<'_> {
-    fn read(&mut self) {
-        self.chunk = self.doc.read_backward(self.offset);
-        self.chunk_off = self.chunk.len();
-    }
-
-    fn skip_newline(&mut self) {
-        // We can rely on the fact that the document does not split graphemes across chunks.
-        // = If there's a newline it's wholly contained in this chunk.
-        if self.chunk_off > 0 && self.chunk[self.chunk_off - 1] == b'\n' {
-            self.chunk_off -= 1;
-        }
-        if self.chunk_off > 0 && self.chunk[self.chunk_off - 1] == b'\r' {
-            self.chunk_off -= 1;
-        }
-    }
-
-    fn skip_class(&mut self, class: CharClass) {
-        while !self.chunk.is_empty() {
-            while self.chunk_off > 0 {
-                if WORD_CLASSIFIER[self.chunk[self.chunk_off - 1] as usize] != class {
-                    return;
-                }
-                self.chunk_off -= 1;
-            }
-
-            self.offset -= self.chunk.len();
-            self.chunk = self.doc.read_backward(self.offset);
-            self.chunk_off = self.chunk.len();
-        }
-    }
-
-    fn peek(&self, default: CharClass) -> CharClass {
-        if self.chunk_off > 0 {
-            WORD_CLASSIFIER[self.chunk[self.chunk_off - 1] as usize]
-        } else {
-            default
-        }
-    }
-
-    fn next(&mut self) {
-        self.chunk_off -= 1;
-    }
-
-    fn offset(&self) -> usize {
-        self.offset - self.chunk.len() + self.chunk_off
-    }
-}
-
-/// Returns the offset range of the "word" at the given offset.
-/// Does not cross newlines. Works similar to VS Code.
-pub fn word_select(doc: &dyn Document, offset: usize) -> Range<usize> {
-    let mut beg = offset;
-    let mut end = offset;
-    let mut class = CharClass::Newline;
-
-    let mut chunk = doc.read_forward(end);
-    if !chunk.is_empty() {
-        // Not at the end of the document? Great!
-        // We default to using the next char as the class, because in terminals
-        // the cursor is usually always to the left of the cell you clicked on.
-        class = WORD_CLASSIFIER[chunk[0] as usize];
-
-        let mut chunk_off = 0;
-
-        // Select the word, unless we hit a newline.
-        if class != CharClass::Newline {
-            loop {
-                chunk_off += 1;
-                end += 1;
-
-                if chunk_off >= chunk.len() {
-                    chunk = doc.read_forward(end);
-                    chunk_off = 0;
-                    if chunk.is_empty() {
-                        break;
-                    }
-                }
-
-                if WORD_CLASSIFIER[chunk[chunk_off] as usize] != class {
-                    break;
-                }
-            }
-        }
-    }
-
-    let mut chunk = doc.read_backward(beg);
-    if !chunk.is_empty() {
-        let mut chunk_off = chunk.len();
-
-        // If we failed to determine the class, because we hit the end of the document
-        // or a newline, we fall back to using the previous character, of course.
-        if class == CharClass::Newline {
-            class = WORD_CLASSIFIER[chunk[chunk_off - 1] as usize];
-        }
-
-        // Select the word, unless we hit a newline.
-        if class != CharClass::Newline {
-            loop {
-                if WORD_CLASSIFIER[chunk[chunk_off - 1] as usize] != class {
-                    break;
-                }
-
-                chunk_off -= 1;
-                beg -= 1;
-
-                if chunk_off == 0 {
-                    chunk = doc.read_backward(beg);
-                    chunk_off = chunk.len();
-                    if chunk.is_empty() {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    beg..end
-}
-
-// TODO: This code could be optimized by replacing memchr with manual line counting.
-// If `line_stop` is very far away, we could accumulate newline counts horizontally
-// in a AVX2 register (= 32 u8 slots). Then, every 256 bytes we compute the horizontal
-// sum via `_mm256_sad_epu8` yielding us the newline count in the last block.
+/// Seeks forward to the given line start.
+///
+/// If given a piece of `text`, and assuming you're currently at `offset` which
+/// is on the logical line `line`, this will seek forward until the logical line
+/// `line_stop` is reached. For instance, if `line` is 0 and `line_stop` is 2,
+/// it'll seek forward past 2 line feeds.
+///
+/// This function always stops exactly past a line feed
+/// and thus returns a position at the start of a line.
+///
+/// # Warning
+///
+/// If the end of `text` is hit before reaching `line_stop`, the function
+/// will return an offset of `text.len()`, not at the start of a line.
+///
+/// # Parameters
+///
+/// * `text`: The text to search in.
+/// * `offset`: The offset to start searching from.
+/// * `line`: The current line.
+/// * `line_stop`: The line to stop at.
+///
+/// # Returns
+///
+/// A tuple consisting of:
+/// * The new offset.
+/// * The line number that was reached.
 pub fn newlines_forward(
     text: &[u8],
     mut offset: usize,
@@ -791,6 +529,13 @@ pub fn newlines_forward(
     offset = offset.min(len);
 
     loop {
+        // TODO: This code could be optimized by replacing memchr with manual line counting.
+        //
+        // If `line_stop` is very far away, we could accumulate newline counts horizontally
+        // in a AVX2 register (= 32 u8 slots). Then, every 256 bytes we compute the horizontal
+        // sum via `_mm256_sad_epu8` yielding us the newline count in the last block.
+        //
+        // We could also just use `_mm256_sad_epu8` on each fetch as-is.
         offset = memchr2(b'\n', b'\n', text, offset);
         if offset >= len {
             break;
@@ -806,9 +551,18 @@ pub fn newlines_forward(
     (offset, line)
 }
 
-// Seeks to the start of the given line.
-// No matter what parameters are given, it only returns an offset at the start of a line.
-// Put differently, even if `line == line_stop`, it'll seek backward to the line start.
+/// Seeks backward to the given line start.
+///
+/// See [`newlines_forward`] for details.
+/// This function does almost the same thing, but in reverse.
+///
+/// # Warning
+///
+/// In addition to the notes in [`newlines_forward`]:
+///
+/// No matter what parameters are given, [`newlines_backward`] only returns an
+/// offset at the start of a line. Put differently, even if `line == line_stop`,
+/// it'll seek backward to the line start.
 pub fn newlines_backward(
     text: &[u8],
     mut offset: usize,
@@ -830,6 +584,27 @@ pub fn newlines_backward(
     }
 }
 
+/// Returns an offset past a newline.
+///
+/// If `offset` is right in front of a newline,
+/// this will return the offset past said newline.
+pub fn skip_newline(text: &[u8], mut offset: usize) -> usize {
+    if offset >= text.len() {
+        return offset;
+    }
+    if text[offset] == b'\r' {
+        offset += 1;
+    }
+    if offset >= text.len() {
+        return offset;
+    }
+    if text[offset] == b'\n' {
+        offset += 1;
+    }
+    offset
+}
+
+/// Strips a trailing newline from the given text.
 pub fn strip_newline(mut text: &[u8]) -> &[u8] {
     // Rust generates surprisingly tight assembly for this.
     if text.last() == Some(&b'\n') {
@@ -847,7 +622,7 @@ mod test {
 
     struct ChunkedDoc<'a>(&'a [&'a [u8]]);
 
-    impl Document for ChunkedDoc<'_> {
+    impl ReadableDocument for ChunkedDoc<'_> {
         fn read_forward(&self, mut off: usize) -> &[u8] {
             for chunk in self.0 {
                 if off < chunk.len() {
@@ -875,7 +650,7 @@ mod test {
             MeasurementConfig::new(&"foo\nbar".as_bytes()).goto_visual(Point { x: 0, y: 1 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 0, y: 1 },
                 visual_pos: Point { x: 0, y: 1 },
@@ -890,7 +665,7 @@ mod test {
         let cursor = MeasurementConfig::new(&"a😶‍🌫️b".as_bytes()).goto_visual(Point { x: 2, y: 0 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 1,
                 logical_pos: Point { x: 1, y: 0 },
                 visual_pos: Point { x: 1, y: 0 },
@@ -912,7 +687,7 @@ mod test {
         let cursor = cfg.goto_logical(Point { x: 5, y: 0 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 5,
                 logical_pos: Point { x: 5, y: 0 },
                 visual_pos: Point { x: 1, y: 1 },
@@ -923,13 +698,10 @@ mod test {
 
         // Does hitting the visual target within a word reset the hit back to the end of the visual line?
         let mut cfg = MeasurementConfig::new(&text).with_word_wrap_column(6);
-        let cursor = cfg.goto_visual(Point {
-            x: CoordType::MAX,
-            y: 0,
-        });
+        let cursor = cfg.goto_visual(Point { x: CoordType::MAX, y: 0 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
@@ -939,19 +711,17 @@ mod test {
         );
 
         // Does hitting the same target but with a non-zero starting position result in the same outcome?
-        let mut cfg = MeasurementConfig::new(&text)
-            .with_word_wrap_column(6)
-            .with_cursor(UcdCursor {
-                offset: 1,
-                logical_pos: Point { x: 1, y: 0 },
-                visual_pos: Point { x: 1, y: 0 },
-                column: 1,
-                wrap_opp: false,
-            });
+        let mut cfg = MeasurementConfig::new(&text).with_word_wrap_column(6).with_cursor(Cursor {
+            offset: 1,
+            logical_pos: Point { x: 1, y: 0 },
+            visual_pos: Point { x: 1, y: 0 },
+            column: 1,
+            wrap_opp: false,
+        });
         let cursor = cfg.goto_visual(Point { x: 5, y: 0 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
@@ -963,7 +733,7 @@ mod test {
         let cursor = cfg.goto_visual(Point { x: 0, y: 1 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 0, y: 1 },
@@ -975,7 +745,7 @@ mod test {
         let cursor = cfg.goto_visual(Point { x: 5, y: 1 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 8,
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 4, y: 1 },
@@ -987,7 +757,7 @@ mod test {
         let cursor = cfg.goto_visual(Point { x: 0, y: 2 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 9,
                 logical_pos: Point { x: 0, y: 1 },
                 visual_pos: Point { x: 0, y: 2 },
@@ -999,7 +769,7 @@ mod test {
         let cursor = cfg.goto_visual(Point { x: 5, y: 2 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 12,
                 logical_pos: Point { x: 3, y: 1 },
                 visual_pos: Point { x: 3, y: 2 },
@@ -1012,12 +782,11 @@ mod test {
     #[test]
     fn test_measure_forward_tabs() {
         let text = "a\tb\tc".as_bytes();
-        let cursor = MeasurementConfig::new(&text)
-            .with_tab_size(4)
-            .goto_visual(Point { x: 4, y: 0 });
+        let cursor =
+            MeasurementConfig::new(&text).with_tab_size(4).goto_visual(Point { x: 4, y: 0 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 2,
                 logical_pos: Point { x: 2, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
@@ -1045,12 +814,7 @@ mod test {
         //   |foo_   |
         //   |bar.   |
         //   |abc    |
-        let chunks = [
-            "foo ".as_bytes(),
-            "bar".as_bytes(),
-            ".\n".as_bytes(),
-            "abc".as_bytes(),
-        ];
+        let chunks = ["foo ".as_bytes(), "bar".as_bytes(), ".\n".as_bytes(), "abc".as_bytes()];
         let doc = ChunkedDoc(&chunks);
         let mut cfg = MeasurementConfig::new(&doc).with_word_wrap_column(7);
         let max = CoordType::MAX;
@@ -1058,7 +822,7 @@ mod test {
         let end0 = cfg.goto_visual(Point { x: 7, y: 0 });
         assert_eq!(
             end0,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
@@ -1070,7 +834,7 @@ mod test {
         let beg1 = cfg.goto_visual(Point { x: 0, y: 1 });
         assert_eq!(
             beg1,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 0, y: 1 },
@@ -1082,7 +846,7 @@ mod test {
         let end1 = cfg.goto_visual(Point { x: max, y: 1 });
         assert_eq!(
             end1,
-            UcdCursor {
+            Cursor {
                 offset: 8,
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 4, y: 1 },
@@ -1094,7 +858,7 @@ mod test {
         let beg2 = cfg.goto_visual(Point { x: 0, y: 2 });
         assert_eq!(
             beg2,
-            UcdCursor {
+            Cursor {
                 offset: 9,
                 logical_pos: Point { x: 0, y: 1 },
                 visual_pos: Point { x: 0, y: 2 },
@@ -1106,7 +870,7 @@ mod test {
         let end2 = cfg.goto_visual(Point { x: max, y: 2 });
         assert_eq!(
             end2,
-            UcdCursor {
+            Cursor {
                 offset: 12,
                 logical_pos: Point { x: 3, y: 1 },
                 visual_pos: Point { x: 3, y: 2 },
@@ -1129,7 +893,7 @@ mod test {
         let end0 = cfg.goto_visual(Point { x: max, y: 0 });
         assert_eq!(
             end0,
-            UcdCursor {
+            Cursor {
                 offset: 3,
                 logical_pos: Point { x: 3, y: 0 },
                 visual_pos: Point { x: 3, y: 0 },
@@ -1142,7 +906,7 @@ mod test {
         let beg0 = cfg.goto_visual(Point { x: 0, y: 1 });
         assert_eq!(
             beg0,
-            UcdCursor {
+            Cursor {
                 offset: 3,
                 logical_pos: Point { x: 3, y: 0 },
                 visual_pos: Point { x: 0, y: 1 },
@@ -1158,7 +922,7 @@ mod test {
         let beg0_off1 = cfg.goto_logical(Point { x: 4, y: 0 });
         assert_eq!(
             beg0_off1,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 1, y: 1 },
@@ -1171,7 +935,7 @@ mod test {
         let end1 = cfg.goto_visual(Point { x: max, y: 1 });
         assert_eq!(
             end1,
-            UcdCursor {
+            Cursor {
                 offset: 11,
                 logical_pos: Point { x: 11, y: 0 },
                 visual_pos: Point { x: 8, y: 1 },
@@ -1184,7 +948,7 @@ mod test {
         let end2 = cfg.goto_visual(Point { x: max, y: 2 });
         assert_eq!(
             end2,
-            UcdCursor {
+            Cursor {
                 offset: 15,
                 logical_pos: Point { x: 15, y: 0 },
                 visual_pos: Point { x: 4, y: 2 },
@@ -1225,13 +989,10 @@ mod test {
         let mut cfg = MeasurementConfig::new(&bytes).with_word_wrap_column(8);
 
         // At the end of "// " there should be a wrap.
-        let end0 = cfg.goto_visual(Point {
-            x: CoordType::MAX,
-            y: 0,
-        });
+        let end0 = cfg.goto_visual(Point { x: CoordType::MAX, y: 0 });
         assert_eq!(
             end0,
-            UcdCursor {
+            Cursor {
                 offset: 3,
                 logical_pos: Point { x: 3, y: 0 },
                 visual_pos: Point { x: 3, y: 0 },
@@ -1240,13 +1001,10 @@ mod test {
             }
         );
 
-        let mid1 = cfg.goto_visual(Point {
-            x: end0.visual_pos.x,
-            y: 1,
-        });
+        let mid1 = cfg.goto_visual(Point { x: end0.visual_pos.x, y: 1 });
         assert_eq!(
             mid1,
-            UcdCursor {
+            Cursor {
                 offset: 6,
                 logical_pos: Point { x: 6, y: 0 },
                 visual_pos: Point { x: 3, y: 1 },
@@ -1255,13 +1013,10 @@ mod test {
             }
         );
 
-        let mid2 = cfg.goto_visual(Point {
-            x: end0.visual_pos.x,
-            y: 2,
-        });
+        let mid2 = cfg.goto_visual(Point { x: end0.visual_pos.x, y: 2 });
         assert_eq!(
             mid2,
-            UcdCursor {
+            Cursor {
                 offset: 14,
                 logical_pos: Point { x: 14, y: 0 },
                 visual_pos: Point { x: 3, y: 2 },
@@ -1282,7 +1037,7 @@ mod test {
         let end0 = cfg.goto_visual(Point { x: max, y: 0 });
         assert_eq!(
             end0,
-            UcdCursor {
+            Cursor {
                 offset: 8,
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 8, y: 0 },
@@ -1294,7 +1049,7 @@ mod test {
         let end1 = cfg.goto_visual(Point { x: max, y: 1 });
         assert_eq!(
             end1,
-            UcdCursor {
+            Cursor {
                 offset: 15,
                 logical_pos: Point { x: 15, y: 0 },
                 visual_pos: Point { x: 7, y: 1 },
@@ -1329,15 +1084,13 @@ mod test {
         // |____b   | <- 1 tab, 1 space
         let text = "foo \t b";
         let bytes = text.as_bytes();
-        let mut cfg = MeasurementConfig::new(&bytes)
-            .with_word_wrap_column(8)
-            .with_tab_size(4);
+        let mut cfg = MeasurementConfig::new(&bytes).with_word_wrap_column(8).with_tab_size(4);
         let max = CoordType::MAX;
 
         let end0 = cfg.goto_visual(Point { x: max, y: 0 });
         assert_eq!(
             end0,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
@@ -1349,7 +1102,7 @@ mod test {
         let beg1 = cfg.goto_visual(Point { x: 0, y: 1 });
         assert_eq!(
             beg1,
-            UcdCursor {
+            Cursor {
                 offset: 4,
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 0, y: 1 },
@@ -1361,7 +1114,7 @@ mod test {
         let end1 = cfg.goto_visual(Point { x: max, y: 1 });
         assert_eq!(
             end1,
-            UcdCursor {
+            Cursor {
                 offset: 7,
                 logical_pos: Point { x: 7, y: 0 },
                 visual_pos: Point { x: 6, y: 1 },
@@ -1374,13 +1127,10 @@ mod test {
     #[test]
     fn test_crlf() {
         let text = "a\r\nbcd\r\ne".as_bytes();
-        let cursor = MeasurementConfig::new(&text).goto_visual(Point {
-            x: CoordType::MAX,
-            y: 1,
-        });
+        let cursor = MeasurementConfig::new(&text).goto_visual(Point { x: CoordType::MAX, y: 1 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 6,
                 logical_pos: Point { x: 3, y: 1 },
                 visual_pos: Point { x: 3, y: 1 },
@@ -1400,7 +1150,7 @@ mod test {
         let cursor = cfg.goto_visual(Point { x: 2, y: 1 });
         assert_eq!(
             cursor,
-            UcdCursor {
+            Cursor {
                 offset: 8,
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 2, y: 1 },
@@ -1408,19 +1158,6 @@ mod test {
                 wrap_opp: false,
             }
         );
-    }
-
-    #[test]
-    fn test_word_navigation() {
-        assert_eq!(word_forward(&"Hello World".as_bytes(), 0), 5);
-        assert_eq!(word_forward(&"Hello,World".as_bytes(), 0), 5);
-        assert_eq!(word_forward(&"   Hello".as_bytes(), 0), 8);
-        assert_eq!(word_forward(&"\n\nHello".as_bytes(), 0), 1);
-
-        assert_eq!(word_backward(&"Hello World".as_bytes(), 11), 6);
-        assert_eq!(word_backward(&"Hello,World".as_bytes(), 10), 6);
-        assert_eq!(word_backward(&"Hello   ".as_bytes(), 7), 0);
-        assert_eq!(word_backward(&"Hello\n\n".as_bytes(), 7), 6);
     }
 
     #[test]

@@ -1,20 +1,26 @@
-//! This module provides a `memset` function for "arbitrary" sizes (1/2/4/8 bytes), as the regular `memset`
-//! is only implemented for byte-sized arrays. This allows us to more aggressively unroll loops and to
-//! use AVX2 on x64 for the non-byte-sized cases and opens the door to compiling with `-Copt-level=s`.
-//!
-//! This implementation uses SWAR to only have a single implementation for all 4 sizes: By duplicating smaller
-//! types into a larger `u64` register we can treat all sizes as if they were `u64`. The only thing we need
-//! to take care of then, is the tail end of the array, where we need to write 0-7 additional bytes.
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
 
-use super::distance;
+//! `memchr` for arbitrary sizes (1/2/4/8 bytes).
+//!
+//! Clang calls the C `memset` function only for byte-sized types (or 0 fills).
+//! We however need to fill other types as well. For that, clang generates
+//! SIMD loops under higher optimization levels. With `-Os` however, it only
+//! generates a trivial loop which is too slow for our needs.
+//!
+//! This implementation uses SWAR to only have a single implementation for all
+//! 4 sizes: By duplicating smaller types into a larger `u64` register we can
+//! treat all sizes as if they were `u64`. The only thing we need to take care
+//! of is the tail end of the array, which needs to write 0-7 additional bytes.
+
 use std::mem;
 
-/// A trait to mark types that are safe to use with `memset`.
+/// A marker trait for types that are safe to `memset`.
 ///
 /// # Safety
 ///
 /// Just like with C's `memset`, bad things happen
-/// if you use this with types that are non-trivial.
+/// if you use this with non-trivial types.
 pub unsafe trait MemsetSafe: Copy {}
 
 unsafe impl MemsetSafe for u8 {}
@@ -29,6 +35,7 @@ unsafe impl MemsetSafe for i32 {}
 unsafe impl MemsetSafe for i64 {}
 unsafe impl MemsetSafe for isize {}
 
+/// Fills a slice with the given value.
 #[inline]
 pub fn memset<T: MemsetSafe>(dst: &mut [T], val: T) {
     unsafe {
@@ -44,21 +51,13 @@ pub fn memset<T: MemsetSafe>(dst: &mut [T], val: T) {
                 let beg = dst.as_mut_ptr();
                 let end = beg.add(dst.len());
                 let val = mem::transmute_copy::<_, u16>(&val);
-                memset_raw(
-                    beg as *mut u8,
-                    end as *mut u8,
-                    val as u64 * 0x0001000100010001,
-                );
+                memset_raw(beg as *mut u8, end as *mut u8, val as u64 * 0x0001000100010001);
             }
             4 => {
                 let beg = dst.as_mut_ptr();
                 let end = beg.add(dst.len());
                 let val = mem::transmute_copy::<_, u32>(&val);
-                memset_raw(
-                    beg as *mut u8,
-                    end as *mut u8,
-                    val as u64 * 0x0000000100000001,
-                );
+                memset_raw(beg as *mut u8, end as *mut u8, val as u64 * 0x0000000100000001);
             }
             8 => {
                 let beg = dst.as_mut_ptr();
@@ -78,6 +77,35 @@ fn memset_raw(beg: *mut u8, end: *mut u8, val: u64) {
 
     #[cfg(target_arch = "aarch64")]
     return unsafe { memset_neon(beg, end, val) };
+
+    #[allow(unreachable_code)]
+    return unsafe { memset_fallback(beg, end, val) };
+}
+
+#[inline(never)]
+unsafe fn memset_fallback(mut beg: *mut u8, end: *mut u8, val: u64) {
+    unsafe {
+        let mut remaining = end.offset_from_unsigned(beg);
+
+        while remaining >= 8 {
+            (beg as *mut u64).write_unaligned(val);
+            beg = beg.add(8);
+            remaining -= 8;
+        }
+
+        if remaining >= 4 {
+            // 4-7 bytes remaining
+            (beg as *mut u32).write_unaligned(val as u32);
+            (end.sub(4) as *mut u32).write_unaligned(val as u32);
+        } else if remaining >= 2 {
+            // 2-3 bytes remaining
+            (beg as *mut u16).write_unaligned(val as u16);
+            (end.sub(2) as *mut u16).write_unaligned(val as u16);
+        } else if remaining >= 1 {
+            // 1 byte remaining
+            beg.write(val as u8);
+        }
+    }
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -91,27 +119,25 @@ fn memset_dispatch(beg: *mut u8, end: *mut u8, val: u64) {
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "sse2")]
 unsafe fn memset_sse2(mut beg: *mut u8, end: *mut u8, val: u64) {
     unsafe {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::*;
+        #[cfg(target_arch = "x86_64")]
         use std::arch::x86_64::*;
 
-        let mut remaining = distance(end, beg);
+        let mut remaining = end.offset_from_unsigned(beg);
 
         if remaining >= 16 {
             let fill = _mm_set1_epi64x(val as i64);
 
-            if remaining >= 32 {
-                loop {
-                    // Compiles to a single `stp` instruction.
-                    _mm_storeu_si128(beg as *mut _, fill);
-                    _mm_storeu_si128(beg.add(16) as *mut _, fill);
+            while remaining >= 32 {
+                _mm_storeu_si128(beg as *mut _, fill);
+                _mm_storeu_si128(beg.add(16) as *mut _, fill);
 
-                    beg = beg.add(32);
-                    remaining -= 32;
-                    if remaining < 32 {
-                        break;
-                    }
-                }
+                beg = beg.add(32);
+                remaining -= 32;
             }
 
             if remaining >= 16 {
@@ -145,7 +171,7 @@ unsafe fn memset_sse2(mut beg: *mut u8, end: *mut u8, val: u64) {
 unsafe fn memset_neon(mut beg: *mut u8, end: *mut u8, val: u64) {
     unsafe {
         use std::arch::aarch64::*;
-        let mut remaining = distance(end, beg);
+        let mut remaining = end.offset_from_unsigned(beg);
 
         if remaining >= 32 {
             let fill = vdupq_n_u64(val);
@@ -189,9 +215,10 @@ unsafe fn memset_neon(mut beg: *mut u8, end: *mut u8, val: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fmt;
     use std::ops::Not;
+
+    use super::*;
 
     fn check_memset<T>(val: T, len: usize)
     where

@@ -1,23 +1,24 @@
-use crate::helpers::{CoordType, Size};
-use crate::{apperr, helpers};
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use std::ffi::{CStr, OsString, c_void};
 use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::mem::MaybeUninit;
-use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::{AsRawHandle as _, FromRawHandle};
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull, null, null_mut};
 use std::{mem, time};
-use windows_sys::Win32::Foundation;
-use windows_sys::Win32::Globalization;
+
 use windows_sys::Win32::Storage::FileSystem;
-use windows_sys::Win32::System::Console;
 use windows_sys::Win32::System::Diagnostics::Debug;
-use windows_sys::Win32::System::IO;
-use windows_sys::Win32::System::LibraryLoader;
-use windows_sys::Win32::System::Memory;
-use windows_sys::Win32::System::Threading;
+use windows_sys::Win32::System::{Console, IO, LibraryLoader, Memory, Threading};
+use windows_sys::Win32::{Foundation, Globalization};
 use windows_sys::w;
+
+use crate::apperr;
+use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::helpers::*;
 
 type ReadConsoleInputExW = unsafe extern "system" fn(
     h_console_input: Foundation::HANDLE,
@@ -75,6 +76,7 @@ extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> Foundation::BOOL {
     1
 }
 
+/// Initializes the platform-specific state.
 pub fn init() -> apperr::Result<Deinit> {
     unsafe {
         // Get the stdin and stdout handles first, so that if this function fails,
@@ -153,23 +155,15 @@ impl Drop for Deinit {
     }
 }
 
+/// Switches the terminal into raw mode, etc.
 pub fn switch_modes() -> apperr::Result<()> {
     unsafe {
-        check_bool_return(Console::SetConsoleCtrlHandler(
-            Some(console_ctrl_handler),
-            1,
-        ))?;
+        check_bool_return(Console::SetConsoleCtrlHandler(Some(console_ctrl_handler), 1))?;
 
         STATE.stdin_cp_old = Console::GetConsoleCP();
         STATE.stdout_cp_old = Console::GetConsoleOutputCP();
-        check_bool_return(Console::GetConsoleMode(
-            STATE.stdin,
-            &raw mut STATE.stdin_mode_old,
-        ))?;
-        check_bool_return(Console::GetConsoleMode(
-            STATE.stdout,
-            &raw mut STATE.stdout_mode_old,
-        ))?;
+        check_bool_return(Console::GetConsoleMode(STATE.stdin, &raw mut STATE.stdin_mode_old))?;
+        check_bool_return(Console::GetConsoleMode(STATE.stdout, &raw mut STATE.stdout_mode_old))?;
 
         check_bool_return(Console::SetConsoleCP(Globalization::CP_UTF8))?;
         check_bool_return(Console::SetConsoleOutputCP(Globalization::CP_UTF8))?;
@@ -191,6 +185,10 @@ pub fn switch_modes() -> apperr::Result<()> {
     }
 }
 
+/// During startup we need to get the window size from the terminal.
+/// Because I didn't want to type a bunch of code, this function tells
+/// [`read_stdin`] to inject a fake sequence, which gets picked up by
+/// the input parser and provided to the TUI code.
 pub fn inject_window_size_into_stdin() {
     unsafe {
         STATE.inject_resize = true;
@@ -207,19 +205,20 @@ fn get_console_size() -> Option<Size> {
 
         let w = (info.srWindow.Right - info.srWindow.Left + 1).max(1) as CoordType;
         let h = (info.srWindow.Bottom - info.srWindow.Top + 1).max(1) as CoordType;
-        Some(Size {
-            width: w,
-            height: h,
-        })
+        Some(Size { width: w, height: h })
     }
 }
 
 /// Reads from stdin.
 ///
-/// Returns `None` if there was an error reading from stdin.
-/// Returns `Some("")` if the given timeout was reached.
-/// Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
+/// # Returns
+///
+/// * `None` if there was an error reading from stdin.
+/// * `Some("")` if the given timeout was reached.
+/// * Otherwise, it returns the read, non-empty string.
+pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaString<'_>> {
+    let scratch = scratch_arena(Some(arena));
+
     // On startup we're asked to inject a window size so that the UI system can layout the elements.
     // --> Inject a fake sequence for our input parser.
     let mut resize_event = None;
@@ -230,9 +229,9 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
     }
 
     let read_poll = timeout != time::Duration::MAX; // there is a timeout -> don't block in read()
-    let mut input_buf = [const { MaybeUninit::<Console::INPUT_RECORD>::uninit() }; 1024];
+    let input_buf = scratch.alloc_uninit_slice(4 * KIBI);
     let mut input_buf_cap = input_buf.len();
-    let mut utf16_buf = [const { MaybeUninit::<u16>::uninit() }; 1024];
+    let utf16_buf = scratch.alloc_uninit_slice(4 * KIBI);
     let mut utf16_buf_len = 0;
 
     // If there was a leftover leading surrogate from the last read, we prepend it to the buffer.
@@ -277,7 +276,7 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
             if ok == 0 || STATE.wants_exit {
                 return None;
             }
-            helpers::slice_assume_init_ref(&input_buf[..read as usize])
+            input_buf[..read as usize].assume_init_ref()
         };
 
         // Convert Win32 input records into UTF16.
@@ -298,10 +297,7 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
                     // Windows is prone to sending broken/useless `WINDOW_BUFFER_SIZE_EVENT`s.
                     // E.g. starting conhost will emit 3 in a row. Skip rendering in that case.
                     if w > 0 && h > 0 {
-                        resize_event = Some(Size {
-                            width: w,
-                            height: h,
-                        });
+                        resize_event = Some(Size { width: w, height: h });
                     }
                 }
                 _ => {}
@@ -314,25 +310,18 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
     }
 
     const RESIZE_EVENT_FMT_MAX_LEN: usize = 16; // "\x1b[8;65535;65535t"
-    let resize_event_len = if resize_event.is_some() {
-        RESIZE_EVENT_FMT_MAX_LEN
-    } else {
-        0
-    };
+    let resize_event_len = if resize_event.is_some() { RESIZE_EVENT_FMT_MAX_LEN } else { 0 };
     // +1 to account for a potential `STATE.leading_surrogate`.
     let utf8_max_len = (utf16_buf_len + 1) * 3;
-    let mut text = String::with_capacity(utf8_max_len + resize_event_len);
+    let mut text = ArenaString::new_in(arena);
+    text.reserve(utf8_max_len + resize_event_len);
 
     // Now prepend our previously extracted resize event.
     if let Some(resize_event) = resize_event {
         // If I read xterm's documentation correctly, CSI 18 t reports the window size in characters.
         // CSI 8 ; height ; width t is the response. Of course, we didn't send the request,
         // but we can use this fake response to trigger the editor to resize itself.
-        _ = write!(
-            text,
-            "\x1b[8;{};{}t",
-            resize_event.height, resize_event.width
-        );
+        _ = write!(text, "\x1b[8;{};{}t", resize_event.height, resize_event.width);
     }
 
     // If the input ends with a lone lead surrogate, we need to remember it for the next read.
@@ -369,16 +358,21 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
         }
     }
 
+    text.shrink_to_fit();
     Some(text)
 }
 
+/// Writes a string to stdout.
+///
+/// Use this instead of `print!` or `println!` to avoid
+/// the overhead of Rust's stdio handling. Don't need that.
 pub fn write_stdout(text: &str) {
     unsafe {
         let mut offset = 0;
 
         while offset < text.len() {
             let ptr = text.as_ptr().add(offset);
-            let write = (text.len() - offset).min(1024 * 1024 * 1024) as u32;
+            let write = (text.len() - offset).min(GIBI) as u32;
             let mut written = 0;
             let ok = FileSystem::WriteFile(STATE.stdout, ptr, write, &mut written, null_mut());
             offset += written as usize;
@@ -389,19 +383,72 @@ pub fn write_stdout(text: &str) {
     }
 }
 
+/// Check if the stdin handle is redirected to a file, etc.
+///
+/// # Returns
+///
+/// * `Some(file)` if stdin is redirected.
+/// * Otherwise, `None`.
 pub fn open_stdin_if_redirected() -> Option<File> {
     unsafe {
         let handle = Console::GetStdHandle(Console::STD_INPUT_HANDLE);
         // Did we reopen stdin during `init()`?
-        if !std::ptr::eq(STATE.stdin, handle) {
-            Some(File::from_raw_handle(handle))
-        } else {
-            None
+        if !std::ptr::eq(STATE.stdin, handle) { Some(File::from_raw_handle(handle)) } else { None }
+    }
+}
+
+/// A unique identifier for a file.
+pub enum FileId {
+    Id(FileSystem::FILE_ID_INFO),
+    Path(PathBuf),
+}
+
+impl PartialEq for FileId {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (FileId::Id(left), FileId::Id(right)) => {
+                // Lowers to an efficient word-wise comparison.
+                const SIZE: usize = std::mem::size_of::<FileSystem::FILE_ID_INFO>();
+                let a: &[u8; SIZE] = unsafe { mem::transmute(left) };
+                let b: &[u8; SIZE] = unsafe { mem::transmute(right) };
+                a == b
+            }
+            (FileId::Path(left), FileId::Path(right)) => left == right,
+            _ => false,
         }
     }
 }
 
-pub fn canonicalize<P: AsRef<Path>>(path: P) -> apperr::Result<PathBuf> {
+impl Eq for FileId {}
+
+/// Returns a unique identifier for the given file by handle or path.
+pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
+    let file = match file {
+        Some(f) => f,
+        None => &File::open(path)?,
+    };
+
+    file_id_from_handle(file).or_else(|_| Ok(FileId::Path(std::fs::canonicalize(path)?)))
+}
+
+fn file_id_from_handle(file: &File) -> apperr::Result<FileId> {
+    unsafe {
+        let mut info = MaybeUninit::<FileSystem::FILE_ID_INFO>::uninit();
+        check_bool_return(FileSystem::GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileSystem::FileIdInfo,
+            info.as_mut_ptr() as *mut _,
+            mem::size_of::<FileSystem::FILE_ID_INFO>() as u32,
+        ))?;
+        Ok(FileId::Id(info.assume_init()))
+    }
+}
+
+/// Canonicalizes the given path.
+///
+/// This differs from [`fs::canonicalize`] in that it strips the `\\?\` UNC
+/// prefix on Windows. This is because it's confusing/ugly when displaying it.
+pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
     let mut path = fs::canonicalize(path)?;
     let path = path.as_mut_os_string();
     let mut path = mem::take(path).into_encoded_bytes();
@@ -417,8 +464,8 @@ pub fn canonicalize<P: AsRef<Path>>(path: P) -> apperr::Result<PathBuf> {
 }
 
 /// Reserves a virtual memory region of the given size.
-/// To commit the memory, use `virtual_commit`.
-/// To release the memory, use `virtual_release`.
+/// To commit the memory, use [`virtual_commit`].
+/// To release the memory, use [`virtual_release`].
 ///
 /// # Safety
 ///
@@ -426,11 +473,15 @@ pub fn canonicalize<P: AsRef<Path>>(path: P) -> apperr::Result<PathBuf> {
 /// Don't forget to release the memory when you're done with it or you'll leak it.
 pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
     unsafe {
+        #[allow(unused_assignments, unused_mut)]
         let mut base = null_mut();
 
-        if cfg!(debug_assertions) {
-            static mut S_BASE_GEN: usize = 0x0000100000000000;
-            S_BASE_GEN += 0x0000100000000000;
+        // In debug builds, we use fixed addresses to aid in debugging.
+        // Makes it possible to immediately tell which address space a pointer belongs to.
+        #[cfg(all(debug_assertions, not(target_pointer_width = "32")))]
+        {
+            static mut S_BASE_GEN: usize = 0x0000100000000000; // 16 TiB
+            S_BASE_GEN += 0x0000001000000000; // 64 GiB
             base = S_BASE_GEN as *mut _;
         }
 
@@ -448,7 +499,7 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
 /// # Safety
 ///
 /// This function is unsafe because it uses raw pointers.
-/// Make sure to only pass pointers acquired from `virtual_reserve`.
+/// Make sure to only pass pointers acquired from [`virtual_reserve`].
 pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
     unsafe {
         Memory::VirtualFree(base.as_ptr() as *mut _, size, Memory::MEM_RELEASE);
@@ -460,8 +511,8 @@ pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
 /// # Safety
 ///
 /// This function is unsafe because it uses raw pointers.
-/// Make sure to only pass pointers acquired from `virtual_reserve`
-/// and to pass a size less than or equal to the size passed to `virtual_reserve`.
+/// Make sure to only pass pointers acquired from [`virtual_reserve`]
+/// and to pass a size less than or equal to the size passed to [`virtual_reserve`].
 pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> apperr::Result<()> {
     unsafe {
         check_ptr_return(Memory::VirtualAlloc(
@@ -499,65 +550,88 @@ unsafe fn load_library(name: *const u16) -> apperr::Result<NonNull<c_void>> {
 pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apperr::Result<T> {
     unsafe {
         let ptr = LibraryLoader::GetProcAddress(handle.as_ptr(), name.as_ptr() as *const u8);
-        if let Some(ptr) = ptr {
-            Ok(mem::transmute_copy(&ptr))
-        } else {
-            Err(get_last_error())
-        }
+        if let Some(ptr) = ptr { Ok(mem::transmute_copy(&ptr)) } else { Err(get_last_error()) }
     }
 }
 
+/// Loads the "common" portion of ICU4C.
 pub fn load_libicuuc() -> apperr::Result<NonNull<c_void>> {
     unsafe { load_library(w!("icuuc.dll")) }
 }
 
+/// Loads the internationalization portion of ICU4C.
 pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
     unsafe { load_library(w!("icuin.dll")) }
 }
 
-pub fn preferred_languages() -> Vec<String> {
-    unsafe {
-        const LEN: usize = 256;
+/// Returns a list of preferred languages for the current user.
+pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString, &Arena> {
+    // If the GetUserPreferredUILanguages() don't fit into 512 characters,
+    // honestly, just give up. How many languages do you realistically need?
+    const LEN: usize = 512;
 
-        let mut lang_num = 0;
-        let mut lang_buf = [const { MaybeUninit::<u16>::uninit() }; LEN];
-        let mut lang_buf_len = lang_buf.len() as u32;
-        if Globalization::GetUserPreferredUILanguages(
+    let scratch = scratch_arena(Some(arena));
+    let mut res = Vec::new_in(arena);
+
+    // Get the list of preferred languages via `GetUserPreferredUILanguages`.
+    let langs = unsafe {
+        let buf = scratch.alloc_uninit_slice(LEN);
+        let mut len = buf.len() as u32;
+        let mut num = 0;
+
+        let ok = Globalization::GetUserPreferredUILanguages(
             Globalization::MUI_LANGUAGE_NAME,
-            &mut lang_num,
-            lang_buf[0].as_mut_ptr(),
-            &mut lang_buf_len,
-        ) == 0
-            || lang_num == 0
-        {
-            return Vec::new();
+            &mut num,
+            buf[0].as_mut_ptr(),
+            &mut len,
+        );
+
+        if ok == 0 || num == 0 {
+            len = 0;
         }
 
         // Drop the terminating double-null character.
-        lang_buf_len = lang_buf_len.saturating_sub(1);
+        len = len.saturating_sub(1);
 
-        let mut lang_buf_utf8 = [const { MaybeUninit::<u8>::uninit() }; 3 * LEN];
-        let lang_buf_utf8_len = Globalization::WideCharToMultiByte(
+        buf[..len as usize].assume_init_ref()
+    };
+
+    // Convert UTF16 to UTF8.
+    let langs = wide_to_utf8(&scratch, langs);
+
+    // Split the null-delimited string into individual chunks
+    // and copy them into the given arena.
+    res.extend(
+        langs
+            .split_terminator('\0')
+            .filter(|s| !s.is_empty())
+            .map(|s| ArenaString::from_str(arena, s)),
+    );
+    res
+}
+
+fn wide_to_utf8<'a>(arena: &'a Arena, wide: &[u16]) -> ArenaString<'a> {
+    let mut res = ArenaString::new_in(arena);
+    res.reserve(wide.len() * 3);
+
+    let len = unsafe {
+        Globalization::WideCharToMultiByte(
             Globalization::CP_UTF8,
             0,
-            lang_buf[0].as_mut_ptr(),
-            lang_buf_len as i32,
-            lang_buf_utf8[0].as_mut_ptr(),
-            lang_buf_utf8.len() as i32,
+            wide.as_ptr(),
+            wide.len() as i32,
+            res.as_mut_ptr() as *mut _,
+            res.capacity() as i32,
             null(),
             null_mut(),
-        );
-        if lang_buf_utf8_len == 0 {
-            return Vec::new();
-        }
-
-        let result = helpers::str_from_raw_parts_mut(
-            lang_buf_utf8[0].as_mut_ptr(),
-            lang_buf_utf8_len as usize,
-        );
-        result.make_ascii_lowercase();
-        result.split_terminator('\0').map(String::from).collect()
+        )
+    };
+    if len > 0 {
+        unsafe { res.as_mut_vec().set_len(len as usize) };
     }
+
+    res.shrink_to_fit();
+    res
 }
 
 #[cold]
@@ -567,19 +641,16 @@ fn get_last_error() -> apperr::Error {
 
 #[inline]
 const fn gle_to_apperr(gle: u32) -> apperr::Error {
-    apperr::Error::new_sys(if gle == 0 {
-        0x8000FFFF
-    } else {
-        0x80070000 | gle
-    })
+    apperr::Error::new_sys(if gle == 0 { 0x8000FFFF } else { 0x80070000 | gle })
 }
 
 #[inline]
-pub fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
+pub(crate) fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
     gle_to_apperr(err.raw_os_error().unwrap_or(0) as u32)
 }
 
-pub fn apperr_format(code: u32) -> String {
+/// Formats a platform error code into a human-readable string.
+pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
     unsafe {
         let mut ptr: *mut u8 = null_mut();
         let len = Debug::FormatMessageA(
@@ -594,31 +665,27 @@ pub fn apperr_format(code: u32) -> String {
             null_mut(),
         );
 
-        let mut result = format!("Error {:#08x}", code);
+        write!(f, "Error {code:#08x}")?;
 
         if len > 0 {
-            let msg = helpers::str_from_raw_parts(ptr, len as usize);
+            let msg = str_from_raw_parts(ptr, len as usize);
             let msg = msg.trim_ascii();
             let msg = msg.replace(['\r', '\n'], " ");
-            result.push_str(": ");
-            result.push_str(&msg);
+            write!(f, ": {msg}")?;
             Foundation::LocalFree(ptr as *mut _);
         }
 
-        result
+        Ok(())
     }
 }
 
+/// Checks if the given error is a "file not found" error.
 pub fn apperr_is_not_found(err: apperr::Error) -> bool {
     err == gle_to_apperr(Foundation::ERROR_FILE_NOT_FOUND)
 }
 
 fn check_bool_return(ret: Foundation::BOOL) -> apperr::Result<()> {
-    if ret == 0 {
-        Err(get_last_error())
-    } else {
-        Ok(())
-    }
+    if ret == 0 { Err(get_last_error()) } else { Ok(()) }
 }
 
 fn check_ptr_return<T>(ret: *mut T) -> apperr::Result<NonNull<T>> {

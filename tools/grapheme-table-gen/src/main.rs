@@ -1,14 +1,19 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 mod rules;
 
-use crate::rules::{JOIN_RULES_GRAPHEME_CLUSTER, JOIN_RULES_LINE_BREAK};
-use anyhow::{bail, Context};
-use indoc::writedoc;
-use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::io::Write as IoWrite;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
+
+use anyhow::{Context, bail};
+use indoc::writedoc;
+use rayon::prelude::*;
+
+use crate::rules::{JOIN_RULES_GRAPHEME_CLUSTER, JOIN_RULES_LINE_BREAK};
 
 // `CharacterWidth` is 2 bits.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -282,19 +287,12 @@ fn main() -> anyhow::Result<()> {
         .iter()
         .map(|t| {
             let rules_gc_len = if out.arg_extended { t.len() } else { 16 };
-            t[..rules_gc_len]
-                .iter()
-                .map(|row| prepare_rules_row(row, 2, 3))
-                .collect()
+            t[..rules_gc_len].iter().map(|row| prepare_rules_row(row, 2, 3)).collect()
         })
         .collect();
 
     // Same for line breaks, but in 2D.
-    let rules_lb_len = if out.arg_extended {
-        JOIN_RULES_LINE_BREAK.len()
-    } else {
-        24
-    };
+    let rules_lb_len = if out.arg_extended { JOIN_RULES_LINE_BREAK.len() } else { 24 };
     out.rules_lb = JOIN_RULES_LINE_BREAK[..rules_lb_len]
         .iter()
         .map(|row| prepare_rules_row(row, 1, 0))
@@ -312,12 +310,7 @@ fn main() -> anyhow::Result<()> {
         for s in &out.trie.stages {
             actual = s.values[actual as usize + ((cp >> s.shift) & s.mask)];
         }
-        assert_eq!(
-            expected.value(),
-            actual,
-            "trie sanity check failed for U+{:04X}",
-            cp
-        );
+        assert_eq!(expected.value(), actual, "trie sanity check failed for U+{:04X}", cp);
     }
     for (cp, &expected) in out.ucd.values[..0x80].iter().enumerate() {
         let last = out.trie.stages.last().unwrap();
@@ -360,11 +353,7 @@ fn generate_c(out: Output) -> String {
             width = stage.mask + 1;
         }
 
-        _ = write!(
-            buf,
-            "static const uint{}_t s_stage{}[] = {{",
-            stage.bits, stage.index
-        );
+        _ = write!(buf, "static const uint{}_t s_stage{}[] = {{", stage.bits, stage.index);
         for (j, &value) in stage.values.iter().enumerate() {
             if j % width == 0 {
                 buf.push_str("\n   ");
@@ -698,21 +687,14 @@ fn generate_rust(out: Output) -> String {
 
 fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::Result<Ucd> {
     let packing = BitPacking::new(out.arg_line_breaks, out.arg_extended);
-    let ambiguous_value = if out.arg_no_ambiguous {
-        CharacterWidth::Narrow
-    } else {
-        CharacterWidth::Ambiguous
-    };
+    let ambiguous_value =
+        if out.arg_no_ambiguous { CharacterWidth::Narrow } else { CharacterWidth::Ambiguous };
 
-    let mut values = vec![
-        TrieType::new(
-            &packing,
-            ClusterBreak::Other,
-            LineBreak::Other,
-            CharacterWidth::Narrow,
-        );
-        1114112
-    ];
+    let mut values =
+        vec![
+            TrieType::new(&packing, ClusterBreak::Other, LineBreak::Other, CharacterWidth::Narrow,);
+            1114112
+        ];
 
     let ns = "http://www.unicode.org/ns/2003/ucd/1.0";
     let root = doc.root_element();
@@ -901,11 +883,7 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
     // but for us that's equivalent to Other.
     values[0xFE0F].change_width(&packing, CharacterWidth::Wide);
 
-    Ok(Ucd {
-        description,
-        values,
-        packing,
-    })
+    Ok(Ucd { description, values, packing })
 }
 
 struct UcdAttributes<'a> {
@@ -924,15 +902,9 @@ fn extract_attributes<'a>(
     UcdAttributes {
         general_category: node.attribute("gc").unwrap_or(default.general_category),
         line_break: node.attribute("lb").unwrap_or(default.line_break),
-        grapheme_cluster_break: node
-            .attribute("GCB")
-            .unwrap_or(default.grapheme_cluster_break),
-        indic_conjunct_break: node
-            .attribute("InCB")
-            .unwrap_or(default.indic_conjunct_break),
-        extended_pictographic: node
-            .attribute("ExtPict")
-            .unwrap_or(default.extended_pictographic),
+        grapheme_cluster_break: node.attribute("GCB").unwrap_or(default.grapheme_cluster_break),
+        indic_conjunct_break: node.attribute("InCB").unwrap_or(default.indic_conjunct_break),
+        extended_pictographic: node.attribute("ExtPict").unwrap_or(default.extended_pictographic),
         east_asian: node.attribute("ea").unwrap_or(default.east_asian),
     }
 }
@@ -1047,18 +1019,13 @@ fn build_trie(uncompressed: Vec<TrieType>, shifts: &[usize]) -> Trie {
         };
     }
 
-    let total_size: usize = stages
-        .iter()
-        .map(|stage| (stage.bits / 8) * stage.values.len())
-        .sum();
+    let total_size: usize = stages.iter().map(|stage| (stage.bits / 8) * stage.values.len()).sum();
 
     Trie { stages, total_size }
 }
 
 fn find_existing(haystack: &[u32], needle: &[u32]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
+    haystack.windows(needle.len()).position(|window| window == needle)
 }
 
 fn measure_overlap(prev: &[u32], next: &[u32]) -> usize {

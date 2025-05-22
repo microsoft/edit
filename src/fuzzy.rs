@@ -1,48 +1,45 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 //! Fuzzy search algorithm based on the one used in VS Code (`/src/vs/base/common/fuzzyScorer.ts`).
 //! Other algorithms exist, such as Sublime Text's, or the one used in `fzf`,
 //! but I figured that this one is what lots of people may be familiar with.
 
+use std::vec;
+
+use crate::arena::{Arena, scratch_arena};
 use crate::icu;
 
-pub type FuzzyScore = (i32, Vec<usize>);
-
 const NO_MATCH: i32 = 0;
-const NO_SCORE: FuzzyScore = (NO_MATCH, Vec::new());
 
-pub fn score_fuzzy(target: &str, query: &str, allow_non_contiguous_matches: bool) -> FuzzyScore {
-    if target.is_empty() || query.is_empty() {
-        return NO_SCORE; // return early if target or query are empty
+pub fn score_fuzzy<'a>(
+    arena: &'a Arena,
+    haystack: &str,
+    needle: &str,
+    allow_non_contiguous_matches: bool,
+) -> (i32, Vec<usize, &'a Arena>) {
+    if haystack.is_empty() || needle.is_empty() {
+        // return early if target or query are empty
+        return (NO_MATCH, Vec::new_in(arena));
     }
 
-    let target_lower = icu::fold_case(target);
-    let query_lower = icu::fold_case(query);
-    let target: Vec<char> = target.chars().collect();
-    let target_lower: Vec<char> = target_lower.chars().collect();
-    let query: Vec<char> = query.chars().collect();
-    let query_lower: Vec<char> = query_lower.chars().collect();
+    let scratch = scratch_arena(Some(arena));
+    let target = map_chars(&scratch, haystack);
+    let query = map_chars(&scratch, needle);
 
     if target.len() < query.len() {
-        return NO_SCORE; // impossible for query to be contained in target
+        // impossible for query to be contained in target
+        return (NO_MATCH, Vec::new_in(arena));
     }
 
-    do_score_fuzzy(
-        &query,
-        &query_lower,
-        &target,
-        &target_lower,
-        allow_non_contiguous_matches,
-    )
-}
+    let target_lower = icu::fold_case(&scratch, haystack);
+    let query_lower = icu::fold_case(&scratch, needle);
+    let target_lower = map_chars(&scratch, &target_lower);
+    let query_lower = map_chars(&scratch, &query_lower);
 
-fn do_score_fuzzy(
-    query: &[char],
-    query_lower: &[char],
-    target: &[char],
-    target_lower: &[char],
-    allow_non_contiguous_matches: bool,
-) -> FuzzyScore {
-    let mut scores = vec![0; query.len() * target.len()];
-    let mut matches = vec![0; query.len() * target.len()];
+    let area = query.len() * target.len();
+    let mut scores = vec::from_elem_in(0, area, &*scratch);
+    let mut matches = vec::from_elem_in(0, area, &*scratch);
 
     //
     // Build Scorer Matrix:
@@ -61,11 +58,8 @@ fn do_score_fuzzy(
     //
     for query_index in 0..query.len() {
         let query_index_offset = query_index * target.len();
-        let query_index_previous_offset = if query_index > 0 {
-            (query_index - 1) * target.len()
-        } else {
-            0
-        };
+        let query_index_previous_offset =
+            if query_index > 0 { (query_index - 1) * target.len() } else { 0 };
 
         for target_index in 0..target.len() {
             let current_index = query_index_offset + target_index;
@@ -74,21 +68,11 @@ fn do_score_fuzzy(
             } else {
                 0
             };
-            let left_score = if target_index > 0 {
-                scores[current_index - 1]
-            } else {
-                0
-            };
-            let diag_score = if query_index > 0 && target_index > 0 {
-                scores[diag_index]
-            } else {
-                0
-            };
-            let matches_sequence_len = if query_index > 0 && target_index > 0 {
-                matches[diag_index]
-            } else {
-                0
-            };
+            let left_score = if target_index > 0 { scores[current_index - 1] } else { 0 };
+            let diag_score =
+                if query_index > 0 && target_index > 0 { scores[diag_index] } else { 0 };
+            let matches_sequence_len =
+                if query_index > 0 && target_index > 0 { matches[diag_index] } else { 0 };
 
             // If we are not matching on the first query character any more, we only produce a
             // score if we had a score previously for the last query index (by looking at the diagScore).
@@ -101,11 +85,7 @@ fn do_score_fuzzy(
                 compute_char_score(
                     query[query_index],
                     query_lower[query_index],
-                    if target_index != 0 {
-                        Some(target[target_index - 1])
-                    } else {
-                        None
-                    },
+                    if target_index != 0 { Some(target[target_index - 1]) } else { None },
                     target[target_index],
                     target_lower[target_index],
                     matches_sequence_len,
@@ -120,12 +100,12 @@ fn do_score_fuzzy(
                 && (
                     // We don't need to check if it's contiguous if we allow non-contiguous matches
                     allow_non_contiguous_matches ||
-                    // We must be looking for a contiguous match.
-                    // Looking at an index higher than 0 in the query means we must have already
-                    // found out this is contiguous otherwise there wouldn't have been a score
-                    query_index > 0 ||
-                    // lastly check if the query is completely contiguous at this index in the target
-                    target_lower[target_index..].starts_with(query_lower)
+                        // We must be looking for a contiguous match.
+                        // Looking at an index higher than 0 in the query means we must have already
+                        // found out this is contiguous otherwise there wouldn't have been a score
+                        query_index > 0 ||
+                        // lastly check if the query is completely contiguous at this index in the target
+                        target_lower[target_index..].starts_with(&query_lower)
                 )
             {
                 matches[current_index] = matches_sequence_len + 1;
@@ -141,7 +121,7 @@ fn do_score_fuzzy(
     }
 
     // Restore Positions (starting from bottom right of matrix)
-    let mut positions = Vec::new();
+    let mut positions = Vec::new_in(arena);
 
     if !query.is_empty() && !target.is_empty() {
         let mut query_index = query.len() - 1;
@@ -169,7 +149,7 @@ fn do_score_fuzzy(
         positions.reverse();
     }
 
-    (scores[query.len() * target.len() - 1], positions)
+    (scores[area - 1], positions)
 }
 
 fn compute_char_score(
@@ -222,7 +202,7 @@ fn compute_char_score(
 
 fn consider_as_equal(a: char, b: char) -> bool {
     // Special case path separators: ignore platform differences
-    a == b || a == '/' || a == '\\' && b == '/' || b == '\\'
+    a == b || (a == '/' && b == '\\') || (a == '\\' && b == '/')
 }
 
 fn score_separator_at_pos(ch: char) -> i32 {
@@ -231,4 +211,11 @@ fn score_separator_at_pos(ch: char) -> i32 {
         '_' | '-' | '.' | ' ' | '\'' | '"' | ':' => 4, // ...over other separators
         _ => 0,
     }
+}
+
+fn map_chars<'a>(arena: &'a Arena, s: &str) -> Vec<char, &'a Arena> {
+    let mut chars = Vec::with_capacity_in(s.len(), arena);
+    chars.extend(s.chars());
+    chars.shrink_to_fit();
+    chars
 }

@@ -1,20 +1,30 @@
-use crate::helpers::{Point, Size};
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+//! Parses VT sequences into input events.
+//!
+//! In the future this allows us to take apart the application and
+//! support input schemes that aren't VT, such as UEFI, or GUI.
+
+use crate::helpers::{CoordType, Point, Size};
 use crate::vt;
 
-// TODO: Is this a good idea? I did it to allow typing `kbmod::CTRL | vk::A`.
-// The reason it's an awkard u32 and not a struct is to hopefully make ABIs easier later.
-// Of course you could just translate on the ABI boundary, but my hope is that this
-// design lets me realize some restrictions early on that I can't foresee yet.
+/// Represents a key/modifier combination.
+///
+/// TODO: Is this a good idea? I did it to allow typing `kbmod::CTRL | vk::A`.
+/// The reason it's an awkard u32 and not a struct is to hopefully make ABIs easier later.
+/// Of course you could just translate on the ABI boundary, but my hope is that this
+/// design lets me realize some restrictions early on that I can't foresee yet.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct InputKey(u32);
 
 impl InputKey {
-    pub const fn new(v: u32) -> Self {
+    pub(crate) const fn new(v: u32) -> Self {
         Self(v)
     }
 
-    pub const fn from_ascii(ch: char) -> Option<Self> {
+    pub(crate) const fn from_ascii(ch: char) -> Option<Self> {
         if ch == ' ' || (ch >= '0' && ch <= '9') {
             Some(Self(ch as u32))
         } else if ch >= 'a' && ch <= 'z' {
@@ -26,26 +36,28 @@ impl InputKey {
         }
     }
 
-    pub const fn value(&self) -> u32 {
+    pub(crate) const fn value(&self) -> u32 {
         self.0
     }
 
-    pub const fn key(&self) -> InputKey {
+    pub(crate) const fn key(&self) -> InputKey {
         InputKey(self.0 & 0x00FFFFFF)
     }
 
-    pub const fn modifiers(&self) -> InputKeyMod {
+    pub(crate) const fn modifiers(&self) -> InputKeyMod {
         InputKeyMod(self.0 & 0xFF000000)
     }
 
-    pub const fn modifiers_contains(&self, modifier: InputKeyMod) -> bool {
+    pub(crate) const fn modifiers_contains(&self, modifier: InputKeyMod) -> bool {
         (self.0 & modifier.0) != 0
     }
 
-    pub const fn with_modifiers(&self, modifiers: InputKeyMod) -> InputKey {
+    pub(crate) const fn with_modifiers(&self, modifiers: InputKeyMod) -> InputKey {
         InputKey(self.0 | modifiers.0)
     }
 }
+
+/// A keyboard modifier. Ctrl/Alt/Shift.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct InputKeyMod(u32);
@@ -55,7 +67,7 @@ impl InputKeyMod {
         Self(v)
     }
 
-    pub const fn contains(&self, modifier: InputKeyMod) -> bool {
+    pub(crate) const fn contains(&self, modifier: InputKeyMod) -> bool {
         (self.0 & modifier.0) != 0
     }
 }
@@ -82,8 +94,10 @@ impl std::ops::BitOrAssign for InputKeyMod {
     }
 }
 
-// The codes defined here match the VK_* constants on Windows.
-// It's a convenient way to handle keyboard input, even on other platforms.
+/// Keyboard keys.
+///
+/// The codes defined here match the VK_* constants on Windows.
+/// It's a convenient way to handle keyboard input, even on other platforms.
 pub mod vk {
     use super::InputKey;
 
@@ -188,6 +202,7 @@ pub mod vk {
     pub const F24: InputKey = InputKey::new(0x87);
 }
 
+/// Keyboard modifiers.
 pub mod kbmod {
     use super::InputKeyMod;
 
@@ -202,12 +217,17 @@ pub mod kbmod {
     pub const CTRL_ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x07000000);
 }
 
+/// Text input.
+///
+/// "Keyboard" input is also "text" input and vice versa.
+/// It differs in that text input can also be Unicode.
 #[derive(Clone, Copy)]
 pub struct InputText<'a> {
     pub text: &'a str,
     pub bracketed: bool,
 }
 
+/// Mouse input state. Up/Down, Left/Right, etc.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum InputMouseState {
     #[default]
@@ -223,21 +243,34 @@ pub enum InputMouseState {
     Scroll,
 }
 
+/// Mouse input.
 #[derive(Clone, Copy)]
 pub struct InputMouse {
+    /// The state of the mouse.Up/Down, Left/Right, etc.
     pub state: InputMouseState,
+    /// Any keyboard modifiers that are held down.
     pub modifiers: InputKeyMod,
+    /// Position of the mouse in the viewport.
     pub position: Point,
+    /// Scroll delta.
     pub scroll: Point,
 }
 
+/// Primary result type of the parser.
 pub enum Input<'input> {
+    /// Window resize event.
     Resize(Size),
+    /// Text input.
+    ///
+    /// Note that [`Input::Keyboard`] events can also be text.
     Text(InputText<'input>),
+    /// Keyboard input.
     Keyboard(InputKey),
+    /// Mouse input.
     Mouse(InputMouse),
 }
 
+/// Parses VT sequences into input events.
 pub struct Parser {
     bracketed_paste: bool,
     x10_mouse_want: bool,
@@ -246,6 +279,9 @@ pub struct Parser {
 }
 
 impl Parser {
+    /// Creates a new parser that turns VT sequences into input events.
+    ///
+    /// Keep the instance alive for the lifetime of the input stream.
     pub fn new() -> Self {
         Self {
             bracketed_paste: false,
@@ -255,27 +291,25 @@ impl Parser {
         }
     }
 
-    /// Turns VT sequences into keyboard, mouse, etc., inputs.
+    /// Takes an [`vt::Stream`] and returns a [`Stream`]
+    /// that turns VT sequences into input events.
     pub fn parse<'parser, 'vt, 'input>(
         &'parser mut self,
         stream: vt::Stream<'vt, 'input>,
     ) -> Stream<'parser, 'vt, 'input> {
-        Stream {
-            parser: self,
-            stream,
-        }
+        Stream { parser: self, stream }
     }
 }
 
+/// An iterator that parses VT sequences into input events.
+///
+/// Can't implement [`Iterator`], because this is a "lending iterator".
 pub struct Stream<'parser, 'vt, 'input> {
     parser: &'parser mut Parser,
     stream: vt::Stream<'vt, 'input>,
 }
 
 impl<'input> Stream<'_, '_, 'input> {
-    /// Parses the next input action from the previously given input.
-    ///
-    /// Can't implement Iterator, because this is a "lending iterator".
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<Input<'input>> {
         loop {
@@ -287,12 +321,20 @@ impl<'input> Stream<'_, '_, 'input> {
                 return self.parse_x10_mouse_coordinates();
             }
 
+            const KEYPAD_LUT: [u8; 8] = [
+                vk::UP.value() as u8,    // A
+                vk::DOWN.value() as u8,  // B
+                vk::RIGHT.value() as u8, // C
+                vk::LEFT.value() as u8,  // D
+                0,                       // E
+                vk::END.value() as u8,   // F
+                0,                       // G
+                vk::HOME.value() as u8,  // H
+            ];
+
             match self.stream.next()? {
                 vt::Token::Text(text) => {
-                    return Some(Input::Text(InputText {
-                        text,
-                        bracketed: false,
-                    }));
+                    return Some(Input::Text(InputText { text, bracketed: false }));
                 }
                 vt::Token::Ctrl(ch) => match ch {
                     '\0' | '\t' | '\r' => return Some(Input::Keyboard(InputKey::new(ch as u32))),
@@ -312,36 +354,30 @@ impl<'input> Stream<'_, '_, 'input> {
                         ' '..='~' => {
                             let ch = ch as u32;
                             let key = ch & !0x20; // Shift a-z to A-Z
-                            let modifiers = if (ch & 0x20) != 0 {
-                                kbmod::ALT
-                            } else {
-                                kbmod::ALT_SHIFT
-                            };
+                            let modifiers =
+                                if (ch & 0x20) != 0 { kbmod::ALT } else { kbmod::ALT_SHIFT };
                             return Some(Input::Keyboard(modifiers | InputKey::new(key)));
                         }
                         _ => {}
                     }
                 }
-                vt::Token::SS3(ch) => {
-                    if ('P'..='S').contains(&ch) {
+                vt::Token::SS3(ch) => match ch {
+                    'A'..='H' => {
+                        let vk = KEYPAD_LUT[ch as usize - 'A' as usize];
+                        if vk != 0 {
+                            return Some(Input::Keyboard(InputKey::new(vk as u32)));
+                        }
+                    }
+                    'P'..='S' => {
                         let key = vk::F1.value() + ch as u32 - 'P' as u32;
                         return Some(Input::Keyboard(InputKey::new(key)));
                     }
-                }
+                    _ => {}
+                },
                 vt::Token::Csi(csi) => {
                     match csi.final_byte {
                         'A'..='H' => {
-                            const LUT: [u8; 8] = [
-                                vk::UP.value() as u8,    // A
-                                vk::DOWN.value() as u8,  // B
-                                vk::RIGHT.value() as u8, // C
-                                vk::LEFT.value() as u8,  // D
-                                0,                       // E
-                                vk::END.value() as u8,   // F
-                                0,                       // G
-                                vk::HOME.value() as u8,  // H
-                            ];
-                            let vk = LUT[csi.final_byte as usize - 'A' as usize];
+                            let vk = KEYPAD_LUT[csi.final_byte as usize - 'A' as usize];
                             if vk != 0 {
                                 return Some(Input::Keyboard(
                                     InputKey::new(vk as u32) | Self::parse_modifiers(csi),
@@ -387,7 +423,7 @@ impl<'input> Stream<'_, '_, 'input> {
                                 vk::F19.value() as u8, // 33
                                 vk::F20.value() as u8, // 34
                             ];
-                            const LUT_LEN: i32 = LUT.len() as i32;
+                            const LUT_LEN: u16 = LUT.len() as u16;
 
                             match csi.params[0] {
                                 0..LUT_LEN => {
@@ -407,8 +443,8 @@ impl<'input> Stream<'_, '_, 'input> {
                             let mut mouse = InputMouse {
                                 state: InputMouseState::None,
                                 modifiers: kbmod::NONE,
-                                position: Point::default(),
-                                scroll: Point::default(),
+                                position: Default::default(),
+                                scroll: Default::default(),
                             };
 
                             mouse.state = InputMouseState::None;
@@ -426,24 +462,15 @@ impl<'input> Stream<'_, '_, 'input> {
                             }
 
                             mouse.modifiers = kbmod::NONE;
-                            mouse.modifiers |= if (btn & 0x04) != 0 {
-                                kbmod::SHIFT
-                            } else {
-                                kbmod::NONE
-                            };
-                            mouse.modifiers |= if (btn & 0x08) != 0 {
-                                kbmod::ALT
-                            } else {
-                                kbmod::NONE
-                            };
-                            mouse.modifiers |= if (btn & 0x10f) != 0 {
-                                kbmod::CTRL
-                            } else {
-                                kbmod::NONE
-                            };
+                            mouse.modifiers |=
+                                if (btn & 0x04) != 0 { kbmod::SHIFT } else { kbmod::NONE };
+                            mouse.modifiers |=
+                                if (btn & 0x08) != 0 { kbmod::ALT } else { kbmod::NONE };
+                            mouse.modifiers |=
+                                if (btn & 0x10f) != 0 { kbmod::CTRL } else { kbmod::NONE };
 
-                            mouse.position.x = csi.params[1] - 1;
-                            mouse.position.y = csi.params[2] - 1;
+                            mouse.position.x = csi.params[1] as CoordType - 1;
+                            mouse.position.y = csi.params[2] as CoordType - 1;
                             return Some(Input::Mouse(mouse));
                         }
                         'M' if csi.param_count == 0 => {
@@ -451,8 +478,8 @@ impl<'input> Stream<'_, '_, 'input> {
                         }
                         't' if csi.params[0] == 8 => {
                             // Window Size
-                            let width = csi.params[2].clamp(1, 32767);
-                            let height = csi.params[1].clamp(1, 32767);
+                            let width = (csi.params[2] as CoordType).clamp(1, 32767);
+                            let height = (csi.params[1] as CoordType).clamp(1, 32767);
                             return Some(Input::Resize(Size { width, height }));
                         }
                         _ => {}
@@ -463,27 +490,36 @@ impl<'input> Stream<'_, '_, 'input> {
         }
     }
 
+    /// Once we encounter the start of a bracketed paste
+    /// we seek to the end of the paste in this function.
+    ///
+    /// A bracketed paste is basically:
+    /// ```text
+    /// <ESC>[201~    lots of text    <ESC>[201~
+    /// ```
+    ///
+    /// That text inbetween is then expected to be taken literally.
+    /// It can inbetween be anything though, including other escape sequences.
+    /// This is the reason why this is a separate method.
     #[cold]
     fn handle_bracketed_paste(&mut self) -> Option<Input<'input>> {
         let beg = self.stream.offset();
         let mut end = beg;
 
         while let Some(token) = self.stream.next() {
-            if let vt::Token::Csi(csi) = token {
-                if csi.final_byte == '~' && csi.params[0] == 201 {
-                    self.parser.bracketed_paste = false;
-                    break;
-                }
+            if let vt::Token::Csi(csi) = token
+                && csi.final_byte == '~'
+                && csi.params[0] == 201
+            {
+                self.parser.bracketed_paste = false;
+                break;
             }
             end = self.stream.offset();
         }
 
         if end != beg {
             let input = self.stream.input();
-            Some(Input::Text(InputText {
-                text: &input[beg..end],
-                bracketed: true,
-            }))
+            Some(Input::Text(InputText { text: &input[beg..end], bracketed: true }))
         } else {
             None
         }
@@ -498,17 +534,16 @@ impl<'input> Stream<'_, '_, 'input> {
     /// This is so puzzling to me. The existence of this function makes me unhappy.
     #[cold]
     fn parse_x10_mouse_coordinates(&mut self) -> Option<Input<'input>> {
-        self.parser.x10_mouse_len += self
-            .stream
-            .read(&mut self.parser.x10_mouse_buf[self.parser.x10_mouse_len..]);
+        self.parser.x10_mouse_len +=
+            self.stream.read(&mut self.parser.x10_mouse_buf[self.parser.x10_mouse_len..]);
         if self.parser.x10_mouse_len < 3 {
             return None;
         }
 
         let button = self.parser.x10_mouse_buf[0] & 0b11;
         let modifier = self.parser.x10_mouse_buf[0] & 0b11100;
-        let x = self.parser.x10_mouse_buf[1] as i32 - 0x21;
-        let y = self.parser.x10_mouse_buf[2] as i32 - 0x21;
+        let x = self.parser.x10_mouse_buf[1] as CoordType - 0x21;
+        let y = self.parser.x10_mouse_buf[2] as CoordType - 0x21;
         let action = match button {
             0 => InputMouseState::Left,
             1 => InputMouseState::Middle,
@@ -529,13 +564,13 @@ impl<'input> Stream<'_, '_, 'input> {
             state: action,
             modifiers,
             position: Point { x, y },
-            scroll: Point::default(),
+            scroll: Default::default(),
         }))
     }
 
     fn parse_modifiers(csi: &vt::Csi) -> InputKeyMod {
         let mut modifiers = kbmod::NONE;
-        let p1 = (csi.params[1] - 1).max(0);
+        let p1 = csi.params[1].saturating_sub(1);
         if (p1 & 0x01) != 0 {
             modifiers |= kbmod::SHIFT;
         }

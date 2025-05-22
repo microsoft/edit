@@ -1,10 +1,14 @@
-//! Like `RefCell`, but without any runtime checks in release mode.
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+//! [`std::cell::RefCell`], but without runtime checks in release builds.
 
 #[cfg(debug_assertions)]
 pub use debug::*;
 #[cfg(not(debug_assertions))]
 pub use release::*;
 
+#[allow(unused)]
 #[cfg(debug_assertions)]
 mod debug {
     pub type SemiRefCell<T> = std::cell::RefCell<T>;

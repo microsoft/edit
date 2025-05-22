@@ -1,40 +1,50 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+//! A text buffer for a text editor.
+//!
 //! Implements a Unicode-aware, layout-aware text buffer for terminals.
 //! It's based on a gap buffer. It has no line cache and instead relies
 //! on the performance of the ucd module for fast text navigation.
+//!
+//! ---
 //!
 //! If the project ever outgrows a basic gap buffer (e.g. to add time travel)
 //! an ideal, alternative architecture would be a piece table with immutable trees.
 //! The tree nodes can be allocated on the same arena allocator as the added chunks,
 //! making lifetime management fairly easy. The algorithm is described here:
-//! * https://cdacamar.github.io/data%20structures/algorithms/benchmarking/text%20editors/c++/editor-data-structures/
-//! * https://github.com/cdacamar/fredbuf
+//! * <https://cdacamar.github.io/data%20structures/algorithms/benchmarking/text%20editors/c++/editor-data-structures/>
+//! * <https://github.com/cdacamar/fredbuf>
 //!
 //! The downside is that text navigation & search takes a performance hit due to small chunks.
 //! The solution to the former is to keep line caches, which further complicates the architecture.
 //! There's no solution for the latter. However, there's a chance that the performance will still be sufficient.
 
-use crate::apperr;
-use crate::cell::SemiRefCell;
-use crate::framebuffer::{Framebuffer, IndexedColor};
-use crate::helpers::{self, COORD_TYPE_SAFE_MAX, CoordType, Point, Rect};
-use crate::icu;
-use crate::simd::memchr2;
-use crate::sys;
-use crate::ucd::{self, Document};
+mod gap_buffer;
+mod navigation;
+
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
 use std::collections::LinkedList;
 use std::fmt::Write as _;
 use std::fs::File;
-use std::io::Read as _;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::mem::{self, MaybeUninit};
 use std::ops::Range;
-use std::path::Path;
-use std::ptr::{self, NonNull};
 use std::rc::Rc;
-use std::slice;
 use std::str;
+
+use gap_buffer::GapBuffer;
+
+use crate::arena::{ArenaString, scratch_arena};
+use crate::cell::SemiRefCell;
+use crate::document::{ReadableDocument, WriteableDocument};
+use crate::framebuffer::{Framebuffer, IndexedColor};
+use crate::helpers::*;
+use crate::oklab::oklab_blend;
+use crate::simd::memchr2;
+use crate::unicode::{self, Cursor, MeasurementConfig};
+use crate::{apperr, icu};
 
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,
@@ -44,25 +54,26 @@ const MARGIN_TEMPLATE: &str = "                    │ ";
 /// Happens to reuse MARGIN_TEMPLATE, because it has sufficient whitespace.
 const TAB_WHITESPACE: &str = MARGIN_TEMPLATE;
 
+/// Stores statistics about the whole document.
 #[derive(Copy, Clone)]
 pub struct TextBufferStatistics {
     logical_lines: CoordType,
     visual_lines: CoordType,
 }
 
+/// Stores the active text selection anchors.
+///
+/// The two points are not sorted. Instead, `beg` refers to where the selection
+/// started being made and `end` refers to the currently being updated position.
 #[derive(Copy, Clone)]
-enum TextBufferSelection {
-    None,
-    Active { beg: Point, end: Point },
-    Done { beg: Point, end: Point },
+struct TextBufferSelection {
+    beg: Point,
+    end: Point,
 }
 
-impl TextBufferSelection {
-    fn is_some(&self) -> bool {
-        !matches!(self, Self::None)
-    }
-}
-
+/// In order to group actions into a single undo step,
+/// we need to know the type of action that was performed.
+/// This stores the action type.
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum HistoryType {
     Other,
@@ -70,11 +81,15 @@ enum HistoryType {
     Delete,
 }
 
+/// An undo/redo entry.
 struct HistoryEntry {
-    /// Logical cursor position before the change was made.
+    /// [`TextBuffer::cursor`] position before the change was made.
     cursor_before: Point,
-    selection_before: TextBufferSelection,
+    /// [`TextBuffer::selection`] before the change was made.
+    selection_before: Option<TextBufferSelection>,
+    /// [`TextBuffer::stats`] before the change was made.
     stats_before: TextBufferStatistics,
+    /// [`GapBuffer::generation`] before the change was made.
     generation_before: u32,
     /// Logical cursor position where the change took place.
     /// The position is at the start of the changed range.
@@ -85,21 +100,38 @@ struct HistoryEntry {
     added: Vec<u8>,
 }
 
+/// Caches an ICU search operation.
 struct ActiveSearch {
+    /// The search pattern.
     pattern: String,
+    /// The search options.
     options: SearchOptions,
+    /// The ICU `UText` object.
     text: icu::Text,
+    /// The ICU `URegularExpression` object.
     regex: icu::Regex,
+    /// [`GapBuffer::generation`] when the search was created.
+    /// This is used to detect if we need to refresh the
+    /// [`ActiveSearch::regex`] object.
     buffer_generation: u32,
+    /// [`TextBuffer::selection_generation`] when the search was
+    /// created. When the user manually selects text, we need to
+    /// refresh the [`ActiveSearch::pattern`] with it.
     selection_generation: u32,
+    /// Stores the text buffer offset in between searches.
     next_search_offset: usize,
+    /// If we know there were no hits, we can skip searching.
     no_matches: bool,
 }
 
+/// Options for a search operation.
 #[derive(Default, Clone, Copy, Eq, PartialEq)]
 pub struct SearchOptions {
+    /// If true, the search is case-sensitive.
     pub match_case: bool,
+    /// If true, the search matches whole words.
     pub whole_word: bool,
+    /// If true, the search uses regex.
     pub use_regex: bool,
 }
 
@@ -107,23 +139,37 @@ pub struct SearchOptions {
 /// This helps us avoid having to remeasure the buffer after an edit.
 struct ActiveEditLineInfo {
     /// Points to the start of the currently being edited line.
-    safe_start: ucd::UcdCursor,
+    safe_start: Cursor,
+    /// Number of visual rows of the line that starts
+    /// at [`ActiveEditLineInfo::safe_start`].
     line_height_in_rows: CoordType,
+    /// Byte distance from the start of the line at
+    /// [`ActiveEditLineInfo::safe_start`] to the next line.
     distance_next_line_start: usize,
 }
 
+/// Char- or word-wise navigation? Your choice.
 pub enum CursorMovement {
     Grapheme,
     Word,
 }
 
+/// The result of a call to [`TextBuffer::render()`].
 pub struct RenderResult {
+    /// The maximum visual X position we encountered during rendering.
     pub visual_pos_x_max: CoordType,
 }
 
+/// A [`TextBuffer`] with inner mutability.
 pub type TextBufferCell = SemiRefCell<TextBuffer>;
+
+/// A [`TextBuffer`] inside an [`Rc`].
+///
+/// We need this because the TUI system needs to borrow
+/// the given text buffer(s) until after the layout process.
 pub type RcTextBuffer = Rc<TextBufferCell>;
 
+/// A text buffer for a text editor.
 pub struct TextBuffer {
     buffer: GapBuffer,
 
@@ -137,13 +183,13 @@ pub struct TextBuffer {
     active_edit_off: usize,
 
     stats: TextBufferStatistics,
-    cursor: ucd::UcdCursor,
+    cursor: Cursor,
     // When scrolling significant amounts of text away from the cursor,
     // rendering will naturally slow down proportionally to the distance.
     // To avoid this, we cache the cursor position for rendering.
     // Must be cleared on every edit or reflow.
-    cursor_for_rendering: Option<ucd::UcdCursor>,
-    selection: TextBufferSelection,
+    cursor_for_rendering: Option<Cursor>,
+    selection: Option<TextBufferSelection>,
     selection_generation: u32,
     search: Option<UnsafeCell<ActiveSearch>>,
 
@@ -164,11 +210,15 @@ pub struct TextBuffer {
 }
 
 impl TextBuffer {
+    /// Creates a new text buffer inside an [`Rc`].
+    /// See [`TextBuffer::new()`].
     pub fn new_rc(small: bool) -> apperr::Result<RcTextBuffer> {
         let buffer = TextBuffer::new(small)?;
         Ok(Rc::new(SemiRefCell::new(buffer)))
     }
 
+    /// Creates a new text buffer. With `small` you can control
+    /// if the buffer is optimized for <1MiB contents.
     pub fn new(small: bool) -> apperr::Result<Self> {
         Ok(Self {
             buffer: GapBuffer::new(small)?,
@@ -182,13 +232,10 @@ impl TextBuffer {
             active_edit_depth: 0,
             active_edit_off: 0,
 
-            stats: TextBufferStatistics {
-                logical_lines: 1,
-                visual_lines: 1,
-            },
-            cursor: ucd::UcdCursor::default(),
+            stats: TextBufferStatistics { logical_lines: 1, visual_lines: 1 },
+            cursor: Default::default(),
             cursor_for_rendering: None,
-            selection: TextBufferSelection::None,
+            selection: None,
             selection_generation: 0,
             search: None,
 
@@ -209,42 +256,72 @@ impl TextBuffer {
         })
     }
 
+    /// Length of the document in bytes.
     pub fn text_length(&self) -> usize {
         self.buffer.len()
     }
 
+    /// Number of logical lines in the document,
+    /// that is, lines separated by newlines.
+    pub fn logical_line_count(&self) -> CoordType {
+        self.stats.logical_lines
+    }
+
+    /// Number of visual lines in the document,
+    /// that is, the number of lines after layout.
+    pub fn visual_line_count(&self) -> CoordType {
+        self.stats.visual_lines
+    }
+
+    /// Does the buffer need to be saved?
     pub fn is_dirty(&self) -> bool {
-        self.last_save_generation != self.buffer.generation
+        self.last_save_generation != self.buffer.generation()
     }
 
+    /// The buffer generation changes on every edit.
+    /// With this you can check if it has changed since
+    /// the last time you called this function.
+    pub fn generation(&self) -> u32 {
+        self.buffer.generation()
+    }
+
+    /// Force the buffer to be dirty.
     pub fn mark_as_dirty(&mut self) {
-        self.last_save_generation = self.buffer.generation.wrapping_sub(1);
-    }
-
-    pub fn get_generation(&self) -> u32 {
-        self.buffer.generation
+        self.last_save_generation = self.buffer.generation().wrapping_sub(1);
     }
 
     fn mark_as_clean(&mut self) {
-        self.last_save_generation = self.buffer.generation;
+        self.last_save_generation = self.buffer.generation();
     }
 
+    /// The encoding used during reading/writing. "UTF-8" is the default.
     pub fn encoding(&self) -> &'static str {
         self.encoding
     }
 
+    /// Set the encoding used during reading/writing.
+    pub fn set_encoding(&mut self, encoding: &'static str) {
+        if self.encoding != encoding {
+            self.encoding = encoding;
+            self.mark_as_dirty();
+        }
+    }
+
+    /// The newline type used in the document. LF or CRLF.
     pub fn is_crlf(&self) -> bool {
         self.newlines_are_crlf
     }
 
+    /// Changes the newline type used in the document.
+    ///
+    /// NOTE: Cannot be undone.
     pub fn normalize_newlines(&mut self, crlf: bool) {
         let newline: &[u8] = if crlf { b"\r\n" } else { b"\n" };
         let mut off = 0;
 
         let mut cursor_offset = self.cursor.offset;
-        let mut cursor_for_rendering_offset = self
-            .cursor_for_rendering
-            .map_or(cursor_offset, |c| c.offset);
+        let mut cursor_for_rendering_offset =
+            self.cursor_for_rendering.map_or(cursor_offset, |c| c.offset);
 
         #[cfg(debug_assertions)]
         let mut adjusted_newlines = 0;
@@ -257,7 +334,7 @@ impl TextBuffer {
                     break 'outer;
                 }
 
-                let (delta, line) = ucd::newlines_forward(chunk, 0, 0, 1);
+                let (delta, line) = unicode::newlines_forward(chunk, 0, 0, 1);
                 off += delta;
                 if line == 1 {
                     break;
@@ -287,11 +364,7 @@ impl TextBuffer {
 
                 // Replace the newline.
                 off -= chunk_newline_len;
-                let gap = self
-                    .buffer
-                    .allocate_gap(off, newline.len(), chunk_newline_len);
-                gap.copy_from_slice(newline);
-                self.buffer.commit_gap(newline.len());
+                self.buffer.replace(off..off + chunk_newline_len, newline);
                 off += newline.len();
             }
         }
@@ -308,96 +381,132 @@ impl TextBuffer {
         self.newlines_are_crlf = crlf;
     }
 
+    /// Whether to insert or overtype text when writing.
     pub fn is_overtype(&self) -> bool {
         self.overtype
     }
 
+    /// Set the overtype mode.
     pub fn set_overtype(&mut self, overtype: bool) {
         self.overtype = overtype;
     }
 
-    pub fn get_logical_line_count(&self) -> CoordType {
-        self.stats.logical_lines
-    }
-
-    pub fn get_visual_line_count(&self) -> CoordType {
-        self.stats.visual_lines
-    }
-
-    pub fn get_cursor_logical_pos(&self) -> Point {
+    /// Gets the logical cursor position, that is,
+    /// the position in lines and graphemes per line.
+    pub fn cursor_logical_pos(&self) -> Point {
         self.cursor.logical_pos
     }
 
-    pub fn get_cursor_visual_pos(&self) -> Point {
+    /// Gets the visual cursor position, that is,
+    /// the position in laid out rows and columns.
+    pub fn cursor_visual_pos(&self) -> Point {
         self.cursor.visual_pos
     }
 
-    pub fn get_margin_width(&self) -> CoordType {
+    /// Gets the width of the left margin.
+    pub fn margin_width(&self) -> CoordType {
         self.margin_width
     }
 
-    pub fn get_text_width(&self) -> CoordType {
+    /// Is the left margin enabled?
+    pub fn set_margin_enabled(&mut self, enabled: bool) -> bool {
+        if self.margin_enabled == enabled {
+            false
+        } else {
+            self.margin_enabled = enabled;
+            self.reflow(true);
+            true
+        }
+    }
+
+    /// Gets the width of the text contents for layout.
+    pub fn text_width(&self) -> CoordType {
         self.width - self.margin_width
     }
 
-    pub fn is_word_wrap_enabled(&self) -> bool {
-        self.word_wrap_enabled
-    }
-
+    /// Ask the TUI system to scroll the buffer and make the cursor visible.
+    ///
+    /// TODO: This function shows that [`TextBuffer`] is poorly abstracted
+    /// away from the TUI system. The only reason this exists is so that
+    /// if someone outside the TUI code enables word-wrap, the TUI code
+    /// recognizes this and scrolls the cursor into view. But outside of this
+    /// scrolling, views, etc., are all UI concerns = this should not be here.
     pub fn make_cursor_visible(&mut self) {
         self.wants_cursor_visibility = true;
     }
 
+    /// For the TUI code to retrieve a prior [`TextBuffer::make_cursor_visible()`] request.
     pub fn take_cursor_visibility_request(&mut self) -> bool {
         mem::take(&mut self.wants_cursor_visibility)
     }
 
-    // NOTE: It's expected that the tui code calls `set_width()` sometime after this.
-    // This will then trigger the actual recalculation of the cursor position.
-    pub fn toggle_word_wrap(&mut self) {
-        self.word_wrap_enabled = !self.word_wrap_enabled;
-        self.width = 0; // Force a reflow.
-        self.make_cursor_visible();
+    /// Is word-wrap enabled?
+    ///
+    /// Technically, this is a misnomer, because it's line-wrapping.
+    pub fn is_word_wrap_enabled(&self) -> bool {
+        self.word_wrap_enabled
     }
 
+    /// Enable or disable word-wrap.
+    ///
+    /// NOTE: It's expected that the tui code calls `set_width()` sometime after this.
+    /// This will then trigger the actual recalculation of the cursor position.
+    pub fn set_word_wrap(&mut self, enabled: bool) {
+        if self.word_wrap_enabled != enabled {
+            self.word_wrap_enabled = enabled;
+            self.width = 0; // Force a reflow.
+            self.make_cursor_visible();
+        }
+    }
+
+    /// Set the width available for layout.
+    ///
+    /// Ideally this would be a pure UI concern, but the text buffer needs this
+    /// so that it can abstract away  visual cursor movement such as "go a line up".
+    /// What would that even mean if it didn't know how wide a line is?
     pub fn set_width(&mut self, width: CoordType) -> bool {
         if width <= 0 || width == self.width {
-            return false;
+            false
+        } else {
+            self.width = width;
+            self.reflow(true);
+            true
         }
-
-        self.width = width;
-        self.reflow(true);
-        true
     }
 
-    pub fn set_margin_enabled(&mut self, enabled: bool) -> bool {
-        if self.margin_enabled == enabled {
-            return false;
-        }
-
-        self.margin_enabled = enabled;
-        self.reflow(true);
-        true
-    }
-
+    /// Set the tab width. Could be anything, but is expected to be 1-8.
     pub fn tab_size(&self) -> CoordType {
         self.tab_size
     }
 
+    /// Set the tab size. Clamped to 1-8.
     pub fn set_tab_size(&mut self, width: CoordType) -> bool {
-        if width <= 0 || width == self.tab_size {
-            return false;
+        let width = width.clamp(1, 8);
+        if width == self.tab_size {
+            false
+        } else {
+            self.tab_size = width;
+            self.reflow(true);
+            true
         }
-
-        self.tab_size = width;
-        self.reflow(true);
-        true
     }
 
+    /// Returns whether tabs are used for indentation.
+    pub fn indent_with_tabs(&self) -> bool {
+        self.indent_with_tabs
+    }
+
+    /// Sets whether tabs or spaces are used for indentation.
+    pub fn set_indent_with_tabs(&mut self, indent_with_tabs: bool) {
+        self.indent_with_tabs = indent_with_tabs;
+    }
+
+    /// Sets whether the line the cursor is on should be highlighted.
     pub fn set_line_highlight_enabled(&mut self, enabled: bool) {
         self.line_highlight_enabled = enabled;
     }
 
+    /// Sets a ruler column, e.g. 80.
     pub fn set_ruler(&mut self, column: CoordType) {
         self.ruler = column;
     }
@@ -412,22 +521,17 @@ impl TextBuffer {
             0
         };
 
-        let text_width = self.get_text_width();
+        let text_width = self.text_width();
         // 2 columns are required, because otherwise wide glyphs wouldn't ever fit.
-        let word_wrap_column = if self.word_wrap_enabled && text_width >= 2 {
-            text_width
-        } else {
-            0
-        };
+        let word_wrap_column =
+            if self.word_wrap_enabled && text_width >= 2 { text_width } else { 0 };
 
         if force || self.word_wrap_column > word_wrap_column {
             self.word_wrap_column = word_wrap_column;
 
             if self.cursor.offset != 0 {
-                self.cursor = self.cursor_move_to_logical_internal(
-                    ucd::UcdCursor::default(),
-                    self.cursor.logical_pos,
-                );
+                self.cursor = self
+                    .cursor_move_to_logical_internal(Default::default(), self.cursor.logical_pos);
             }
 
             // Recalculate the line statistics.
@@ -442,51 +546,17 @@ impl TextBuffer {
         self.cursor_for_rendering = None;
     }
 
-    pub fn indent_with_tabs(&self) -> bool {
-        self.indent_with_tabs
-    }
-
-    pub fn set_indent_with_tabs(&mut self, indent_with_tabs: bool) {
-        self.indent_with_tabs = indent_with_tabs;
-    }
-
-    pub fn set_encoding(&mut self, encoding: &'static str) {
-        self.encoding = encoding;
-        self.buffer.generation = self.buffer.generation.wrapping_add(1);
-    }
-
     /// Replaces the entire buffer contents with the given `text`.
     /// Assumes that the line count doesn't change.
-    pub fn copy_from_str(&mut self, text: &str) {
-        if self.buffer.copy_from_str(text) {
+    pub fn copy_from_str(&mut self, text: &dyn ReadableDocument) {
+        if self.buffer.copy_from(text) {
             self.recalc_after_content_swap();
-            self.cursor_move_to_logical(Point {
-                x: CoordType::MAX,
-                y: 0,
-            });
+            self.cursor_move_to_logical(Point { x: CoordType::MAX, y: 0 });
 
             let delete = self.buffer.len() - self.cursor.offset;
             if delete != 0 {
                 self.buffer.allocate_gap(self.cursor.offset, 0, delete);
-                self.buffer.commit_gap(0);
             }
-        }
-    }
-
-    pub fn debug_replace_everything(&mut self, text: &str) {
-        if self.buffer.copy_from_str(text) {
-            let before = self.cursor.logical_pos;
-            let end = self.cursor_move_to_logical_internal(
-                ucd::UcdCursor::default(),
-                Point {
-                    x: 0,
-                    y: CoordType::MAX,
-                },
-            );
-            self.stats.logical_lines = end.logical_pos.y + 1;
-            self.stats.visual_lines = self.stats.logical_lines;
-            self.recalc_after_content_swap();
-            self.cursor_move_to_logical(before);
         }
     }
 
@@ -495,17 +565,17 @@ impl TextBuffer {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.last_history_type = HistoryType::Other;
-        self.cursor = ucd::UcdCursor::default();
+        self.cursor = Default::default();
         self.cursor_for_rendering = None;
-        self.set_selection(TextBufferSelection::None);
+        self.set_selection(None);
         self.search = None;
         self.mark_as_clean();
         self.reflow(true);
     }
 
     /// Copies the contents of the buffer into a string.
-    pub fn save_as_string(&mut self, dst: &mut String) {
-        self.buffer.copy_into_string(dst);
+    pub fn save_as_string(&mut self, dst: &mut dyn WriteableDocument) {
+        self.buffer.copy_into(dst);
         self.mark_as_clean();
     }
 
@@ -515,14 +585,14 @@ impl TextBuffer {
         file: &mut File,
         encoding: Option<&'static str>,
     ) -> apperr::Result<()> {
-        let mut read = 0;
-
-        let mut buf = [const { MaybeUninit::<u8>::uninit() }; 4096];
+        let scratch = scratch_arena(None);
+        let mut buf = scratch.alloc_uninit().transpose();
         let mut first_chunk_len = 0;
+        let mut read = 0;
 
         // Read enough bytes to detect the BOM.
         while first_chunk_len < BOM_MAX_LEN {
-            read = helpers::file_read_uninit(file, &mut buf[first_chunk_len..])?;
+            read = file_read_uninit(file, &mut buf[first_chunk_len..])?;
             if read == 0 {
                 break;
             }
@@ -532,8 +602,7 @@ impl TextBuffer {
         if let Some(encoding) = encoding {
             self.encoding = encoding;
         } else {
-            let bom =
-                detect_bom(unsafe { helpers::slice_assume_init_ref(&buf[..first_chunk_len]) });
+            let bom = detect_bom(unsafe { buf[..first_chunk_len].assume_init_ref() });
             self.encoding = bom.unwrap_or("UTF-8");
         }
 
@@ -573,11 +642,8 @@ impl TextBuffer {
                 } else {
                     // Otherwise, check how many spaces the line starts with. Searching for >8 spaces
                     // allows us to reject lines that have more than 1 level of indentation.
-                    let space_indentation = chunk[offset..]
-                        .iter()
-                        .take(9)
-                        .take_while(|&&c| c == b' ')
-                        .count();
+                    let space_indentation =
+                        chunk[offset..].iter().take(9).take_while(|&&c| c == b' ').count();
 
                     // We'll also reject lines starting with 1 space, because that's too fickle as a heuristic.
                     if (2..=8).contains(&space_indentation) {
@@ -603,7 +669,7 @@ impl TextBuffer {
                     }
                 }
 
-                (offset, lines) = ucd::newlines_forward(chunk, offset, lines, lines + 1);
+                (offset, lines) = unicode::newlines_forward(chunk, offset, lines, lines + 1);
 
                 // Check if the preceding line ended in CRLF.
                 if offset >= 2 && &chunk[offset - 2..offset] == b"\r\n" {
@@ -642,7 +708,7 @@ impl TextBuffer {
 
             // If the file has more than 1000 lines, figure out how many are remaining.
             if offset < chunk.len() {
-                (_, lines) = ucd::newlines_forward(chunk, offset, lines, CoordType::MAX);
+                (_, lines) = unicode::newlines_forward(chunk, offset, lines, CoordType::MAX);
             }
 
             // Add 1, because the last line doesn't end in a newline (it ends in the literal end).
@@ -660,21 +726,18 @@ impl TextBuffer {
     fn read_file_as_utf8(
         &mut self,
         file: &mut File,
-        buf: &mut [MaybeUninit<u8>],
+        buf: &mut [MaybeUninit<u8>; 4 * KIBI],
         first_chunk_len: usize,
         done: bool,
     ) -> apperr::Result<()> {
         {
-            let mut first_chunk =
-                unsafe { helpers::slice_assume_init_ref(&buf[..first_chunk_len]) };
+            let mut first_chunk = unsafe { buf[..first_chunk_len].assume_init_ref() };
             if first_chunk.starts_with(b"\xEF\xBB\xBF") {
                 first_chunk = &first_chunk[3..];
                 self.encoding = "UTF-8 BOM";
             }
 
-            let gap = self.buffer.allocate_gap(0, first_chunk.len(), 0);
-            gap.copy_from_slice(first_chunk);
-            self.buffer.commit_gap(first_chunk.len());
+            self.buffer.replace(0..0, first_chunk);
         }
 
         if done {
@@ -683,8 +746,8 @@ impl TextBuffer {
 
         // If we don't have file metadata, the input may be a pipe or a socket.
         // Every read will have the same size until we hit the end.
-        let mut chunk_size = 128 * 1024;
-        let mut extra_chunk_size = 128 * 1024;
+        let mut chunk_size = 128 * KIBI;
+        let mut extra_chunk_size = 128 * KIBI;
 
         if let Ok(m) = file.metadata() {
             // Usually the next read of size `chunk_size` will read the entire file,
@@ -693,11 +756,14 @@ impl TextBuffer {
             // 4KiB is not too large and not too slow.
             let len = m.len() as usize;
             chunk_size = len.saturating_sub(first_chunk_len);
-            extra_chunk_size = 4096;
+            extra_chunk_size = 4 * KIBI;
         }
 
         loop {
             let gap = self.buffer.allocate_gap(self.text_length(), chunk_size, 0);
+            if gap.is_empty() {
+                break;
+            }
 
             let read = file.read(gap)?;
             if read == 0 {
@@ -714,20 +780,20 @@ impl TextBuffer {
     fn read_file_with_icu(
         &mut self,
         file: &mut File,
-        buf: &mut [MaybeUninit<u8>],
+        buf: &mut [MaybeUninit<u8>; 4 * KIBI],
         first_chunk_len: usize,
         mut done: bool,
     ) -> apperr::Result<()> {
-        let mut pivot_buffer = [const { MaybeUninit::<u16>::uninit() }; 4096];
+        let scratch = scratch_arena(None);
+        let pivot_buffer = scratch.alloc_uninit_slice(4 * KIBI);
+        let mut c = icu::Converter::new(pivot_buffer, self.encoding, "UTF-8")?;
+        let mut first_chunk = unsafe { buf[..first_chunk_len].assume_init_ref() };
 
-        let mut c = icu::Converter::new(&mut pivot_buffer, self.encoding, "UTF-8")?;
-
-        let mut first_chunk = unsafe { helpers::slice_assume_init_ref(&buf[..first_chunk_len]) };
         while !first_chunk.is_empty() {
             let off = self.text_length();
-            let gap = self.buffer.allocate_gap(off, 8 * 1024, 0);
+            let gap = self.buffer.allocate_gap(off, 8 * KIBI, 0);
             let (input_advance, mut output_advance) =
-                c.convert(first_chunk, helpers::slice_as_uninit_mut(gap))?;
+                c.convert(first_chunk, slice_as_uninit_mut(gap))?;
 
             // Remove the BOM from the file, if this is the first chunk.
             // Our caller ensures to only call us once the BOM has been identified,
@@ -748,18 +814,22 @@ impl TextBuffer {
 
         loop {
             if !done {
-                let read = helpers::file_read_uninit(file, &mut buf[buf_len..])?;
+                let read = file_read_uninit(file, &mut buf[buf_len..])?;
                 buf_len += read;
                 done = read == 0;
             }
 
-            let flush = done && buf_len == 0;
-            let gap = self.buffer.allocate_gap(self.text_length(), 8 * 1024, 0);
-            let read = unsafe { helpers::slice_assume_init_ref(&buf[..buf_len]) };
-            let (input_advance, output_advance) =
-                c.convert(read, helpers::slice_as_uninit_mut(gap))?;
+            let gap = self.buffer.allocate_gap(self.text_length(), 8 * KIBI, 0);
+            if gap.is_empty() {
+                break;
+            }
+
+            let read = unsafe { buf[..buf_len].assume_init_ref() };
+            let (input_advance, output_advance) = c.convert(read, slice_as_uninit_mut(gap))?;
 
             self.buffer.commit_gap(output_advance);
+
+            let flush = done && buf_len == 0;
             buf_len -= input_advance;
             buf.copy_within(input_advance.., 0);
 
@@ -772,9 +842,7 @@ impl TextBuffer {
     }
 
     /// Writes the text buffer contents to a file, handling BOM and encoding.
-    pub fn write_file(&mut self, path: &Path) -> apperr::Result<()> {
-        // TODO: Write to a temp file and do an atomic rename.
-        let mut file = File::create(path)?;
+    pub fn write_file(&mut self, file: &mut File) -> apperr::Result<()> {
         let mut offset = 0;
 
         if self.encoding.starts_with("UTF-8") {
@@ -797,19 +865,20 @@ impl TextBuffer {
         Ok(())
     }
 
-    fn write_file_with_icu(&mut self, mut file: File) -> apperr::Result<()> {
-        let mut pivot_buffer = [const { MaybeUninit::<u16>::uninit() }; 4096];
-        let mut buf = [const { MaybeUninit::<u8>::uninit() }; 4096];
-        let mut c = icu::Converter::new(&mut pivot_buffer, "UTF-8", self.encoding)?;
+    fn write_file_with_icu(&mut self, file: &mut File) -> apperr::Result<()> {
+        let scratch = scratch_arena(None);
+        let pivot_buffer = scratch.alloc_uninit_slice(4 * KIBI);
+        let buf = scratch.alloc_uninit_slice(4 * KIBI);
+        let mut c = icu::Converter::new(pivot_buffer, "UTF-8", self.encoding)?;
         let mut offset = 0;
 
         // Write the BOM for the encodings we know need it.
         if self.encoding.starts_with("UTF-16")
             || self.encoding.starts_with("UTF-32")
-            || self.encoding == "gb18030"
+            || self.encoding == "GB18030"
         {
-            let (_, output_advance) = c.convert(b"\xEF\xBB\xBF", &mut buf)?;
-            let chunk = unsafe { helpers::slice_assume_init_ref(&buf[..output_advance]) };
+            let (_, output_advance) = c.convert(b"\xEF\xBB\xBF", buf)?;
+            let chunk = unsafe { buf[..output_advance].assume_init_ref() };
             file.write_all(chunk)?;
         }
 
@@ -819,8 +888,8 @@ impl TextBuffer {
                 break;
             }
 
-            let (input_advance, output_advance) = c.convert(chunk, &mut buf)?;
-            let chunk = unsafe { helpers::slice_assume_init_ref(&buf[..output_advance]) };
+            let (input_advance, output_advance) = c.convert(chunk, buf)?;
+            let chunk = unsafe { buf[..output_advance].assume_init_ref() };
             file.write_all(chunk)?;
             offset += input_advance;
         }
@@ -828,104 +897,94 @@ impl TextBuffer {
         Ok(())
     }
 
+    /// Returns the current selection.
     pub fn has_selection(&self) -> bool {
         self.selection.is_some()
     }
 
-    fn set_selection(&mut self, selection: TextBufferSelection) -> u32 {
+    fn set_selection(&mut self, selection: Option<TextBufferSelection>) -> u32 {
         self.selection = selection;
         self.selection_generation = self.selection_generation.wrapping_add(1);
         self.selection_generation
     }
 
+    /// Moves the cursor to `visual_pos` and updates the selection to contain it.
     pub fn selection_update_visual(&mut self, visual_pos: Point) {
-        let cursor = self.cursor;
-        self.set_cursor_for_selection(self.cursor_move_to_visual_internal(cursor, visual_pos));
-
-        match &mut self.selection {
-            TextBufferSelection::None | TextBufferSelection::Done { .. } => {
-                self.set_selection(TextBufferSelection::Active {
-                    beg: cursor.logical_pos,
-                    end: self.cursor.logical_pos,
-                });
-            }
-            TextBufferSelection::Active { beg: _, end } => {
-                *end = self.cursor.logical_pos;
-            }
-        }
+        self.set_cursor_for_selection(self.cursor_move_to_visual_internal(self.cursor, visual_pos));
     }
 
+    /// Moves the cursor to `logical_pos` and updates the selection to contain it.
     pub fn selection_update_logical(&mut self, logical_pos: Point) {
-        let cursor = self.cursor;
-        self.set_cursor_for_selection(self.cursor_move_to_logical_internal(cursor, logical_pos));
-
-        match &mut self.selection {
-            TextBufferSelection::None | TextBufferSelection::Done { .. } => {
-                self.set_selection(TextBufferSelection::Active {
-                    beg: cursor.logical_pos,
-                    end: self.cursor.logical_pos,
-                });
-            }
-            TextBufferSelection::Active { beg: _, end } => {
-                *end = self.cursor.logical_pos;
-            }
-        }
+        self.set_cursor_for_selection(
+            self.cursor_move_to_logical_internal(self.cursor, logical_pos),
+        );
     }
 
+    /// Moves the cursor by `delta` and updates the selection to contain it.
     pub fn selection_update_delta(&mut self, granularity: CursorMovement, delta: CoordType) {
-        let cursor = self.cursor;
-        self.set_cursor_for_selection(self.cursor_move_delta_internal(cursor, granularity, delta));
-
-        match &mut self.selection {
-            TextBufferSelection::None | TextBufferSelection::Done { .. } => {
-                self.set_selection(TextBufferSelection::Active {
-                    beg: cursor.logical_pos,
-                    end: self.cursor.logical_pos,
-                });
-            }
-            TextBufferSelection::Active { beg: _, end } => {
-                *end = self.cursor.logical_pos;
-            }
-        }
+        self.set_cursor_for_selection(self.cursor_move_delta_internal(
+            self.cursor,
+            granularity,
+            delta,
+        ));
     }
 
+    /// Select the current word.
     pub fn select_word(&mut self) {
-        // TODO: Something is wrong about this. Try the string "</sup> in the"
-        // and double click on the "i" (= the cursor is in front of the "i").
-        // It'll select "sup> in" but should only select 1 word of course.
-        // Not sure what the issue is, but I think this approach is wrong in general.
-        let Range { start, end } = ucd::word_select(&self.buffer, self.cursor.offset);
+        let Range { start, end } = navigation::word_select(&self.buffer, self.cursor.offset);
         let beg = self.cursor_move_to_offset_internal(self.cursor, start);
         let end = self.cursor_move_to_offset_internal(beg, end);
-        self.set_cursor_for_selection(end);
-        self.set_selection(TextBufferSelection::Done {
+        unsafe { self.set_cursor(end) };
+        self.set_selection(Some(TextBufferSelection {
             beg: beg.logical_pos,
             end: end.logical_pos,
-        });
+        }));
     }
 
-    pub fn selection_finalize(&mut self) {
-        if let TextBufferSelection::Active { beg, end } = self.selection {
-            self.set_selection(TextBufferSelection::Done { beg, end });
+    /// Select the current line.
+    pub fn select_line(&mut self) {
+        let beg = self.cursor_move_to_logical_internal(
+            self.cursor,
+            Point { x: 0, y: self.cursor.logical_pos.y },
+        );
+        let end = self
+            .cursor_move_to_logical_internal(beg, Point { x: 0, y: self.cursor.logical_pos.y + 1 });
+        unsafe { self.set_cursor(end) };
+        self.set_selection(Some(TextBufferSelection {
+            beg: beg.logical_pos,
+            end: end.logical_pos,
+        }));
+    }
+
+    /// Select the entire document.
+    pub fn select_all(&mut self) {
+        let beg = Default::default();
+        let end = self.cursor_move_to_logical_internal(beg, Point::MAX);
+        unsafe { self.set_cursor(end) };
+        self.set_selection(Some(TextBufferSelection {
+            beg: beg.logical_pos,
+            end: end.logical_pos,
+        }));
+    }
+
+    /// Starts a new selection, if there's none already.
+    pub fn start_selection(&mut self) {
+        if self.selection.is_none() {
+            self.set_selection(Some(TextBufferSelection {
+                beg: self.cursor.logical_pos,
+                end: self.cursor.logical_pos,
+            }));
         }
     }
 
-    pub fn select_all(&mut self) {
-        let beg = ucd::UcdCursor::default();
-        let end = self.cursor_move_to_logical_internal(beg, Point::MAX);
-        self.set_cursor_for_selection(end);
-        self.set_selection(TextBufferSelection::Done {
-            beg: beg.logical_pos,
-            end: end.logical_pos,
-        });
-    }
-
+    /// Destroy the current selection.
     pub fn clear_selection(&mut self) -> bool {
         let had_selection = self.selection.is_some();
-        self.set_selection(TextBufferSelection::None);
+        self.set_selection(None);
         had_selection
     }
 
+    /// Find the next occurrence of the given `pattern` and select it.
     pub fn find_and_select(&mut self, pattern: &str, options: SearchOptions) -> apperr::Result<()> {
         if let Some(search) = &mut self.search {
             let search = search.get_mut();
@@ -935,10 +994,10 @@ impl TextBuffer {
             }
 
             // When transitioning from some search to no search, we must clear the selection.
-            if pattern.is_empty() {
-                if let TextBufferSelection::Done { beg, .. } = self.selection {
-                    self.cursor_move_to_logical(beg);
-                }
+            if pattern.is_empty()
+                && let Some(TextBufferSelection { beg, .. }) = self.selection
+            {
+                self.cursor_move_to_logical(beg);
             }
         }
 
@@ -964,12 +1023,11 @@ impl TextBuffer {
         // If the user moved the cursor since the last search, but the needle remained the same,
         // we still need to move the start of the search to the new cursor position.
         let next_search_offset = match self.selection {
-            TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
+            Some(TextBufferSelection { beg, end }) => {
                 if self.selection_generation == search.selection_generation {
                     search.next_search_offset
                 } else {
-                    self.cursor_move_to_logical_internal(self.cursor, beg.min(end))
-                        .offset
+                    self.cursor_move_to_logical_internal(self.cursor, beg.min(end)).offset
                 }
             }
             _ => self.cursor.offset,
@@ -979,6 +1037,7 @@ impl TextBuffer {
         Ok(())
     }
 
+    /// Find the next occurrence of the given `pattern` and replace it with `replacement`.
     pub fn find_and_replace(
         &mut self,
         pattern: &str,
@@ -986,9 +1045,7 @@ impl TextBuffer {
         replacement: &str,
     ) -> apperr::Result<()> {
         // Editors traditionally replace the previous search hit, not the next possible one.
-        if let (Some(search), TextBufferSelection::Done { .. }) =
-            (&mut self.search, &self.selection)
-        {
+        if let (Some(search), Some(..)) = (&mut self.search, &self.selection) {
             let search = search.get_mut();
             if search.selection_generation == self.selection_generation {
                 self.write(replacement.as_bytes(), true);
@@ -998,6 +1055,7 @@ impl TextBuffer {
         self.find_and_select(pattern, options)
     }
 
+    /// Find all occurrences of the given `pattern` and replace them with `replacement`.
     pub fn find_and_replace_all(
         &mut self,
         pattern: &str,
@@ -1026,7 +1084,7 @@ impl TextBuffer {
         options: SearchOptions,
     ) -> apperr::Result<ActiveSearch> {
         let sanitized_pattern = if options.whole_word && options.use_regex {
-            Cow::Owned(format!(r"\b(?:{})\b", pattern))
+            Cow::Owned(format!(r"\b(?:{pattern})\b"))
         } else if options.whole_word {
             let mut p = String::with_capacity(pattern.len() + 16);
             p.push_str(r"\b");
@@ -1069,7 +1127,7 @@ impl TextBuffer {
             options,
             text,
             regex,
-            buffer_generation: self.buffer.generation,
+            buffer_generation: self.buffer.generation(),
             selection_generation: 0,
             next_search_offset: 0,
             no_matches: false,
@@ -1077,9 +1135,9 @@ impl TextBuffer {
     }
 
     fn find_select_next(&mut self, search: &mut ActiveSearch, offset: usize, wrap: bool) {
-        if search.buffer_generation != self.buffer.generation {
+        if search.buffer_generation != self.buffer.generation() {
             unsafe { search.regex.set_text(&search.text) };
-            search.buffer_generation = self.buffer.generation;
+            search.buffer_generation = self.buffer.generation();
         }
 
         if search.next_search_offset != offset {
@@ -1107,24 +1165,24 @@ impl TextBuffer {
             unsafe { self.set_cursor(end) };
             self.make_cursor_visible();
 
-            self.set_selection(TextBufferSelection::Done {
+            self.set_selection(Some(TextBufferSelection {
                 beg: beg.logical_pos,
                 end: end.logical_pos,
-            })
+            }))
         } else {
             // Avoid searching through the entire document again if we know there's nothing to find.
             search.no_matches = true;
-            self.set_selection(TextBufferSelection::None)
+            self.set_selection(None)
         };
     }
 
-    fn measurement_config(&self) -> ucd::MeasurementConfig {
-        ucd::MeasurementConfig::new(&self.buffer)
+    fn measurement_config(&self) -> MeasurementConfig {
+        MeasurementConfig::new(&self.buffer)
             .with_word_wrap_column(self.word_wrap_column)
             .with_tab_size(self.tab_size)
     }
 
-    fn goto_line_start(&self, cursor: ucd::UcdCursor, y: CoordType) -> ucd::UcdCursor {
+    fn goto_line_start(&self, cursor: Cursor, y: CoordType) -> Cursor {
         let mut result = cursor;
         let mut seek_to_line_start = true;
 
@@ -1135,7 +1193,7 @@ impl TextBuffer {
                     break;
                 }
 
-                let (delta, line) = ucd::newlines_forward(chunk, 0, result.logical_pos.y, y);
+                let (delta, line) = unicode::newlines_forward(chunk, 0, result.logical_pos.y, y);
                 result.offset += delta;
                 result.logical_pos.y = line;
             }
@@ -1156,7 +1214,7 @@ impl TextBuffer {
                 }
 
                 let (delta, line) =
-                    ucd::newlines_backward(chunk, chunk.len(), result.logical_pos.y, y);
+                    unicode::newlines_backward(chunk, chunk.len(), result.logical_pos.y, y);
                 result.offset -= chunk.len() - delta;
                 result.logical_pos.y = line;
                 if delta > 0 {
@@ -1177,16 +1235,10 @@ impl TextBuffer {
 
         if self.word_wrap_column > 0 {
             let upward = result.offset < cursor.offset;
-            let (top, bottom) = if upward {
-                (result, cursor)
-            } else {
-                (cursor, result)
-            };
+            let (top, bottom) = if upward { (result, cursor) } else { (cursor, result) };
 
-            let mut bottom_remeasured = self
-                .measurement_config()
-                .with_cursor(top)
-                .goto_logical(bottom.logical_pos);
+            let mut bottom_remeasured =
+                self.measurement_config().with_cursor(top).goto_logical(bottom.logical_pos);
 
             // The second problem is that visual positions can be ambiguous. A single logical position
             // can map to two visual positions: One at the end of the preceeding line in front of
@@ -1214,92 +1266,86 @@ impl TextBuffer {
         result
     }
 
-    fn cursor_move_to_offset_internal(
-        &self,
-        mut cursor: ucd::UcdCursor,
-        offset: usize,
-    ) -> ucd::UcdCursor {
+    fn cursor_move_to_offset_internal(&self, mut cursor: Cursor, offset: usize) -> Cursor {
+        if offset == cursor.offset {
+            return cursor;
+        }
+
+        // goto_line_start() is fast for seeking across lines _if_ line wrapping is disabled.
+        // For backward seeking we have to use it either way, so we're covered there.
+        // This implements the forward seeking portion, if it's approx. worth doing so.
+        if self.word_wrap_column <= 0 && offset.saturating_sub(cursor.offset) > 1024 {
+            // Replacing this with a more optimal, direct memchr() loop appears
+            // to improve performance only marginally by another 2% or so.
+            // Still, it's kind of "meh" looking at how poorly this is implemented...
+            loop {
+                let next = self.goto_line_start(cursor, cursor.logical_pos.y + 1);
+                // Stop when we either ran past the target offset,
+                // or when we hit the end of the buffer and `goto_line_start` backtracked to the line start.
+                if next.offset > offset || next.offset <= cursor.offset {
+                    break;
+                }
+                cursor = next;
+            }
+        }
+
         while offset < cursor.offset {
-            cursor = self.cursor_move_to_logical_internal(
-                cursor,
-                Point {
-                    x: 0,
-                    y: cursor.logical_pos.y - 1,
-                },
-            );
+            cursor = self.goto_line_start(cursor, cursor.logical_pos.y - 1);
         }
 
-        self.measurement_config()
-            .with_cursor(cursor)
-            .goto_offset(offset)
+        self.measurement_config().with_cursor(cursor).goto_offset(offset)
     }
 
-    fn cursor_move_to_logical_internal(
-        &self,
-        mut cursor: ucd::UcdCursor,
-        pos: Point,
-    ) -> ucd::UcdCursor {
-        let x = pos.x.max(0);
-        let y = pos.y.max(0);
+    fn cursor_move_to_logical_internal(&self, mut cursor: Cursor, pos: Point) -> Cursor {
+        let pos = Point { x: pos.x.max(0), y: pos.y.max(0) };
 
-        // goto_line_start() is very fast for seeking across lines. But we don't need that
-        // of course if the `y` didn't actually change. The only exception is if we're
-        // moving leftward in the same line as there's no read_backward() for that.
-        if y != cursor.logical_pos.y || x < cursor.logical_pos.x {
-            cursor = self.goto_line_start(cursor, y);
+        if pos == cursor.logical_pos {
+            return cursor;
         }
 
-        self.measurement_config()
-            .with_cursor(cursor)
-            .goto_logical(Point { x, y })
+        // goto_line_start() is the fastest way for seeking across lines. As such we always
+        // use it if the requested `.y` position is different. We still need to use it if the
+        // `.x` position is smaller, but only because `goto_logical()` cannot seek backwards.
+        if pos.y != cursor.logical_pos.y || pos.x < cursor.logical_pos.x {
+            cursor = self.goto_line_start(cursor, pos.y);
+        }
+
+        self.measurement_config().with_cursor(cursor).goto_logical(pos)
     }
 
-    fn cursor_move_to_visual_internal(
-        &self,
-        mut cursor: ucd::UcdCursor,
-        pos: Point,
-    ) -> ucd::UcdCursor {
-        let x = pos.x.max(0);
-        let y = pos.y.max(0);
+    fn cursor_move_to_visual_internal(&self, mut cursor: Cursor, pos: Point) -> Cursor {
+        let pos = Point { x: pos.x.max(0), y: pos.y.max(0) };
+
+        if pos == cursor.visual_pos {
+            return cursor;
+        }
 
         if self.word_wrap_column <= 0 {
-            // goto_line_start() is very fast for seeking across lines. But we don't need that
-            // of course if the `y` didn't actually change. The only exception is if we're
-            // moving leftward in the same line as there's no read_backward() for that.
-            if y != cursor.logical_pos.y || x < cursor.logical_pos.x {
-                cursor = self.goto_line_start(cursor, y);
+            // Identical to the fast-pass in `cursor_move_to_logical_internal()`.
+            if pos.y != cursor.logical_pos.y || pos.x < cursor.logical_pos.x {
+                cursor = self.goto_line_start(cursor, pos.y);
             }
         } else {
-            // Since we don't store how many visual lines each logical line spans,
-            // we have to iterate line by line and check each time if we're there yet.
-            // We can skip that for forward seeking, since measure_forward() will handle that.
-
-            if y < cursor.visual_pos.y || (y == cursor.visual_pos.y && x < cursor.visual_pos.x) {
-                cursor = self.goto_line_start(cursor, cursor.logical_pos.y);
+            // `goto_visual()` can only seek foward, so we need to seek backward here if needed.
+            // NOTE that this intentionally doesn't use the `Eq` trait of `Point`, because if
+            // `pos.y == cursor.visual_pos.y` we don't need to go to `cursor.logical_pos.y - 1`.
+            while pos.y < cursor.visual_pos.y {
+                cursor = self.goto_line_start(cursor, cursor.logical_pos.y - 1);
             }
-
-            while y < cursor.visual_pos.y {
-                cursor = self.cursor_move_to_logical_internal(
-                    cursor,
-                    Point {
-                        x: 0,
-                        y: cursor.logical_pos.y - 1,
-                    },
-                );
+            if pos.y == cursor.visual_pos.y && pos.x < cursor.visual_pos.x {
+                cursor = self.goto_line_start(cursor, cursor.logical_pos.y);
             }
         }
 
-        self.measurement_config()
-            .with_cursor(cursor)
-            .goto_visual(Point { x, y })
+        self.measurement_config().with_cursor(cursor).goto_visual(pos)
     }
 
     fn cursor_move_delta_internal(
         &self,
-        mut cursor: ucd::UcdCursor,
+        mut cursor: Cursor,
         granularity: CursorMovement,
         mut delta: CoordType,
-    ) -> ucd::UcdCursor {
+    ) -> Cursor {
         if delta == 0 {
             return cursor;
         }
@@ -1315,10 +1361,7 @@ impl TextBuffer {
 
                     cursor = self.cursor_move_to_logical_internal(
                         cursor,
-                        Point {
-                            x: target_x,
-                            y: cursor.logical_pos.y,
-                        },
+                        Point { x: target_x, y: cursor.logical_pos.y },
                     );
 
                     // We can stop if we ran out of remaining delta
@@ -1334,10 +1377,7 @@ impl TextBuffer {
 
                     cursor = self.cursor_move_to_logical_internal(
                         cursor,
-                        Point {
-                            x: start_x,
-                            y: cursor.logical_pos.y + sign,
-                        },
+                        Point { x: start_x, y: cursor.logical_pos.y + sign },
                     );
 
                     // We crossed a newline which counts for 1 grapheme cluster.
@@ -1352,14 +1392,14 @@ impl TextBuffer {
                 }
             }
             CursorMovement::Word => {
-                let doc = &self.buffer as &dyn Document;
+                let doc = &self.buffer as &dyn ReadableDocument;
                 let mut offset = self.cursor.offset;
 
                 while delta != 0 {
                     if delta < 0 {
-                        offset = ucd::word_backward(doc, offset);
+                        offset = navigation::word_backward(doc, offset);
                     } else {
-                        offset = ucd::word_forward(doc, offset);
+                        offset = navigation::word_forward(doc, offset);
                     }
                     delta -= sign;
                 }
@@ -1371,18 +1411,22 @@ impl TextBuffer {
         cursor
     }
 
+    /// Moves the cursor to the given offset.
     pub fn cursor_move_to_offset(&mut self, offset: usize) {
         unsafe { self.set_cursor(self.cursor_move_to_offset_internal(self.cursor, offset)) }
     }
 
+    /// Moves the cursor to the given logical position.
     pub fn cursor_move_to_logical(&mut self, pos: Point) {
         unsafe { self.set_cursor(self.cursor_move_to_logical_internal(self.cursor, pos)) }
     }
 
+    /// Moves the cursor to the given visual position.
     pub fn cursor_move_to_visual(&mut self, pos: Point) {
         unsafe { self.set_cursor(self.cursor_move_to_visual_internal(self.cursor, pos)) }
     }
 
+    /// Moves the cursor by the given delta.
     pub fn cursor_move_delta(&mut self, granularity: CursorMovement, delta: CoordType) {
         unsafe { self.set_cursor(self.cursor_move_delta_internal(self.cursor, granularity, delta)) }
     }
@@ -1393,18 +1437,26 @@ impl TextBuffer {
     ///
     /// This function performs no checks that the cursor is valid. "Valid" in this case means
     /// that the TextBuffer has not been modified since you received the cursor from this class.
-    pub unsafe fn set_cursor(&mut self, cursor: ucd::UcdCursor) {
+    pub unsafe fn set_cursor(&mut self, cursor: Cursor) {
         self.set_cursor_internal(cursor);
         self.last_history_type = HistoryType::Other;
-        self.set_selection(TextBufferSelection::None);
+        self.set_selection(None);
     }
 
-    fn set_cursor_for_selection(&mut self, cursor: ucd::UcdCursor) {
+    fn set_cursor_for_selection(&mut self, cursor: Cursor) {
+        let beg = match self.selection {
+            Some(TextBufferSelection { beg, .. }) => beg,
+            None => self.cursor.logical_pos,
+        };
+
         self.set_cursor_internal(cursor);
         self.last_history_type = HistoryType::Other;
+
+        let end = self.cursor.logical_pos;
+        self.set_selection(if beg == end { None } else { Some(TextBufferSelection { beg, end }) });
     }
 
-    fn set_cursor_internal(&mut self, cursor: ucd::UcdCursor) {
+    fn set_cursor_internal(&mut self, cursor: Cursor) {
         debug_assert!(
             cursor.offset <= self.text_length()
                 && cursor.logical_pos.x >= 0
@@ -1421,7 +1473,6 @@ impl TextBuffer {
     /// Extracts a rectangular region of the text buffer and writes it to the framebuffer.
     /// The `destination` rect is framebuffer coordinates. The extracted region within this
     /// text buffer has the given `origin` and the same size as the `destination` rect.
-    #[inline(never)]
     pub fn render(
         &mut self,
         origin: Point,
@@ -1433,12 +1484,13 @@ impl TextBuffer {
             return None;
         }
 
+        let scratch = scratch_arena(None);
         let width = destination.width();
         let height = destination.height();
         let line_number_width = self.margin_width.max(3) as usize - 3;
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
-        let mut line = String::new();
+        let mut line = ArenaString::new_in(&scratch);
         let mut visual_pos_x_max = 0;
 
         // Pick the cursor closer to the `origin.y`.
@@ -1451,10 +1503,8 @@ impl TextBuffer {
         };
 
         let [selection_beg, selection_end] = match self.selection {
-            TextBufferSelection::None => [Point::MIN, Point::MIN],
-            TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
-                helpers::minmax(beg, end)
-            }
+            None => [Point::MIN, Point::MIN],
+            Some(TextBufferSelection { beg, end }) => minmax(beg, end),
         };
 
         line.reserve(width as usize * 2);
@@ -1463,19 +1513,11 @@ impl TextBuffer {
             line.clear();
 
             let visual_line = origin.y + y;
-            let mut cursor_beg = self.cursor_move_to_visual_internal(
-                cursor,
-                Point {
-                    x: origin.x,
-                    y: visual_line,
-                },
-            );
+            let mut cursor_beg =
+                self.cursor_move_to_visual_internal(cursor, Point { x: origin.x, y: visual_line });
             let cursor_end = self.cursor_move_to_visual_internal(
                 cursor_beg,
-                Point {
-                    x: origin.x + text_width,
-                    y: visual_line,
-                },
+                Point { x: origin.x + text_width, y: visual_line },
             );
 
             // Accelerate the next render pass by remembering where we started off.
@@ -1494,12 +1536,7 @@ impl TextBuffer {
                     line.push_str(&MARGIN_TEMPLATE[off..]);
                 } else if self.word_wrap_column <= 0 || cursor_beg.logical_pos.x == 0 {
                     // Regular line? Place "123 | " in the margin.
-                    _ = write!(
-                        line,
-                        "{:1$} │ ",
-                        cursor_beg.logical_pos.y + 1,
-                        line_number_width
-                    );
+                    _ = write!(line, "{:1$} │ ", cursor_beg.logical_pos.y + 1, line_number_width);
                 } else {
                     // Wrapped line? Place " ... | " in the margin.
                     let number_width = (cursor_beg.logical_pos.y + 1).ilog10() as usize + 1;
@@ -1517,10 +1554,10 @@ impl TextBuffer {
                         Rect {
                             left,
                             top,
-                            right: left + line_number_width as i32,
+                            right: left + line_number_width as CoordType,
                             bottom: top + 1,
                         },
-                        fb.indexed(IndexedColor::Background),
+                        fb.indexed_alpha(IndexedColor::Background, 1, 2),
                     );
                 }
             }
@@ -1533,10 +1570,7 @@ impl TextBuffer {
                 if cursor_beg.visual_pos.x < origin.x {
                     let cursor_next = self.cursor_move_to_logical_internal(
                         cursor_beg,
-                        Point {
-                            x: cursor_beg.logical_pos.x + 1,
-                            y: cursor_beg.logical_pos.y,
-                        },
+                        Point { x: cursor_beg.logical_pos.x + 1, y: cursor_beg.logical_pos.y },
                     );
 
                     if cursor_next.visual_pos.x > origin.x {
@@ -1614,12 +1648,7 @@ impl TextBuffer {
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
 
-            fb.replace_text(
-                destination.top + y,
-                destination.left,
-                destination.right,
-                &line,
-            );
+            fb.replace_text(destination.top + y, destination.left, destination.right, &line);
 
             // Draw the selection on this line, if any.
             // FYI: `cursor_beg.visual_pos.y == visual_line` is necessary as the `visual_line`
@@ -1654,17 +1683,14 @@ impl TextBuffer {
 
                 let left = destination.left + self.margin_width - origin.x;
                 let top = destination.top + y;
-                let rect = Rect {
-                    left: left + beg,
-                    top,
-                    right: left + end,
-                    bottom: top + 1,
-                };
+                let rect = Rect { left: left + beg, top, right: left + end, bottom: top + 1 };
 
-                let bg = if focused {
-                    fb.indexed(IndexedColor::BrightBlue)
-                } else {
-                    fb.indexed(IndexedColor::Blue)
+                let mut bg = oklab_blend(
+                    fb.indexed(IndexedColor::Foreground),
+                    fb.indexed_alpha(IndexedColor::BrightBlue, 1, 2),
+                );
+                if !focused {
+                    bg = oklab_blend(bg, fb.indexed_alpha(IndexedColor::Background, 1, 2))
                 };
                 let fg = fb.contrasted(bg);
                 fb.blend_bg(rect, bg);
@@ -1682,7 +1708,7 @@ impl TextBuffer {
                 right: destination.left + self.margin_width,
                 bottom: destination.bottom,
             };
-            fb.blend_fg(margin, 0x7f7f7f7f);
+            fb.blend_fg(margin, 0x7f3f3f3f);
         }
 
         if self.ruler > 0 {
@@ -1690,13 +1716,8 @@ impl TextBuffer {
             let right = destination.right;
             if left < right {
                 fb.blend_bg(
-                    Rect {
-                        left,
-                        top: destination.top,
-                        right,
-                        bottom: destination.bottom,
-                    },
-                    fb.indexed_alpha(IndexedColor::BrightRed, 0x1f),
+                    Rect { left, top: destination.top, right, bottom: destination.bottom },
+                    fb.indexed_alpha(IndexedColor::BrightRed, 1, 4),
                 );
             }
         }
@@ -1735,7 +1756,7 @@ impl TextBuffer {
                             right: destination.right,
                             bottom: cursor.y + 1,
                         },
-                        0x1f7f7f7f,
+                        0x50282828,
                     );
                 }
             }
@@ -1756,17 +1777,18 @@ impl TextBuffer {
         if let Some((beg, end)) = self.selection_range_internal(false) {
             self.edit_begin(HistoryType::Write, beg);
             self.edit_delete(end);
-            self.set_selection(TextBufferSelection::None);
+            self.set_selection(None);
         }
         if self.active_edit_depth <= 0 {
             self.edit_begin(HistoryType::Write, self.cursor);
         }
 
         let mut offset = 0;
-        let mut newline_buffer = String::new();
+        let scratch = scratch_arena(None);
+        let mut newline_buffer = ArenaString::new_in(&scratch);
 
         loop {
-            // Can't use `ucd::newlines_forward` because bracketed paste uses CR instead of LF/CRLF.
+            // Can't use `unicode::newlines_forward` because bracketed paste uses CR instead of LF/CRLF.
             let offset_next = memchr2(b'\r', b'\n', text, offset);
             let line = &text[offset..offset_next];
             let column_before = self.cursor.logical_pos.x;
@@ -1798,10 +1820,7 @@ impl TextBuffer {
                 let delete = self.cursor.logical_pos.x - column_before;
                 let end = self.cursor_move_to_logical_internal(
                     self.cursor,
-                    Point {
-                        x: self.cursor.logical_pos.x + delete,
-                        y: self.cursor.logical_pos.y,
-                    },
+                    Point { x: self.cursor.logical_pos.x + delete, y: self.cursor.logical_pos.y },
                 );
                 self.edit_delete(end);
             }
@@ -1847,18 +1866,18 @@ impl TextBuffer {
                 // If tabs are enabled, add as many tabs as we can.
                 if self.indent_with_tabs {
                     let tab_count = newline_indentation / tab_size;
-                    helpers::string_append_repeat(&mut newline_buffer, '\t', tab_count);
+                    newline_buffer.push_repeat('\t', tab_count);
                     newline_indentation -= tab_count * tab_size;
                 }
 
                 // If tabs are disabled, or if the indentation wasn't a multiple of the tab size,
                 // add spaces to make up the difference.
-                helpers::string_append_repeat(&mut newline_buffer, ' ', newline_indentation);
+                newline_buffer.push_repeat(' ', newline_indentation);
             }
 
             self.edit_write(newline_buffer.as_bytes());
 
-            // Skip one CR(LF).
+            // Skip one CR/LF/CRLF.
             if offset >= text.len() {
                 break;
             }
@@ -1892,7 +1911,6 @@ impl TextBuffer {
 
         if let Some(r) = self.selection_range_internal(false) {
             (beg, end) = r;
-            self.set_selection(TextBufferSelection::None);
         } else {
             if (delta == -1 && self.cursor.offset == 0)
                 || (delta == 1 && self.cursor.offset >= self.text_length())
@@ -1914,9 +1932,115 @@ impl TextBuffer {
         self.edit_begin(HistoryType::Delete, beg);
         self.edit_delete(end);
         self.edit_end();
+
+        self.set_selection(None);
     }
 
-    /// Extracts a chunk of text or a line if no selection is active. May optionally delete it.
+    /// Returns the logical position of the first character on this line.
+    /// Return `.x == 0` if there are no non-whitespace characters.
+    pub fn indent_end_logical_pos(&self) -> Point {
+        let cursor = self.goto_line_start(self.cursor, self.cursor.logical_pos.y);
+        let mut chars = 0;
+        let mut offset = cursor.offset;
+
+        'outer: loop {
+            let chunk = self.read_forward(offset);
+            if chunk.is_empty() {
+                break;
+            }
+
+            for &c in chunk {
+                if c == b'\n' || c == b'\r' || (c != b' ' && c != b'\t') {
+                    break 'outer;
+                }
+                chars += 1;
+            }
+
+            offset += chunk.len();
+        }
+
+        Point { x: chars, y: cursor.logical_pos.y }
+    }
+
+    /// Unindents the current selection or line.
+    ///
+    /// TODO: This function is ripe for some optimizations:
+    /// * Instead of replacing the entire selection,
+    ///   it should unindent each line directly (as if multiple cursors had been used).
+    /// * The cursor movement at the end is rather costly, but at least without word wrap
+    ///   it should be possible to calculate it directly from the removed amount.
+    pub fn unindent(&mut self) {
+        let mut selection_beg = self.cursor.logical_pos;
+        let mut selection_end = selection_beg;
+
+        if let Some(TextBufferSelection { beg, end }) = self.selection {
+            selection_beg = beg;
+            selection_end = end;
+        }
+
+        let [beg, end] = minmax(selection_beg, selection_end);
+        let beg = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: beg.y });
+        let end = self.cursor_move_to_logical_internal(beg, Point { x: CoordType::MAX, y: end.y });
+
+        let mut replacement = Vec::new();
+        self.buffer.extract_raw(beg.offset, end.offset, &mut replacement, 0);
+
+        let initial_len = replacement.len();
+        let mut offset = 0;
+        let mut y = beg.logical_pos.y;
+
+        loop {
+            if offset >= replacement.len() {
+                break;
+            }
+
+            let mut remove = 0;
+
+            if replacement[offset] == b'\t' {
+                remove = 1;
+            } else {
+                while remove < self.tab_size as usize
+                    && offset + remove < replacement.len()
+                    && replacement[offset + remove] == b' '
+                {
+                    remove += 1;
+                }
+            }
+
+            if remove > 0 {
+                replacement.drain(offset..offset + remove);
+            }
+
+            if y == selection_beg.y {
+                selection_beg.x -= remove as CoordType;
+            }
+            if y == selection_end.y {
+                selection_end.x -= remove as CoordType;
+            }
+
+            (offset, y) = unicode::newlines_forward(&replacement, offset, y, y + 1);
+        }
+
+        if replacement.len() == initial_len {
+            // Nothing to do.
+            return;
+        }
+
+        self.edit_begin(HistoryType::Other, beg);
+        self.edit_delete(end);
+        self.edit_write(&replacement);
+        self.edit_end();
+
+        if let Some(TextBufferSelection { beg, end }) = &mut self.selection {
+            *beg = selection_beg;
+            *end = selection_end;
+        }
+
+        self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, selection_end));
+    }
+
+    /// Extracts the contents of the current selection.
+    /// May optionally delete it, if requested. This is meant to be used for Ctrl+X.
     pub fn extract_selection(&mut self, delete: bool) -> Vec<u8> {
         let Some((beg, end)) = self.selection_range_internal(true) else {
             return Vec::new();
@@ -1929,12 +2053,15 @@ impl TextBuffer {
             self.edit_begin(HistoryType::Delete, beg);
             self.edit_delete(end);
             self.edit_end();
-            self.set_selection(TextBufferSelection::None);
+            self.set_selection(None);
         }
 
         out
     }
 
+    /// Extracts the contents of the current selection the user made.
+    /// This differs from [`TextBuffer::extract_selection()`] in that
+    /// it does nothing if the selection was made by searching.
     pub fn extract_user_selection(&mut self, delete: bool) -> Option<Vec<u8>> {
         if !self.has_selection() {
             return None;
@@ -1950,42 +2077,36 @@ impl TextBuffer {
         Some(self.extract_selection(delete))
     }
 
-    pub fn selection_range(&self) -> Option<(ucd::UcdCursor, ucd::UcdCursor)> {
+    /// Returns the current selection anchors, or `None` if there
+    /// is no selection. The returned logical positions are sorted.
+    pub fn selection_range(&self) -> Option<(Cursor, Cursor)> {
         self.selection_range_internal(false)
     }
 
-    fn selection_range_internal(
-        &self,
-        line_fallback: bool,
-    ) -> Option<(ucd::UcdCursor, ucd::UcdCursor)> {
+    /// Returns the current selection anchors.
+    ///
+    /// If there's no selection and `line_fallback` is `true`,
+    /// the start/end of the current line are returned.
+    /// This is meant to be used for Ctrl+C / Ctrl+X.
+    fn selection_range_internal(&self, line_fallback: bool) -> Option<(Cursor, Cursor)> {
         let [beg, end] = match self.selection {
-            TextBufferSelection::None if !line_fallback => return None,
-            TextBufferSelection::None => [
-                Point {
-                    x: 0,
-                    y: self.cursor.logical_pos.y,
-                },
-                Point {
-                    x: 0,
-                    y: self.cursor.logical_pos.y + 1,
-                },
+            None if !line_fallback => return None,
+            None => [
+                Point { x: 0, y: self.cursor.logical_pos.y },
+                Point { x: 0, y: self.cursor.logical_pos.y + 1 },
             ],
-            TextBufferSelection::Active { beg, end } | TextBufferSelection::Done { beg, end } => {
-                helpers::minmax(beg, end)
-            }
+            Some(TextBufferSelection { beg, end }) => minmax(beg, end),
         };
 
         let beg = self.cursor_move_to_logical_internal(self.cursor, beg);
         let end = self.cursor_move_to_logical_internal(beg, end);
 
-        if beg.offset < end.offset {
-            Some((beg, end))
-        } else {
-            None
-        }
+        if beg.offset < end.offset { Some((beg, end)) } else { None }
     }
 
-    fn edit_begin(&mut self, history_type: HistoryType, cursor: ucd::UcdCursor) {
+    /// Starts a new edit operation.
+    /// This is used for tracking the undo/redo history.
+    fn edit_begin(&mut self, history_type: HistoryType, cursor: Cursor) {
         self.active_edit_depth += 1;
         if self.active_edit_depth > 1 {
             return;
@@ -2008,7 +2129,7 @@ impl TextBuffer {
                 cursor_before: cursor_before.logical_pos,
                 selection_before: self.selection,
                 stats_before: self.stats,
-                generation_before: self.buffer.generation,
+                generation_before: self.buffer.generation(),
                 cursor: cursor.logical_pos,
                 deleted: Vec::new(),
                 added: Vec::new(),
@@ -2025,10 +2146,7 @@ impl TextBuffer {
             let safe_start = self.goto_line_start(cursor, cursor.logical_pos.y);
             let next_line = self.cursor_move_to_logical_internal(
                 cursor,
-                Point {
-                    x: 0,
-                    y: cursor.logical_pos.y + 1,
-                },
+                Point { x: 0, y: cursor.logical_pos.y + 1 },
             );
             self.active_edit_line_info = Some(ActiveEditLineInfo {
                 safe_start,
@@ -2038,6 +2156,8 @@ impl TextBuffer {
         }
     }
 
+    /// Writes `text` into the buffer at the current cursor position.
+    /// It records the change in the undo stack.
     fn edit_write(&mut self, text: &[u8]) {
         let logical_y_before = self.cursor.logical_pos.y;
 
@@ -2048,13 +2168,7 @@ impl TextBuffer {
         }
 
         // Write!
-        {
-            let gap = self
-                .buffer
-                .allocate_gap(self.active_edit_off, text.len(), 0);
-            gap.copy_from_slice(text);
-            self.buffer.commit_gap(text.len());
-        }
+        self.buffer.replace(self.active_edit_off..self.active_edit_off, text);
 
         // Move self.cursor to the end of the newly written text. Can't use `self.set_cursor_internal`,
         // because we're still in the progress of recalculating the line stats.
@@ -2063,7 +2177,9 @@ impl TextBuffer {
         self.stats.logical_lines += self.cursor.logical_pos.y - logical_y_before;
     }
 
-    fn edit_delete(&mut self, to: ucd::UcdCursor) {
+    /// Deletes the text between the current cursor position and `to`.
+    /// It records the change in the undo stack.
+    fn edit_delete(&mut self, to: Cursor) {
         debug_assert!(to.offset >= self.active_edit_off);
 
         let logical_y_before = self.cursor.logical_pos.y;
@@ -2083,11 +2199,12 @@ impl TextBuffer {
         // Delete the portion from the buffer by enlarging the gap.
         let count = to.offset - off;
         self.buffer.allocate_gap(off, 0, count);
-        self.buffer.commit_gap(0);
 
         self.stats.logical_lines += logical_y_before - to.logical_pos.y;
     }
 
+    /// Finalizes the current edit operation
+    /// and recalculates the line statistics.
     fn edit_end(&mut self) {
         self.active_edit_depth -= 1;
         assert!(self.active_edit_depth >= 0);
@@ -2102,13 +2219,7 @@ impl TextBuffer {
         }
 
         if let Some(info) = self.active_edit_line_info.take() {
-            let deleted_count = self
-                .undo_stack
-                .back_mut()
-                .unwrap()
-                .borrow_mut()
-                .deleted
-                .len();
+            let deleted_count = self.undo_stack.back_mut().unwrap().borrow_mut().deleted.len();
             let target = self.cursor.logical_pos;
 
             // From our safe position we can measure the actual visual position of the cursor.
@@ -2123,13 +2234,8 @@ impl TextBuffer {
             // the entire buffer contents until the end to compute `self.stats.visual_lines`.
             if deleted_count < info.distance_next_line_start {
                 // Now we can measure how many more visual rows this logical line spans.
-                let next_line = self.cursor_move_to_logical_internal(
-                    self.cursor,
-                    Point {
-                        x: 0,
-                        y: target.y + 1,
-                    },
-                );
+                let next_line = self
+                    .cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: target.y + 1 });
                 let lines_before = info.line_height_in_rows;
                 let lines_after = next_line.visual_pos.y - info.safe_start.visual_pos.y;
                 self.stats.visual_lines += lines_after - lines_before;
@@ -2148,15 +2254,18 @@ impl TextBuffer {
         self.reflow(false);
     }
 
+    /// Undo the last edit operation.
     pub fn undo(&mut self) {
         self.undo_redo(true);
     }
 
+    /// Redo the last undo operation.
     pub fn redo(&mut self) {
         self.undo_redo(false);
     }
 
     fn undo_redo(&mut self, undo: bool) {
+        // Transfer the last entry from the undo stack to the redo stack or vice versa.
         {
             let (from, to) = if undo {
                 (&mut self.undo_stack, &mut self.redo_stack)
@@ -2164,20 +2273,15 @@ impl TextBuffer {
                 (&mut self.redo_stack, &mut self.undo_stack)
             };
 
-            let len = from.len();
-            if len == 0 {
+            let Some(list) = from.cursor_back_mut().remove_current_as_list() else {
                 return;
-            }
+            };
 
-            to.append(&mut from.split_off(len - 1));
+            to.cursor_back_mut().splice_after(list);
         }
 
         let change = {
-            let to = if undo {
-                &self.redo_stack
-            } else {
-                &self.undo_stack
-            };
+            let to = if undo { &self.redo_stack } else { &self.undo_stack };
             to.back().unwrap()
         };
 
@@ -2193,20 +2297,51 @@ impl TextBuffer {
         };
 
         {
+            let buffer_generation = self.buffer.generation();
             let mut change = change.borrow_mut();
             let change = &mut *change;
 
             // Undo: Whatever was deleted is now added and vice versa.
             mem::swap(&mut change.deleted, &mut change.added);
 
-            // Delete the inserted portion and reinsert the deleted portion.
-            let deleted = change.deleted.len();
-            let added = &change.added[..];
-            let gap = self
-                .buffer
-                .allocate_gap(cursor.offset, added.len(), deleted);
-            gap.copy_from_slice(added);
-            self.buffer.commit_gap(added.len());
+            // Delete the inserted portion.
+            self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
+
+            // Reinsert the deleted portion.
+            {
+                let added = &change.added[..];
+                let mut beg = 0;
+                let mut offset = cursor.offset;
+
+                while beg < added.len() {
+                    let (end, line) = unicode::newlines_forward(added, beg, 0, 1);
+                    let has_newline = line != 0;
+                    let link = &added[beg..end];
+                    let line = unicode::strip_newline(link);
+                    let mut written;
+
+                    {
+                        let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
+                        written = slice_copy_safe(gap, line);
+
+                        if has_newline {
+                            if self.newlines_are_crlf && written < gap.len() {
+                                gap[written] = b'\r';
+                                written += 1;
+                            }
+                            if written < gap.len() {
+                                gap[written] = b'\n';
+                                written += 1;
+                            }
+                        }
+
+                        self.buffer.commit_gap(written);
+                    }
+
+                    beg = end;
+                    offset += written;
+                }
+            }
 
             // Restore the previous line statistics.
             mem::swap(&mut self.stats, &mut change.stats_before);
@@ -2215,7 +2350,8 @@ impl TextBuffer {
             mem::swap(&mut self.selection, &mut change.selection_before);
 
             // Pretend as if the buffer was never modified.
-            mem::swap(&mut self.buffer.generation, &mut change.generation_before);
+            self.buffer.set_generation(change.generation_before);
+            change.generation_before = buffer_generation;
 
             // Restore the previous cursor.
             let cursor_before =
@@ -2233,328 +2369,14 @@ impl TextBuffer {
         self.reflow(false);
     }
 
-    pub fn read_backward(&self, off: usize) -> &[u8] {
+    /// For interfacing with ICU.
+    pub(crate) fn read_backward(&self, off: usize) -> &[u8] {
         self.buffer.read_backward(off)
     }
 
+    /// For interfacing with ICU.
     pub fn read_forward(&self, off: usize) -> &[u8] {
         self.buffer.read_forward(off)
-    }
-}
-
-enum BackingBuffer {
-    VirtualMemory(NonNull<u8>, usize),
-    Vec(Vec<u8>),
-}
-
-impl Drop for BackingBuffer {
-    fn drop(&mut self) {
-        unsafe {
-            if let BackingBuffer::VirtualMemory(ptr, reserve) = *self {
-                sys::virtual_release(ptr, reserve);
-            }
-        }
-    }
-}
-
-/// Most people know how Vec<T> works: It has some spare capacity at the end,
-/// so that pushing into it doesn't reallocate every single time. A gap buffer
-/// is the same thing, but the spare capacity can be anywhere in the buffer.
-/// This variant is optimized for large buffers and uses virtual memory.
-pub struct GapBuffer {
-    /// Pointer to the buffer.
-    text: NonNull<u8>,
-    /// Maximum size of the buffer, including gap.
-    reserve: usize,
-    /// Size of the buffer, including gap.
-    commit: usize,
-    /// Length of the stored text, NOT including gap.
-    text_length: usize,
-    /// Gap offset.
-    gap_off: usize,
-    /// Gap length.
-    gap_len: usize,
-    /// Increments every time the buffer is modified.
-    generation: u32,
-    /// If `Vec(..)`, the buffer is optimized for small amounts of text
-    /// and uses the standard heap. Otherwise, it uses virtual memory.
-    buffer: BackingBuffer,
-}
-
-impl GapBuffer {
-    fn new(small: bool) -> apperr::Result<Self> {
-        const RESERVE: usize = 256 * 1048576;
-
-        let buffer;
-        let text;
-
-        if small {
-            text = NonNull::dangling();
-            buffer = BackingBuffer::Vec(Vec::new());
-        } else {
-            text = unsafe { sys::virtual_reserve(RESERVE)? };
-            buffer = BackingBuffer::VirtualMemory(text, RESERVE);
-        }
-
-        Ok(Self {
-            text,
-            reserve: RESERVE,
-            commit: 0,
-            text_length: 0,
-            gap_off: 0,
-            gap_len: 0,
-            generation: 0,
-            buffer,
-        })
-    }
-
-    fn len(&self) -> usize {
-        self.text_length
-    }
-
-    fn allocate_gap(&mut self, off: usize, len: usize, delete: usize) -> &mut [u8] {
-        const LARGE_ALLOC_CHUNK: usize = 64 * 1024;
-        const LARGE_GAP_CHUNK: usize = 4 * 1024;
-        const SMALL_ALLOC_CHUNK: usize = 256;
-        const SMALL_GAP_CHUNK: usize = 16;
-
-        // Sanitize parameters
-        let off = off.min(self.text_length);
-        let delete = delete.min(self.text_length - off);
-
-        // Move the existing gap if it exists
-        if off != self.gap_off {
-            let gap_off = self.gap_off;
-            let gap_len = self.gap_len;
-
-            if gap_len > 0 {
-                //
-                //                       v gap_off
-                // left:  |ABCDEFGHIJKLMN   OPQRSTUVWXYZ|
-                //        |ABCDEFGHI   JKLMNOPQRSTUVWXYZ|
-                //                  ^ off
-                //        move: GLMNET
-                //
-                //                       v gap_off
-                // !left: |ABCDEFGHIJKLMN   OPQRSTUVWXYZ|
-                //        |ABCDEFGHIJKLMNOPQRS   TUVWXYZ|
-                //                            ^ off
-                //        move: OPPOSERS
-                //
-                let data = self.text;
-                let left = off < gap_off;
-                let move_src = if left { off } else { gap_off + gap_len };
-                let move_dst = if left { off + gap_len } else { gap_off };
-                let move_len = if left { gap_off - off } else { off - gap_off };
-
-                unsafe { data.add(move_src).copy_to(data.add(move_dst), move_len) };
-
-                if cfg!(debug_assertions) {
-                    unsafe {
-                        slice::from_raw_parts_mut(data.add(off).as_ptr(), gap_len).fill(0xCD)
-                    };
-                }
-            }
-
-            self.gap_off = off;
-        }
-
-        // Delete the text
-        if cfg!(debug_assertions) {
-            unsafe {
-                slice::from_raw_parts_mut(self.text.add(off + self.gap_len).as_ptr(), delete)
-                    .fill(0xCD)
-            };
-        }
-        self.gap_len += delete;
-        self.text_length -= delete;
-
-        // Enlarge the gap if needed
-        if len > self.gap_len {
-            let gap_chunk;
-            let alloc_chunk;
-
-            if matches!(self.buffer, BackingBuffer::VirtualMemory(..)) {
-                gap_chunk = LARGE_GAP_CHUNK;
-                alloc_chunk = LARGE_ALLOC_CHUNK;
-            } else {
-                gap_chunk = SMALL_GAP_CHUNK;
-                alloc_chunk = SMALL_ALLOC_CHUNK;
-            }
-
-            let gap_len_old = self.gap_len;
-            let gap_len_new = (len + gap_chunk + gap_chunk - 1) & !(gap_chunk - 1);
-            let bytes_old = self.commit;
-            let bytes_new = self.text_length + gap_len_new;
-
-            if bytes_new > bytes_old {
-                let bytes_new = (bytes_new + alloc_chunk - 1) & !(alloc_chunk - 1);
-                assert!(bytes_new <= self.reserve);
-
-                match &mut self.buffer {
-                    BackingBuffer::VirtualMemory(ptr, _) => unsafe {
-                        sys::virtual_commit(ptr.add(bytes_old), bytes_new - bytes_old).expect("OOM")
-                    },
-                    BackingBuffer::Vec(v) => {
-                        v.resize(bytes_new, 0);
-                        self.text = unsafe { NonNull::new_unchecked(v.as_mut_ptr()) };
-                    }
-                }
-
-                self.commit = bytes_new;
-            }
-
-            let gap_beg = unsafe { self.text.add(off) };
-            unsafe {
-                ptr::copy(
-                    gap_beg.add(gap_len_old).as_ptr(),
-                    gap_beg.add(gap_len_new).as_ptr(),
-                    self.text_length - off,
-                )
-            };
-
-            if cfg!(debug_assertions) {
-                unsafe {
-                    slice::from_raw_parts_mut(
-                        gap_beg.add(gap_len_old).as_ptr(),
-                        gap_len_new - gap_len_old,
-                    )
-                    .fill(0xCD)
-                };
-            }
-
-            self.gap_len = gap_len_new;
-        }
-
-        self.generation = self.generation.wrapping_add(1);
-        unsafe { slice::from_raw_parts_mut(self.text.add(off).as_ptr(), len) }
-    }
-
-    fn commit_gap(&mut self, len: usize) {
-        assert!(len <= self.gap_len);
-        self.text_length += len;
-        self.gap_off += len;
-        self.gap_len -= len;
-    }
-
-    fn clear(&mut self) {
-        self.gap_off = 0;
-        self.gap_len += self.text_length;
-        self.generation = self.generation.wrapping_add(1);
-        self.text_length = 0;
-    }
-
-    fn extract_raw(&self, mut beg: usize, mut end: usize, out: &mut Vec<u8>, mut out_off: usize) {
-        debug_assert!(beg <= end && end <= self.text_length);
-
-        end = end.min(self.text_length);
-        beg = beg.min(end);
-        out_off = out_off.min(out.len());
-
-        if beg >= end {
-            return;
-        }
-
-        out.reserve(end - beg);
-
-        while beg < end {
-            let chunk = self.read_forward(beg);
-            let chunk = &chunk[..chunk.len().min(end - beg)];
-            helpers::vec_insert_at(out, out_off, chunk);
-            beg += chunk.len();
-            out_off += chunk.len();
-        }
-    }
-
-    /// Replaces the entire buffer contents with the given `text`.
-    /// The method is optimized for the case where the given `text` already matches
-    /// the existing contents. Returns `true` if the buffer contents were changed.
-    fn copy_from_str(&mut self, text: &str) -> bool {
-        let input = text.as_bytes();
-        let max_common = self.text_length.min(input.len());
-        let mut common = 0;
-
-        // Find the position at which the contents change.
-        while common < max_common {
-            let chunk = self.read_forward(common);
-            let cmp_len = chunk.len().min(max_common - common);
-
-            if chunk[..cmp_len] != input[common..common + cmp_len] {
-                // Find the first differing byte.
-                common += chunk[..cmp_len]
-                    .iter()
-                    .zip(&input[common..common + cmp_len])
-                    .position(|(&a, &b)| a != b)
-                    .unwrap_or(cmp_len);
-                break;
-            }
-
-            common += cmp_len;
-        }
-
-        // If the contents are identical, we're done.
-        if common == self.text_length && common == input.len() {
-            return false;
-        }
-
-        // Update the buffer from the first differing byte.
-        let new = &input[common..];
-        let gap = self.allocate_gap(common, new.len(), self.text_length - common);
-        gap.copy_from_slice(new);
-        self.commit_gap(new.len());
-        true
-    }
-
-    /// Copies the contents of the buffer into a string.
-    fn copy_into_string(&self, dst: &mut String) {
-        dst.clear();
-
-        let mut off = 0;
-        while off < self.text_length {
-            let chunk = self.read_forward(off);
-            dst.push_str(&String::from_utf8_lossy(chunk));
-            off += chunk.len();
-        }
-    }
-}
-
-impl Document for GapBuffer {
-    fn read_forward(&self, off: usize) -> &[u8] {
-        let off = off.min(self.text_length);
-        let beg;
-        let len;
-
-        if off < self.gap_off {
-            // Cursor is before the gap: We can read until the start of the gap.
-            beg = off;
-            len = self.gap_off - off;
-        } else {
-            // Cursor is after the gap: We can read until the end of the buffer.
-            beg = off + self.gap_len;
-            len = self.text_length - off;
-        }
-
-        unsafe { slice::from_raw_parts(self.text.add(beg).as_ptr(), len) }
-    }
-
-    fn read_backward(&self, off: usize) -> &[u8] {
-        let off = off.min(self.text_length);
-        let beg;
-        let len;
-
-        if off <= self.gap_off {
-            // Cursor is before the gap: We can read until the beginning of the buffer.
-            beg = 0;
-            len = off;
-        } else {
-            // Cursor is after the gap: We can read until the end of the gap.
-            beg = self.gap_off + self.gap_len;
-            // The cursor_off doesn't account of the gap_len.
-            // (This allows us to move the gap without recalculating the cursor position.)
-            len = off - self.gap_off;
-        }
-
-        unsafe { slice::from_raw_parts(self.text.add(beg).as_ptr(), len) }
     }
 }
 
@@ -2579,7 +2401,7 @@ fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
             return Some("UTF-32BE");
         }
         if bytes.starts_with(b"\x84\x31\x95\x33") {
-            return Some("gb18030");
+            return Some("GB18030");
         }
     }
     if bytes.len() >= 3 && bytes.starts_with(b"\xEF\xBB\xBF") {

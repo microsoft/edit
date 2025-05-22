@@ -1,13 +1,22 @@
-use crate::apperr;
-use crate::helpers;
-use std::borrow::Cow;
-use std::ffi::{CStr, CString, c_int, c_void};
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+//! Unix-specific platform code.
+//!
+//! Read the `windows` module for reference.
+//! TODO: This reminds me that the sys API should probably be a trait.
+
+use std::ffi::{CStr, c_int, c_void};
 use std::fs::{self, File};
-use std::mem::{self, MaybeUninit};
-use std::os::fd::FromRawFd;
-use std::ptr::{self, NonNull, null, null_mut};
-use std::thread;
-use std::time;
+use std::mem::{self, ManuallyDrop, MaybeUninit};
+use std::os::fd::{AsRawFd as _, FromRawFd as _};
+use std::path::Path;
+use std::ptr::{self, NonNull, null_mut};
+use std::{thread, time};
+
+use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::helpers::*;
+use crate::{apperr, arena_format};
 
 struct State {
     stdin: libc::c_int,
@@ -69,11 +78,7 @@ pub fn switch_modes() -> apperr::Result<()> {
         // Set STATE.inject_resize to true whenever we get a SIGWINCH.
         let mut sigwinch_action: libc::sigaction = mem::zeroed();
         sigwinch_action.sa_sigaction = sigwinch_handler as libc::sighandler_t;
-        check_int_return(libc::sigaction(
-            libc::SIGWINCH,
-            &sigwinch_action,
-            null_mut(),
-        ))?;
+        check_int_return(libc::sigaction(libc::SIGWINCH, &sigwinch_action, null_mut()))?;
 
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
@@ -165,19 +170,20 @@ fn get_window_size() -> (u16, u16) {
 /// Returns `None` if there was an error reading from stdin.
 /// Returns `Some("")` if the given timeout was reached.
 /// Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
+pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaString<'_>> {
     unsafe {
         if STATE.inject_resize {
             timeout = time::Duration::ZERO;
         }
 
         let read_poll = timeout != time::Duration::MAX;
+        let mut buf = Vec::new_in(arena);
 
         // We don't know if the input is valid UTF8, so we first use a Vec and then
-        // later turn it into UTF8 using `helpers::string_from_utf8_lossy_owned`.
+        // later turn it into UTF8 using `from_utf8_lossy_owned`.
         // It is important that we allocate the buffer with an explicit capacity,
         // because we later use `spare_capacity_mut` to access it.
-        let mut buf = Vec::with_capacity(1024);
+        buf.reserve(4 * KIBI);
 
         // We got some leftover broken UTF8 from a previous read? Prepend it.
         if STATE.utf8_len != 0 {
@@ -189,16 +195,20 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
             if timeout != time::Duration::MAX {
                 let beg = time::Instant::now();
 
-                let mut pollfd = libc::pollfd {
-                    fd: STATE.stdin,
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
-                let ts = libc::timespec {
-                    tv_sec: timeout.as_secs() as libc::time_t,
-                    tv_nsec: timeout.subsec_nanos() as libc::c_long,
-                };
-                let ret = libc::ppoll(&mut pollfd, 1, &ts, null());
+                let mut pollfd = libc::pollfd { fd: STATE.stdin, events: libc::POLLIN, revents: 0 };
+                let ret;
+                #[cfg(target_os = "linux")]
+                {
+                    let ts = libc::timespec {
+                        tv_sec: timeout.as_secs() as libc::time_t,
+                        tv_nsec: timeout.subsec_nanos() as libc::c_long,
+                    };
+                    ret = libc::ppoll(&mut pollfd, 1, &ts, ptr::null());
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    ret = libc::poll(&mut pollfd, 1, timeout.as_millis() as libc::c_int);
+                }
                 if ret < 0 {
                     return None; // Error? Let's assume it's an EOF.
                 }
@@ -209,13 +219,9 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
                 timeout = timeout.saturating_sub(beg.elapsed());
             };
 
-            // If we're asked for a non-blocking read we need to manipulate `O_NONBLOCK` and vice versa.
-            // This uses `STATE.stdin_flags` to track and skip unnecessary `fcntl` calls.
-            let is_nonblock = (STATE.stdin_flags & libc::O_NONBLOCK) != 0;
-            if read_poll != is_nonblock {
-                STATE.stdin_flags ^= libc::O_NONBLOCK;
-                let _ = libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
-            }
+            // If we're asked for a non-blocking read we need
+            // to manipulate `O_NONBLOCK` and vice versa.
+            set_tty_nonblocking(read_poll);
 
             // Read from stdin.
             let spare = buf.spare_capacity_mut();
@@ -228,7 +234,7 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
                 return None; // EOF
             }
             if ret < 0 {
-                match *libc::__errno_location() {
+                match errno() {
                     libc::EINTR if STATE.inject_resize => break,
                     libc::EAGAIN if timeout == time::Duration::ZERO => break,
                     libc::EINTR | libc::EAGAIN => {}
@@ -254,7 +260,7 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
                 b if b & 0b1111_0000 == 0b1110_0000 => 3,
                 b if b & 0b1111_1000 == 0b1111_0000 => 4,
                 // If the lead byte we found isn't actually one, we don't cache it.
-                // `string_from_utf8_lossy_owned` will replace it with U+FFFD.
+                // `from_utf8_lossy_owned` will replace it with U+FFFD.
                 _ => 0,
             };
 
@@ -266,7 +272,7 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
             }
         }
 
-        let mut result = helpers::string_from_utf8_lossy_owned(buf);
+        let mut result = ArenaString::from_utf8_lossy_owned(buf);
 
         // We received a SIGWINCH? Add a fake window size sequence for our input parser.
         // I prepend it so that on startup, the TUI system gets first initialized with a size.
@@ -274,20 +280,32 @@ pub fn read_stdin(mut timeout: time::Duration) -> Option<String> {
             STATE.inject_resize = false;
             let (w, h) = get_window_size();
             if w > 0 && h > 0 {
-                result = format!("\x1b[8;{};{}t{}", h, w, result);
+                let scratch = scratch_arena(Some(arena));
+                let seq = arena_format!(&scratch, "\x1b[8;{h};{w}t");
+                result.replace_range(0..0, &seq);
             }
         }
 
+        result.shrink_to_fit();
         Some(result)
     }
 }
 
 pub fn write_stdout(text: &str) {
+    if text.is_empty() {
+        return;
+    }
+
+    // If we don't set the TTY to blocking mode,
+    // the write will potentially fail with EAGAIN.
+    set_tty_nonblocking(false);
+
     let buf = text.as_bytes();
     let mut written = 0;
 
     while written < buf.len() {
         let w = &buf[written..];
+        let w = &buf[..w.len().min(GIBI)];
         let n = unsafe { libc::write(STATE.stdout, w.as_ptr() as *const _, w.len()) };
 
         if n >= 0 {
@@ -295,9 +313,23 @@ pub fn write_stdout(text: &str) {
             continue;
         }
 
-        let err = unsafe { *libc::__errno_location() };
+        let err = errno();
         if err != libc::EINTR {
             return;
+        }
+    }
+}
+
+/// Sets/Resets `O_NONBLOCK` on the TTY handle.
+///
+/// Note that setting this flag applies to both stdin and stdout, because the
+/// TTY is a bidirectional device and both handles refer to the same thing.
+fn set_tty_nonblocking(nonblock: bool) {
+    unsafe {
+        let is_nonblock = (STATE.stdin_flags & libc::O_NONBLOCK) != 0;
+        if is_nonblock != nonblock {
+            STATE.stdin_flags ^= libc::O_NONBLOCK;
+            let _ = libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
         }
     }
 }
@@ -310,6 +342,27 @@ pub fn open_stdin_if_redirected() -> Option<File> {
         } else {
             None
         }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct FileId {
+    st_dev: libc::dev_t,
+    st_ino: libc::ino_t,
+}
+
+/// Returns a unique identifier for the given file by handle or path.
+pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
+    let file = match file {
+        Some(f) => f,
+        None => &File::open(path)?,
+    };
+
+    unsafe {
+        let mut stat = MaybeUninit::<libc::stat>::uninit();
+        check_int_return(libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()))?;
+        let stat = stat.assume_init();
+        Ok(FileId { st_dev: stat.st_dev, st_ino: stat.st_ino })
     }
 }
 
@@ -360,23 +413,15 @@ pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
 /// and to pass a size less than or equal to the size passed to `virtual_reserve`.
 pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> apperr::Result<()> {
     unsafe {
-        let status = libc::mprotect(
-            base.cast().as_ptr(),
-            size,
-            libc::PROT_READ | libc::PROT_WRITE,
-        );
-        if status != 0 {
-            Err(errno_to_apperr(libc::ENOMEM))
-        } else {
-            Ok(())
-        }
+        let status = libc::mprotect(base.cast().as_ptr(), size, libc::PROT_READ | libc::PROT_WRITE);
+        if status != 0 { Err(errno_to_apperr(libc::ENOMEM)) } else { Ok(()) }
     }
 }
 
 unsafe fn load_library(name: &CStr) -> apperr::Result<NonNull<c_void>> {
     unsafe {
         NonNull::new(libc::dlopen(name.as_ptr(), libc::RTLD_LAZY))
-            .ok_or_else(|| errno_to_apperr(libc::ELIBACC))
+            .ok_or_else(|| errno_to_apperr(libc::ENOENT))
     }
 }
 
@@ -392,7 +437,7 @@ pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apper
     unsafe {
         let sym = libc::dlsym(handle.as_ptr(), name.as_ptr());
         if sym.is_null() {
-            Err(errno_to_apperr(libc::ELIBACC))
+            Err(errno_to_apperr(libc::ENOENT))
         } else {
             Ok(mem::transmute_copy(&sym))
         }
@@ -412,14 +457,16 @@ pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
 /// but I found that many (most?) Linux distributions don't do this for some reason.
 /// This function returns the suffix, if any.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn icu_proc_suffix(handle: *mut c_void) -> String {
+pub fn icu_proc_suffix(arena: &Arena, handle: NonNull<c_void>) -> ArenaString<'_> {
     unsafe {
         type T = *const c_void;
+
+        let mut res = ArenaString::new_in(arena);
 
         // Check if the ICU library is using unversioned symbols.
         // Return an empty suffix in that case.
         if get_proc_address::<T>(handle, c"u_errorName").is_ok() {
-            return String::new();
+            return res;
         }
 
         // In the versions (63-76) and distributions (Arch/Debian) I tested,
@@ -428,20 +475,20 @@ pub fn icu_proc_suffix(handle: *mut c_void) -> String {
         // in a namespace. Thank you ICU maintainers for this oversight.
         let proc = match get_proc_address::<T>(handle, c"_ZN8UCaseMapD1Ev") {
             Ok(proc) => proc,
-            Err(_) => return String::new(),
+            Err(_) => return res,
         };
 
         // `dladdr` is specific to GNU's libc unfortunately.
         let mut info: libc::Dl_info = mem::zeroed();
         let ret = libc::dladdr(proc, &mut info);
         if ret == 0 {
-            return String::new();
+            return res;
         }
 
         // The library path is in `info.dli_fname`.
         let path = match CStr::from_ptr(info.dli_fname).to_str() {
             Ok(name) => name,
-            Err(_) => return String::new(),
+            Err(_) => return res,
         };
 
         let path = match fs::read_link(path) {
@@ -454,36 +501,56 @@ pub fn icu_proc_suffix(handle: *mut c_void) -> String {
         let path = path.to_string_lossy();
         let suffix_start = match path.rfind(".so.") {
             Some(pos) => pos + 4,
-            None => return String::new(),
+            None => return res,
         };
         let version = &path[suffix_start..];
         let version_end = version.find('.').unwrap_or(version.len());
         let version = &version[..version_end];
-        format!("_{}", version)
+
+        res.push('_');
+        res.push_str(version);
+        res
     }
 }
 
-pub fn add_icu_proc_suffix<'a>(name: &'a CStr, suffix: &str) -> Cow<'a, CStr> {
+pub fn add_icu_proc_suffix<'a, 'b, 'r>(arena: &'a Arena, name: &'b CStr, suffix: &str) -> &'r CStr
+where
+    'a: 'r,
+    'b: 'r,
+{
     if suffix.is_empty() {
-        Cow::Borrowed(name)
+        name
     } else {
+        // SAFETY: In this particualar case we know that the string
+        // is valid UTF-8, because it comes from icu.rs.
         let name = unsafe { name.to_str().unwrap_unchecked() };
-        let combined = format!("{}{}\0", name, suffix);
-        let combined = unsafe { CString::from_vec_unchecked(combined.into_bytes()) };
-        Cow::Owned(combined)
+
+        let mut res = ArenaString::new_in(arena);
+        res.reserve(name.len() + suffix.len() + 1);
+        res.push_str(name);
+        res.push_str(suffix);
+        res.push('\0');
+
+        let bytes: &'a [u8] = unsafe { mem::transmute(res.as_bytes()) };
+        unsafe { CStr::from_bytes_with_nul_unchecked(bytes) }
     }
 }
 
-pub fn preferred_languages() -> Vec<String> {
-    let mut locales = Vec::new();
+pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
+    let mut locales = Vec::new_in(arena);
 
     for key in ["LANGUAGE", "LC_ALL", "LANG"] {
-        if let Ok(val) = std::env::var(key) {
-            locales.extend(
-                val.split(':')
-                    .filter(|val| !val.is_empty())
-                    .map(String::from),
-            );
+        if let Ok(val) = std::env::var(key)
+            && !val.is_empty()
+        {
+            locales.extend(val.split(':').filter(|s| !s.is_empty()).map(|s| {
+                // Replace all underscores with dashes,
+                // because the localization code expects pt-br, not pt_BR.
+                let mut res = Vec::new_in(arena);
+                res.extend(s.as_bytes().iter().map(|&b| if b == b'_' { b'-' } else { b }));
+                unsafe { ArenaString::from_utf8_unchecked(res) }
+            }));
+            break;
         }
     }
 
@@ -491,23 +558,30 @@ pub fn preferred_languages() -> Vec<String> {
 }
 
 #[inline]
-pub fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
+fn errno() -> i32 {
+    // Under `-O -Copt-level=s` the 1.87 compiler fails to fully inline and
+    // remove the raw_os_error() call. This leaves us with the drop() call.
+    // ManuallyDrop fixes that and results in a direct `std::sys::os::errno` call.
+    ManuallyDrop::new(std::io::Error::last_os_error()).raw_os_error().unwrap_or(0)
+}
+
+#[inline]
+pub(crate) fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
     errno_to_apperr(err.raw_os_error().unwrap_or(0))
 }
 
-pub fn apperr_format(code: u32) -> String {
-    let mut result = format!("Error {}", code);
+pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
+    write!(f, "Error {code}")?;
 
     unsafe {
         let ptr = libc::strerror(code as i32);
         if !ptr.is_null() {
             let msg = CStr::from_ptr(ptr).to_string_lossy();
-            result.push_str(": ");
-            result.push_str(&msg);
+            write!(f, ": {msg}")?;
         }
     }
 
-    result
+    Ok(())
 }
 
 pub fn apperr_is_not_found(err: apperr::Error) -> bool {
@@ -519,9 +593,5 @@ const fn errno_to_apperr(no: c_int) -> apperr::Error {
 }
 
 fn check_int_return(ret: libc::c_int) -> apperr::Result<libc::c_int> {
-    if ret < 0 {
-        Err(errno_to_apperr(unsafe { *libc::__errno_location() }))
-    } else {
-        Ok(ret)
-    }
+    if ret < 0 { Err(errno_to_apperr(errno())) } else { Ok(ret) }
 }

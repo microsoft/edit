@@ -1,4 +1,5 @@
 use crate::apperr;
+use crate::arena::{Arena, ArenaString};
 use crate::helpers::Size;
 use crate::input::{Input, InputKey, InputKeyMod, InputText, kbmod, vk};
 use r_efi::efi;
@@ -14,8 +15,10 @@ use uefi::boot::{OpenProtocolAttributes, ScopedProtocol};
 use uefi::proto::console::text::{Color, Key};
 use uefi::{Handle, ResultExt};
 
-pub fn preferred_languages() -> Vec<String> {
-    vec!["en".to_string()]
+pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
+    let mut v = Vec::new_in(arena);
+    v.push(ArenaString::from_str(arena, "en"));
+    v
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -285,6 +288,14 @@ pub fn open_stdin_if_redirected() -> Option<File> {
     None
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub struct FileId { }
+
+/// Returns a unique identifier for the given file by handle or path.
+pub fn file_id(_file: Option<&File>, _path: &Path) -> apperr::Result<FileId> {
+    Err(apperr::Error::new_sys(1))
+}
+
 pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
     Ok(uefi::boot::allocate_pool(uefi::boot::MemoryType::BOOT_SERVICES_DATA, size).unwrap())
 }
@@ -316,11 +327,10 @@ pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
     ))
 }
 
-pub fn apperr_format(code: u32) -> String {
+pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
     let errno = code & 0xFFFF;
-    let result = format!("Error {:x}", errno);
-
-    result
+    write!(f, "Error {errno:x}")?;
+    Ok({})
 }
 
 pub fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {

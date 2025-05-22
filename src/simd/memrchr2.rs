@@ -1,25 +1,22 @@
-//! Rust has a very popular `memchr` crate. It's quite fast, so you may ask yourself
-//! why we don't just use it: Simply put, this is optimized for short inputs.
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
 
-use super::distance;
+//! `memchr`, but with two needles.
+
 use std::ptr;
 
-/// Same as `memchr2`, but searches from the end of the haystack.
-/// If no needle is found, 0 is returned.
+/// `memchr`, but with two needles.
 ///
-/// *NOTE: Unlike `memchr2` (or `memrchr`), an offset PAST the hit is returned.*
-/// This is because this function is primarily used for `ucd::newlines_backward`,
-/// which needs exactly that.
+/// If no needle is found, 0 is returned.
+/// Unlike `memchr2` (or `memrchr`), an offset PAST the hit is returned.
+/// This is because this function is primarily used for
+/// `ucd::newlines_backward`, which needs exactly that.
 pub fn memrchr2(needle1: u8, needle2: u8, haystack: &[u8], offset: usize) -> Option<usize> {
     unsafe {
         let beg = haystack.as_ptr();
         let it = beg.add(offset.min(haystack.len()));
         let it = memrchr2_raw(needle1, needle2, beg, it);
-        if it.is_null() {
-            None
-        } else {
-            Some(distance(it, beg))
-        }
+        if it.is_null() { None } else { Some(it.offset_from_unsigned(beg)) }
     }
 }
 
@@ -72,7 +69,7 @@ unsafe fn memrchr2_neon(needle1: u8, needle2: u8, beg: *const u8, mut end: *cons
     unsafe {
         use std::arch::aarch64::*;
 
-        if distance(end, beg) >= 16 {
+        if end.offset_from_unsigned(beg) >= 16 {
             let n1 = vdupq_n_u8(needle1);
             let n2 = vdupq_n_u8(needle2);
 
@@ -94,7 +91,7 @@ unsafe fn memrchr2_neon(needle1: u8, needle2: u8, beg: *const u8, mut end: *cons
                     return end.add(15 - (m.leading_zeros() as usize >> 2));
                 }
 
-                if distance(end, beg) < 16 {
+                if end.offset_from_unsigned(beg) < 16 {
                     break;
                 }
             }
@@ -106,9 +103,10 @@ unsafe fn memrchr2_neon(needle1: u8, needle2: u8, beg: *const u8, mut end: *cons
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use super::*;
     use crate::sys;
-    use std::slice;
 
     #[test]
     fn test_empty() {
@@ -143,12 +141,12 @@ mod tests {
     #[test]
     fn test_page_boundary() {
         let page = unsafe {
-            let page_size = 4096;
+            const PAGE_SIZE: usize = 64 * 1024;  // 64 KiB to cover many architectures.
 
             // 3 pages: uncommitted, committed, uncommitted
-            let ptr = sys::virtual_reserve(page_size * 3).unwrap();
-            sys::virtual_commit(ptr.add(page_size), page_size).unwrap();
-            slice::from_raw_parts_mut(ptr.add(page_size).as_ptr(), page_size)
+            let ptr = sys::virtual_reserve(PAGE_SIZE * 3).unwrap();
+            sys::virtual_commit(ptr.add(PAGE_SIZE), PAGE_SIZE).unwrap();
+            slice::from_raw_parts_mut(ptr.add(PAGE_SIZE).as_ptr(), PAGE_SIZE)
         };
 
         page.fill(b'a');

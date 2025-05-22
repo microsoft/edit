@@ -1,0 +1,7 @@
+style_edition = "2024"
+use_small_heuristics = "Max"
+group_imports = "StdExternalCrate"
+imports_granularity = "Module"
+format_code_in_doc_comments = true
+newline_style = "Unix"
+use_field_init_shorthand = true

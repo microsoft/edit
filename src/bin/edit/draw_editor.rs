@@ -1,0 +1,273 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+use edit::framebuffer::IndexedColor;
+use edit::helpers::*;
+use edit::icu;
+use edit::input::{kbmod, vk};
+use edit::tui::*;
+
+use crate::localization::*;
+use crate::state::*;
+
+pub fn draw_editor(ctx: &mut Context, state: &mut State) {
+    if !matches!(state.wants_search.kind, StateSearchKind::Hidden | StateSearchKind::Disabled) {
+        draw_search(ctx, state);
+    }
+
+    let size = ctx.size();
+    // TODO: The layout code should be able to just figure out the height on its own.
+    let height_reduction = match state.wants_search.kind {
+        StateSearchKind::Search => 4,
+        StateSearchKind::Replace => 5,
+        _ => 2,
+    };
+
+    if let Some(doc) = state.documents.active() {
+        ctx.textarea("textarea", doc.buffer.clone());
+        ctx.inherit_focus();
+    } else {
+        ctx.block_begin("empty");
+        ctx.block_end();
+    }
+
+    ctx.attr_intrinsic_size(Size { width: 0, height: size.height - height_reduction });
+}
+
+fn draw_search(ctx: &mut Context, state: &mut State) {
+    enum SearchAction {
+        None,
+        Search,
+        Replace,
+        ReplaceAll,
+    }
+
+    if let Err(err) = icu::init() {
+        error_log_add(ctx, state, err);
+        state.wants_search.kind = StateSearchKind::Disabled;
+        return;
+    }
+
+    let Some(doc) = state.documents.active() else {
+        state.wants_search.kind = StateSearchKind::Hidden;
+        return;
+    };
+
+    let mut action = SearchAction::None;
+    let mut focus = StateSearchKind::Hidden;
+
+    if state.wants_search.focus {
+        state.wants_search.focus = false;
+        focus = StateSearchKind::Search;
+
+        // If the selection is empty, focus the search input field.
+        // Otherwise, focus the replace input field, if it exists.
+        if let Some(selection) = doc.buffer.borrow_mut().extract_user_selection(false) {
+            state.search_needle = String::from_utf8_lossy_owned(selection);
+            focus = state.wants_search.kind;
+        }
+    }
+
+    ctx.block_begin("search");
+    ctx.attr_focus_well();
+    ctx.attr_background_rgba(ctx.indexed(IndexedColor::White));
+    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
+    {
+        if ctx.contains_focus() && ctx.consume_shortcut(vk::ESCAPE) {
+            state.wants_search.kind = StateSearchKind::Hidden;
+        }
+
+        ctx.table_begin("needle");
+        ctx.table_set_cell_gap(Size { width: 1, height: 0 });
+        {
+            {
+                ctx.table_next_row();
+                ctx.label("label", loc(LocId::SearchNeedleLabel));
+
+                if ctx.editline("needle", &mut state.search_needle) {
+                    action = SearchAction::Search;
+                }
+                if !state.search_success {
+                    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+                    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+                }
+                ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
+                if focus == StateSearchKind::Search {
+                    ctx.steal_focus();
+                }
+                if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
+                    action = SearchAction::Search;
+                }
+            }
+
+            if state.wants_search.kind == StateSearchKind::Replace {
+                ctx.table_next_row();
+                ctx.label("label", loc(LocId::SearchReplacementLabel));
+
+                ctx.editline("replacement", &mut state.search_replacement);
+                ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
+                if focus == StateSearchKind::Replace {
+                    ctx.steal_focus();
+                }
+                if ctx.is_focused() {
+                    if ctx.consume_shortcut(vk::RETURN) {
+                        action = SearchAction::Replace;
+                    } else if ctx.consume_shortcut(kbmod::CTRL_ALT | vk::RETURN) {
+                        action = SearchAction::ReplaceAll;
+                    }
+                }
+            }
+        }
+        ctx.table_end();
+
+        ctx.table_begin("options");
+        ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+        {
+            ctx.table_next_row();
+
+            let mut change = false;
+            change |= ctx.checkbox(
+                "match-case",
+                loc(LocId::SearchMatchCase),
+                &mut state.search_options.match_case,
+            );
+            change |= ctx.checkbox(
+                "whole-word",
+                loc(LocId::SearchWholeWord),
+                &mut state.search_options.whole_word,
+            );
+            change |= ctx.checkbox(
+                "use-regex",
+                loc(LocId::SearchUseRegex),
+                &mut state.search_options.use_regex,
+            );
+            if change {
+                action = SearchAction::Search;
+                state.wants_search.focus = true;
+                ctx.needs_rerender();
+            }
+
+            if state.wants_search.kind == StateSearchKind::Replace
+                && ctx.button("replace-all", loc(LocId::SearchReplaceAll))
+            {
+                action = SearchAction::ReplaceAll;
+            }
+
+            if ctx.button("close", loc(LocId::SearchClose)) {
+                state.wants_search.kind = StateSearchKind::Hidden;
+            }
+        }
+        ctx.table_end();
+    }
+    ctx.block_end();
+
+    state.search_success = match action {
+        SearchAction::None => return,
+        SearchAction::Search => {
+            doc.buffer.borrow_mut().find_and_select(&state.search_needle, state.search_options)
+        }
+        SearchAction::Replace => doc.buffer.borrow_mut().find_and_replace(
+            &state.search_needle,
+            state.search_options,
+            &state.search_replacement,
+        ),
+        SearchAction::ReplaceAll => doc.buffer.borrow_mut().find_and_replace_all(
+            &state.search_needle,
+            state.search_options,
+            &state.search_replacement,
+        ),
+    }
+    .is_ok();
+
+    ctx.needs_rerender();
+}
+
+pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
+    if let Some(doc) = state.documents.active_mut() {
+        if doc.path.is_some() {
+            if let Err(err) = doc.save(None) {
+                error_log_add(ctx, state, err);
+            }
+        } else {
+            // No path? Show the file picker.
+            state.wants_file_picker = StateFilePicker::SaveAs;
+            state.wants_save = false;
+            ctx.needs_rerender();
+        }
+    }
+
+    state.wants_save = false;
+}
+
+pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
+    let Some(doc) = state.documents.active() else {
+        state.wants_close = false;
+        state.wants_exit = true;
+        return;
+    };
+
+    if !doc.buffer.borrow().is_dirty() {
+        state.documents.remove_active();
+        state.wants_close = false;
+        ctx.needs_rerender();
+        return;
+    }
+
+    enum Action {
+        None,
+        Save,
+        Discard,
+        Cancel,
+    }
+    let mut action = Action::None;
+
+    ctx.modal_begin("unsaved-changes", loc(LocId::UnsavedChangesDialogTitle));
+    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+    {
+        ctx.label("description", loc(LocId::UnsavedChangesDialogDescription));
+        ctx.attr_padding(Rect::three(1, 2, 1));
+
+        ctx.table_begin("choices");
+        ctx.inherit_focus();
+        ctx.attr_padding(Rect::three(0, 2, 1));
+        ctx.attr_position(Position::Center);
+        ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+        {
+            ctx.table_next_row();
+            ctx.inherit_focus();
+
+            if ctx.button("yes", loc(LocId::UnsavedChangesDialogYes)) {
+                action = Action::Save;
+            }
+            ctx.inherit_focus();
+            if ctx.button("no", loc(LocId::UnsavedChangesDialogNo)) {
+                action = Action::Discard;
+            }
+            if ctx.button("cancel", loc(LocId::Cancel)) {
+                action = Action::Cancel;
+            }
+
+            // TODO: This should highlight the corresponding letter in the label.
+            if ctx.consume_shortcut(vk::S) {
+                action = Action::Save;
+            } else if ctx.consume_shortcut(vk::N) {
+                action = Action::Discard;
+            }
+        }
+        ctx.table_end();
+    }
+    if ctx.modal_end() {
+        action = Action::Cancel;
+    }
+
+    match action {
+        Action::None => return,
+        Action::Save => state.wants_save = true,
+        Action::Discard => state.documents.remove_active(),
+        Action::Cancel => state.wants_exit = false,
+    }
+
+    state.wants_close = false;
+    ctx.toss_focus_up();
+}

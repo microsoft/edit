@@ -1,22 +1,28 @@
-use crate::buffer::TextBuffer;
-use crate::helpers::DisplayableCString;
-use crate::utf8::Utf8Chars;
-use crate::{apperr, sys};
-use std::ffi::{CStr, CString};
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+//! Bindings to the ICU library.
+
+use std::cmp::Ordering;
+use std::ffi::CStr;
+use std::mem;
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::ptr::{null, null_mut};
-use std::{cmp, mem};
 
-static mut ENCODINGS: Option<Vec<DisplayableCString>> = None;
+use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::buffer::TextBuffer;
+use crate::unicode::Utf8Chars;
+use crate::{apperr, arena_format, sys};
 
-pub fn get_available_encodings() -> &'static [DisplayableCString] {
+static mut ENCODINGS: Vec<&'static str> = Vec::new();
+
+/// Returns a list of encodings ICU supports.
+pub fn get_available_encodings() -> &'static [&'static str] {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     unsafe {
-        if ENCODINGS.is_none() {
-            let mut encodings = Vec::new();
-
+        if ENCODINGS.is_empty() {
             if let Ok(f) = init_if_needed() {
                 let mut n = 0;
                 loop {
@@ -24,22 +30,21 @@ pub fn get_available_encodings() -> &'static [DisplayableCString] {
                     if name.is_null() {
                         break;
                     }
-                    encodings.push(DisplayableCString::from_ptr(name));
+                    ENCODINGS.push(CStr::from_ptr(name).to_str().unwrap_unchecked());
                     n += 1;
                 }
             }
 
-            if encodings.is_empty() {
-                encodings.push(DisplayableCString::new(CString::new("UTF-8").unwrap()));
+            if ENCODINGS.is_empty() {
+                ENCODINGS.push("UTF-8");
             }
-
-            ENCODINGS = Some(encodings);
         }
-        ENCODINGS.as_ref().unwrap_unchecked().as_slice()
+        &ENCODINGS
     }
 }
 
-pub fn apperr_format(code: u32) -> String {
+/// Formats the given ICU error code into a human-readable string.
+pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
     fn format(code: u32) -> &'static str {
         let Ok(f) = init_if_needed() else {
             return "";
@@ -57,12 +62,13 @@ pub fn apperr_format(code: u32) -> String {
 
     let msg = format(code);
     if !msg.is_empty() {
-        format!("ICU Error: {}", msg)
+        write!(f, "ICU Error: {msg}")
     } else {
-        format!("ICU Error: {:#08x}", code)
+        write!(f, "ICU Error: {code:#08x}")
     }
 }
 
+/// Converts between two encodings using ICU.
 pub struct Converter<'pivot> {
     source: *mut icu_ffi::UConverter,
     target: *mut icu_ffi::UConverter,
@@ -81,6 +87,14 @@ impl Drop for Converter<'_> {
 }
 
 impl<'pivot> Converter<'pivot> {
+    /// Constructs a new `Converter` instance.
+    ///
+    /// # Parameters
+    ///
+    /// * `pivot_buffer`: A buffer used to cache partial conversions.
+    ///   Don't make it too small.
+    /// * `source_encoding`: The source encoding name (e.g., "UTF-8").
+    /// * `target_encoding`: The target encoding name (e.g., "UTF-16").
     pub fn new(
         pivot_buffer: &'pivot mut [MaybeUninit<u16>],
         source_encoding: &str,
@@ -88,8 +102,9 @@ impl<'pivot> Converter<'pivot> {
     ) -> apperr::Result<Self> {
         let f = init_if_needed()?;
 
-        let source_encoding = Self::append_nul(source_encoding);
-        let target_encoding = Self::append_nul(target_encoding);
+        let arena = scratch_arena(None);
+        let source_encoding = Self::append_nul(&arena, source_encoding);
+        let target_encoding = Self::append_nul(&arena, target_encoding);
 
         let mut status = icu_ffi::U_ZERO_ERROR;
         let source = unsafe { (f.ucnv_open)(source_encoding.as_ptr(), &mut status) };
@@ -107,20 +122,27 @@ impl<'pivot> Converter<'pivot> {
         let pivot_source = pivot_buffer.as_mut_ptr() as *mut u16;
         let pivot_target = unsafe { pivot_source.add(pivot_buffer.len()) };
 
-        Ok(Self {
-            source,
-            target,
-            pivot_buffer,
-            pivot_source,
-            pivot_target,
-            reset: true,
-        })
+        Ok(Self { source, target, pivot_buffer, pivot_source, pivot_target, reset: true })
     }
 
-    fn append_nul(input: &str) -> String {
-        format!("{}\0", input)
+    fn append_nul<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
+        arena_format!(arena, "{}\0", input)
     }
 
+    /// Performs one step of the encoding conversion.
+    ///
+    /// # Parameters
+    ///
+    /// * `input`: The input buffer to convert from.
+    ///   It should be in the `source_encoding` that was previously specified.
+    /// * `output`: The output buffer to convert to.
+    ///   It should be in the `target_encoding` that was previously specified.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// 1. The number of bytes read from the input buffer.
+    /// 2. The number of bytes written to the output buffer.
     pub fn convert(
         &mut self,
         input: &[u8],
@@ -175,24 +197,26 @@ impl<'pivot> Converter<'pivot> {
 // I picked 64 because it seemed like a reasonable lower bound.
 const CACHE_SIZE: usize = 64;
 
-// Caches a chunk of TextBuffer contents (UTF-8) in UTF-16 format.
+/// Caches a chunk of TextBuffer contents (UTF-8) in UTF-16 format.
 struct Cache {
-    /// The translated text. Contains `len`-many valid items.
+    /// The translated text. Contains [`Cache::utf16_len`]-many valid items.
     utf16: [u16; CACHE_SIZE],
-    /// For each character in `utf16` this stores the offset in the `TextBuffer`,
+    /// For each character in [`Cache::utf16`] this stores the offset in the [`TextBuffer`],
     /// relative to the start offset stored in `native_beg`.
-    /// This has the same length as `utf16`.
+    /// This has the same length as [`Cache::utf16`].
     utf16_to_utf8_offsets: [u16; CACHE_SIZE],
-    /// `utf8_to_utf16_offsets[native_offset - native_beg]` will tell you which character
-    /// in `utf16` maps to the given `native_offset` in the underlying `TextBuffer`.
+    /// `utf8_to_utf16_offsets[native_offset - native_beg]` will tell you which character in
+    /// [`Cache::utf16`] maps to the given `native_offset` in the underlying [`TextBuffer`].
     /// Contains `native_end - native_beg`-many valid items.
     utf8_to_utf16_offsets: [u16; CACHE_SIZE],
 
-    /// The number of valid items in `utf16`.
+    /// The number of valid items in [`Cache::utf16`].
     utf16_len: usize,
+    /// Offset of the first non-ASCII character.
+    /// Less than or equal to [`Cache::utf16_len`].
     native_indexing_limit: usize,
 
-    /// The range of UTF-8 text in the `TextBuffer` that this chunk covers.
+    /// The range of UTF-8 text in the [`TextBuffer`] that this chunk covers.
     utf8_range: Range<usize>,
 }
 
@@ -202,9 +226,15 @@ struct DoubleCache {
     mru: bool,
 }
 
-// I initially did this properly with a PhantomData marker for the TextBuffer lifetime,
-// but it was a pain so now I don't. Not a big deal - its only use is in a self-referential
-// struct in TextBuffer which Rust can't deal with anyway.
+/// A wrapper around ICU's `UText` struct.
+///
+/// In our case its only purpose is to adapt a [`TextBuffer`] for ICU.
+///
+/// # Safety
+///
+/// Warning! No lifetime tracking is done here.
+/// I initially did it properly with a PhantomData marker for the TextBuffer
+/// lifetime, but it was a pain so now I don't. Not a big deal in our case.
 pub struct Text(&'static mut icu_ffi::UText);
 
 impl Drop for Text {
@@ -215,11 +245,12 @@ impl Drop for Text {
 }
 
 impl Text {
-    /// Constructs an ICU `UText` instance from a `TextBuffer`.
+    /// Constructs an ICU `UText` instance from a [`TextBuffer`].
     ///
     /// # Safety
     ///
-    /// The caller must ensure that the given `TextBuffer` outlives the returned `Text` instance.
+    /// The caller must ensure that the given [`TextBuffer`]
+    /// outlives the returned `Text` instance.
     pub unsafe fn new(tb: &TextBuffer) -> apperr::Result<Self> {
         let f = init_if_needed()?;
 
@@ -252,7 +283,7 @@ impl Text {
         let ut = unsafe { &mut *ptr };
         ut.p_funcs = &FUNCS;
         ut.context = tb as *const TextBuffer as *mut _;
-        ut.a = tb.get_generation() as i64;
+        ut.a = tb.generation() as i64;
 
         // ICU unfortunately expects a `UText` instance to have valid contents after construction.
         utext_access(ut, 0, true);
@@ -353,15 +384,19 @@ fn utext_access_impl<'a>(
     let index_contained = index_contained as usize;
     let native_index = native_index as usize;
     let double_cache = double_cache_from_utext(ut);
-    let dirty = ut.a != tb.get_generation() as i64;
+    let dirty = ut.a != tb.generation() as i64;
 
     if dirty {
+        // The text buffer contents have changed.
+        // Invalidate both caches so that future calls don't mistakenly use them
+        // when they enter the for loop in the else branch below (`dirty == false`).
         double_cache.cache[0].utf16_len = 0;
         double_cache.cache[1].utf16_len = 0;
         double_cache.cache[0].utf8_range = 0..0;
         double_cache.cache[1].utf8_range = 0..0;
-        ut.a = tb.get_generation() as i64;
+        ut.a = tb.generation() as i64;
     } else {
+        // Check if one of the caches already contains the requested range.
         for (i, cache) in double_cache.cache.iter_mut().enumerate() {
             if cache.utf8_range.contains(&index_contained) {
                 double_cache.mru = i != 0;
@@ -424,14 +459,11 @@ fn utext_access_impl<'a>(
         // If we've only seen ASCII so far we can fast-pass the UTF-16 translation,
         // because we can just widen from u8 -> u16.
         if utf16_len == ascii_len {
-            // TODO: This crashes, why?
             let haystack = &chunk[..chunk.len().min(utf8_len_limit - ascii_len)];
+
             // When it comes to performance, and the search space is small (which it is here),
             // it's always a good idea to keep the loops small and tight...
-            let len = haystack
-                .iter()
-                .position(|&c| c >= 0x80)
-                .unwrap_or(haystack.len());
+            let len = haystack.iter().position(|&c| c >= 0x80).unwrap_or(haystack.len());
 
             // ...In this case it allows the compiler to vectorize this loop and double
             // the performance. Luckily, llvm doesn't unroll the loop, which is great,
@@ -453,13 +485,12 @@ fn utext_access_impl<'a>(
             }
         }
 
-        // TODO: This loop is the slow part of our uregex search. May be worth optimizing.
         loop {
             let Some(c) = it.next() else {
                 break;
             };
 
-            // Thanks to our `if utf16_len >= utf16_limit` check,
+            // Thanks to our `if utf16_len >= UTF16_LEN_LIMIT` check,
             // we can safely assume that this will fit.
             unsafe {
                 let utf8_len_beg = utf8_len;
@@ -475,13 +506,13 @@ fn utext_access_impl<'a>(
                     *cache.utf16_to_utf8_offsets.get_unchecked_mut(utf16_len) = utf8_len_beg as u16;
                     utf16_len += 1;
                 } else {
-                    let c = c as u32 - 0x1_0000;
+                    let c = c as u32 - 0x10000;
+                    let b = utf8_len_beg as u16;
                     *cache.utf16.get_unchecked_mut(utf16_len) = (c >> 10) as u16 | 0xD800;
-                    *cache.utf16_to_utf8_offsets.get_unchecked_mut(utf16_len) = utf8_len_beg as u16;
-                    utf16_len += 1;
-                    *cache.utf16.get_unchecked_mut(utf16_len) = (c & 0x3FF) as u16 | 0xDC00;
-                    *cache.utf16_to_utf8_offsets.get_unchecked_mut(utf16_len) = utf8_len_beg as u16;
-                    utf16_len += 1;
+                    *cache.utf16.get_unchecked_mut(utf16_len + 1) = (c & 0x3FF) as u16 | 0xDC00;
+                    *cache.utf16_to_utf8_offsets.get_unchecked_mut(utf16_len) = b;
+                    *cache.utf16_to_utf8_offsets.get_unchecked_mut(utf16_len + 1) = b;
+                    utf16_len += 2;
                 }
             }
 
@@ -525,7 +556,11 @@ extern "C" fn utext_map_native_index_to_utf16(ut: &icu_ffi::UText, native_index:
     off_rel as i32
 }
 
-// Same reason here for not using a PhantomData marker as with `Text`.
+/// A wrapper around ICU's `URegularExpression` struct.
+///
+/// # Safety
+///
+/// Warning! No lifetime tracking is done here.
 pub struct Regex(&'static mut icu_ffi::URegularExpression);
 
 impl Drop for Regex {
@@ -536,8 +571,14 @@ impl Drop for Regex {
 }
 
 impl Regex {
+    /// Enable case-insensitive matching.
     pub const CASE_INSENSITIVE: i32 = icu_ffi::UREGEX_CASE_INSENSITIVE;
+
+    /// If set, ^ and $ match the start and end of each line.
+    /// Otherwise, they match the start and end of the entire string.
     pub const MULTILINE: i32 = icu_ffi::UREGEX_MULTILINE;
+
+    /// Treat the given pattern as a literal string.
     pub const LITERAL: i32 = icu_ffi::UREGEX_LITERAL;
 
     /// Constructs a regex, plain and simple. Read `uregex_open` docs.
@@ -548,8 +589,11 @@ impl Regex {
     pub unsafe fn new(pattern: &str, flags: i32, text: &Text) -> apperr::Result<Self> {
         let f = init_if_needed()?;
         unsafe {
-            let utf16: Vec<u16> = pattern.encode_utf16().collect();
+            let scratch = scratch_arena(None);
+            let mut utf16 = Vec::new_in(&*scratch);
             let mut status = icu_ffi::U_ZERO_ERROR;
+
+            utf16.extend(pattern.encode_utf16());
 
             let ptr = (f.uregex_open)(
                 utf16.as_ptr(),
@@ -562,7 +606,6 @@ impl Regex {
             // and "typically [in] the order of milliseconds", but this claim seems
             // highly outdated. On my CPU from 2021, a limit of 4096 equals roughly 600ms.
             (f.uregex_setTimeLimit)(ptr, 4096, &mut status);
-            (f.uregex_setStackLimit)(ptr, 4 * 1024 * 1024, &mut status);
             (f.uregex_setUText)(ptr, text.0 as *const _ as *mut _, &mut status);
             if status.is_failure() {
                 return Err(status.as_error());
@@ -573,7 +616,7 @@ impl Regex {
     }
 
     /// Updates the regex pattern with the given text.
-    /// If the text contents have changed, you can pass the same text as you usued
+    /// If the text contents have changed, you can pass the same text as you used
     /// initially and it'll trigger ICU to reload the text and invalidate its caches.
     ///
     /// # Safety
@@ -585,6 +628,7 @@ impl Regex {
         unsafe { (f.uregex_setUText)(self.0, text.0 as *const _ as *mut _, &mut status) };
     }
 
+    /// Sets the regex to the absolute offset in the underlying text.
     pub fn reset(&mut self, index: usize) {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
@@ -618,7 +662,8 @@ impl Iterator for Regex {
 
 static mut ROOT_COLLATOR: Option<*mut icu_ffi::UCollator> = None;
 
-pub fn compare_strings(a: &[u8], b: &[u8]) -> cmp::Ordering {
+/// Compares two UTF-8 strings for sorting using ICU's collation algorithm.
+pub fn compare_strings(a: &[u8], b: &[u8]) -> Ordering {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     let coll = unsafe {
@@ -628,13 +673,13 @@ pub fn compare_strings(a: &[u8], b: &[u8]) -> cmp::Ordering {
                 (f.ucol_open)(c"".as_ptr(), &mut status)
             } else {
                 null_mut()
-            })
+            });
         }
         ROOT_COLLATOR.unwrap_unchecked()
     };
 
     if coll.is_null() {
-        a.cmp(b)
+        compare_strings_ascii(a, b)
     } else {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
@@ -650,16 +695,56 @@ pub fn compare_strings(a: &[u8], b: &[u8]) -> cmp::Ordering {
         };
 
         match res {
-            icu_ffi::UCollationResult::UCOL_EQUAL => cmp::Ordering::Equal,
-            icu_ffi::UCollationResult::UCOL_GREATER => cmp::Ordering::Greater,
-            icu_ffi::UCollationResult::UCOL_LESS => cmp::Ordering::Less,
+            icu_ffi::UCollationResult::UCOL_EQUAL => Ordering::Equal,
+            icu_ffi::UCollationResult::UCOL_GREATER => Ordering::Greater,
+            icu_ffi::UCollationResult::UCOL_LESS => Ordering::Less,
         }
     }
 }
 
+/// Unicode collation via `ucol_strcollUTF8`, now for ASCII!
+fn compare_strings_ascii(a: &[u8], b: &[u8]) -> Ordering {
+    let mut iter = a.iter().zip(b.iter());
+
+    // Low weight: Find the first character which differs.
+    //
+    // Remember that result in case all remaining characters are
+    // case-insensitive equal, because then we use that as a fallback.
+    while let Some((&a, &b)) = iter.next() {
+        if a != b {
+            let mut order = a.cmp(&b);
+            let la = a.to_ascii_lowercase();
+            let lb = b.to_ascii_lowercase();
+
+            if la == lb {
+                // High weight: Find the first character which
+                // differs case-insensitively.
+                for (a, b) in iter {
+                    let la = a.to_ascii_lowercase();
+                    let lb = b.to_ascii_lowercase();
+
+                    if la != lb {
+                        order = la.cmp(&lb);
+                        break;
+                    }
+                }
+            }
+
+            return order;
+        }
+    }
+
+    // Fallback: The shorter string wins.
+    a.len().cmp(&b.len())
+}
+
 static mut ROOT_CASEMAP: Option<*mut icu_ffi::UCaseMap> = None;
 
-pub fn fold_case(input: &str) -> String {
+/// Converts the given UTF-8 string to lower case.
+///
+/// Case folding differs from lower case in that the output is primarily useful
+/// to machines for comparisons. It's like applying Unicode normalization.
+pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     let casemap = unsafe {
@@ -677,7 +762,7 @@ pub fn fold_case(input: &str) -> String {
     if !casemap.is_null() {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
-        let mut output = Vec::new();
+        let mut output = Vec::new_in(arena);
         let mut output_len;
 
         // First, guess the output length:
@@ -717,17 +802,15 @@ pub fn fold_case(input: &str) -> String {
             unsafe {
                 output.set_len(output_len as usize);
             }
-            return unsafe { String::from_utf8_unchecked(output) };
+            return unsafe { ArenaString::from_utf8_unchecked(output) };
         }
     }
 
-    input.to_ascii_lowercase()
-}
-
-pub fn apperr_is_regex_error(err: apperr::Error) -> bool {
-    // As per icu.h:
-    // > Error codes in the range 0x10300-0x103ff are reserved for regular expression related errors.
-    matches!(err, apperr::Error::Icu(0x10300..0x10400))
+    let mut result = ArenaString::from_str(arena, input);
+    for b in unsafe { result.as_bytes_mut() } {
+        b.make_ascii_lowercase();
+    }
+    result
 }
 
 // WARNING:
@@ -745,17 +828,16 @@ struct LibraryFunctions {
     ucasemap_utf8FoldCase: icu_ffi::ucasemap_utf8FoldCase,
     utext_setup: icu_ffi::utext_setup,
     utext_close: icu_ffi::utext_close,
+
+    // LIBICUI18N_PROC_NAMES
     uregex_open: icu_ffi::uregex_open,
     uregex_close: icu_ffi::uregex_close,
-    uregex_setStackLimit: icu_ffi::uregex_setStackLimit,
     uregex_setTimeLimit: icu_ffi::uregex_setTimeLimit,
     uregex_setUText: icu_ffi::uregex_setUText,
     uregex_reset64: icu_ffi::uregex_reset64,
     uregex_findNext: icu_ffi::uregex_findNext,
     uregex_start64: icu_ffi::uregex_start64,
     uregex_end64: icu_ffi::uregex_end64,
-
-    // LIBICUI18N_PROC_NAMES
     ucol_open: icu_ffi::ucol_open,
     ucol_strcollUTF8: icu_ffi::ucol_strcollUTF8,
 }
@@ -773,12 +855,11 @@ const LIBICUUC_PROC_NAMES: [&CStr; 9] = [
     c"utext_close",
 ];
 
-const LIBICUI18N_PROC_NAMES: [&CStr; 11] = [
+const LIBICUI18N_PROC_NAMES: [&CStr; 10] = [
     // Found in libicui18n.so on UNIX, icuin.dll/icu.dll on Windows.
     c"uregex_open",
     c"uregex_close",
     c"uregex_setTimeLimit",
-    c"uregex_setStackLimit",
     c"uregex_setUText",
     c"uregex_reset64",
     c"uregex_findNext",
@@ -836,15 +917,18 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
             let mut ptr = funcs.as_mut_ptr() as *mut TransparentFunction;
 
             #[cfg(unix)]
-            let suffix = sys::icu_proc_suffix(libicuuc);
+            let scratch_outer = scratch_arena(None);
+            #[cfg(unix)]
+            let suffix = sys::icu_proc_suffix(&scratch_outer, libicuuc);
 
-            for (handle, names) in [
-                (libicuuc, &LIBICUUC_PROC_NAMES[..]),
-                (libicui18n, &LIBICUI18N_PROC_NAMES[..]),
-            ] {
+            for (handle, names) in
+                [(libicuuc, &LIBICUUC_PROC_NAMES[..]), (libicui18n, &LIBICUI18N_PROC_NAMES[..])]
+            {
                 for name in names {
                     #[cfg(unix)]
-                    let name = &sys::add_icu_proc_suffix(name, &suffix);
+                    let scratch = scratch_arena(Some(&scratch_outer));
+                    #[cfg(unix)]
+                    let name = &sys::add_icu_proc_suffix(&scratch, name, &suffix);
 
                     let Ok(func) = sys::get_proc_address(handle, name) else {
                         debug_assert!(
@@ -887,8 +971,9 @@ fn assume_loaded() -> &'static LibraryFunctions {
 mod icu_ffi {
     #![allow(dead_code, non_camel_case_types)]
 
-    use crate::apperr;
     use std::ffi::{c_char, c_int, c_void};
+
+    use crate::apperr;
 
     #[derive(Copy, Clone, Eq, PartialEq)]
     #[repr(transparent)]
@@ -1114,8 +1199,6 @@ mod icu_ffi {
     pub type uregex_close = unsafe extern "C" fn(regexp: *mut URegularExpression);
     pub type uregex_setTimeLimit =
         unsafe extern "C" fn(regexp: *mut URegularExpression, limit: i32, status: &mut UErrorCode);
-    pub type uregex_setStackLimit =
-        unsafe extern "C" fn(regexp: *mut URegularExpression, limit: i32, status: &mut UErrorCode);
     pub type uregex_setUText = unsafe extern "C" fn(
         regexp: *mut URegularExpression,
         text: *mut UText,
@@ -1135,4 +1218,25 @@ mod icu_ffi {
         group_num: i32,
         status: &mut UErrorCode,
     ) -> i64;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compare_strings_ascii() {
+        // Empty strings
+        assert_eq!(compare_strings_ascii(b"", b""), Ordering::Equal);
+        // Equal strings
+        assert_eq!(compare_strings_ascii(b"hello", b"hello"), Ordering::Equal);
+        // Different lengths
+        assert_eq!(compare_strings_ascii(b"abc", b"abcd"), Ordering::Less);
+        assert_eq!(compare_strings_ascii(b"abcd", b"abc"), Ordering::Greater);
+        // Same chars, different cases - 1st char wins
+        assert_eq!(compare_strings_ascii(b"AbC", b"aBc"), Ordering::Less);
+        // Different chars, different cases - 2nd char wins, because it differs
+        assert_eq!(compare_strings_ascii(b"hallo", b"Hello"), Ordering::Less);
+        assert_eq!(compare_strings_ascii(b"Hello", b"hallo"), Ordering::Greater);
+    }
 }

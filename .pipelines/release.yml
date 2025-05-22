@@ -14,6 +14,10 @@ parameters:
     values:
       - NonOfficial
       - Official
+  - name: createvpack
+    displayName: Enable vpack creation
+    type: boolean
+    default: false
   - name: buildPlatforms
     type: object
     default:
@@ -83,7 +87,7 @@ extends:
               #         - edit.exe
               #      - arm64/
               #         - edit.exe
-              ob_createvpack_enabled: false
+              ob_createvpack_enabled: ${{parameters.createvpack}}
               ob_createvpack_vpackdirectory: "$(ob_outputDirectory)/vpack"
               ob_createvpack_packagename: "windows_edit.$(Build.SourceBranchName)"
               ob_createvpack_owneralias: lhecker@microsoft.com
@@ -127,7 +131,7 @@ extends:
                   configFile: ".cargo/release-windows-ms.toml"
               # We recommend making a separate `cargo fetch` step, as some build systems perform
               # fetching entirely prior to the build, and perform the build with the network disabled.
-              - script: cargo fetch
+              - script: cargo fetch --config .cargo/release-windows-ms.toml
                 displayName: Fetch crates
               - ${{ each platform in parameters.buildPlatforms }}:
                   - script: cargo build --config .cargo/release-windows-ms.toml --frozen --release --target ${{platform}}
