@@ -441,19 +441,19 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "取代",
     ],
     // EditSelectAll
-[
-/* en */ "Select All",
-/* de */ "Alle auswählen",
-/* es */ "Seleccionar todo",
-/* fr */ "Tout sélectionner",
-/* it */ "Seleziona tutto",
-/* ja */ "すべて選択",
-/* ko */ "모두 선택",
-/* pt_br */ "Selecionar todos",
-/* ru */ "Выбрать всё",
-/* zh_hans */ "全选",
-/* zh_hant */ "全選",
-],
+    [
+        /* en      */ "Select All",
+        /* de      */ "Alles auswählen",
+        /* es      */ "Seleccionar todo",
+        /* fr      */ "Tout sélectionner",
+        /* it      */ "Seleziona tutto",
+        /* ja      */ "すべて選択",
+        /* ko      */ "모두 선택",
+        /* pt_br   */ "Selecionar tudo",
+        /* ru      */ "Выделить всё",
+        /* zh_hans */ "全选",
+        /* zh_hant */ "全選"
+    ]
 
     // View (a menu bar item)
     [
