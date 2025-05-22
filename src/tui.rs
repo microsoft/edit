@@ -299,7 +299,7 @@ pub struct Tui {
     left_mouse_down_target: u64,
     /// Timestamp of the last mouse up event.
     /// Used for tracking double/triple clicks.
-    mouse_up_timestamp: std::time::Instant,
+    mouse_up_timestamp: Option<std::time::Instant>,
     /// The current mouse state.
     mouse_state: InputMouseState,
     /// Whether the mouse is currently being dragged.
@@ -366,7 +366,7 @@ impl Tui {
             mouse_position: Point::MIN,
             mouse_down_position: Point::MIN,
             left_mouse_down_target: 0,
-            mouse_up_timestamp: std::time::Instant::now(),
+            mouse_up_timestamp: None,
             mouse_state: InputMouseState::None,
             mouse_is_drag: false,
             mouse_click_counter: 0,
@@ -490,7 +490,7 @@ impl Tui {
             self.needs_more_settling();
         }
 
-        let now = std::time::Instant::now();
+        //let now = std::time::Instant::now();
         let mut input_text = None;
         let mut input_keyboard = None;
         let mut input_mouse_modifiers = kbmod::NONE;
@@ -568,8 +568,8 @@ impl Tui {
                     if self.mouse_click_counter != 0 {
                         if self.first_click_target != target
                             || self.first_click_position != next_position
-                            || (now - self.mouse_up_timestamp)
-                                > std::time::Duration::from_millis(500)
+                            || false/*(now - self.mouse_up_timestamp.unwrap())
+                                > std::time::Duration::from_millis(500)*/
                         {
                             // If the cursor moved / the focus changed in between, or if the user did a slow click,
                             // we reset the click counter. On mouse-up it'll transition to a regular click.
@@ -605,7 +605,7 @@ impl Tui {
                         input_mouse_click = 1;
                     }
 
-                    self.mouse_up_timestamp = now;
+                    //self.mouse_up_timestamp = Some(now);
                 } else if is_drag {
                     self.mouse_is_drag = true;
                 }
