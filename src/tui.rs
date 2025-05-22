@@ -161,6 +161,7 @@ use crate::{apperr, arena_format, input, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
+const WORD_KEY: InputKeyMod = if cfg!(target_os="macos") { kbmod::ALT } else { kbmod::CTRL };
 
 type Input<'input> = input::Input<'input>;
 type InputKey = input::InputKey;
@@ -2421,7 +2422,7 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::LEFT => {
-                    let granularity = if modifiers.contains(kbmod::CTRL) {
+                    let granularity = if modifiers.contains(WORD_KEY) {
                         CursorMovement::Word
                     } else {
                         CursorMovement::Grapheme
@@ -2479,7 +2480,7 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::RIGHT => {
-                    let granularity = if modifiers.contains(kbmod::CTRL) {
+                    let granularity = if modifiers.contains(WORD_KEY) {
                         CursorMovement::Word
                     } else {
                         CursorMovement::Grapheme
