@@ -220,7 +220,7 @@ pub fn error_log_add(ctx: &mut Context, state: &mut State, err: apperr::Error) {
 }
 
 pub fn draw_error_log(ctx: &mut Context, state: &mut State) {
-    ctx.modal_begin("error", loc(LocId::ErrorDialogTitle));
+    let bg_click = ctx.modal_begin("error", loc(LocId::ErrorDialogTitle));
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
     {
@@ -248,7 +248,7 @@ pub fn draw_error_log(ctx: &mut Context, state: &mut State) {
         ctx.attr_position(Position::Center);
         ctx.inherit_focus();
     }
-    if ctx.modal_end() {
+    if ctx.modal_end() || bg_click {
         state.error_log_count = 0;
     }
 }

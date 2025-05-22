@@ -394,7 +394,7 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
 
     let over_limit = ctx.clipboard().len() >= SCRATCH_ARENA_CAPACITY / 4;
 
-    ctx.modal_begin("warning", loc(LocId::WarningDialogTitle));
+    let bg_click = ctx.modal_begin("warning", loc(LocId::WarningDialogTitle));
     {
         ctx.block_begin("description");
         ctx.attr_padding(Rect::three(1, 2, 1));
@@ -464,7 +464,7 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
         }
         ctx.table_end();
     }
-    if ctx.modal_end() {
+    if ctx.modal_end() || bg_click {
         state.osc_clipboard_seen_generation = generation;
     }
 }
@@ -491,7 +491,9 @@ impl Drop for RestoreModes {
     fn drop(&mut self) {
         // Same as in the beginning but in the reverse order.
         // It also includes DECSCUSR 0 to reset the cursor style and DECTCEM to show the cursor.
-        sys::write_stdout("\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1036l\x1b[?1002;1006;2004l\x1b[?1049l");
+        sys::write_stdout(
+            "\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1036l\x1b[?1002;1006;2004l\x1b[?1049l",
+        );
     }
 }
 

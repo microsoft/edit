@@ -221,7 +221,7 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     }
     let mut action = Action::None;
 
-    ctx.modal_begin("unsaved-changes", loc(LocId::UnsavedChangesDialogTitle));
+    let bg_click = ctx.modal_begin("unsaved-changes", loc(LocId::UnsavedChangesDialogTitle));
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
     {
@@ -257,7 +257,7 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
         }
         ctx.table_end();
     }
-    if ctx.modal_end() {
+    if ctx.modal_end() || bg_click {
         action = Action::Cancel;
     }
 

@@ -120,7 +120,7 @@ fn draw_menu_help(ctx: &mut Context, state: &mut State) {
 }
 
 pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
-    ctx.modal_begin("about", loc(LocId::AboutDialogTitle));
+    let bg_click = ctx.modal_begin("about", loc(LocId::AboutDialogTitle));
     {
         ctx.block_begin("content");
         ctx.inherit_focus();
@@ -160,7 +160,7 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
         }
         ctx.block_end();
     }
-    if ctx.modal_end() {
+    if ctx.modal_end() || bg_click {
         state.wants_about = false;
     }
 }
