@@ -568,7 +568,7 @@ impl Framebuffer {
             }
 
             let line_bytes = back_line.as_bytes();
-            let mut cfg = ucd::MeasurementConfig::new(&line_bytes);
+            let mut cfg = MeasurementConfig::new(&line_bytes);
             let mut chunk_end = 0;
 
             ops.push(DrawingOp::MoveTo(0, y as usize));
@@ -587,7 +587,7 @@ impl Framebuffer {
                         && back_attr[chunk_end] == attr
                 } {}
 
-                if attr.underlined() {
+                if attr.is(Attributes::Underlined) {
                     std::mem::swap(&mut fg, &mut bg);
                 }
                 ops.push(DrawingOp::Color(fg, bg));
