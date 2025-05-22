@@ -23,6 +23,9 @@ pub fn get_available_encodings() -> &'static [&'static str] {
     #[allow(static_mut_refs)]
     unsafe {
         if ENCODINGS.is_empty() {
+            ENCODINGS.push("UTF-8");
+            ENCODINGS.push("UTF-8 BOM");
+
             if let Ok(f) = init_if_needed() {
                 let mut n = 0;
                 loop {
@@ -32,19 +35,14 @@ pub fn get_available_encodings() -> &'static [&'static str] {
                     }
 
                     let name = CStr::from_ptr(name).to_str().unwrap_unchecked();
-                    ENCODINGS.push(name);
-
-                    // Push the encoding for UTF-8 BOM separately since ICU does not distinguish it from the regular UTF-8 encoding.
-                    if name == "UTF-8" {
-                        ENCODINGS.push("UTF-8 BOM");
+                    // We have already pushed UTF-8 above.
+                    // There is no need to filter UTF-8 BOM here, since ICU does not distinguish it from UTF-8.
+                    if name != "UTF-8" {
+                        ENCODINGS.push(name);
                     }
 
                     n += 1;
                 }
-            }
-
-            if ENCODINGS.is_empty() {
-                ENCODINGS.push("UTF-8");
             }
         }
         &ENCODINGS
