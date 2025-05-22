@@ -158,6 +158,7 @@ use crate::hash::*;
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
 use crate::{apperr, arena_format, input, unicode};
+use crate::highlighter::Highlighter;
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
@@ -334,6 +335,8 @@ pub struct Tui {
     settling_have: i32,
     settling_want: i32,
     read_timeout: time::Duration,
+
+    highlighter: Highlighter,
 }
 
 impl Tui {
@@ -385,6 +388,8 @@ impl Tui {
             settling_have: 0,
             settling_want: 0,
             read_timeout: time::Duration::MAX,
+
+            highlighter: Highlighter::new(),
         };
         Self::clean_node_path(&mut tui.mouse_down_node_path);
         Self::clean_node_path(&mut tui.focused_node_path);
@@ -937,6 +942,28 @@ impl Tui {
                         tc.scroll_offset.y,
                         tb.visual_line_count() + inner.height() - 1,
                     );
+
+                    // Highlighting
+                    let mut full = String::new();
+                    tb.save_as_string(&mut full);
+                    let tokens = self.highlighter.highlight(&full, &self.framebuffer);
+                    let bytes = full.as_bytes();
+                    let mut meas_cfg = unicode::MeasurementConfig::new(&bytes);
+                    for token in tokens {
+                        let pos= meas_cfg.goto_offset(token.byte_offset).visual_pos;
+                        let sx = pos.x - tc.scroll_offset.x + inner.left + tb.margin_width();
+                        let sy = pos.y - tc.scroll_offset.y + inner.top;
+                        let rect = Rect {
+                            left: sx,
+                            top: sy,
+                            right: sx + token.length as CoordType,
+                            bottom: sy + 1,
+                        };
+
+                        if !rect.intersect(inner_clipped).is_empty() {
+                            self.framebuffer.blend_fg(rect, token.foreground);
+                        }
+                    }
                 }
             }
             NodeContent::Scrollarea(sc) => {
