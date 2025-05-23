@@ -1961,343 +1961,99 @@ impl TextBuffer {
 
         Point { x: chars, y: cursor.logical_pos.y }
     }
+
+    fn get_bytes_to_unindent_by(line: &[u8], cursor_pos: usize, tab_size: usize) -> (usize, usize) {
+        let mut start = cursor_pos;
+        let mut width = 0;
+        let mut pos = cursor_pos;
     
-    // calculates the number of characters and bytes to remove
-    // based on the cursor's logical position and tab size.
-    fn unindent_line(line: &[u8], cursor_char_pos: usize, tab_size: usize) -> (Vec<u8>, usize, usize) {
-        // get a string slice for character-based iteration (handles UTF-8).
-        let line_str = std::str::from_utf8(line).unwrap_or("");
-        let mut char_indices = line_str.char_indices();
-
-        // determine the byte offset corresponding to the logical character position of the cursor.
-        let byte_offset = char_indices
-            .nth(cursor_char_pos)
-            .map(|(idx, _)| idx)
-            .unwrap_or(line.len());
-
-        let mut remove_start_byte_offset = byte_offset; // tracks where the deletion should begin.
-        let mut effective_removed_width = 0; // accumulates the visual width of removed whitespace.
-
-        // iterate backward from the cursor's byte offset to find leading whitespace.
-        let mut chars_to_check = line_str[..byte_offset].char_indices().rev();
-
-        while let Some((char_idx, char_val)) = chars_to_check.next() {
-            // stop if enough "width" (e.g., 4 spaces or 1 tab) has been found.
-            if effective_removed_width >= tab_size {
-                break;
-            }
-
-            match char_val {
-                ' ' => {
-                    effective_removed_width += 1;
-                    remove_start_byte_offset = char_idx;
-                }
-                '\t' => {
-                    effective_removed_width += tab_size;
-                    remove_start_byte_offset = char_idx;
-                }
-                _ => {
-                    // stop if a non-whitespace character is encountered.
-                    break;
-                }
+        // collect whitespace backwards from cursor upto tab_size width
+        while pos > 0 && width < tab_size {
+            pos -= 1;
+            match line[pos] {
+                b' ' => { width += 1; start = pos; }
+                b'\t' => { width += tab_size; start = pos; }
+                _ => break,
             }
         }
-
-        // calculate the actual number of characters to be removed.
-        let removed_chars = std::str::from_utf8(&line[remove_start_byte_offset..byte_offset])
-            .ok()
-            .map(|s| s.chars().count())
-            .unwrap_or(0);
-
-        // construct the new line by excluding the identified whitespace.
-        let mut new_line = Vec::with_capacity(line.len() - (byte_offset - remove_start_byte_offset));
-        new_line.extend_from_slice(&line[..remove_start_byte_offset]);
-        new_line.extend_from_slice(&line[byte_offset..]);
-
-        (new_line, removed_chars, remove_start_byte_offset)
+    
+        // (whitespace chars count, byte offset to start deletion)
+        (line[start..cursor_pos].iter().filter(|&&b| b == b' ' || b == b'\t').count(), start)
     }
-
-    fn handle_selection_forward_indent(&mut self, delta: i32, original_selection_start: Point, original_selection_end: Point) {
-        // get the cursor position at the start of the selection for the edit operation.
-        let start_cursor_for_edit = self.cursor_move_to_logical_internal(self.cursor, original_selection_start);
-        // create a vector of tab characters to insert.
-        let tabs = vec![b'\t'; delta as usize];
-
-        // perform the text insertion within an edit transaction.
-        self.edit_begin(HistoryType::Other, start_cursor_for_edit);
-        self.edit_write(&tabs);
-        self.edit_end();
-
-        // calculate the new logical X coordinates for the selection after indentation.
-        let new_selection_start_x = original_selection_start.x + delta;
-        let new_selection_end_x = original_selection_end.x + delta;
-
-        // create the new selection points.
-        let new_selection_start = Point {
-            x: new_selection_start_x,
-            y: original_selection_start.y,
-        };
-        let new_selection_end = Point {
-            x: new_selection_end_x,
-            y: original_selection_end.y,
-        };
-
-        // update the active selection.
-        self.selection = Some(TextBufferSelection {
-            beg: new_selection_start,
-            end: new_selection_end,
-        });
-
-        // set the cursor to the new logical start of the selection for intuitive behavior.
-        let cursor_at_line_start = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: new_selection_start.y });
-        let final_cursor_pos = self.cursor_move_to_logical_internal(cursor_at_line_start, new_selection_start);
-        self.set_cursor_internal(final_cursor_pos);
+    
+    // determine whether to indent by tabs or spaces according to user preferences
+    fn get_indent_type_preference(&self, delta: i32) -> Vec<u8> {
+        if self.indent_with_tabs { vec![b'\t'; delta as usize] } 
+        else { vec![b' '; delta as usize * self.tab_size as usize] }
     }
-
-    fn handle_selection_backward_indent(&mut self, original_selection_start: Point, original_selection_end: Point, tab_size: usize) {
-        // store the current cursor for consistent base calculations.
-        let current_cursor = self.cursor;
-
-        // get precise cursor positions for the beginning and end of the selection.
-        let selection_beg_cursor = self.cursor_move_to_logical_internal(current_cursor, original_selection_start);
-        let selection_end_cursor = self.cursor_move_to_logical_internal(current_cursor, original_selection_end);
-
-        // extract the bytes of the currently selected text.
-        let mut selected_bytes = Vec::new();
-        self.buffer.extract_raw(
-            selection_beg_cursor.offset,
-            selection_end_cursor.offset,
-            &mut selected_bytes,
-            0
-        );
-
-        // convert selected bytes to a string for character-based checks.
-        let selected_text_str = std::str::from_utf8(&selected_bytes).unwrap_or("");
-
-        // determine if the *entire* selected text consists only of spaces or tabs.
-        let is_selected_whitespace_only = selected_text_str.chars().all(|c| c == ' ' || c == '\t');
-
-        // handle highlighted text being only whitespace (spaces/tabs)
-        if is_selected_whitespace_only {
-            let delete_start_actual_cursor = selection_beg_cursor;
-            let delete_end_actual_cursor = selection_end_cursor;
-
-            // ensure there's actually a range to delete.
-            if delete_start_actual_cursor.offset < delete_end_actual_cursor.offset {
-                // perform the deletion within an edit transaction.
-                self.edit_begin(HistoryType::Other, delete_start_actual_cursor);
-                self.edit_delete(delete_end_actual_cursor);
-                self.edit_end();
-
-                // after deletion, the selection is consumed, so clear it.
-                self.selection = None;
-                // place the cursor at the point where the selection originally started.
-                self.set_cursor_internal(delete_start_actual_cursor);
-            } else {
-                // log a warning if an attempt was made to delete an empty whitespace selection.
-                eprintln!("Warning: Attempted to delete empty whitespace selection. No edit performed.");
+    
+    fn update_cursor_position_after_unindent(&mut self, removed: i32, selection_range: Option<(Point, Point)>, cursor_pos: Point) {
+        match selection_range {
+            Some((beg, end)) => {
+                // there was an active selection, adjust start/end X coords by the removed amount
+                self.selection = Some(TextBufferSelection {
+                    beg: Point { x: beg.x - removed, y: beg.y },
+                    end: Point { x: end.x - removed, y: end.y },
+                });
+                self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, self.selection.unwrap().beg));
             }
-
-        // handle normal unindent; remove tabs/spaces before the hightlighted text
-        } else {
-            // get the cursor at the very beginning of the line containing the selection.
-            let line_start_point = Point { x: 0, y: original_selection_start.y };
-            let beg_cursor_line = self.cursor_move_to_logical_internal(current_cursor, line_start_point);
-
-            // extract the bytes of the line *up to* the start of the selection.
-            let mut line_prefix_bytes = Vec::new();
-            let selection_start_offset = self.cursor_move_to_logical_internal(beg_cursor_line, original_selection_start).offset;
-
-            self.buffer.extract_raw(
-                beg_cursor_line.offset,
-                selection_start_offset,
-                &mut line_prefix_bytes,
-                0
-            );
-
-            // use `unindent_line` to determine how many characters to remove
-            // and the byte offset from where to start the deletion within `line_prefix_bytes`.
-            let (_, removed_chars, deletion_start_byte_offset_in_line) =
-                Self::unindent_line(&line_prefix_bytes, original_selection_start.x as usize, tab_size);
-
-            if removed_chars > 0 {
-                // get the byte offset within the line prefix corresponding to the selection's start.
-                let full_line_str_prefix = std::str::from_utf8(&line_prefix_bytes).unwrap_or("");
-                let cursor_byte_offset_in_line_prefix = full_line_str_prefix.char_indices()
-                    .nth(original_selection_start.x as usize)
-                    .map(|(idx, _)| idx)
-                    .unwrap_or(line_prefix_bytes.len());
-
-                // calculate the absolute buffer offsets for the deletion range.
-                let delete_start_buffer_offset = beg_cursor_line.offset + deletion_start_byte_offset_in_line;
-                let delete_end_buffer_offset = beg_cursor_line.offset + cursor_byte_offset_in_line_prefix;
-
-                // perform deletion only if a valid range exists.
-                if delete_start_buffer_offset < delete_end_buffer_offset {
-                    // get precise cursor objects for the deletion range.
-                    let delete_start_actual_cursor = self.cursor_move_to_offset_internal(
-                        beg_cursor_line,
-                        delete_start_buffer_offset
-                    );
-                    let delete_end_actual_cursor = self.cursor_move_to_offset_internal(
-                        beg_cursor_line,
-                        delete_end_buffer_offset
-                    );
-
-                    // perform the deletion within an edit transaction.
-                    self.edit_begin(HistoryType::Other, delete_start_actual_cursor);
-                    self.edit_delete(delete_end_actual_cursor);
-                    self.edit_end();
-
-                    // calculate the new logical coordinates for the selection after unindentation.
-                    let new_selection_start = Point {
-                        x: original_selection_start.x - removed_chars as i32,
-                        y: original_selection_start.y,
-                    };
-                    let new_selection_end = Point {
-                        x: original_selection_end.x - removed_chars as i32,
-                        y: original_selection_end.y,
-                    };
-                    // update the active selection.
-                    self.selection = Some(TextBufferSelection {
-                        beg: new_selection_start,
-                        end: new_selection_end,
-                    });
-
-                    // set the cursor to the new logical start of the selection.
-                    let cursor_at_line_start = self.cursor_move_to_logical_internal(current_cursor, Point { x: 0, y: new_selection_start.y });
-                    let final_cursor_pos = self.cursor_move_to_logical_internal(cursor_at_line_start, new_selection_start);
-                    self.set_cursor_internal(final_cursor_pos);
-
-                } else {
-                    // Log a warning if no actual bytes were marked for deletion despite `removed_chars` being > 0.
-                    eprintln!("Warning: `removed_chars` was > 0 for selection back-tab, but deletion range was empty. No edit performed.");
-                }
+            None => {
+                // there was no active selection, adjust only the cursor's X coord
+                let new_pos = Point { x: (cursor_pos.x - removed).max(0), y: cursor_pos.y };
+                self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, new_pos));
             }
         }
     }
-
-    fn handle_no_selection_forward_indent(&mut self, delta: i32, cursor_pos: Point) {
-        // insert tab characters at the current cursor.
-        let tabs_to_insert = vec![b'\t'; delta as usize];
-
-        // perform insertion within an edit transaction.
-        self.edit_begin(HistoryType::Other, self.cursor);
-        self.edit_write(&tabs_to_insert);
-        self.edit_end();
-
-        // update the cursor's logical position.
-        let new_x = cursor_pos.x + delta;
-        let new_cursor_pos = Point { x: new_x, y: cursor_pos.y };
-        let updated_cursor_after_write = self.cursor_move_to_logical_internal(self.cursor, new_cursor_pos);
-        self.set_cursor_internal(updated_cursor_after_write);
-    }
-
-    fn handle_no_selection_backward_indent(&mut self, cursor_pos: Point, tab_size: usize) {
-        // define the range of the current line.
-        let line_start_point = Point { x: 0, y: cursor_pos.y };
-        let line_end_point = Point { x: CoordType::MAX, y: cursor_pos.y };
-
-        // get cursor objects for the line start and end.
-        let beg_cursor_line = self.cursor_move_to_logical_internal(self.cursor, line_start_point);
-        let end_cursor_line = self.cursor_move_to_logical_internal(beg_cursor_line, line_end_point);
-
-        // extract the full bytes of the current line.
-        let mut full_line_bytes = Vec::new();
-        self.buffer.extract_raw(
-            beg_cursor_line.offset,
-            end_cursor_line.offset,
-            &mut full_line_bytes,
-            0
-        );
-
-        // get the cursor's character position within the line.
-        let cursor_x_char_pos = cursor_pos.x as usize;
-
-        // use `unindent_line` to find the characters to remove and the starting byte offset.
-        let (_, removed_chars, deletion_start_byte_offset_in_line) =
-            Self::unindent_line(&full_line_bytes, cursor_x_char_pos, tab_size);
-
-        if removed_chars > 0 {
-            // convert line to string for character index mapping to byte offset.
-            let full_line_str = std::str::from_utf8(&full_line_bytes).unwrap_or("");
-            let cursor_byte_offset_in_line = full_line_str.char_indices()
-                .nth(cursor_x_char_pos)
-                .map(|(idx, _)| idx)
-                .unwrap_or(full_line_bytes.len());
-
-            // calculate absolute buffer offsets for the deletion range.
-            let delete_start_buffer_offset = beg_cursor_line.offset + deletion_start_byte_offset_in_line;
-            let delete_end_buffer_offset = beg_cursor_line.offset + cursor_byte_offset_in_line;
-
-            // perform deletion only if a valid range exists.
-            if delete_start_buffer_offset < delete_end_buffer_offset {
-                // get precise cursor objects for the deletion range.
-                let delete_start_actual_cursor = self.cursor_move_to_offset_internal(
-                    beg_cursor_line,
-                    delete_start_buffer_offset
-                );
-                let delete_end_actual_cursor = self.cursor_move_to_offset_internal(
-                    beg_cursor_line,
-                    delete_end_buffer_offset
-                );
-
-                // perform the deletion within an edit transaction.
-                self.edit_begin(HistoryType::Other, delete_start_actual_cursor);
-                self.edit_delete(delete_end_actual_cursor);
-                self.edit_end();
-
-                // update the cursor's logical X position.
-                let mut new_x = cursor_pos.x as i32 - removed_chars as i32;
-                if new_x < 0 {
-                    new_x = 0;
-                }
-
-                let new_cursor_pos = Point {
-                    x: new_x,
-                    y: cursor_pos.y,
-                };
-                // set the new cursor position.
-                let updated_line_start_cursor = self.cursor_move_to_logical_internal(self.cursor, line_start_point);
-                let new_cursor = self.cursor_move_to_logical_internal(updated_line_start_cursor, new_cursor_pos);
-                self.set_cursor_internal(new_cursor);
-            } else {
-                // log a warning if no actual bytes were marked for deletion despite `removed_chars` being > 0.
-                eprintln!("Warning: `removed_chars` was > 0, but deletion range was empty. No edit performed.");
-            }
-        }
-    }
-
-    /// indents or unindents the current selection or the current line if no selection.
+    
     pub fn change_indent(&mut self, delta: i32) {
-        let tab_size = usize::try_from(self.tab_size).unwrap_or(4);
-
-        // handle indent for highlighted text
-        if let Some(TextBufferSelection { beg, end }) = self.selection {
-            // get the normalized start and end points of the selection.
-            let [original_selection_start, original_selection_end] = minmax(beg, end);
-
-            // handles tabbing forward
-            if delta > 0 {
-                self.handle_selection_forward_indent(delta, original_selection_start, original_selection_end);
-            // handle tabbing backward
-            } else {
-                self.handle_selection_backward_indent(original_selection_start, original_selection_end, tab_size);
+        let tab_size = self.tab_size as usize;
+        let cursor_pos = self.cursor.logical_pos;
+        let (start_point, selection_range) = self.selection
+            .map(|sel| { let [start, end] = minmax(sel.beg, sel.end); (start, Some((start, end))) })
+            .unwrap_or((cursor_pos, None));
+    
+        if delta > 0 {
+            let insert_offset = self.cursor_move_to_logical_internal(self.cursor, start_point).offset;
+            self.edit_begin(HistoryType::Other, self.cursor_move_to_offset_internal(self.cursor, insert_offset));
+            self.edit_write(&self.get_indent_type_preference(delta));
+            self.edit_end();
+    
+            let width_delta = if self.indent_with_tabs { delta } else { delta * self.tab_size };
+            match selection_range {
+                Some((beg, end)) => {
+                    self.selection = Some(TextBufferSelection {
+                        beg: Point { x: beg.x + width_delta, y: beg.y },
+                        end: Point { x: end.x + width_delta, y: end.y },
+                    });
+                    self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, self.selection.unwrap().beg));
+                }
+                None => {
+                    let new_pos = Point { x: cursor_pos.x + width_delta, y: cursor_pos.y };
+                    self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, new_pos));
+                }
             }
-        // handle indent if there is no highlighted text
         } else {
-            let cursor_pos = self.cursor.logical_pos;
-
-            // handle forward tabbing
-            if delta > 0 {
-                self.handle_no_selection_forward_indent(delta, cursor_pos);
-            // handle backward tabbing
-            } else {
-                self.handle_no_selection_backward_indent(cursor_pos, tab_size);
+            let line_start = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: start_point.y });
+            let target_offset = self.cursor_move_to_logical_internal(line_start, start_point).offset;
+            
+            let mut line_bytes = Vec::new();
+            self.buffer.extract_raw(line_start.offset, target_offset, &mut line_bytes, 0);
+    
+            let cursor_byte_offset = target_offset - line_start.offset;
+            let (removed_count, del_start) = Self::get_bytes_to_unindent_by(&line_bytes, cursor_byte_offset, tab_size);
+    
+            if removed_count > 0 {
+                let del_start_offset = line_start.offset + del_start;
+                let del_end_offset = line_start.offset + cursor_byte_offset;
+    
+                self.edit_begin(HistoryType::Other, self.cursor_move_to_offset_internal(self.cursor, del_start_offset));
+                self.edit_delete(self.cursor_move_to_offset_internal(self.cursor, del_end_offset));
+                self.edit_end();
+    
+                self.update_cursor_position_after_unindent(removed_count as i32, selection_range, cursor_pos);
             }
         }
     }
- 
 
     /// Extracts the contents of the current selection.
     /// May optionally delete it, if requested. This is meant to be used for Ctrl+X.
