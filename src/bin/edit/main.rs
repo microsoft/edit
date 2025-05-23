@@ -1,7 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![feature(let_chains, linked_list_cursors, os_string_truncate, string_from_utf8_lossy_owned)]
+#![feature(
+    allocator_api,
+    let_chains,
+    linked_list_cursors,
+    os_string_truncate,
+    string_from_utf8_lossy_owned
+)]
 
 mod documents;
 mod draw_editor;
@@ -12,7 +18,6 @@ mod localization;
 mod state;
 
 use std::borrow::Cow;
-use std::ffi::OsString;
 #[cfg(feature = "debug-latency")]
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -22,7 +27,7 @@ use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
 use draw_statusbar::*;
-use edit::arena::{self, ArenaString, scratch_arena};
+use edit::arena::{self, Arena, ArenaString, scratch_arena};
 use edit::framebuffer::{self, IndexedColor};
 use edit::helpers::{KIBI, MEBI, MetricFormatter, Rect, Size};
 use edit::input::{self, kbmod, vk};
@@ -234,54 +239,49 @@ fn run() -> apperr::Result<()> {
 
 // Returns true if the application should exit early.
 fn handle_args(state: &mut State) -> apperr::Result<bool> {
+    let scratch = scratch_arena(None);
+    let mut paths: Vec<PathBuf, &Arena> = Vec::new_in(&*scratch);
     let mut cwd = env::current_dir()?;
 
     // The best CLI argument parser in the world.
-    let args = env::args_os().collect::<Vec<OsString>>();
-    if args.iter().any(|arg| arg == "-h" || arg == "--help" || (cfg!(windows) && arg == "/?")) {
-        print_help();
-        return Ok(true);
-    } else if args.iter().any(|arg| arg == "-v" || arg == "--version") {
-        print_version();
-        return Ok(true);
+    for arg in env::args_os().skip(1) {
+        if arg == "-h" || arg == "--help" || (cfg!(windows) && arg == "/?") {
+            print_help();
+            return Ok(true);
+        } else if arg == "-v" || arg == "--version" {
+            print_version();
+            return Ok(true);
+        } else if arg == "-" {
+            paths.clear();
+            break;
+        }
+        let p = cwd.join(Path::new(&arg));
+        let p = path::normalize(&p);
+        if !p.is_dir() {
+            paths.push(p);
+        }
     }
 
-    let paths = args
-        .iter()
-        .skip(1)
-        .filter_map(|arg| {
-            if arg == "-" {
-                // We ignore it
-                return None;
-            }
-            let p = cwd.join(Path::new(arg));
-            let p = path::normalize(&p);
-            if p.is_dir() {
-                return None;
-            }
-            Some(p)
-        })
-        .collect::<Vec<PathBuf>>();
-
     if paths.len() > 1 {
-        for p in paths {
-            state.documents.add_file_path(&p)?;
+        for p in &paths {
+            state.documents.add_file_path(p)?;
         }
     } else if paths.len() == 1 {
-        let p = paths[0].clone();
+        let p = &paths[0];
         if let Some(parent) = p.parent() {
             cwd = parent.to_path_buf();
         }
-        state.documents.add_file_path(&p)?;
-    } else {
-        if let Some(mut file) = sys::open_stdin_if_redirected() {
-            let doc = state.documents.add_untitled()?;
-            let mut tb = doc.buffer.borrow_mut();
-            tb.read_file(&mut file, None)?;
-            tb.mark_as_dirty();
-        } else {
-            state.documents.add_untitled()?;
-        }
+        state.documents.add_file_path(p)?;
+    }
+
+    if let Some(mut file) = sys::open_stdin_if_redirected() {
+        let doc = state.documents.add_untitled()?;
+        let mut tb = doc.buffer.borrow_mut();
+        tb.read_file(&mut file, None)?;
+        tb.mark_as_dirty();
+    } else if paths.len() == 0 {
+        // No files were passed, and stdin is not redirected.
+        state.documents.add_untitled()?;
     }
 
     state.file_picker_pending_dir = DisplayablePathBuf::new(cwd);
