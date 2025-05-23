@@ -232,27 +232,18 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
         ctx.inherit_focus();
         ctx.attr_padding(Rect::three(0, 2, 1));
         ctx.attr_position(Position::Center);
-        ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+        ctx.table_set_cell_gap(Size { width: 1, height: 0 });
         {
             ctx.table_next_row();
             ctx.inherit_focus();
-
-            if ctx.button("yes", loc(LocId::UnsavedChangesDialogYes)) {
+            if ctx.menubar_menu_button(loc(LocId::UnsavedChangesDialogYes), 'S', vk::NULL){
                 action = Action::Save;
             }
-            ctx.inherit_focus();
-            if ctx.button("no", loc(LocId::UnsavedChangesDialogNo)) {
+            if ctx.menubar_menu_button(loc(LocId::UnsavedChangesDialogNo), 'D', vk::NULL) {
                 action = Action::Discard;
             }
-            if ctx.button("cancel", loc(LocId::Cancel)) {
+            if ctx.menubar_menu_button(loc(LocId::Cancel), 'C', vk::NULL) {
                 action = Action::Cancel;
-            }
-
-            // TODO: This should highlight the corresponding letter in the label.
-            if ctx.consume_shortcut(vk::S) {
-                action = Action::Save;
-            } else if ctx.consume_shortcut(vk::N) {
-                action = Action::Discard;
             }
         }
         ctx.table_end();
