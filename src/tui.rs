@@ -486,17 +486,21 @@ impl Tui {
             self.mouse_is_drag = false;
         }
 
-        if self.scroll_to_focused() {
-            self.needs_more_settling();
-        }
-
         let now = std::time::Instant::now();
         let mut input_text = None;
         let mut input_keyboard = None;
         let mut input_mouse_modifiers = kbmod::NONE;
         let mut input_mouse_click = 0;
         let mut input_scroll_delta = Point { x: 0, y: 0 };
-        let input_consumed = input.is_none();
+        // `input_consumed` should be `true` if we're in the settling phase which is indicated by
+        // `self.needs_settling() == true`. However, there's a possibility for it being true from
+        // a previous frame, and we do have fresh new input. In that case want `input_consumed`
+        // to be false of course which is ensured by checking for `input.is_none()`.
+        let input_consumed = self.needs_settling() && input.is_none();
+
+        if self.scroll_to_focused() {
+            self.needs_more_settling();
+        }
 
         match input {
             None => {}
