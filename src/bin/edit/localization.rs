@@ -576,7 +576,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* es      */ "Acerca de",
         /* fr      */ "À propos",
         /* it      */ "Informazioni",
-        /* ja      */ "バージョン情報",
+        /* ja      */ "情報",
         /* ko      */ "정보",
         /* pt_br   */ "Sobre",
         /* ru      */ "О программе",
