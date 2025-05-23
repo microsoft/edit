@@ -635,6 +635,19 @@ impl Regex {
         unsafe { (f.uregex_reset64)(self.0, index as i64, &mut status) };
     }
 
+    /// Gets captured group count.
+    pub fn get_captured_group_count(&mut self) -> Option<i32> {
+        let f = assume_loaded();
+
+        let mut status = icu_ffi::U_ZERO_ERROR;
+        let count = unsafe { (f.uregex_groupCount)(self.0, &mut status) };
+        if status.is_failure() {
+            return None;
+        }
+
+        Some(count)
+    }
+
     /// Gets the text range of a captured group by index.
     pub fn get_captured_group_range(&mut self, group: i32) -> Option<Range<usize>> {
         let f = assume_loaded();
@@ -852,6 +865,7 @@ struct LibraryFunctions {
     uregex_setUText: icu_ffi::uregex_setUText,
     uregex_reset64: icu_ffi::uregex_reset64,
     uregex_findNext: icu_ffi::uregex_findNext,
+    uregex_groupCount: icu_ffi::uregex_groupCount,
     uregex_start64: icu_ffi::uregex_start64,
     uregex_end64: icu_ffi::uregex_end64,
     ucol_open: icu_ffi::ucol_open,
@@ -871,7 +885,7 @@ const LIBICUUC_PROC_NAMES: [&CStr; 9] = [
     c"utext_close",
 ];
 
-const LIBICUI18N_PROC_NAMES: [&CStr; 10] = [
+const LIBICUI18N_PROC_NAMES: [&CStr; 11] = [
     // Found in libicui18n.so on UNIX, icuin.dll/icu.dll on Windows.
     c"uregex_open",
     c"uregex_close",
@@ -879,6 +893,7 @@ const LIBICUI18N_PROC_NAMES: [&CStr; 10] = [
     c"uregex_setUText",
     c"uregex_reset64",
     c"uregex_findNext",
+    c"uregex_groupCount",
     c"uregex_start64",
     c"uregex_end64",
     c"ucol_open",
@@ -1224,6 +1239,8 @@ mod icu_ffi {
         unsafe extern "C" fn(regexp: *mut URegularExpression, index: i64, status: &mut UErrorCode);
     pub type uregex_findNext =
         unsafe extern "C" fn(regexp: *mut URegularExpression, status: &mut UErrorCode) -> bool;
+    pub type uregex_groupCount =
+        unsafe extern "C" fn(regexp: *mut URegularExpression, status: &mut UErrorCode) -> i32;
     pub type uregex_start64 = unsafe extern "C" fn(
         regexp: *mut URegularExpression,
         group_num: i32,
