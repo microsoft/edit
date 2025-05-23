@@ -1641,10 +1641,16 @@ impl<'a> Context<'a, '_> {
         last_node.attributes.reverse = true;
     }
 
+
+     /// Overload of consume_shortcut_optional when it's never ignored
+    pub fn consume_shortcut(&mut self, shortcut: InputKey) -> bool {
+        return self.consume_shortcut_optional(shortcut, false);
+    }
+
     /// Checks if the current keyboard input matches the given shortcut,
     /// consumes it if it is and returns true in that case.
-    pub fn consume_shortcut(&mut self, shortcut: InputKey) -> bool {
-        if !self.input_consumed && self.input_keyboard == Some(shortcut) {
+    pub fn consume_shortcut_optional(&mut self, shortcut: InputKey, ignore: bool) -> bool {
+        if !ignore && !self.input_consumed && self.input_keyboard == Some(shortcut) {
             self.set_input_consumed();
             true
         } else {

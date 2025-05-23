@@ -249,9 +249,9 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
             }
 
             // TODO: This should highlight the corresponding letter in the label.
-            if ctx.consume_shortcut(vk::S) {
+            if ctx.consume_shortcut_optional(vk::S, state.wants_file_picker == StateFilePicker::SaveAsShown) {
                 action = Action::Save;
-            } else if ctx.consume_shortcut(vk::N) {
+            } else if ctx.consume_shortcut_optional(vk::N, state.wants_file_picker == StateFilePicker::SaveAsShown) {
                 action = Action::Discard;
             }
         }
