@@ -276,7 +276,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
             if ok == 0 || STATE.wants_exit {
                 return None;
             }
-            input_buf[..read as usize].assume_init_ref()
+            uninit_slice_assume_init_ref(&input_buf[..read as usize])
         };
 
         // Convert Win32 input records into UTF16.
@@ -593,7 +593,7 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString, &Arena> {
         // Drop the terminating double-null character.
         len = len.saturating_sub(1);
 
-        buf[..len as usize].assume_init_ref()
+        uninit_slice_assume_init_ref(&buf[..len as usize])
     };
 
     // Convert UTF16 to UTF8.

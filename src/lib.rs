@@ -8,7 +8,6 @@
     let_chains,
     linked_list_cursors,
     maybe_uninit_fill,
-    maybe_uninit_slice,
     maybe_uninit_uninit_array_transpose,
     os_string_truncate
 )]

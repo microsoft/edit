@@ -602,7 +602,7 @@ impl TextBuffer {
         if let Some(encoding) = encoding {
             self.encoding = encoding;
         } else {
-            let bom = detect_bom(unsafe { buf[..first_chunk_len].assume_init_ref() });
+            let bom = detect_bom(unsafe { uninit_slice_assume_init_ref(&buf[..first_chunk_len]) });
             self.encoding = bom.unwrap_or("UTF-8");
         }
 
@@ -731,7 +731,7 @@ impl TextBuffer {
         done: bool,
     ) -> apperr::Result<()> {
         {
-            let mut first_chunk = unsafe { buf[..first_chunk_len].assume_init_ref() };
+            let mut first_chunk = unsafe { uninit_slice_assume_init_ref(&buf[..first_chunk_len]) };
             if first_chunk.starts_with(b"\xEF\xBB\xBF") {
                 first_chunk = &first_chunk[3..];
                 self.encoding = "UTF-8 BOM";
@@ -787,7 +787,7 @@ impl TextBuffer {
         let scratch = scratch_arena(None);
         let pivot_buffer = scratch.alloc_uninit_slice(4 * KIBI);
         let mut c = icu::Converter::new(pivot_buffer, self.encoding, "UTF-8")?;
-        let mut first_chunk = unsafe { buf[..first_chunk_len].assume_init_ref() };
+        let mut first_chunk = unsafe { uninit_slice_assume_init_ref(&buf[..first_chunk_len]) };
 
         while !first_chunk.is_empty() {
             let off = self.text_length();
@@ -824,7 +824,7 @@ impl TextBuffer {
                 break;
             }
 
-            let read = unsafe { buf[..buf_len].assume_init_ref() };
+            let read = unsafe { uninit_slice_assume_init_ref(&buf[..buf_len]) };
             let (input_advance, output_advance) = c.convert(read, slice_as_uninit_mut(gap))?;
 
             self.buffer.commit_gap(output_advance);
@@ -878,7 +878,7 @@ impl TextBuffer {
             || self.encoding == "GB18030"
         {
             let (_, output_advance) = c.convert(b"\xEF\xBB\xBF", buf)?;
-            let chunk = unsafe { buf[..output_advance].assume_init_ref() };
+            let chunk = unsafe { uninit_slice_assume_init_ref(&buf[..output_advance]) };
             file.write_all(chunk)?;
         }
 
@@ -889,7 +889,7 @@ impl TextBuffer {
             }
 
             let (input_advance, output_advance) = c.convert(chunk, buf)?;
-            let chunk = unsafe { buf[..output_advance].assume_init_ref() };
+            let chunk = unsafe { uninit_slice_assume_init_ref(&buf[..output_advance]) };
             file.write_all(chunk)?;
             offset += input_advance;
         }
