@@ -586,7 +586,7 @@ impl TextBuffer {
         encoding: Option<&'static str>,
     ) -> apperr::Result<()> {
         let scratch = scratch_arena(None);
-        let mut buf = scratch.alloc_uninit().transpose();
+        let mut buf = scratch.alloc_uninit_array();
         let mut first_chunk_len = 0;
         let mut read = 0;
 
