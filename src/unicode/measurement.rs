@@ -32,7 +32,7 @@ pub struct Cursor {
     pub column: CoordType,
     /// When `measure_forward` hits the `word_wrap_column`, the question is:
     /// Was there a wrap opportunity on this line? Because if there wasn't,
-    /// a hard-wrap is required, otherwise the word that is being layouted is
+    /// a hard-wrap is required; otherwise, the word that is being laid-out is
     /// moved to the next line. This boolean carries this state between calls.
     pub wrap_opp: bool,
 }
@@ -357,7 +357,7 @@ impl<'doc> MeasurementConfig<'doc> {
         // Is the word we're currently on so wide that it will be wrapped further down the document?
         if word_wrap_column > 0 {
             if !wrap_opp {
-                // If the current layouted line had no wrap opportunities, it means we had an input
+                // If the current laid-out line had no wrap opportunities, it means we had an input
                 // such as "fooooooooooooooooooooo" at a `word_wrap_column` of e.g. 10. The word
                 // didn't fit and the lack of a `wrap_opp` indicates we must force a hard wrap.
                 // Thankfully, if we reach this point, that was already done by the code above.
@@ -486,7 +486,7 @@ impl<'doc> MeasurementConfig<'doc> {
     }
 }
 
-/// Seeks forward to to the given line start.
+/// Seeks forward to the given line start.
 ///
 /// If given a piece of `text`, and assuming you're currently at `offset` which
 /// is on the logical line `line`, this will seek forward until the logical line
@@ -944,7 +944,7 @@ mod test {
             }
         );
 
-        // Test if the remaining 4 "a"s are properly layouted.
+        // Test if the remaining 4 "a"s are properly laid-out.
         let end2 = cfg.goto_visual(Point { x: max, y: 2 });
         assert_eq!(
             end2,
@@ -968,7 +968,7 @@ mod test {
 
         for (y, &expected) in expected.iter().enumerate() {
             let y = y as CoordType;
-            // In order for `goto_visual()` to hit columnn 0 after a word wrap,
+            // In order for `goto_visual()` to hit column 0 after a word wrap,
             // it MUST be able to go back by 1 grapheme, which is what this tests.
             let beg = cfg.goto_visual(Point { x: 0, y });
             let end = cfg.goto_visual(Point { x: 5, y });
@@ -1069,7 +1069,7 @@ mod test {
 
         for (y, &expected) in expected.iter().enumerate() {
             let y = y as CoordType;
-            // In order for `goto_visual()` to hit columnn 0 after a word wrap,
+            // In order for `goto_visual()` to hit column 0 after a word wrap,
             // it MUST be able to go back by 1 grapheme, which is what this tests.
             let beg = cfg.goto_visual(Point { x: 0, y });
             let end = cfg.goto_visual(Point { x: 5, y });

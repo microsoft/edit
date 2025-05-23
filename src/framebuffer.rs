@@ -793,12 +793,12 @@ pub struct Attributes(u8);
 
 #[allow(non_upper_case_globals)]
 impl Attributes {
-    pub const None: Attributes = Attributes(0);
-    pub const Italic: Attributes = Attributes(0b1);
-    pub const Underlined: Attributes = Attributes(0b10);
-    pub const All: Attributes = Attributes(0b11);
+    pub const None: Self = Self(0);
+    pub const Italic: Self = Self(0b1);
+    pub const Underlined: Self = Self(0b10);
+    pub const All: Self = Self(0b11);
 
-    pub const fn is(self, attr: Attributes) -> bool {
+    pub const fn is(self, attr: Self) -> bool {
         (self.0 & attr.0) == attr.0
     }
 }
@@ -806,18 +806,18 @@ impl Attributes {
 unsafe impl MemsetSafe for Attributes {}
 
 impl BitOr for Attributes {
-    type Output = Attributes;
+    type Output = Self;
 
     fn bitor(self, rhs: Self) -> Self::Output {
-        Attributes(self.0 | rhs.0)
+        Self(self.0 | rhs.0)
     }
 }
 
 impl BitXor for Attributes {
-    type Output = Attributes;
+    type Output = Self;
 
     fn bitxor(self, rhs: Self) -> Self::Output {
-        Attributes(self.0 ^ rhs.0)
+        Self(self.0 ^ rhs.0)
     }
 }
 

@@ -32,7 +32,7 @@ impl Document {
             tb.write_file(&mut file)?;
         }
 
-        if let Ok(id) = sys::file_id(&file) {
+        if let Ok(id) = sys::file_id(None, path) {
             self.file_id = Some(id);
         }
 
@@ -52,7 +52,7 @@ impl Document {
             tb.read_file(&mut file, encoding)?;
         }
 
-        if let Ok(id) = sys::file_id(&file) {
+        if let Ok(id) = sys::file_id(None, path) {
             self.file_id = Some(id);
         }
 
@@ -156,10 +156,7 @@ impl DocumentManager {
             Err(err) => return Err(err),
         };
 
-        let file_id = match &file {
-            Some(file) => Some(sys::file_id(file)?),
-            None => None,
-        };
+        let file_id = if file.is_some() { Some(sys::file_id(file.as_ref(), &path)?) } else { None };
 
         // Check if the file is already open.
         if file_id.is_some() && self.update_active(|doc| doc.file_id == file_id) {

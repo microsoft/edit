@@ -74,7 +74,7 @@ pub fn score_fuzzy<'a>(
             let matches_sequence_len =
                 if query_index > 0 && target_index > 0 { matches[diag_index] } else { 0 };
 
-            // If we are not matching on the first query character any more, we only produce a
+            // If we are not matching on the first query character anymore, we only produce a
             // score if we had a score previously for the last query index (by looking at the diagScore).
             // This makes sure that the query always matches in sequence on the target. For example
             // given a target of "ede" and a query of "de", we would otherwise produce a wrong high score
@@ -101,7 +101,7 @@ pub fn score_fuzzy<'a>(
                     // We don't need to check if it's contiguous if we allow non-contiguous matches
                     allow_non_contiguous_matches ||
                         // We must be looking for a contiguous match.
-                        // Looking at an index higher than 0 in the query means we must have already
+                        // Looking at an index above 0 in the query means we must have already
                         // found out this is contiguous otherwise there wouldn't have been a score
                         query_index > 0 ||
                         // lastly check if the query is completely contiguous at this index in the target
@@ -202,7 +202,7 @@ fn compute_char_score(
 
 fn consider_as_equal(a: char, b: char) -> bool {
     // Special case path separators: ignore platform differences
-    a == b || a == '/' || a == '\\' && b == '/' || b == '\\'
+    a == b || (a == '/' && b == '\\') || (a == '\\' && b == '/')
 }
 
 fn score_separator_at_pos(ch: char) -> i32 {

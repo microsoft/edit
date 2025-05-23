@@ -14,8 +14,13 @@ pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
     ctx.attr_background_rgba(state.menubar_color_bg);
     ctx.attr_foreground_rgba(state.menubar_color_fg);
     {
+        let contains_focus = ctx.contains_focus();
+
         if ctx.menubar_menu_begin(loc(LocId::File), 'F') {
             draw_menu_file(ctx, state);
+        }
+        if !contains_focus && ctx.consume_shortcut(vk::F10) {
+            ctx.steal_focus();
         }
         if state.documents.active().is_some() && ctx.menubar_menu_begin(loc(LocId::Edit), 'E') {
             draw_menu_edit(ctx, state);
@@ -84,7 +89,7 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
             state.wants_search.kind = StateSearchKind::Search;
             state.wants_search.focus = true;
         }
-        if ctx.menubar_menu_button(loc(LocId::EditReplace), 'R', kbmod::CTRL | vk::R) {
+        if ctx.menubar_menu_button(loc(LocId::EditReplace), 'L', kbmod::CTRL | vk::R) {
             state.wants_search.kind = StateSearchKind::Replace;
             state.wants_search.focus = true;
         }
