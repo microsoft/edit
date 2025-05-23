@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::num::ParseIntError;
+
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::icu;
@@ -272,34 +274,12 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     ctx.toss_focus_up();
 }
 
-
-fn validate_goto_point(line: &str, current: Point) -> Result<Point, ()> {
-    let parts: Vec<_> = line.splitn(2, ':').collect();
-    Ok(match parts.len() {
-        1 => {
-            if let Ok(line) = parts[0].parse::<i32>() {
-                Point { y: line - 1, x: current.x }
-            } else {
-                return Err(());
-            }
-        }
-        2 => {
-            if let Ok(line) = parts[0].parse::<i32>() {
-                if let Ok(column) = parts[1].parse::<i32>() {
-                    Point { y: line - 1, x: column }
-                } else {
-                    return Err(());
-                }
-            } else {
-                return Err(());
-            }
-        }
-        _ => unreachable!()
-    })
-}
-
+// NOTE: This is where `validate_goto_point` used to be. It's subjective,
+//       but I prefer utility functions to be after the non-utility code.
 
 pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
+    let mut done = false;
+
     ctx.modal_begin("goto", loc(LocId::FileGoto));
     {
         if ctx.editline("goto-line", &mut state.goto_target) {
@@ -309,30 +289,53 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
             ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
             ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
         }
-
         ctx.attr_intrinsic_size(Size { width: 24, height: 1 });
         ctx.steal_focus();
 
         if ctx.consume_shortcut(vk::RETURN) {
-            let Some(doc) = state.documents.active_mut() else {
-                state.wants_goto = false;
-                return;
-            };
-            let mut buf = doc.buffer.borrow_mut();
-            match validate_goto_point(&state.goto_target, buf.cursor_logical_pos()) {
-                Ok(point) => {
-                    buf.cursor_move_to_logical(point);
-                    state.wants_goto = false;
-                    state.goto_target.clear();
-                    state.goto_invalid = false;
-                },
-                Err(_) => {
-                    state.goto_invalid = true;
+            // NOTE: Early returns are a bug here.
+            //       You can think of immediate mode UI code as writing HTML,
+            //       and so early returns are equivalent to not closing a tag.
+            match state.documents.active_mut() {
+                Some(doc) => {
+                    match validate_goto_point(&state.goto_target) {
+                        Ok(point) => {
+                            let mut tb = doc.buffer.borrow_mut();
+                            tb.cursor_move_to_logical(point);
+                            // NOTE: Make sure the text area scrolls to the cursor.
+                            tb.make_cursor_visible();
+                            done = true;
+                        }
+                        Err(_) => state.goto_invalid = true,
+                    };
                 }
-            };
+                None => done = true,
+            }
+            // NOTE: When the state changes and TUI can't possibly know about it,
+            // we need to call `ctx.needs_rerender()`. Calling it too often is fine,
+            // but if you never stop calling it is a bug (= infinite render loop).
+            // All 3 cases above require a rerender one way or another.
+            ctx.needs_rerender();
         }
     }
-    if ctx.modal_end() {
+    done |= ctx.modal_end();
+
+    // NOTE: Common cleanup at the end to make sure we don't forget `goto_target.clear()`.
+    if done {
         state.wants_goto = false;
+        state.goto_target.clear();
+        state.goto_invalid = false;
     }
+}
+
+// NOTE: Since we don't care about the error type we can just return ParseIntError to use `?`.
+fn validate_goto_point(line: &str) -> Result<Point, ParseIntError> {
+    let mut coords = [0; 2];
+    let (y, x) = line.split_once(':').unwrap_or((line, "0"));
+    // NOTE: Using a loop here to avoid 2 copies of the str->int code.
+    // This makes the binary more compact.
+    for (i, s) in [x, y].iter().enumerate() {
+        coords[i] = s.parse::<CoordType>()?.saturating_sub(1);
+    }
+    Ok(Point { x: coords[0], y: coords[1] })
 }
