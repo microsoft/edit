@@ -1961,83 +1961,122 @@ impl TextBuffer {
 
         Point { x: chars, y: cursor.logical_pos.y }
     }
-
-    /// Unindents the current selection or line.
-    ///
-    /// TODO: This function is ripe for some optimizations:
-    /// * Instead of replacing the entire selection,
-    ///   it should unindent each line directly (as if multiple cursors had been used).
-    /// * The cursor movement at the end is rather costly, but at least without word wrap
-    ///   it should be possible to calculate it directly from the removed amount.
-    pub fn unindent(&mut self) {
-        let mut selection_beg = self.cursor.logical_pos;
-        let mut selection_end = selection_beg;
-
-        if let Some(TextBufferSelection { beg, end }) = self.selection {
-            selection_beg = beg;
-            selection_end = end;
-        }
-
-        let [beg, end] = minmax(selection_beg, selection_end);
-        let beg = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: beg.y });
-        let end = self.cursor_move_to_logical_internal(beg, Point { x: CoordType::MAX, y: end.y });
-
-        let mut replacement = Vec::new();
-        self.buffer.extract_raw(beg.offset, end.offset, &mut replacement, 0);
-
-        let initial_len = replacement.len();
-        let mut offset = 0;
-        let mut y = beg.logical_pos.y;
-
-        loop {
-            if offset >= replacement.len() {
-                break;
-            }
-
-            let mut remove = 0;
-
-            if replacement[offset] == b'\t' {
-                remove = 1;
-            } else {
-                while remove < self.tab_size as usize
-                    && offset + remove < replacement.len()
-                    && replacement[offset + remove] == b' '
-                {
-                    remove += 1;
+    
+    fn unindent_line(line: &[u8], cursor_char_pos: usize, tab_size: usize) -> (Vec<u8>, usize) {
+        let line_str = std::str::from_utf8(line).unwrap_or("");
+        let mut char_indices = line_str.char_indices();
+    
+        let byte_offset = char_indices
+            .nth(cursor_char_pos)
+            .map(|(idx, _)| idx)
+            .unwrap_or(line.len());
+    
+        let mut remove_start = byte_offset;
+        let mut removed_bytes = 0;
+    
+        while removed_bytes < tab_size && remove_start > 0 {
+            match line.get(remove_start - 1) {
+                Some(&b' ') => {
+                    remove_start -= 1;
+                    removed_bytes += 1;
                 }
+                _ => break,
             }
-
-            if remove > 0 {
-                replacement.drain(offset..offset + remove);
-            }
-
-            if y == selection_beg.y {
-                selection_beg.x -= remove as CoordType;
-            }
-            if y == selection_end.y {
-                selection_end.x -= remove as CoordType;
-            }
-
-            (offset, y) = unicode::newlines_forward(&replacement, offset, y, y + 1);
         }
+    
+        let removed_chars = std::str::from_utf8(&line[remove_start..byte_offset])
+            .ok()
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
+    
+        let mut new_line = Vec::with_capacity(line.len() - removed_bytes);
+        new_line.extend_from_slice(&line[..remove_start]);
+        new_line.extend_from_slice(&line[byte_offset..]);
+    
+        (new_line, removed_chars)
+    }
 
-        if replacement.len() == initial_len {
-            // Nothing to do.
-            return;
+    /// indents/unindents the current selection or line.
+    pub fn change_indent(&mut self, delta: i32) {
+        let tab_size = usize::try_from(self.tab_size).unwrap_or(4);
+    
+        // Determine selection bounds
+        let [selection_beg, selection_end] = if let Some(TextBufferSelection { beg, end }) = self.selection {
+            minmax(beg, end)
+        } else {
+            [self.cursor.logical_pos, self.cursor.logical_pos]
+        };
+    
+        let beg_cursor = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: selection_beg.y });
+        let end_cursor = self.cursor_move_to_logical_internal(beg_cursor, Point { x: CoordType::MAX, y: selection_end.y });
+    
+        let mut buffer_bytes = Vec::new();
+        self.buffer.extract_raw(beg_cursor.offset, end_cursor.offset, &mut buffer_bytes, 0);
+    
+        let mut offset = 0;
+        let mut lines = Vec::new();
+        let mut y = beg_cursor.logical_pos.y;
+        let mut removed_cursor_chars: i32 = 0;
+    
+        // Get original cursor position
+        let original_cursor_pos = self.cursor.logical_pos;
+    
+        while offset < buffer_bytes.len() {
+            let (next_offset, _) = unicode::newlines_forward(&buffer_bytes, offset, y, y + 1);
+            let current_line = &buffer_bytes[offset..next_offset];
+    
+            let is_cursor_line = y == original_cursor_pos.y;
+            let cursor_x = original_cursor_pos.x as usize;
+    
+            let new_line = if delta > 0 {
+                // Indent
+                let mut indented = vec![b'\t'; delta as usize];
+                indented.extend_from_slice(current_line);
+                if is_cursor_line {
+                    removed_cursor_chars = -(delta as i32); // Visual shift right
+                }
+                indented
+            } else {
+                // Unindent
+                let (unindented, removed_chars) = Self::unindent_line(current_line, cursor_x, tab_size);
+                if is_cursor_line {
+                    removed_cursor_chars = removed_chars as i32;
+                }
+                unindented
+            };
+    
+            lines.push(new_line);
+            offset = next_offset;
+            y += 1;
         }
-
-        self.edit_begin(HistoryType::Other, beg);
-        self.edit_delete(end);
-        self.edit_write(&replacement);
+    
+        let updated = lines.concat();
+        self.edit_begin(HistoryType::Other, beg_cursor);
+        self.edit_delete(end_cursor);
+        self.edit_write(&updated);
         self.edit_end();
-
+    
+        // Adjust selection
         if let Some(TextBufferSelection { beg, end }) = &mut self.selection {
             *beg = selection_beg;
             *end = selection_end;
         }
-
-        self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, selection_end));
-    }
+    
+        // Adjust cursor position
+        if self.selection.is_none() {
+            let mut new_x = original_cursor_pos.x as i32 - removed_cursor_chars;
+            if new_x < 0 {
+                new_x = 0;
+            }
+    
+            let new_cursor_pos = Point {
+                x: new_x as i32,
+                y: original_cursor_pos.y,
+            };
+            let new_cursor = self.cursor_move_to_logical_internal(beg_cursor, new_cursor_pos);
+            self.set_cursor_internal(new_cursor);
+        }
+    } 
 
     /// Extracts the contents of the current selection.
     /// May optionally delete it, if requested. This is meant to be used for Ctrl+X.

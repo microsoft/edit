@@ -2265,7 +2265,7 @@ impl<'a> Context<'a, '_> {
                         return false;
                     }
                     if modifiers == kbmod::SHIFT {
-                        tb.unindent();
+                        tb.change_indent(-1);
                     } else {
                         write = b"\t";
                     }
