@@ -6,6 +6,7 @@
 use std::time;
 
 use crate::simd::memchr2;
+use crate::unicode::Utf8Chars;
 
 /// The parser produces these tokens.
 pub enum Token<'parser, 'input> {
@@ -135,13 +136,19 @@ impl<'input> Stream<'_, 'input> {
         len
     }
 
+    fn decode_next(&mut self) -> char {
+        let mut iter = Utf8Chars::new(self.input.as_bytes(), self.off);
+        let c = iter.next().unwrap_or('\0');
+        self.off = iter.offset();
+        c
+    }
+
     /// Parses the next VT sequence from the previously given input.
     #[allow(
         clippy::should_implement_trait,
         reason = "can't implement Iterator because this is a lending iterator"
     )]
     pub fn next(&mut self) -> Option<Token<'_, 'input>> {
-        let parser = &mut *self.parser;
         let input = self.input;
         let bytes = input.as_bytes();
 
@@ -149,16 +156,21 @@ impl<'input> Stream<'_, 'input> {
         // returned `Some(..)` timeout, and if the caller did everything correctly
         // and there was indeed a timeout, we should be called with an empty
         // input. In that case we'll return the escape as its own token.
-        if input.is_empty() && matches!(parser.state, State::Esc) {
-            parser.state = State::Ground;
+        if input.is_empty() && matches!(self.parser.state, State::Esc) {
+            self.parser.state = State::Ground;
             return Some(Token::Esc('\0'));
         }
 
         while self.off < bytes.len() {
-            match parser.state {
+            // TODO: The state machine can be roughly broken up into two parts:
+            // * Wants to parse 1 `char` at a time: Ground, Esc, Ss3
+            //   These could all be unified to a single call to `decode_next()`.
+            // * Wants to bulk-process bytes: Csi, Osc, Dcs
+            // We should do that so the UTF8 handling is a bit more "unified".
+            match self.parser.state {
                 State::Ground => match bytes[self.off] {
                     0x1b => {
-                        parser.state = State::Esc;
+                        self.parser.state = State::Esc;
                         self.off += 1;
                     }
                     c @ (0x00..0x20 | 0x7f) => {
@@ -176,45 +188,39 @@ impl<'input> Stream<'_, 'input> {
                         return Some(Token::Text(&input[beg..self.off]));
                     }
                 },
-                State::Esc => {
-                    let c = bytes[self.off];
-                    self.off += 1;
-                    match c {
-                        b'[' => {
-                            parser.state = State::Csi;
-                            parser.csi.private_byte = '\0';
-                            parser.csi.final_byte = '\0';
-                            while parser.csi.param_count > 0 {
-                                parser.csi.param_count -= 1;
-                                parser.csi.params[parser.csi.param_count] = 0;
-                            }
-                        }
-                        b']' => {
-                            parser.state = State::Osc;
-                        }
-                        b'O' => {
-                            parser.state = State::Ss3;
-                        }
-                        b'P' => {
-                            parser.state = State::Dcs;
-                        }
-                        c => {
-                            parser.state = State::Ground;
-                            return Some(Token::Esc(c as char));
+                State::Esc => match self.decode_next() {
+                    '[' => {
+                        self.parser.state = State::Csi;
+                        self.parser.csi.private_byte = '\0';
+                        self.parser.csi.final_byte = '\0';
+                        while self.parser.csi.param_count > 0 {
+                            self.parser.csi.param_count -= 1;
+                            self.parser.csi.params[self.parser.csi.param_count] = 0;
                         }
                     }
-                }
+                    ']' => {
+                        self.parser.state = State::Osc;
+                    }
+                    'O' => {
+                        self.parser.state = State::Ss3;
+                    }
+                    'P' => {
+                        self.parser.state = State::Dcs;
+                    }
+                    c => {
+                        self.parser.state = State::Ground;
+                        return Some(Token::Esc(c));
+                    }
+                },
                 State::Ss3 => {
-                    parser.state = State::Ground;
-                    let c = bytes[self.off];
-                    self.off += 1;
-                    return Some(Token::SS3(c as char));
+                    self.parser.state = State::Ground;
+                    return Some(Token::SS3(self.decode_next()));
                 }
                 State::Csi => {
                     loop {
                         // If we still have slots left, parse the parameter.
-                        if parser.csi.param_count < parser.csi.params.len() {
-                            let dst = &mut parser.csi.params[parser.csi.param_count];
+                        if self.parser.csi.param_count < self.parser.csi.params.len() {
+                            let dst = &mut self.parser.csi.params[self.parser.csi.param_count];
                             while self.off < bytes.len() && bytes[self.off].is_ascii_digit() {
                                 let add = bytes[self.off] as u32 - b'0' as u32;
                                 let value = *dst as u32 * 10 + add;
@@ -238,15 +244,17 @@ impl<'input> Stream<'_, 'input> {
 
                         match c {
                             0x40..=0x7e => {
-                                parser.state = State::Ground;
-                                parser.csi.final_byte = c as char;
-                                if parser.csi.param_count != 0 || parser.csi.params[0] != 0 {
-                                    parser.csi.param_count += 1;
+                                self.parser.state = State::Ground;
+                                self.parser.csi.final_byte = c as char;
+                                if self.parser.csi.param_count != 0
+                                    || self.parser.csi.params[0] != 0
+                                {
+                                    self.parser.csi.param_count += 1;
                                 }
-                                return Some(Token::Csi(&parser.csi));
+                                return Some(Token::Csi(&self.parser.csi));
                             }
-                            b';' => parser.csi.param_count += 1,
-                            b'<'..=b'?' => parser.csi.private_byte = c as char,
+                            b';' => self.parser.csi.param_count += 1,
+                            b'<'..=b'?' => self.parser.csi.private_byte = c as char,
                             _ => {}
                         }
                     }
@@ -275,7 +283,7 @@ impl<'input> Stream<'_, 'input> {
                             // It's only a string terminator if it's followed by \.
                             // We're at the end so we're saving the state and will continue next time.
                             if self.off >= bytes.len() {
-                                parser.state = match parser.state {
+                                self.parser.state = match self.parser.state {
                                     State::Osc => State::OscEsc,
                                     _ => State::DcsEsc,
                                 };
@@ -294,9 +302,9 @@ impl<'input> Stream<'_, 'input> {
                         break;
                     }
 
-                    let state = parser.state;
+                    let state = self.parser.state;
                     if !partial {
-                        parser.state = State::Ground;
+                        self.parser.state = State::Ground;
                     }
                     return match state {
                         State::Osc => Some(Token::Osc { data, partial }),
@@ -308,10 +316,10 @@ impl<'input> Stream<'_, 'input> {
                     // It's only a string terminator if it's followed by \ (= "\x1b\\").
                     if bytes[self.off] == b'\\' {
                         // It was indeed a string terminator and we can now tell the caller about it.
-                        let state = parser.state;
+                        let state = self.parser.state;
 
                         // Consume the terminator (one byte in the previous input and this byte).
-                        parser.state = State::Ground;
+                        self.parser.state = State::Ground;
                         self.off += 1;
 
                         return match state {
@@ -322,11 +330,11 @@ impl<'input> Stream<'_, 'input> {
                         // False alarm: Not a string terminator.
                         // We'll return the escape character as a separate token.
                         // Processing will continue from the current state (`bytes[self.off]`).
-                        parser.state = match parser.state {
+                        self.parser.state = match self.parser.state {
                             State::OscEsc => State::Osc,
                             _ => State::Dcs,
                         };
-                        return match parser.state {
+                        return match self.parser.state {
                             State::Osc => Some(Token::Osc { data: "\x1b", partial: true }),
                             _ => Some(Token::Dcs { data: "\x1b", partial: true }),
                         };

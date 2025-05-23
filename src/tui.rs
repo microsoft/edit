@@ -496,7 +496,7 @@ impl Tui {
         let mut input_mouse_modifiers = kbmod::NONE;
         let mut input_mouse_click = 0;
         let mut input_scroll_delta = Point { x: 0, y: 0 };
-        let input_consumed = self.needs_settling();
+        let input_consumed = input.is_none();
 
         match input {
             None => {}
