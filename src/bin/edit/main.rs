@@ -491,7 +491,9 @@ impl Drop for RestoreModes {
     fn drop(&mut self) {
         // Same as in the beginning but in the reverse order.
         // It also includes DECSCUSR 0 to reset the cursor style and DECTCEM to show the cursor.
-        sys::write_stdout("\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1036l\x1b[?1002;1006;2004l\x1b[?1049l");
+        sys::write_stdout(
+            "\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1036l\x1b[?1002;1006;2004l\x1b[?1049l",
+        );
     }
 }
 
@@ -594,7 +596,7 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
     RestoreModes
 }
 
-/// Strips all C0 control characters from the string an replaces them with "_".
+/// Strips all C0 control characters from the string and replaces them with "_".
 ///
 /// Jury is still out on whether this should also strip C1 control characters.
 /// That requires parsing UTF8 codepoints, which is annoying.

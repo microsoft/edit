@@ -521,7 +521,7 @@ where
     if suffix.is_empty() {
         name
     } else {
-        // SAFETY: In this particualar case we know that the string
+        // SAFETY: In this particular case we know that the string
         // is valid UTF-8, because it comes from icu.rs.
         let name = unsafe { name.to_str().unwrap_unchecked() };
 

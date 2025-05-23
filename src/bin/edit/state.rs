@@ -20,7 +20,7 @@ pub struct FormatApperr(apperr::Error);
 
 impl From<apperr::Error> for FormatApperr {
     fn from(err: apperr::Error) -> Self {
-        FormatApperr(err)
+        Self(err)
     }
 }
 
@@ -68,19 +68,19 @@ impl Default for DisplayablePathBuf {
 
 impl Clone for DisplayablePathBuf {
     fn clone(&self) -> Self {
-        DisplayablePathBuf::new(self.value.clone())
+        Self::new(self.value.clone())
     }
 }
 
 impl From<OsString> for DisplayablePathBuf {
-    fn from(s: OsString) -> DisplayablePathBuf {
-        DisplayablePathBuf::new(PathBuf::from(s))
+    fn from(s: OsString) -> Self {
+        Self::new(PathBuf::from(s))
     }
 }
 
 impl<T: ?Sized + AsRef<OsStr>> From<&T> for DisplayablePathBuf {
-    fn from(s: &T) -> DisplayablePathBuf {
-        DisplayablePathBuf::new(PathBuf::from(s))
+    fn from(s: &T) -> Self {
+        Self::new(PathBuf::from(s))
     }
 }
 

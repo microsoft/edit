@@ -58,11 +58,11 @@ pub struct Point {
 }
 
 impl Point {
-    pub const MIN: Point = Point { x: CoordType::MIN, y: CoordType::MIN };
-    pub const MAX: Point = Point { x: CoordType::MAX, y: CoordType::MAX };
+    pub const MIN: Self = Self { x: CoordType::MIN, y: CoordType::MIN };
+    pub const MAX: Self = Self { x: CoordType::MAX, y: CoordType::MAX };
 }
 
-impl PartialOrd<Point> for Point {
+impl PartialOrd<Self> for Point {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -70,10 +70,7 @@ impl PartialOrd<Point> for Point {
 
 impl Ord for Point {
     fn cmp(&self, other: &Self) -> Ordering {
-        match self.y.cmp(&other.y) {
-            Ordering::Equal => self.x.cmp(&other.x),
-            ord => ord,
-        }
+        self.y.cmp(&other.y).then(self.x.cmp(&other.x))
     }
 }
 
@@ -149,7 +146,7 @@ impl Rect {
         let r = l.max(r);
         let b = t.max(b);
 
-        Rect { left: l, top: t, right: r, bottom: b }
+        Self { left: l, top: t, right: r, bottom: b }
     }
 }
 
