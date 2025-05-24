@@ -1694,12 +1694,15 @@ impl<'a> Context<'a, '_> {
     }
 
     /// Begins a modal window. Call [`Context::modal_end()`].
-    pub fn modal_begin(&mut self, classname: &'static str, title: &str) {
+    pub fn modal_begin(&mut self, classname: &'static str, title: &str) -> bool {
         self.block_begin(classname);
         self.attr_float(FloatSpec { anchor: Anchor::Root, ..Default::default() });
         self.attr_intrinsic_size(Size { width: self.tui.size.width, height: self.tui.size.height });
         self.attr_background_rgba(self.indexed_alpha(IndexedColor::Background, 1, 2));
         self.attr_foreground_rgba(self.indexed_alpha(IndexedColor::Background, 1, 2));
+
+        let bg_click = self.input_mouse_click != 0 && self.was_mouse_down();
+
         self.attr_focus_well();
 
         self.block_begin("window");
@@ -1724,6 +1727,8 @@ impl<'a> Context<'a, '_> {
         };
         last_node.content = NodeContent::Modal(title);
         self.last_modal = Some(self.tree.last_node);
+
+        bg_click
     }
 
     /// Ends the current modal window block.

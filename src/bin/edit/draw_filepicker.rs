@@ -30,7 +30,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     let mut doit = None;
     let mut done = false;
 
-    ctx.modal_begin(
+    let bg_click = ctx.modal_begin(
         "file-picker",
         if state.wants_file_picker == StateFilePicker::Open {
             loc(LocId::FileOpen)
@@ -122,14 +122,14 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             }
         }
     }
-    if ctx.modal_end() {
+    if ctx.modal_end() || bg_click {
         done = true;
     }
 
     if state.file_picker_overwrite_warning.is_some() {
         let mut save;
 
-        ctx.modal_begin("overwrite", loc(LocId::FileOverwriteWarning));
+        let bg_click = ctx.modal_begin("overwrite", loc(LocId::FileOverwriteWarning));
         ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
         ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
         {
@@ -160,7 +160,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 state.file_picker_overwrite_warning = None;
             }
         }
-        if ctx.modal_end() {
+        if ctx.modal_end() || bg_click {
             state.file_picker_overwrite_warning = None;
         }
 

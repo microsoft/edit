@@ -411,7 +411,7 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
 
     let over_limit = ctx.clipboard().len() >= SCRATCH_ARENA_CAPACITY / 4;
 
-    ctx.modal_begin("warning", loc(LocId::WarningDialogTitle));
+    let bg_click = ctx.modal_begin("warning", loc(LocId::WarningDialogTitle));
     {
         ctx.block_begin("description");
         ctx.attr_padding(Rect::three(1, 2, 1));
@@ -481,7 +481,7 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
         }
         ctx.table_end();
     }
-    if ctx.modal_end() {
+    if ctx.modal_end() || bg_click {
         state.osc_clipboard_seen_generation = generation;
     }
 }

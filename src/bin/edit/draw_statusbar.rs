@@ -198,7 +198,7 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
     let height = (ctx.size().height - 10).max(10);
     let mut change = None;
 
-    ctx.modal_begin(
+    let bg_click = ctx.modal_begin(
         "encode",
         if reopen { loc(LocId::EncodingReopen) } else { loc(LocId::EncodingConvert) },
     );
@@ -223,7 +223,7 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
         }
         ctx.scrollarea_end();
     }
-    if ctx.modal_end() {
+    if ctx.modal_end() || bg_click {
         state.wants_encoding_change = StateEncodingChange::None;
     }
 
@@ -249,7 +249,7 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
 }
 
 pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {
-    ctx.modal_begin("document-picker", "");
+    let bg_click = ctx.modal_begin("document-picker", "");
     {
         let width = (ctx.size().width - 20).max(10);
         let height = (ctx.size().height - 10).max(10);
@@ -285,7 +285,7 @@ pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {
         }
         ctx.scrollarea_end();
     }
-    if ctx.modal_end() {
+    if ctx.modal_end() || bg_click {
         state.wants_document_picker = false;
     }
 }
