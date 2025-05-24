@@ -298,6 +298,9 @@ fn draw(ctx: &mut Context, state: &mut State) {
     if state.wants_exit {
         draw_handle_wants_exit(ctx, state);
     }
+    if state.wants_goto {
+        draw_goto_menu(ctx, state);
+    }
     if state.wants_file_picker != StateFilePicker::None {
         draw_file_picker(ctx, state);
     }
@@ -337,6 +340,8 @@ fn draw(ctx: &mut Context, state: &mut State) {
             state.wants_document_picker = true;
         } else if key == kbmod::CTRL | vk::Q {
             state.wants_exit = true;
+        } else if key == kbmod::CTRL | vk::G {
+            state.wants_goto = true;
         } else if key == kbmod::CTRL | vk::F && state.wants_search.kind != StateSearchKind::Disabled
         {
             state.wants_search.kind = StateSearchKind::Search;
