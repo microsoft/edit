@@ -273,6 +273,33 @@ pub const fn slice_as_uninit_mut<T>(slice: &mut [T]) -> &mut [MaybeUninit<T>] {
     unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut MaybeUninit<T>, slice.len()) }
 }
 
+/// Turns a [`&[MaybeUninit<T>]`] into a [`&[T]`].
+///
+/// # Safety
+///
+/// Every `MaybeUninit<T>` in the slice must be fully initialized.
+///
+// FIXME: Shim for `maybe_uninit_slice` (rust-lang#63569). Replace with `[MaybeUninit<T>]::assume_init_ref` once stable.
+#[inline(always)]
+pub const unsafe fn uninit_slice_assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
+    // SAFETY: cast is safe because `MaybeUninit<T>` has the same memory layout as `T`, and the caller guarantees that
+    // the slice is initialized.
+    unsafe { &*(slice as *const [MaybeUninit<T>] as *const [T]) }
+}
+
+/// Turns a [`&mut [MaybeUninit<T>`] into a [`&mut [T]`].
+///
+/// # Safety
+///
+/// Every `MaybeUninit<T>` in the slice must be fully initialized.
+// FIXME: Shim for `maybe_uninit_slice` (rust-lang#63569). Replace with `[MaybeUninit<T>]::assume_init_ref` once stable.
+#[inline(always)]
+pub const unsafe fn uninit_slice_assume_init_mut<T>(slice: &mut [MaybeUninit<T>]) -> &mut [T] {
+    // SAFETY: cast is safe because `MaybeUninit<T>` has the same memory layout as `T`, and the caller guarantees that
+    // the slice is initialized.
+    unsafe { &mut *(slice as *mut [MaybeUninit<T>] as *mut [T]) }
+}
+
 /// Helpers for ASCII string comparisons.
 pub trait AsciiStringHelpers {
     /// Tests if a string starts with a given ASCII prefix.
