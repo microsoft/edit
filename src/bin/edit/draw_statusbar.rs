@@ -2,7 +2,9 @@
 // Licensed under the MIT License.
 
 use edit::framebuffer::{Attributes, IndexedColor};
+use edit::fuzzy::score_fuzzy;
 use edit::helpers::*;
+use edit::icu::EncodingInfo;
 use edit::input::vk;
 use edit::tui::*;
 use edit::{arena_format, icu};
@@ -203,28 +205,94 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
         if reopen { loc(LocId::EncodingReopen) } else { loc(LocId::EncodingConvert) },
     );
     {
-        ctx.scrollarea_begin("scrollarea", Size { width, height });
-        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
-        ctx.inherit_focus();
-        {
-            let encodings = icu::get_available_encodings();
+        ctx.table_begin("encoding-picker");
+        ctx.table_set_columns(&[0]);
 
-            ctx.list_begin("encodings");
+        {
+            ctx.table_next_row();
+
+            ctx.scrollarea_begin("scrollarea", Size { width, height });
+            ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
             ctx.inherit_focus();
-            for &encoding in encodings {
-                if ctx.list_item(encoding == doc.buffer.borrow().encoding(), encoding)
-                    == ListSelection::Activated
-                {
-                    change = Some(encoding);
-                    break;
+            ctx.focus_on_first_present();
+            {
+                let encodings = icu::get_available_encodings()
+                    .iter()
+                    .filter_map(|enc| {
+                        if state.encoding_picker_needle.is_empty() {
+                            return Some(enc);
+                        }
+
+                        let (name_score, _) =
+                            score_fuzzy(ctx.arena(), enc.name, &state.encoding_picker_needle, true);
+
+                        if name_score > 0 {
+                            return Some(enc);
+                        }
+
+                        let alias_matches = enc.aliases.iter().any(|alias| {
+                            let (alias_score, _) = score_fuzzy(
+                                ctx.arena(),
+                                alias,
+                                &state.encoding_picker_needle,
+                                true,
+                            );
+                            alias_score > 0
+                        });
+
+                        if alias_matches { Some(enc) } else { None }
+                    })
+                    .collect::<Vec<&EncodingInfo>>();
+
+                ctx.list_begin("encodings");
+                ctx.inherit_focus();
+
+                for encoding in encodings {
+                    let label = if encoding.aliases.is_empty() {
+                        encoding.name
+                    } else {
+                        let aliases = encoding
+                            .aliases
+                            .iter()
+                            .map(|alias| format!("\"{}\"", alias))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        &format!("{} ({})", encoding.name, aliases)
+                    };
+
+                    if ctx.list_item(encoding.name == doc.buffer.borrow().encoding(), label)
+                        == ListSelection::Activated
+                    {
+                        change = Some(encoding.name);
+                        break;
+                    }
+                    ctx.attr_overflow(Overflow::TruncateTail);
                 }
+                ctx.list_end();
             }
-            ctx.list_end();
+            ctx.scrollarea_end();
         }
-        ctx.scrollarea_end();
+
+        {
+            ctx.table_next_row();
+
+            ctx.table_begin("encoding-search");
+            ctx.table_set_columns(&[0, width]);
+
+            ctx.table_next_row();
+
+            ctx.label("needle-label", loc(LocId::SearchNeedleLabel));
+            ctx.editline("needle", &mut state.encoding_picker_needle);
+            ctx.inherit_focus();
+
+            ctx.table_end();
+        }
+
+        ctx.table_end();
     }
     if ctx.modal_end() {
         state.wants_encoding_change = StateEncodingChange::None;
+        state.encoding_picker_needle.clear();
     }
 
     if let Some(encoding) = change {
@@ -243,6 +311,7 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
             doc.buffer.borrow_mut().set_encoding(encoding);
         }
 
+        state.encoding_picker_needle.clear();
         state.wants_encoding_change = StateEncodingChange::None;
         ctx.needs_rerender();
     }
