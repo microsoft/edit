@@ -159,6 +159,8 @@ pub struct State {
     pub osc_clipboard_send_generation: u32,
     pub osc_clipboard_always_send: bool,
     pub exit: bool,
+
+    pub encoding_picker_needle: String,
 }
 
 impl State {
@@ -203,6 +205,8 @@ impl State {
             osc_clipboard_send_generation: 0,
             osc_clipboard_always_send: false,
             exit: false,
+
+            encoding_picker_needle: Default::default(),
         })
     }
 }
