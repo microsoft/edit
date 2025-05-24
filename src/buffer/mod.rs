@@ -1136,11 +1136,10 @@ impl TextBuffer {
 
     fn find_select_next(&mut self, search: &mut ActiveSearch, offset: usize, wrap: bool) {
         if search.buffer_generation != self.buffer.generation() {
-            unsafe { search.regex.set_text(&search.text) };
+            unsafe { search.regex.set_text(&search.text, offset) };
             search.buffer_generation = self.buffer.generation();
-        }
-
-        if search.next_search_offset != offset {
+            search.next_search_offset = offset;
+        } else if search.next_search_offset != offset {
             search.next_search_offset = offset;
             search.regex.reset(offset);
         }
