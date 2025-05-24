@@ -1216,10 +1216,6 @@ impl Tui {
     // TODO: Move this into `block_end()` and run it whenever the block is a `focus_well`.
     // It makes no sense otherwise that all input handling occurs in the controls, except for this.
     fn move_focus(&mut self, input: InputKey) -> bool {
-        if !matches!(input, vk::TAB | SHIFT_TAB | vk::UP | vk::DOWN | vk::LEFT | vk::RIGHT) {
-            return false;
-        }
-
         let focused_id = self.focused_node_path.last().cloned().unwrap_or(0);
         let Some(focused) = self.prev_node_map.get(focused_id) else {
             debug_assert!(false); // The caller should've cleaned up the focus path.
@@ -1734,13 +1730,21 @@ impl<'a> Context<'a, '_> {
 
         // Consume the input unconditionally, so that the root (the "main window")
         // doesn't accidentally receive any input via `consume_shortcut()`.
+        let mut exit = false;
         if self.contains_focus() {
-            let exit = !self.input_consumed && self.input_keyboard == Some(vk::ESCAPE);
-            self.set_input_consumed_unchecked();
-            exit
-        } else {
-            false
+            if let Some(input) = self.input_keyboard {
+                if !self.input_consumed && input == vk::ESCAPE {
+                    exit = true;
+                }
+                if !exit && matches!(input,
+                    vk::TAB | SHIFT_TAB | vk::UP | 
+                    vk::DOWN | vk::LEFT | vk::RIGHT) {
+                    return exit;
+                }
+            }
+            self.set_input_consumed_unchecked();    
         }
+        exit
     }
 
     /// Begins a table block. Call [`Context::table_end()`].
