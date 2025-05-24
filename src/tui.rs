@@ -2250,6 +2250,21 @@ impl<'a> Context<'a, '_> {
 
             make_cursor_visible = true;
 
+
+            
+            // In textarea_handle_input(), if it's a single-line input field and receives ↑/↓ keys,
+            // directly return false, let the key bubble up to the outer layer.
+
+            // Logic:
+            // 1. When the cursor is in the file name input field, pressing ↓ will be captured by the outer
+            // layer logic and the focus will be switched to the autocomplete floating window;
+            // 2. After the floating window gains focus, the list component continues to receive and process
+            // subsequent ↑/↓ navigation;
+            // 3. Pressing ↑ from the top of the floating window will return to the input box.
+            if single_line && matches!(key, vk::UP | vk::DOWN) {
+                return false;
+            }
+
             match key {
                 vk::BACK => {
                     let granularity = if modifiers == kbmod::CTRL {
@@ -3412,11 +3427,18 @@ impl<'a> NodeMap<'a> {
         // Since we aren't expected to have millions of nodes,
         // we allocate 4x the number of slots for a 25% fill factor.
         let width = (4 * tree.count + 1).ilog2().max(1) as usize;
-        let slots = 1 << width;
+        let slot_count = 1 << width;
         let shift = 64 - width;
-        let mask = (slots - 1) as u64;
+        let mask = (slot_count - 1) as u64;
 
-        let slots = arena.alloc_uninit_slice(slots).write_filled(None);
+        let slots_uninit = arena.alloc_uninit_slice::<Option<&'a NodeCell<'a>>>(slot_count);
+        for slot in slots_uninit.iter_mut() {
+            slot.write(None);
+        }
+        // SAFETY: At this point every element of the slice is initialised (we just wrote `None`),
+        // so it is safe to reinterpret it as a slice of initialised values.
+        // Convert the slice to its initialised form (mutable for population).
+        let slots_slice_mut: &'a mut [Option<&'a NodeCell<'a>>] = unsafe { &mut *(slots_uninit as *mut [_] as *mut [Option<&'a NodeCell<'a>>]) };
         let mut node = tree.root_first;
 
         loop {
@@ -3424,8 +3446,8 @@ impl<'a> NodeMap<'a> {
             let mut slot = n.id >> shift;
 
             loop {
-                if slots[slot as usize].is_none() {
-                    slots[slot as usize] = Some(node);
+                if slots_slice_mut[slot as usize].is_none() {
+                    slots_slice_mut[slot as usize] = Some(node);
                     break;
                 }
                 slot = (slot + 1) & mask;
@@ -3437,7 +3459,8 @@ impl<'a> NodeMap<'a> {
             };
         }
 
-        Self { slots, shift, mask }
+        let slots_slice = &*slots_slice_mut;
+        Self { slots: slots_slice, shift, mask }
     }
 
     /// Gets a node by its ID.
