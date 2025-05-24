@@ -313,6 +313,7 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
             doc.buffer.borrow_mut().set_encoding(encoding);
         }
 
+        state.encoding_picker_needle.clear();
         state.wants_encoding_change = StateEncodingChange::None;
         ctx.needs_rerender();
     }
