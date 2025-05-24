@@ -262,16 +262,11 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         }
     }
 
-    if paths.len() > 1 {
-        for p in &paths {
-            state.documents.add_file_path(p)?;
-        }
-    } else if paths.len() == 1 {
-        let p = &paths[0];
-        if let Some(parent) = p.parent() {
-            cwd = parent.to_path_buf();
-        }
+    for p in &paths {
         state.documents.add_file_path(p)?;
+    }
+    if let Some(parent) = paths.first().and_then(|p| p.parent()) {
+        cwd = parent.to_path_buf();
     }
 
     if let Some(mut file) = sys::open_stdin_if_redirected() {
@@ -279,7 +274,7 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         let mut tb = doc.buffer.borrow_mut();
         tb.read_file(&mut file, None)?;
         tb.mark_as_dirty();
-    } else if paths.len() == 0 {
+    } else if paths.is_empty() {
         // No files were passed, and stdin is not redirected.
         state.documents.add_untitled()?;
     }
