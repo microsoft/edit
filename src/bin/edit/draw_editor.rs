@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::num::ParseIntError;
+
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::icu;
@@ -272,34 +274,14 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     ctx.toss_focus_up();
 }
 
-
-fn validate_goto_point(line: &str, current: Point) -> Result<Point, ()> {
-    let parts: Vec<_> = line.splitn(2, ':').collect();
-    Ok(match parts.len() {
-        1 => {
-            if let Ok(line) = parts[0].parse::<i32>() {
-                Point { y: line - 1, x: current.x }
-            } else {
-                return Err(());
-            }
-        }
-        2 => {
-            if let Ok(line) = parts[0].parse::<i32>() {
-                if let Ok(column) = parts[1].parse::<i32>() {
-                    Point { y: line - 1, x: column }
-                } else {
-                    return Err(());
-                }
-            } else {
-                return Err(());
-            }
-        }
-        _ => unreachable!()
-    })
-}
-
-
 pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
+    let Some(doc) = state.documents.active_mut() else {
+        // Goto does not make sense if there is no active document
+        state.wants_goto = false;
+        return;
+    };
+    let mut done = false;
+
     ctx.modal_begin("goto", loc(LocId::FileGoto));
     {
         if ctx.editline("goto-line", &mut state.goto_target) {
@@ -314,25 +296,27 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
         ctx.steal_focus();
 
         if ctx.consume_shortcut(vk::RETURN) {
-            let Some(doc) = state.documents.active_mut() else {
-                state.wants_goto = false;
-                return;
-            };
             let mut buf = doc.buffer.borrow_mut();
-            match validate_goto_point(&state.goto_target, buf.cursor_logical_pos()) {
+            match validate_goto_point(&state.goto_target) {
                 Ok(point) => {
                     buf.cursor_move_to_logical(point);
-                    state.wants_goto = false;
-                    state.goto_target.clear();
-                    state.goto_invalid = false;
-                },
-                Err(_) => {
-                    state.goto_invalid = true;
+                    done = true;
                 }
-            };
+                Err(_) => state.goto_invalid = true,
+            }
+            ctx.needs_rerender();
         }
     }
-    if ctx.modal_end() {
+    if ctx.modal_end() || done {
         state.wants_goto = false;
+        state.goto_target.clear();
+        state.goto_invalid = false;
     }
+}
+
+fn validate_goto_point(line: &str) -> Result<Point, ParseIntError> {
+    let parts = line.split_once(':').unwrap_or((line, "0"));
+    let line = parts.0.parse::<i32>()?;
+    let column = parts.1.parse::<i32>()?;
+    Ok(Point { y: line.saturating_sub(1), x: column.saturating_sub(1) })
 }
