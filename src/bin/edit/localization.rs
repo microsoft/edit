@@ -934,6 +934,9 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
 static mut S_LANG: LangId = LangId::en;
 
 pub fn init() {
+    // WARNING:
+    // Generic language tags such as "zh" MUST be sorted after more specific tags such
+    // as "zh-hant" to ensure that the prefix match finds the most specific one first.
     const LANG_MAP: &[(&str, LangId)] = &[
         ("en", LangId::en),
         // ----------------
@@ -954,11 +957,11 @@ pub fn init() {
     let langs = sys::preferred_languages(&scratch);
     let mut lang = LangId::en;
 
-    for l in langs {
+    'outer: for l in langs {
         for (prefix, id) in LANG_MAP {
             if l.starts_with_ignore_ascii_case(prefix) {
                 lang = *id;
-                break;
+                break 'outer;
             }
         }
     }
