@@ -4,7 +4,7 @@
 //! Bindings to the ICU library.
 
 use std::cmp::Ordering;
-use std::ffi::CStr;
+use std::ffi::{CStr, c_char};
 use std::mem;
 use std::mem::MaybeUninit;
 use std::ops::Range;
@@ -15,38 +15,65 @@ use crate::buffer::TextBuffer;
 use crate::unicode::Utf8Chars;
 use crate::{apperr, arena_format, sys};
 
-static mut ENCODINGS: Vec<&'static str> = Vec::new();
+static mut ENCODINGS: Vec<EncodingInfo> = Vec::new();
+
+pub struct EncodingInfo {
+    pub name: &'static str,
+    pub aliases: Vec<&'static str>,
+}
 
 /// Returns a list of encodings ICU supports.
-pub fn get_available_encodings() -> &'static [&'static str] {
+pub fn get_available_encodings() -> &'static Vec<EncodingInfo> {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     unsafe {
         if ENCODINGS.is_empty() {
-            ENCODINGS.push("UTF-8");
-            ENCODINGS.push("UTF-8 BOM");
+            ENCODINGS.push(EncodingInfo { name: "UTF-8", aliases: vec![] });
+            ENCODINGS.push(EncodingInfo { name: "UTF-8-BOM", aliases: vec![] });
 
             if let Ok(f) = init_if_needed() {
                 let mut n = 0;
                 loop {
-                    let name = (f.ucnv_getAvailableName)(n);
-                    if name.is_null() {
+                    let c_name = (f.ucnv_getAvailableName)(n);
+                    if c_name.is_null() {
                         break;
                     }
 
-                    let name = CStr::from_ptr(name).to_str().unwrap_unchecked();
+                    let name = CStr::from_ptr(c_name).to_str().unwrap_unchecked();
                     // We have already pushed UTF-8 above.
                     // There is no need to filter UTF-8 BOM here, since ICU does not distinguish it from UTF-8.
                     if name != "UTF-8" {
-                        ENCODINGS.push(name);
+                        ENCODINGS.push(EncodingInfo { name, aliases: get_aliases(c_name, f) })
                     }
 
                     n += 1;
                 }
             }
         }
+
         &ENCODINGS
     }
+}
+
+fn get_aliases(name: *const c_char, f: &LibraryFunctions) -> Vec<&'static str> {
+    let mut status = icu_ffi::U_ZERO_ERROR;
+    let alias_count = unsafe { (f.ucnv_countAliases)(name, &mut status) };
+    if status.is_failure() {
+        return vec![];
+    }
+
+    let mut aliases: Vec<*mut c_char> = vec![null_mut(); alias_count as usize];
+
+    status = icu_ffi::U_ZERO_ERROR;
+    unsafe { (f.ucnv_getAliases)(name, aliases.as_mut_ptr(), &mut status) };
+    if status.is_failure() {
+        return vec![];
+    }
+
+    aliases
+        .iter()
+        .map(|alias| unsafe { CStr::from_ptr(*alias).to_str().unwrap_unchecked() })
+        .collect()
 }
 
 /// Formats the given ICU error code into a human-readable string.
@@ -830,6 +857,8 @@ struct LibraryFunctions {
     // LIBICUUC_PROC_NAMES
     u_errorName: icu_ffi::u_errorName,
     ucnv_getAvailableName: icu_ffi::ucnv_getAvailableName,
+    ucnv_countAliases: icu_ffi::ucnv_countAliases,
+    ucnv_getAliases: icu_ffi::ucnv_getAliases,
     ucnv_open: icu_ffi::ucnv_open,
     ucnv_close: icu_ffi::ucnv_close,
     ucnv_convertEx: icu_ffi::ucnv_convertEx,
@@ -851,10 +880,12 @@ struct LibraryFunctions {
     ucol_strcollUTF8: icu_ffi::ucol_strcollUTF8,
 }
 
-const LIBICUUC_PROC_NAMES: [&CStr; 9] = [
+const LIBICUUC_PROC_NAMES: [&CStr; 11] = [
     // Found in libicuuc.so on UNIX, icuuc.dll/icu.dll on Windows.
     c"u_errorName",
     c"ucnv_getAvailableName",
+    c"ucnv_countAliases",
+    c"ucnv_getAliases",
     c"ucnv_open",
     c"ucnv_close",
     c"ucnv_convertEx",
@@ -1016,6 +1047,15 @@ mod icu_ffi {
     pub struct UConverter;
 
     pub type ucnv_getAvailableName = unsafe extern "C" fn(n: i32) -> *mut c_char;
+
+    pub type ucnv_countAliases =
+        unsafe extern "C" fn(name: *const c_char, status: &mut UErrorCode) -> u16;
+
+    pub type ucnv_getAliases = unsafe extern "C" fn(
+        name: *const c_char,
+        aliases: *mut *mut c_char,
+        status: &mut UErrorCode,
+    );
 
     pub type ucnv_open =
         unsafe extern "C" fn(converter_name: *const u8, status: &mut UErrorCode) -> *mut UConverter;
