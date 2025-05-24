@@ -41,6 +41,7 @@ pub enum LocId {
     View,
     ViewFocusStatusbar,
     ViewWordWrap,
+    ViewDocumentPicker,
 
     // Help menu
     Help,
@@ -496,6 +497,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Перенос слов",
         /* zh_hans */ "自动换行",
         /* zh_hant */ "自動換行",
+    ],
+    // ViewDocumentPicker
+    [
+        /* en      */ "Document Picker",
+        /* de      */ "Dokumentauswahl",
+        /* es      */ "Selector de documentos",
+        /* fr      */ "Sélecteur de documents",
+        /* it      */ "Selettore di documenti",
+        /* ja      */ "ドキュメントピッカー",
+        /* ko      */ "문서 선택기",
+        /* pt_br   */ "Seletor de documentos",
+        /* ru      */ "Выбор документа",
+        /* zh_hans */ "文档选择器",
+        /* zh_hant */ "文件選擇器",
     ],
 
     // Help (a menu bar item)
