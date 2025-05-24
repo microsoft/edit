@@ -486,10 +486,10 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // ViewDocumentPicker
     [
         /* en      */ "Document Picker",
-        /* de      */ "Dokumentenauswahl",
+        /* de      */ "Dokumentauswahl",
         /* es      */ "Selector de documentos",
         /* fr      */ "Sélecteur de documents",
-        /* it      */ "Selettore documenti",
+        /* it      */ "Selettore di documenti",
         /* ja      */ "ドキュメントピッカー",
         /* ko      */ "문서 선택기",
         /* pt_br   */ "Seletor de documentos",
