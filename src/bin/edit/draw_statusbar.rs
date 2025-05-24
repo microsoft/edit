@@ -268,6 +268,7 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
                         change = Some(encoding.name);
                         break;
                     }
+                    ctx.attr_overflow(Overflow::TruncateTail);
                 }
                 ctx.list_end();
             }
@@ -293,6 +294,7 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
     }
     if ctx.modal_end() {
         state.wants_encoding_change = StateEncodingChange::None;
+        state.encoding_picker_needle.clear();
     }
 
     if let Some(encoding) = change {

@@ -72,6 +72,7 @@ fn get_aliases(name: *const c_char, f: &LibraryFunctions) -> Vec<&'static str> {
 
     aliases
         .iter()
+        .skip(1) // The first alias is the name itself.
         .map(|alias| unsafe { CStr::from_ptr(*alias).to_str().unwrap_unchecked() })
         .collect()
 }
