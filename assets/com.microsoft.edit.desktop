@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Edit
+Name[zh_CN]=编辑器
+GenericName=Text Editor
+GenericName[zh_CN]=文本编辑器
+GenericName[zh_TW]=文字編輯器
+Comment=A simple editor for simple needs
+Comment[zh_CN]=用于简单编辑需要的简易编辑器
+Icon=edit
+Exec=edit %U
+Terminal=true
+MimeType=text/plain;
+Keywords=text;txt;editor;note;notepad;
+Keywords[zh_CN]=text;txt;editor;note;notepad;文字;文本;编辑器;笔记;记事本;wenzi;wenben;bianjiqi;biji;jishiben;
