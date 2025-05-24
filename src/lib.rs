@@ -23,6 +23,7 @@ pub mod buffer;
 pub mod cell;
 pub mod document;
 pub mod framebuffer;
+pub mod fuzzy;
 pub mod hash;
 pub mod helpers;
 pub mod icu;
