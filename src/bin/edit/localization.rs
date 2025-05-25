@@ -1034,7 +1034,6 @@ pub fn init() {
 
     'outer: for l in langs {
         for (prefix, id) in LANG_MAP {
-            println!("Checking language: {l} against prefix: {prefix}");
             if l.starts_with_ignore_ascii_case(prefix) {
                 lang = *id;
                 break 'outer;
