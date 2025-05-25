@@ -275,49 +275,55 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
 }
 
 pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
-    let Some(doc) = state.documents.active_mut() else {
-        // Goto does not make sense if there is no active document
-        state.wants_goto = false;
-        return;
-    };
     let mut done = false;
 
-    ctx.modal_begin("goto", loc(LocId::FileGoto));
-    {
-        if ctx.editline("goto-line", &mut state.goto_target) {
-            state.goto_invalid = false;
-        }
-        if state.goto_invalid {
-            ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
-            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
-        }
-
-        ctx.attr_intrinsic_size(Size { width: 24, height: 1 });
-        ctx.steal_focus();
-
-        if ctx.consume_shortcut(vk::RETURN) {
-            let mut buf = doc.buffer.borrow_mut();
-            match validate_goto_point(&state.goto_target) {
-                Ok(point) => {
-                    buf.cursor_move_to_logical(point);
-                    buf.make_cursor_visible();
-                    done = true;
-                }
-                Err(_) => state.goto_invalid = true,
+    if let Some(doc) = state.documents.active_mut() {
+        ctx.modal_begin("goto", loc(LocId::FileGoto));
+        {
+            if ctx.editline("goto-line", &mut state.goto_target) {
+                state.goto_invalid = false;
             }
-            ctx.needs_rerender();
+            if state.goto_invalid {
+                ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+            }
+
+            ctx.attr_intrinsic_size(Size { width: 24, height: 1 });
+            ctx.steal_focus();
+
+            if ctx.consume_shortcut(vk::RETURN) {
+                match validate_goto_point(&state.goto_target) {
+                    Ok(point) => {
+                        let mut buf = doc.buffer.borrow_mut();
+                        buf.cursor_move_to_logical(point);
+                        buf.make_cursor_visible();
+                        done = true;
+                    }
+                    Err(_) => state.goto_invalid = true,
+                }
+                ctx.needs_rerender();
+            }
         }
+        done |= ctx.modal_end();
+    } else {
+        done = true;
     }
-    if ctx.modal_end() || done {
+
+    if done {
         state.wants_goto = false;
         state.goto_target.clear();
         state.goto_invalid = false;
+        ctx.needs_rerender();
     }
 }
 
 fn validate_goto_point(line: &str) -> Result<Point, ParseIntError> {
-    let parts = line.split_once(':').unwrap_or((line, "0"));
-    let line = parts.0.parse::<i32>()?;
-    let column = parts.1.parse::<i32>()?;
-    Ok(Point { y: line.saturating_sub(1), x: column.saturating_sub(1) })
+    let mut coords = [0; 2];
+    let (y, x) = line.split_once(':').unwrap_or((line, "0"));
+    // Using a loop here avoids 2 copies of the str->int code.
+    // This makes the binary more compact.
+    for (i, s) in [x, y].iter().enumerate() {
+        coords[i] = s.parse::<CoordType>()?.saturating_sub(1);
+    }
+    Ok(Point { x: coords[0], y: coords[1] })
 }
