@@ -104,6 +104,6 @@ impl WriteableDocument for PathBuf {
     fn replace(&mut self, range: Range<usize>, replacement: &[u8]) {
         let mut vec = mem::take(self).into_os_string().into_encoded_bytes();
         vec.replace_range(range, replacement);
-        *self = unsafe { PathBuf::from(OsString::from_encoded_bytes_unchecked(vec)) };
+        *self = unsafe { Self::from(OsString::from_encoded_bytes_unchecked(vec)) };
     }
 }

@@ -213,7 +213,7 @@ impl TextBuffer {
     /// Creates a new text buffer inside an [`Rc`].
     /// See [`TextBuffer::new()`].
     pub fn new_rc(small: bool) -> apperr::Result<RcTextBuffer> {
-        let buffer = TextBuffer::new(small)?;
+        let buffer = Self::new(small)?;
         Ok(Rc::new(SemiRefCell::new(buffer)))
     }
 
@@ -1326,7 +1326,7 @@ impl TextBuffer {
                 cursor = self.goto_line_start(cursor, pos.y);
             }
         } else {
-            // `goto_visual()` can only seek foward, so we need to seek backward here if needed.
+            // `goto_visual()` can only seek forward, so we need to seek backward here if needed.
             // NOTE that this intentionally doesn't use the `Eq` trait of `Point`, because if
             // `pos.y == cursor.visual_pos.y` we don't need to go to `cursor.logical_pos.y - 1`.
             while pos.y < cursor.visual_pos.y {
@@ -1990,6 +1990,10 @@ impl TextBuffer {
         let mut y = beg.logical_pos.y;
 
         loop {
+            if offset >= replacement.len() {
+                break;
+            }
+
             let mut remove = 0;
 
             if replacement[offset] == b'\t' {
@@ -2015,9 +2019,6 @@ impl TextBuffer {
             }
 
             (offset, y) = unicode::newlines_forward(&replacement, offset, y, y + 1);
-            if offset >= replacement.len() {
-                break;
-            }
         }
 
         if replacement.len() == initial_len {

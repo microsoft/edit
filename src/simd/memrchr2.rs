@@ -177,12 +177,12 @@ mod tests {
     #[test]
     fn test_page_boundary() {
         let page = unsafe {
-            let page_size = 4096;
+            const PAGE_SIZE: usize = 64 * 1024; // 64 KiB to cover many architectures.
 
             // 3 pages: uncommitted, committed, uncommitted
-            let ptr = sys::virtual_reserve(page_size * 3).unwrap();
-            sys::virtual_commit(ptr.add(page_size), page_size).unwrap();
-            slice::from_raw_parts_mut(ptr.add(page_size).as_ptr(), page_size)
+            let ptr = sys::virtual_reserve(PAGE_SIZE * 3).unwrap();
+            sys::virtual_commit(ptr.add(PAGE_SIZE), PAGE_SIZE).unwrap();
+            slice::from_raw_parts_mut(ptr.add(PAGE_SIZE).as_ptr(), PAGE_SIZE)
         };
 
         page.fill(b'a');

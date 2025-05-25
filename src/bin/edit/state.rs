@@ -20,7 +20,7 @@ pub struct FormatApperr(apperr::Error);
 
 impl From<apperr::Error> for FormatApperr {
     fn from(err: apperr::Error) -> Self {
-        FormatApperr(err)
+        Self(err)
     }
 }
 
@@ -68,19 +68,19 @@ impl Default for DisplayablePathBuf {
 
 impl Clone for DisplayablePathBuf {
     fn clone(&self) -> Self {
-        DisplayablePathBuf::new(self.value.clone())
+        Self::new(self.value.clone())
     }
 }
 
 impl From<OsString> for DisplayablePathBuf {
-    fn from(s: OsString) -> DisplayablePathBuf {
-        DisplayablePathBuf::new(PathBuf::from(s))
+    fn from(s: OsString) -> Self {
+        Self::new(PathBuf::from(s))
     }
 }
 
 impl<T: ?Sized + AsRef<OsStr>> From<&T> for DisplayablePathBuf {
-    fn from(s: &T) -> DisplayablePathBuf {
-        DisplayablePathBuf::new(PathBuf::from(s))
+    fn from(s: &T) -> Self {
+        Self::new(PathBuf::from(s))
     }
 }
 
@@ -145,6 +145,9 @@ pub struct State {
     pub wants_about: bool,
     pub wants_close: bool,
     pub wants_exit: bool,
+    pub wants_goto: bool,
+    pub goto_target: String,
+    pub goto_invalid: bool,
 
     pub osc_title_filename: String,
     pub osc_clipboard_seen_generation: u32,
@@ -193,6 +196,9 @@ impl State {
             wants_about: false,
             wants_close: false,
             wants_exit: false,
+            wants_goto: false,
+            goto_target: Default::default(),
+            goto_invalid: false,
 
             osc_title_filename: Default::default(),
             osc_clipboard_seen_generation: 0,

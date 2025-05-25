@@ -26,6 +26,9 @@ unsafe fn memchr2_raw(needle1: u8, needle2: u8, beg: *const u8, end: *const u8) 
 
     #[cfg(target_arch = "aarch64")]
     return unsafe { memchr2_neon(needle1, needle2, beg, end) };
+
+    #[allow(unreachable_code)]
+    return unsafe { memchr2_fallback(needle1, needle2, beg, end) };
 }
 
 unsafe fn memchr2_fallback(
@@ -176,12 +179,12 @@ mod tests {
     #[test]
     fn test_page_boundary() {
         let page = unsafe {
-            let page_size = 4096;
+            const PAGE_SIZE: usize = 64 * 1024; // 64 KiB to cover many architectures.
 
             // 3 pages: uncommitted, committed, uncommitted
-            let ptr = sys::virtual_reserve(page_size * 3).unwrap();
-            sys::virtual_commit(ptr.add(page_size), page_size).unwrap();
-            slice::from_raw_parts_mut(ptr.add(page_size).as_ptr(), page_size)
+            let ptr = sys::virtual_reserve(PAGE_SIZE * 3).unwrap();
+            sys::virtual_commit(ptr.add(PAGE_SIZE), PAGE_SIZE).unwrap();
+            slice::from_raw_parts_mut(ptr.add(PAGE_SIZE).as_ptr(), PAGE_SIZE)
         };
 
         page.fill(b'a');

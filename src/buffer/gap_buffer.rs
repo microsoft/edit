@@ -30,7 +30,7 @@ enum BackingBuffer {
 impl Drop for BackingBuffer {
     fn drop(&mut self) {
         unsafe {
-            if let BackingBuffer::VirtualMemory(ptr, reserve) = *self {
+            if let Self::VirtualMemory(ptr, reserve) = *self {
                 sys::virtual_release(ptr, reserve);
             }
         }

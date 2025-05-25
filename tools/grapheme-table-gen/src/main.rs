@@ -243,7 +243,7 @@ const HELP: &str = "\
 Usage: grapheme-table-gen [options...] <ucd.nounihan.grouped.xml>
   -h, --help            Prints help information
   --lang=<c|rust>       Output language (default: c)
-  --extended            Expose a start-of-text property for kickstarting the segmentation
+  --extended            Expose a start-of-text property for kick-starting the segmentation
                         Expose tab and linefeed as grapheme cluster properties
   --no-ambiguous        Treat all ambiguous characters as narrow
   --line-breaks         Store and expose line break information
