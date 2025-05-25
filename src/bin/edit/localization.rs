@@ -355,6 +355,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ko      */ "행/열로 이동…",
         /* pt_br   */ "Ir para linha/coluna…",
         /* ru      */ "Перейти к строке/столбцу…",
+        /* tr      */ "Satıra/Sütuna Git…",
         /* zh_hans */ "转到行/列…",
         /* zh_hant */ "跳至行/列…",
     ],
