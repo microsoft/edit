@@ -1765,7 +1765,7 @@ impl<'a> Context<'a, '_> {
     }
 
     fn table_end_row(&mut self) {
-        self.table_row_move_focus();
+        self.table_move_focus(vk::LEFT, vk::RIGHT);
     }
 
     /// Ends the current table block.
@@ -1780,39 +1780,39 @@ impl<'a> Context<'a, '_> {
         }
 
         self.block_end(); // table
-        self.table_end_move_focus();
+        self.table_move_focus(vk::UP, vk::DOWN);
     }
 
-    fn table_row_move_focus(&mut self) {
+    fn table_move_focus(&mut self, prev_key: InputKey, next_key: InputKey) {
         // Filter down to table rows that are focused.
         if !self.contains_focus() {
             return;
         }
 
-        // Filter down to left/right inputs.
+        // Filter down to our prev/next inputs.
         if self.input_consumed {
             return;
         }
         let Some(input) = self.input_keyboard else {
             return;
         };
-        if !matches!(input, vk::LEFT | vk::RIGHT) {
+        if input != prev_key && input != next_key {
             return;
         }
 
-        let row = self.tree.last_node;
-        let Some(&focused_cell_id) = self.tui.focused_node_path.get(row.borrow().depth + 1) else {
+        let container = self.tree.last_node;
+        let Some(&focused_id) = self.tui.focused_node_path.get(container.borrow().depth + 1) else {
             return;
         };
 
         let mut prev_next = NodeSiblings { prev: None, next: None };
         let mut focused = None;
 
-        // Iterate through the cells in the row, looking for the focused cell.
-        // Take note of the previous and next focusable cells around the focused one.
-        for cell in Tree::iterate_siblings(row.borrow().children.first) {
+        // Iterate through the cells in the row / the rows in the table, looking for focused_id.
+        // Take note of the previous and next focusable cells / rows around the focused one.
+        for cell in Tree::iterate_siblings(container.borrow().children.first) {
             let n = cell.borrow();
-            if n.id == focused_cell_id {
+            if n.id == focused_id {
                 focused = Some(cell);
             } else if n.attributes.focusable {
                 if focused.is_none() {
@@ -1828,75 +1828,11 @@ impl<'a> Context<'a, '_> {
             return;
         }
 
-        let forward = input == vk::RIGHT;
+        let forward = input == next_key;
         let children_idx = if forward { NodeChildren::FIRST } else { NodeChildren::LAST };
         let siblings_idx = if forward { NodeSiblings::NEXT } else { NodeSiblings::PREV };
         let Some(focused_next) =
-            prev_next.get(siblings_idx).or_else(|| row.borrow().children.get(children_idx))
-        else {
-            return;
-        };
-
-        Tui::build_node_path(Some(focused_next), &mut self.tui.focused_node_path);
-        self.set_input_consumed();
-        self.needs_rerender();
-    }
-
-    fn table_end_move_focus(&mut self) {
-        // Filter down to table rows that are focused.
-        if !self.contains_focus() {
-            return;
-        }
-
-        // Filter down to up/down inputs.
-        if self.input_consumed {
-            return;
-        }
-        let Some(input) = self.input_keyboard else {
-            return;
-        };
-        if !matches!(input, vk::UP | vk::DOWN) {
-            return;
-        }
-
-        let table = self.tree.last_node;
-        if table.borrow().child_count <= 1 {
-            // If there's just one row, we can't move focus up or down.
-            return;
-        }
-
-        let Some(&focused_row_id) = self.tui.focused_node_path.get(table.borrow().depth + 1) else {
-            return;
-        };
-
-        let mut prev_next = NodeSiblings { prev: None, next: None };
-        let mut focused = None;
-
-        // Iterate through the row in the table, looking for the focused row.
-        // Take note of the previous and next focusable rows around the focused one.
-        for cell in Tree::iterate_siblings(table.borrow().children.first) {
-            let n = cell.borrow();
-            if n.id == focused_row_id {
-                focused = Some(cell);
-            } else if n.attributes.focusable {
-                if focused.is_none() {
-                    prev_next.prev = Some(cell);
-                } else {
-                    prev_next.next = Some(cell);
-                    break;
-                }
-            }
-        }
-
-        if focused.is_none() {
-            return;
-        }
-
-        let forward = input == vk::DOWN;
-        let children_idx = if forward { NodeChildren::FIRST } else { NodeChildren::LAST };
-        let siblings_idx = if forward { NodeSiblings::NEXT } else { NodeSiblings::PREV };
-        let Some(focused_next) =
-            prev_next.get(siblings_idx).or_else(|| table.borrow().children.get(children_idx))
+            prev_next.get(siblings_idx).or_else(|| container.borrow().children.get(children_idx))
         else {
             return;
         };
