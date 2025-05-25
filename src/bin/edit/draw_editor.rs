@@ -300,6 +300,7 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
             match validate_goto_point(&state.goto_target) {
                 Ok(point) => {
                     buf.cursor_move_to_logical(point);
+                    buf.make_cursor_visible();
                     done = true;
                 }
                 Err(_) => state.goto_invalid = true,
