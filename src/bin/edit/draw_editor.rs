@@ -239,22 +239,25 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
             ctx.table_next_row();
             ctx.inherit_focus();
 
-            if ctx.button("yes", loc(LocId::UnsavedChangesDialogYes)) {
+            if ctx.shortcut_button("yes", loc(LocId::UnsavedChangesDialogYes), kbmod::CTRL | vk::S)
+            {
                 action = Action::Save;
             }
             ctx.inherit_focus();
-            if ctx.button("no", loc(LocId::UnsavedChangesDialogNo)) {
+            if ctx.shortcut_button("no", loc(LocId::UnsavedChangesDialogNo), kbmod::CTRL | vk::N) {
                 action = Action::Discard;
             }
-            if ctx.button("cancel", loc(LocId::Cancel)) {
+            if ctx.shortcut_button("cancel", loc(LocId::Cancel), kbmod::CTRL | vk::C) {
                 action = Action::Cancel;
             }
 
             // TODO: This should highlight the corresponding letter in the label.
-            if ctx.consume_shortcut(vk::S) {
+            if ctx.consume_shortcut(kbmod::CTRL | vk::S) {
                 action = Action::Save;
-            } else if ctx.consume_shortcut(vk::N) {
+            } else if ctx.consume_shortcut(kbmod::CTRL | vk::N) {
                 action = Action::Discard;
+            } else if ctx.consume_shortcut(kbmod::CTRL | vk::C) {
+                action = Action::Cancel;
             }
         }
         ctx.table_end();

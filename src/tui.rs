@@ -1932,6 +1932,50 @@ impl<'a> Context<'a, '_> {
         self.button_activated()
     }
 
+    pub fn shortcut_button(
+        &mut self,
+        classname: &'static str,
+        text: &str,
+        shortcut: InputKey,
+    ) -> bool {
+        self.styled_label_begin(classname);
+        self.attr_focusable();
+        if self.is_focused() {
+            self.attr_reverse();
+        }
+        let shortcut_letter = shortcut.value() as u8 as char;
+        if shortcut_letter.is_ascii_uppercase() {
+            let mut shortcut_text = String::new();
+            if shortcut.modifiers_contains(kbmod::CTRL) {
+                shortcut_text.push_str(self.tui.modifier_translations.ctrl);
+                shortcut_text.push('+');
+            }
+            if shortcut.modifiers_contains(kbmod::ALT) {
+                shortcut_text.push_str(self.tui.modifier_translations.alt);
+                shortcut_text.push('+');
+            }
+            if shortcut.modifiers_contains(kbmod::SHIFT) {
+                shortcut_text.push_str(self.tui.modifier_translations.shift);
+                shortcut_text.push('+');
+            }
+            shortcut_text.push(shortcut_letter);
+            self.styled_label_add_text("[");
+            let button_text = format!("{} {}", text, shortcut_text);
+            self.styled_label_add_text(&button_text);
+            self.styled_label_add_text("]");
+        } else {
+            {
+                self.styled_label_add_text("[");
+                self.styled_label_add_text(text);
+                self.styled_label_add_text("]");
+            }
+        }
+
+        self.styled_label_end();
+
+        self.button_activated()
+    }
+
     /// Creates a checkbox with the given text.
     /// Returns true if the checkbox was activated.
     pub fn checkbox(&mut self, classname: &'static str, text: &str, checked: &mut bool) -> bool {
