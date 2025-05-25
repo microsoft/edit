@@ -248,7 +248,7 @@ pub fn draw_error_log(ctx: &mut Context, state: &mut State) {
         }
         ctx.block_end();
 
-        if ctx.button("ok", loc(LocId::Ok)) {
+        if ctx.button("ok", loc(LocId::Ok), ButtonStyle::default()) {
             state.error_log_count = 0;
         }
         ctx.attr_position(Position::Center);

@@ -150,12 +150,12 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
             }
 
             if state.wants_search.kind == StateSearchKind::Replace
-                && ctx.button("replace-all", loc(LocId::SearchReplaceAll))
+                && ctx.button("replace-all", loc(LocId::SearchReplaceAll), ButtonStyle::default())
             {
                 action = SearchAction::ReplaceAll;
             }
 
-            if ctx.button("close", loc(LocId::SearchClose)) {
+            if ctx.button("close", loc(LocId::SearchClose), ButtonStyle::default()) {
                 state.wants_search.kind = StateSearchKind::Hidden;
             }
         }
@@ -239,18 +239,18 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
             ctx.table_next_row();
             ctx.inherit_focus();
 
-            if ctx.button("yes", loc(LocId::UnsavedChangesDialogYes)) {
+            if ctx.button("yes", loc(LocId::UnsavedChangesDialogYes), ButtonStyle::default().accelerator('S')) {
                 action = Action::Save;
             }
             ctx.inherit_focus();
-            if ctx.button("no", loc(LocId::UnsavedChangesDialogNo)) {
+            if ctx.button("no", loc(LocId::UnsavedChangesDialogNo), ButtonStyle::default().accelerator('N')) {
                 action = Action::Discard;
             }
-            if ctx.button("cancel", loc(LocId::Cancel)) {
+            if ctx.button("cancel", loc(LocId::Cancel), ButtonStyle::default()) {
                 action = Action::Cancel;
             }
 
-            // TODO: This should highlight the corresponding letter in the label.
+            // Handle accelerator shortcuts
             if ctx.consume_shortcut(vk::S) {
                 action = Action::Save;
             } else if ctx.consume_shortcut(vk::N) {

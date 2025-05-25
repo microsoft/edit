@@ -146,10 +146,10 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 ctx.table_next_row();
                 ctx.inherit_focus();
 
-                save = ctx.button("yes", loc(LocId::Yes));
+                save = ctx.button("yes", loc(LocId::Yes), ButtonStyle::default());
                 ctx.inherit_focus();
 
-                if ctx.button("no", loc(LocId::No)) {
+                if ctx.button("no", loc(LocId::No), ButtonStyle::default()) {
                     state.file_picker_overwrite_warning = None;
                 }
             }

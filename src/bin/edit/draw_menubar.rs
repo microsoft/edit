@@ -157,7 +157,7 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
             ctx.attr_padding(Rect::three(1, 2, 0));
             ctx.attr_position(Position::Center);
             {
-                if ctx.button("ok", loc(LocId::Ok)) {
+                if ctx.button("ok", loc(LocId::Ok), ButtonStyle::default()) {
                     state.wants_about = false;
                 }
                 ctx.inherit_focus();

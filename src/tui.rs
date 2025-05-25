@@ -257,6 +257,41 @@ pub enum Overflow {
     TruncateTail,
 }
 
+/// Controls the style with which a button label renders
+#[derive(Clone, Copy)]
+pub struct ButtonStyle {
+    accelerator:  Option<char>,
+    checked: Option<bool>,
+    bracketed: bool,
+}
+
+impl ButtonStyle {
+    /// Draw an accelerator label: `[_E_xample button]` or `[Example button(X)]`
+    /// 
+    /// Must provide an upper-case ASCII character.
+    pub fn accelerator(self, char: char) -> Self {
+        Self { accelerator: Some(char), ..self }
+    }
+    /// Draw a checkbox prefix: `[▣ Example Button]`
+    pub fn checked(self, checked: bool) -> Self {
+        Self { checked: Some(checked), ..self }
+    }
+    /// Draw with or without brackets: `[Example Button]` or `Example Button`
+    pub fn bracketed(self, bracketed: bool) -> Self {
+        Self { bracketed, ..self }
+    }
+}
+
+impl Default for ButtonStyle {
+    fn default() -> Self {
+        Self {
+            accelerator: None,
+            checked: None,
+            bracketed: true, // Default style for most buttons. Brackets may be disabled e.g. for buttons in menus
+        }
+    }
+}
+
 /// There's two types of lifetimes the TUI code needs to manage:
 /// * Across frames
 /// * Per frame
@@ -652,7 +687,7 @@ impl Tui {
     fn report_context_completion<'a>(&'a mut self, ctx: &mut Context<'a, '_>) {
         // If this hits, you forgot to block_end() somewhere. The best way to figure
         // out where is to do a binary search of commenting out code in main.rs.
-        debug_assert!(ctx.tree.current_node.borrow().stack_parent.is_none());
+        debug_assert!(ctx.tree.current_node.borrow().stack_parent.is_none(), "Dangling parent! Did you miss a block_end?");
 
         // End the root node.
         ctx.block_end();
@@ -1944,16 +1979,14 @@ impl<'a> Context<'a, '_> {
 
     /// Creates a button with the given text.
     /// Returns true if the button was activated.
-    pub fn button(&mut self, classname: &'static str, text: &str) -> bool {
-        self.styled_label_begin(classname);
+    pub fn button(&mut self, classname: &'static str, text: &str, style: ButtonStyle) -> bool {
+        self.block_begin(classname);
         self.attr_focusable();
         if self.is_focused() {
             self.attr_reverse();
         }
-        self.styled_label_add_text("[");
-        self.styled_label_add_text(text);
-        self.styled_label_add_text("]");
-        self.styled_label_end();
+        self.button_label(text, style);
+        self.block_end();
 
         self.button_activated()
     }
@@ -3024,7 +3057,7 @@ impl<'a> Context<'a, '_> {
         let mixin = self.tree.current_node.borrow().child_count as u64;
         self.next_block_id_mixin(mixin);
 
-        self.menubar_label(text, accelerator, None);
+        self.button_label(text, ButtonStyle::default().accelerator(accelerator).bracketed(false));
         self.attr_focusable();
         self.attr_padding(Rect::two(0, 1));
 
@@ -3098,7 +3131,7 @@ impl<'a> Context<'a, '_> {
         let clicked =
             self.button_activated() || self.consume_shortcut(InputKey::new(accelerator as u32));
 
-        self.menubar_label(text, accelerator, Some(checked));
+        self.button_label(text, ButtonStyle::default().bracketed(false).checked(checked).accelerator(accelerator));
         self.menubar_shortcut(shortcut);
 
         if clicked {
@@ -3146,51 +3179,64 @@ impl<'a> Context<'a, '_> {
         self.table_end();
     }
 
-    fn menubar_label(&mut self, text: &str, accelerator: char, checked: Option<bool>) {
-        if !accelerator.is_ascii_uppercase() {
-            self.label("label", text);
-            return;
-        }
-
-        let mut off = text.len();
-
-        for (i, c) in text.bytes().enumerate() {
-            // Perfect match (uppercase character) --> stop
-            if c as char == accelerator {
-                off = i;
-                break;
-            }
-            // Inexact match (lowercase character) --> use first hit
-            if (c & !0x20) as char == accelerator && off == text.len() {
-                off = i;
-            }
-        }
-
+    /// Renders a button label with an optional accelerator character
+    /// May also renders a checkbox or square brackets for inline buttons
+    fn button_label(&mut self, text: &str, style: ButtonStyle) {
+        // Label prefix
         self.styled_label_begin("label");
-        if let Some(checked) = checked {
+        if style.bracketed {
+            self.styled_label_add_text("[");
+        }
+        if let Some(checked) = style.checked {
             self.styled_label_add_text(if checked { "▣ " } else { "  " });
         }
+        // Label text
+        match style.accelerator {
+            Some(accelerator) if accelerator.is_ascii_uppercase() => {
+                // Complex case: 
+                // Locate the offset of the acclerator character in the label text
+                let mut off = text.len();
+                for (i, c) in text.bytes().enumerate() {
+                    // Perfect match (uppercase character) --> stop
+                    if c as char == accelerator {
+                        off = i;
+                        break;
+                    }
+                    // Inexact match (lowercase character) --> use first hit
+                    if (c & !0x20) as char == accelerator && off == text.len() {
+                        off = i;
+                    }
+                }
 
-        if off < text.len() {
-            // Add an underline to the accelerator.
-            self.styled_label_add_text(&text[..off]);
-            self.styled_label_set_attributes(Attributes::Underlined);
-            self.styled_label_add_text(&text[off..off + 1]);
-            self.styled_label_set_attributes(Attributes::None);
-            self.styled_label_add_text(&text[off + 1..]);
-        } else {
-            // Add the accelerator in parentheses and underline it.
-            let ch = accelerator as u8;
-            self.styled_label_add_text(text);
-            self.styled_label_add_text("(");
-            self.styled_label_set_attributes(Attributes::Underlined);
-            self.styled_label_add_text(unsafe { str_from_raw_parts(&ch, 1) });
-            self.styled_label_set_attributes(Attributes::None);
-            self.styled_label_add_text(")");
+                if off < text.len() {
+                    // Add an underline to the accelerator.
+                    self.styled_label_add_text(&text[..off]);
+                    self.styled_label_set_attributes(Attributes::Underlined);
+                    self.styled_label_add_text(&text[off..off + 1]);
+                    self.styled_label_set_attributes(Attributes::None);
+                    self.styled_label_add_text(&text[off + 1..]);
+                } else {
+                    // Add the accelerator in parentheses and underline it.
+                    let ch = accelerator as u8;
+                    self.styled_label_add_text(text);
+                    self.styled_label_add_text("(");
+                    self.styled_label_set_attributes(Attributes::Underlined);
+                    self.styled_label_add_text(unsafe { str_from_raw_parts(&ch, 1) });
+                    self.styled_label_set_attributes(Attributes::None);
+                    self.styled_label_add_text(")");
+                }
+            },
+            _ => {
+                // Simple case:
+                // no accelerator character
+                self.styled_label_add_text(text);
+            },
         }
-
+        // Label postfix
+        if style.bracketed {
+            self.styled_label_add_text("]");
+        }
         self.styled_label_end();
-        self.attr_padding(Rect { left: 0, top: 0, right: 2, bottom: 0 });
     }
 
     fn menubar_shortcut(&mut self, shortcut: InputKey) {
@@ -3216,7 +3262,7 @@ impl<'a> Context<'a, '_> {
             self.block_begin("shortcut");
             self.block_end();
         }
-        self.attr_padding(Rect { left: 0, top: 0, right: 2, bottom: 0 });
+        self.attr_padding(Rect { left: 2, top: 0, right: 2, bottom: 0 });
     }
 }
 
