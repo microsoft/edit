@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::num::ParseIntError;
+
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::icu;
@@ -270,4 +272,51 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
 
     state.wants_close = false;
     ctx.toss_focus_up();
+}
+
+pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
+    let Some(doc) = state.documents.active_mut() else {
+        // Goto does not make sense if there is no active document
+        state.wants_goto = false;
+        return;
+    };
+    let mut done = false;
+
+    ctx.modal_begin("goto", loc(LocId::FileGoto));
+    {
+        if ctx.editline("goto-line", &mut state.goto_target) {
+            state.goto_invalid = false;
+        }
+        if state.goto_invalid {
+            ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+        }
+
+        ctx.attr_intrinsic_size(Size { width: 24, height: 1 });
+        ctx.steal_focus();
+
+        if ctx.consume_shortcut(vk::RETURN) {
+            let mut buf = doc.buffer.borrow_mut();
+            match validate_goto_point(&state.goto_target) {
+                Ok(point) => {
+                    buf.cursor_move_to_logical(point);
+                    done = true;
+                }
+                Err(_) => state.goto_invalid = true,
+            }
+            ctx.needs_rerender();
+        }
+    }
+    if ctx.modal_end() || done {
+        state.wants_goto = false;
+        state.goto_target.clear();
+        state.goto_invalid = false;
+    }
+}
+
+fn validate_goto_point(line: &str) -> Result<Point, ParseIntError> {
+    let parts = line.split_once(':').unwrap_or((line, "0"));
+    let line = parts.0.parse::<i32>()?;
+    let column = parts.1.parse::<i32>()?;
+    Ok(Point { y: line.saturating_sub(1), x: column.saturating_sub(1) })
 }

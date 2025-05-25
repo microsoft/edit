@@ -25,6 +25,7 @@ pub enum LocId {
     FileSaveAs,
     FileClose,
     FileExit,
+    FileGoto,
 
     // Edit menu
     Edit,
@@ -40,6 +41,7 @@ pub enum LocId {
     View,
     ViewFocusStatusbar,
     ViewWordWrap,
+    ViewDocumentPicker,
 
     // Help menu
     Help,
@@ -326,6 +328,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "退出",
         /* zh_hant */ "退出",
     ],
+    // FileGoto
+    [
+        /* en      */ "Go to Line/Column…",
+        /* de      */ "Gehe zu Zeile/Spalte…",
+        /* es      */ "Ir a línea/columna…",
+        /* fr      */ "Aller à la ligne/colonne…",
+        /* it      */ "Vai a riga/colonna…",
+        /* ja      */ "行/列へ移動…",
+        /* ko      */ "행/열로 이동…",
+        /* pt_br   */ "Ir para linha/coluna…",
+        /* ru      */ "Перейти к строке/столбцу…",
+        /* zh_hans */ "转到行/列…",
+        /* zh_hant */ "跳至行/列…",
+    ],
 
     // Edit (a menu bar item)
     [
@@ -481,6 +497,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Перенос слов",
         /* zh_hans */ "自动换行",
         /* zh_hant */ "自動換行",
+    ],
+    // ViewDocumentPicker
+    [
+        /* en      */ "Document Picker",
+        /* de      */ "Dokumentauswahl",
+        /* es      */ "Selector de documentos",
+        /* fr      */ "Sélecteur de documents",
+        /* it      */ "Selettore di documenti",
+        /* ja      */ "ドキュメントピッカー",
+        /* ko      */ "문서 선택기",
+        /* pt_br   */ "Seletor de documentos",
+        /* ru      */ "Выбор документа",
+        /* zh_hans */ "文档选择器",
+        /* zh_hant */ "文件選擇器",
     ],
 
     // Help (a menu bar item)
@@ -806,7 +836,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* es      */ "Reabrir con codificación",
         /* fr      */ "Rouvrir avec un encodage différent",
         /* it      */ "Riapri con codifica",
-        /* ja      */ "違うエンコーディングで開きなおす",
+        /* ja      */ "指定エンコーディングで再度開く",
         /* ko      */ "인코딩으로 다시 열기",
         /* pt_br   */ "Reabrir com codificação",
         /* ru      */ "Открыть снова с кодировкой",
@@ -820,7 +850,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* es      */ "Convertir a otra codificación",
         /* fr      */ "Convertir vers l’encodage",
         /* it      */ "Converti in codifica",
-        /* ja      */ "違うエンコーディングに変換する",
+        /* ja      */ "エンコーディングを変換",
         /* ko      */ "인코딩으로 변환",
         /* pt_br   */ "Converter para codificação",
         /* ru      */ "Преобразовать в кодировку",
@@ -919,6 +949,9 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
 static mut S_LANG: LangId = LangId::en;
 
 pub fn init() {
+    // WARNING:
+    // Generic language tags such as "zh" MUST be sorted after more specific tags such
+    // as "zh-hant" to ensure that the prefix match finds the most specific one first.
     const LANG_MAP: &[(&str, LangId)] = &[
         ("en", LangId::en),
         // ----------------
@@ -939,11 +972,11 @@ pub fn init() {
     let langs = sys::preferred_languages(&scratch);
     let mut lang = LangId::en;
 
-    for l in langs {
+    'outer: for l in langs {
         for (prefix, id) in LANG_MAP {
             if l.starts_with_ignore_ascii_case(prefix) {
                 lang = *id;
-                break;
+                break 'outer;
             }
         }
     }
