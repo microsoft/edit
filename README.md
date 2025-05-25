@@ -25,6 +25,6 @@ This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/
 
 * [Install Rust](https://www.rust-lang.org/tools/install)
 * Install the nightly toolchain: `rustup install nightly`
-  * Alternatively, set the environment variable `RUSTC_BOOTSTRAP=1`
+* Set nightly as default: `rustup default nightly`
 * Clone the repository
 * For a release build, run: `cargo build --config .cargo/release.toml --release`
