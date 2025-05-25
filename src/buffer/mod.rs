@@ -903,7 +903,7 @@ impl TextBuffer {
     }
 
     fn set_selection(&mut self, selection: Option<TextBufferSelection>) -> u32 {
-        self.selection = selection;
+        self.selection = selection.filter(|s| s.beg != s.end);
         self.selection_generation = self.selection_generation.wrapping_add(1);
         self.selection_generation
     }
@@ -1083,6 +1083,10 @@ impl TextBuffer {
         pattern: &str,
         options: SearchOptions,
     ) -> apperr::Result<ActiveSearch> {
+        if pattern.is_empty() {
+            return Err(apperr::Error::Icu(1)); // U_ILLEGAL_ARGUMENT_ERROR
+        }
+
         let sanitized_pattern = if options.whole_word && options.use_regex {
             Cow::Owned(format!(r"\b(?:{pattern})\b"))
         } else if options.whole_word {
