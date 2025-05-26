@@ -2,13 +2,22 @@
 .SH NAME
 edit \- a simple text editor
 .SH SYNOPSIS
-edit [file]
+\fBedit\fP [\fIOPTIONS\fP]... [\fIARGUMENTS\fP]...
 .SH DESCRIPTION
 edit is a simple text editor inspired by MS-DOS edit.
 .SH EDITING
 Edit is an interactive mode-less editor. Use Alt-F to access the menus.
+.SH ARGUMENTS
+.TP
+\fIFILE[:LINE[:COLUMN]]\fP
+The file to open, optionally with line and column (e.g., \fBfoo.txt:123:45\fP).
 .SH OPTIONS
-Pass the name of the file to edit.
+.TP
+\fB\-h\fP, \fB\-\-help\fP
+Print the help message.
+.TP
+\fB\-v\fP, \fB\-\-version\fP
+Print the version number.
 .SH SEE ALSO
 https://github.com/microsoft/edit
 .SH AUTHOR
