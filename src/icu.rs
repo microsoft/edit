@@ -628,17 +628,20 @@ impl Regex {
     /// # Safety
     ///
     /// The caller must ensure that the given `Text` outlives the `Regex` instance.
-    pub unsafe fn set_text(&mut self, text: &Text) {
+    pub unsafe fn set_text(&mut self, text: &Text, offset: usize) {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
         unsafe { (f.uregex_setUText)(self.0, text.0 as *const _ as *mut _, &mut status) };
+        // `uregex_setUText` resets the regex to the start of the text.
+        // Because of this, we must also call `uregex_reset64`.
+        unsafe { (f.uregex_reset64)(self.0, offset as i64, &mut status) };
     }
 
     /// Sets the regex to the absolute offset in the underlying text.
-    pub fn reset(&mut self, index: usize) {
+    pub fn reset(&mut self, offset: usize) {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
-        unsafe { (f.uregex_reset64)(self.0, index as i64, &mut status) };
+        unsafe { (f.uregex_reset64)(self.0, offset as i64, &mut status) };
     }
 }
 

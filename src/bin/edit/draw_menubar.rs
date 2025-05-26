@@ -56,9 +56,6 @@ fn draw_menu_file(ctx: &mut Context, state: &mut State) {
     if ctx.menubar_menu_button(loc(LocId::FileExit), 'X', kbmod::CTRL | vk::Q) {
         state.wants_exit = true;
     }
-    if ctx.menubar_menu_button(loc(LocId::FileGoto), 'G', kbmod::CTRL | vk::G) {
-        state.wants_goto = true;
-    }
     ctx.menubar_menu_end();
 }
 
@@ -106,19 +103,16 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
         let mut tb = doc.buffer.borrow_mut();
         let word_wrap = tb.is_word_wrap_enabled();
 
+        if ctx.menubar_menu_button(loc(LocId::ViewDocumentPicker), 'P', kbmod::CTRL | vk::P) {
+            state.wants_document_picker = true;
+        }
+        if ctx.menubar_menu_button(loc(LocId::FileGoto), 'G', kbmod::CTRL | vk::G) {
+            state.wants_goto = true;
+        }
         if ctx.menubar_menu_checkbox(loc(LocId::ViewWordWrap), 'W', kbmod::ALT | vk::Z, word_wrap) {
             tb.set_word_wrap(!word_wrap);
             ctx.needs_rerender();
         }
-
-        if ctx.menubar_menu_checkbox(
-            loc(LocId::ViewDocumentPicker),
-            'P',
-            kbmod::CTRL | vk::P,
-            state.wants_document_picker,
-        ) {
-            state.wants_document_picker = !state.wants_document_picker;
-        };
     }
 
     ctx.menubar_menu_end();
