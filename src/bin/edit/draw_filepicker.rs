@@ -131,6 +131,8 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
         ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
         {
+            let contains_focus = ctx.contains_focus();
+
             ctx.label("description", loc(LocId::FileOverwriteWarningDescription));
             ctx.attr_overflow(Overflow::TruncateTail);
             ctx.attr_padding(Rect::three(1, 2, 1));
@@ -153,9 +155,11 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             }
             ctx.table_end();
 
-            save |= ctx.consume_shortcut(vk::Y);
-            if ctx.consume_shortcut(vk::N) {
-                state.file_picker_overwrite_warning = None;
+            if contains_focus {
+                save |= ctx.consume_shortcut(vk::Y);
+                if ctx.consume_shortcut(vk::N) {
+                    state.file_picker_overwrite_warning = None;
+                }
             }
         }
         if ctx.modal_end() {

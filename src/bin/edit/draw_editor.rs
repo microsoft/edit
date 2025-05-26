@@ -227,6 +227,8 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
     {
+        let contains_focus = ctx.contains_focus();
+
         ctx.label("description", loc(LocId::UnsavedChangesDialogDescription));
         ctx.attr_padding(Rect::three(1, 2, 1));
 
@@ -251,10 +253,12 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
             }
 
             // TODO: This should highlight the corresponding letter in the label.
-            if ctx.consume_shortcut(vk::S) {
-                action = Action::Save;
-            } else if ctx.consume_shortcut(vk::N) {
-                action = Action::Discard;
+            if contains_focus {
+                if ctx.consume_shortcut(vk::S) {
+                    action = Action::Save;
+                } else if ctx.consume_shortcut(vk::N) {
+                    action = Action::Discard;
+                }
             }
         }
         ctx.table_end();
