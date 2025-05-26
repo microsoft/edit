@@ -1960,7 +1960,7 @@ impl<'a> Context<'a, '_> {
             }
             shortcut_text.push(shortcut_letter);
             self.styled_label_add_text("[");
-            let button_text = format!("{} {}", text, shortcut_text);
+            let button_text = format!("{} ({})", text, shortcut_text);
             self.styled_label_add_text(&button_text);
             self.styled_label_add_text("]");
         } else {
