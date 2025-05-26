@@ -2141,6 +2141,7 @@ impl<'a> Context<'a, '_> {
         let mut tb = tc.buffer.borrow_mut();
         let tb = &mut *tb;
         let mut make_cursor_visible = false;
+        let mut change_preferred_column = false;
 
         if self.tui.mouse_state != InputMouseState::None
             && self.tui.was_mouse_down_on_node(node_prev.id)
@@ -2623,9 +2624,7 @@ impl<'a> Context<'a, '_> {
                 _ => return false,
             }
 
-            if !matches!(key, vk::PRIOR | vk::NEXT | vk::UP | vk::DOWN) {
-                tc.preferred_column = tb.cursor_visual_pos().x;
-            }
+            change_preferred_column = !matches!(key, vk::PRIOR | vk::NEXT | vk::UP | vk::DOWN);
         } else {
             return false;
         }
@@ -2636,6 +2635,11 @@ impl<'a> Context<'a, '_> {
         }
         if !write.is_empty() {
             tb.write(write, write_raw);
+            change_preferred_column = true;
+        }
+
+        if change_preferred_column {
+            tc.preferred_column = tb.cursor_visual_pos().x;
         }
 
         self.set_input_consumed();
