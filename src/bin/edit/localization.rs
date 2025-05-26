@@ -537,7 +537,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ko      */ "문서 선택기",
         /* pt_br   */ "Seletor de documentos",
         /* ru      */ "Выбор документа",
-        /* tr      */ "Belge Seçici",
+        /* tr      */ "Belge Seç",
         /* zh_hans */ "文档选择器",
         /* zh_hant */ "文件選擇器",
     ],
