@@ -9,7 +9,7 @@ use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::input::vk;
 use edit::tui::*;
-use edit::{icu, path, sys};
+use edit::{icu, path};
 
 use crate::localization::*;
 use crate::state::*;
@@ -114,7 +114,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             // Check if the file already exists and show an overwrite warning in that case.
             if state.wants_file_picker != StateFilePicker::Open
                 && let Some(path) = doit.as_deref()
-                && std::fs::exists(path).unwrap()
+                && path.exists()
             {
                 state.file_picker_overwrite_warning = doit.take();
             }
