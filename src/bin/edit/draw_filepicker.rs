@@ -3,7 +3,7 @@
 
 use std::cmp::Ordering;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
@@ -196,19 +196,31 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
 // Returns Some(path) if the path refers to a file.
 fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
-    let path = state.file_picker_pending_dir.as_path();
-    let path = path.join(&state.file_picker_pending_name);
+    let old_path = state.file_picker_pending_dir.as_path();
+    let path = old_path.join(&state.file_picker_pending_name);
     let path = path::normalize(&path);
 
     let (dir, name) = if path.is_dir() {
-        (path.as_path(), PathBuf::new())
+        // If the current path is C:\ and the user selects "..", we want to
+        // navigate to the drive picker. Since `path::normalize` will turn C:\.. into C:\,
+        // we can detect this by checking if the length of the path didn't change.
+        let dir = if cfg!(windows)
+            && state.file_picker_pending_name == Path::new("..")
+            // It's unneccessary to check the contents of the paths.
+            && old_path.as_os_str().len() == path.as_os_str().len()
+        {
+            Path::new("")
+        } else {
+            path.as_path()
+        };
+        (dir, PathBuf::new())
     } else {
         let dir = path.parent().unwrap_or(&path);
         let name = path.file_name().map_or(Default::default(), |s| s.into());
         (dir, name)
     };
     if dir != state.file_picker_pending_dir.as_path() {
-        state.file_picker_pending_dir = DisplayablePathBuf::new(dir.to_path_buf());
+        state.file_picker_pending_dir = DisplayablePathBuf::from_path(dir.to_path_buf());
         state.file_picker_entries = None;
     }
 
@@ -220,7 +232,19 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     let dir = state.file_picker_pending_dir.as_path();
     let mut files = Vec::new();
 
-    if dir.parent().is_some() {
+    #[cfg(windows)]
+    if dir.as_os_str().is_empty() {
+        // If the path is empty, we are at the drive picker.
+        // Add all drives as entries.
+        for drive in sys::drives() {
+            files.push(DisplayablePathBuf::from_string(format!("{drive}:\\")));
+        }
+
+        state.file_picker_entries = Some(files);
+        return;
+    }
+
+    if cfg!(windows) || dir.parent().is_some() {
         files.push(DisplayablePathBuf::from(".."));
     }
 

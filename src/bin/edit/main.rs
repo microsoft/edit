@@ -279,7 +279,7 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         state.documents.add_untitled()?;
     }
 
-    state.file_picker_pending_dir = DisplayablePathBuf::new(cwd);
+    state.file_picker_pending_dir = DisplayablePathBuf::from_path(cwd);
     Ok(false)
 }
 

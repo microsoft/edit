@@ -41,7 +41,13 @@ pub struct DisplayablePathBuf {
 }
 
 impl DisplayablePathBuf {
-    pub fn new(value: PathBuf) -> Self {
+    #[allow(dead_code, reason = "only used on Windows")]
+    pub fn from_string(str: String) -> Self {
+        let value = PathBuf::from(&str);
+        Self { value, str: Cow::Owned(str) }
+    }
+
+    pub fn from_path(value: PathBuf) -> Self {
         let str = value.to_string_lossy();
         let str = unsafe { mem::transmute::<Cow<'_, str>, Cow<'_, str>>(str) };
         Self { value, str }
@@ -68,19 +74,19 @@ impl Default for DisplayablePathBuf {
 
 impl Clone for DisplayablePathBuf {
     fn clone(&self) -> Self {
-        Self::new(self.value.clone())
+        Self::from_path(self.value.clone())
     }
 }
 
 impl From<OsString> for DisplayablePathBuf {
     fn from(s: OsString) -> Self {
-        Self::new(PathBuf::from(s))
+        Self::from_path(PathBuf::from(s))
     }
 }
 
 impl<T: ?Sized + AsRef<OsStr>> From<&T> for DisplayablePathBuf {
     fn from(s: &T) -> Self {
-        Self::new(PathBuf::from(s))
+        Self::from_path(PathBuf::from(s))
     }
 }
 
