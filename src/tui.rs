@@ -1381,17 +1381,21 @@ impl<'a> Context<'a, '_> {
             self.focused_node = Some(focus_well);
         }
 
-        // Filter down to nodes that are focus wells and contain the focus.
-        // They're basically the "tab container".
-        if !focus_well.borrow().attributes.focus_well {
-            return;
-        }
-
         // The mere fact that there's a `focused_node` indicates that we're the
         // first `block_end()` call that's a focus well and also contains the focus.
         let Some(focused) = self.focused_node else {
             return;
         };
+
+        // Filter down to nodes that are focus wells and contain the focus. They're
+        // basically the "tab container". We test for the node depth to ensure that
+        // we don't accidentally pick a focus well next to or inside the focused node.
+        {
+            let n = focus_well.borrow();
+            if !n.attributes.focus_well || n.depth > focused.borrow().depth {
+                return;
+            }
+        }
 
         // Filter down to Tab/Shift+Tab inputs.
         if self.input_consumed {
@@ -3116,9 +3120,11 @@ impl<'a> Context<'a, '_> {
 
         if !self.input_consumed
             && let Some(key) = self.input_keyboard
-            && matches!(key, vk::ESCAPE | vk::UP | vk::DOWN | vk::LEFT | vk::RIGHT)
+            && matches!(key, vk::ESCAPE | vk::UP | vk::DOWN)
         {
             if matches!(key, vk::UP | vk::DOWN) {
+                // If the focus is on the menubar, and the user presses up/down,
+                // focus the first/last item of the flyout respectively.
                 let ln = self.tree.last_node.borrow();
                 if self.tui.is_node_focused(ln.parent.map_or(0, |n| n.borrow().id)) {
                     let selected_next =
@@ -3129,14 +3135,9 @@ impl<'a> Context<'a, '_> {
                     }
                 }
             } else if self.contains_focus() {
-                if key == vk::ESCAPE {
-                    // TODO: This should reassign the previous focused path.
-                    self.needs_rerender();
-                    self.set_input_consumed();
-                    Tui::clean_node_path(&mut self.tui.focused_node_path);
-                } else if !self.is_focused() {
-                    self.tui.pop_focusable_node(2);
-                }
+                // Otherwise, if the menu is the focused one and the
+                // user presses Escape, pass focus back to the menubar.
+                self.tui.pop_focusable_node(1);
             }
         }
     }
