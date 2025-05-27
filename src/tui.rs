@@ -272,7 +272,7 @@ impl ButtonStyle {
     pub fn accelerator(self, char: char) -> Self {
         Self { accelerator: Some(char), ..self }
     }
-    /// Draw a checkbox prefix: `[▣ Example Button]`
+    /// Draw a checkbox prefix: `[🗹 Example Button]`
     pub fn checked(self, checked: bool) -> Self {
         Self { checked: Some(checked), ..self }
     }
@@ -2289,7 +2289,8 @@ impl<'a> Context<'a, '_> {
                             let trackable = track_rect.height() - tc.thumb_height;
                             let delta_y = mouse.y - self.tui.mouse_down_position.y;
                             tc.scroll_offset.y = tc.scroll_offset_y_drag_start
-                                + (delta_y as f64 / trackable as f64 * scrollable_height as f64) as CoordType;
+                                + (delta_y as i64 * scrollable_height as i64 / trackable as i64)
+                                    as CoordType;
                         }
                     }
                 }
@@ -2816,7 +2817,9 @@ impl<'a> Context<'a, '_> {
                                     let delta_y =
                                         self.tui.mouse_position.y - self.tui.mouse_down_position.y;
                                     sc.scroll_offset.y = sc.scroll_offset_y_drag_start
-                                        + (delta_y as f64 / trackable as f64 * scrollable_height as f64) as CoordType;
+                                        + (delta_y as i64 * scrollable_height as i64
+                                            / trackable as i64)
+                                            as CoordType;
                                 }
 
                                 self.set_input_consumed();
@@ -3205,7 +3208,7 @@ impl<'a> Context<'a, '_> {
             self.styled_label_add_text("[");
         }
         if let Some(checked) = style.checked {
-            self.styled_label_add_text(if checked { "▣ " } else { "  " });
+            self.styled_label_add_text(if checked { "🗹 " } else { "  " });
         }
         // Label text
         match style.accelerator {
