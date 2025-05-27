@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use edit::arena::scratch_arena;
+use edit::helpers::AsciiStringHelpers;
 use edit::sys;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -24,6 +25,7 @@ pub enum LocId {
     FileSaveAs,
     FileClose,
     FileExit,
+    FileGoto,
 
     // Edit menu
     Edit,
@@ -34,11 +36,13 @@ pub enum LocId {
     EditPaste,
     EditFind,
     EditReplace,
+    EditSelectAll,
 
     // View menu
     View,
     ViewFocusStatusbar,
     ViewWordWrap,
+    ViewDocumentPicker,
 
     // Help menu
     Help,
@@ -302,7 +306,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "Close Editor",
         /* de      */ "Editor schließen",
         /* es      */ "Cerrar editor",
-        /* fr      */ "Fermer l'éditeur",
+        /* fr      */ "Fermer l’éditeur",
         /* it      */ "Chiudi editor",
         /* ja      */ "エディターを閉じる",
         /* ko      */ "편집기 닫기",
@@ -324,6 +328,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Выход",
         /* zh_hans */ "退出",
         /* zh_hant */ "退出",
+    ],
+    // FileGoto
+    [
+        /* en      */ "Go to Line/Column…",
+        /* de      */ "Gehe zu Zeile/Spalte…",
+        /* es      */ "Ir a línea/columna…",
+        /* fr      */ "Aller à la ligne/colonne…",
+        /* it      */ "Vai a riga/colonna…",
+        /* ja      */ "行/列へ移動…",
+        /* ko      */ "행/열로 이동…",
+        /* pt_br   */ "Ir para linha/coluna…",
+        /* ru      */ "Перейти к строке/столбцу…",
+        /* zh_hans */ "转到行/列…",
+        /* zh_hant */ "跳至行/列…",
     ],
 
     // Edit (a menu bar item)
@@ -438,6 +456,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "替换",
         /* zh_hant */ "取代",
     ],
+    // EditSelectAll
+    [
+        /* en      */ "Select All",
+        /* de      */ "Alles auswählen",
+        /* es      */ "Seleccionar todo",
+        /* fr      */ "Tout sélectionner",
+        /* it      */ "Seleziona tutto",
+        /* ja      */ "すべて選択",
+        /* ko      */ "모두 선택",
+        /* pt_br   */ "Selecionar tudo",
+        /* ru      */ "Выделить всё",
+        /* zh_hans */ "全选",
+        /* zh_hant */ "全選"
+    ],
 
     // View (a menu bar item)
     [
@@ -472,7 +504,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "Word Wrap",
         /* de      */ "Zeilenumbruch",
         /* es      */ "Ajuste de línea",
-        /* fr      */ "Retour à la ligne",
+        /* fr      */ "Retour automatique à la ligne",
         /* it      */ "A capo automatico",
         /* ja      */ "折り返し",
         /* ko      */ "자동 줄 바꿈",
@@ -480,6 +512,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Перенос слов",
         /* zh_hans */ "自动换行",
         /* zh_hant */ "自動換行",
+    ],
+    // ViewDocumentPicker
+    [
+        /* en      */ "Document Picker",
+        /* de      */ "Dokumentauswahl",
+        /* es      */ "Selector de documentos",
+        /* fr      */ "Sélecteur de documents",
+        /* it      */ "Selettore di documenti",
+        /* ja      */ "ドキュメントピッカー",
+        /* ko      */ "문서 선택기",
+        /* pt_br   */ "Seletor de documentos",
+        /* ru      */ "Выбор документа",
+        /* zh_hans */ "文档选择器",
+        /* zh_hant */ "文件選擇器",
     ],
 
     // Help (a menu bar item)
@@ -546,7 +592,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* es      */ "Guardar",
         /* fr      */ "Enregistrer",
         /* it      */ "Salva",
-        /* ja      */ "保存",
+        /* ja      */ "保存する",
         /* ko      */ "저장",
         /* pt_br   */ "Salvar",
         /* ru      */ "Сохранить",
@@ -631,7 +677,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "Do you want to send it anyway?",
         /* de      */ "Möchten Sie es trotzdem senden?",
         /* es      */ "¿Desea enviarlo de todas formas?",
-        /* fr      */ "Voulez-vous quand même l’envoyer?",
+        /* fr      */ "Voulez-vous quand même l’envoyer ?",
         /* it      */ "Vuoi inviarlo comunque?",
         /* ja      */ "それでも送信しますか？",
         /* ko      */ "그래도 전송하시겠습니까?",
@@ -732,9 +778,9 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "Match Case",
         /* de      */ "Groß/Klein",
         /* es      */ "May/Min",
-        /* fr      */ "Casse",
+        /* fr      */ "Resp. la casse",
         /* it      */ "Maius/minus",
-        /* ja      */ "大/小文字",
+        /* ja      */ "大/小文字を区別",
         /* ko      */ "대소문자",
         /* pt_br   */ "Maius/minus",
         /* ru      */ "Регистр",
@@ -748,7 +794,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* es      */ "Palabra",
         /* fr      */ "Mot entier",
         /* it      */ "Parola",
-        /* ja      */ "単語単位",
+        /* ja      */ "単語全体",
         /* ko      */ "전체 단어",
         /* pt_br   */ "Palavra",
         /* ru      */ "Слово",
@@ -805,7 +851,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* es      */ "Reabrir con codificación",
         /* fr      */ "Rouvrir avec un encodage différent",
         /* it      */ "Riapri con codifica",
-        /* ja      */ "エンコーディングで再度開く",
+        /* ja      */ "指定エンコーディングで再度開く",
         /* ko      */ "인코딩으로 다시 열기",
         /* pt_br   */ "Reabrir com codificação",
         /* ru      */ "Открыть снова с кодировкой",
@@ -817,9 +863,9 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "Convert to encoding",
         /* de      */ "In Kodierung konvertieren",
         /* es      */ "Convertir a otra codificación",
-        /* fr      */ "Convertir en encodage",
+        /* fr      */ "Convertir vers l’encodage",
         /* it      */ "Converti in codifica",
-        /* ja      */ "エンコーディングに変換",
+        /* ja      */ "エンコーディングを変換",
         /* ko      */ "인코딩으로 변환",
         /* pt_br   */ "Converter para codificação",
         /* ru      */ "Преобразовать в кодировку",
@@ -875,7 +921,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "File name:",
         /* de      */ "Dateiname:",
         /* es      */ "Nombre de archivo:",
-        /* fr      */ "Nom de fichier :",
+        /* fr      */ "Nom du fichier :",
         /* it      */ "Nome del file:",
         /* ja      */ "ファイル名:",
         /* ko      */ "파일 이름:",
@@ -904,7 +950,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* en      */ "File already exists. Do you want to overwrite it?",
         /* de      */ "Datei existiert bereits. Möchten Sie sie überschreiben?",
         /* es      */ "El archivo ya existe. ¿Desea sobrescribirlo?",
-        /* fr      */ "Le fichier existe déjà. Voulez-vous l’écraser?",
+        /* fr      */ "Le fichier existe déjà. Voulez-vous l’écraser ?",
         /* it      */ "Il file esiste già. Vuoi sovrascriverlo?",
         /* ja      */ "ファイルは既に存在します。上書きしますか？",
         /* ko      */ "파일이 이미 존재합니다. 덮어쓰시겠습니까?",
@@ -918,26 +964,36 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
 static mut S_LANG: LangId = LangId::en;
 
 pub fn init() {
+    // WARNING:
+    // Generic language tags such as "zh" MUST be sorted after more specific tags such
+    // as "zh-hant" to ensure that the prefix match finds the most specific one first.
+    const LANG_MAP: &[(&str, LangId)] = &[
+        ("en", LangId::en),
+        // ----------------
+        ("de", LangId::de),
+        ("es", LangId::es),
+        ("fr", LangId::fr),
+        ("it", LangId::it),
+        ("ja", LangId::ja),
+        ("ko", LangId::ko),
+        ("pt-br", LangId::pt_br),
+        ("ru", LangId::ru),
+        ("zh-hant", LangId::zh_hant),
+        ("zh-tw", LangId::zh_hant),
+        ("zh", LangId::zh_hans),
+    ];
+
     let scratch = scratch_arena(None);
     let langs = sys::preferred_languages(&scratch);
     let mut lang = LangId::en;
 
-    for l in langs {
-        lang = match l.as_str() {
-            "en" => LangId::en,
-            "de" => LangId::de,
-            "es" => LangId::es,
-            "fr" => LangId::fr,
-            "it" => LangId::it,
-            "ja" => LangId::ja,
-            "ko" => LangId::ko,
-            "pt-br" => LangId::pt_br,
-            "ru" => LangId::ru,
-            "zh-hant" => LangId::zh_hant,
-            "zh" => LangId::zh_hans,
-            _ => continue,
-        };
-        break;
+    'outer: for l in langs {
+        for (prefix, id) in LANG_MAP {
+            if l.starts_with_ignore_ascii_case(prefix) {
+                lang = *id;
+                break 'outer;
+            }
+        }
     }
 
     unsafe {

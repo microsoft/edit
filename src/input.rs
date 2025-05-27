@@ -12,7 +12,7 @@ use crate::vt;
 /// Represents a key/modifier combination.
 ///
 /// TODO: Is this a good idea? I did it to allow typing `kbmod::CTRL | vk::A`.
-/// The reason it's an awkard u32 and not a struct is to hopefully make ABIs easier later.
+/// The reason it's an awkward u32 and not a struct is to hopefully make ABIs easier later.
 /// Of course you could just translate on the ABI boundary, but my hope is that this
 /// design lets me realize some restrictions early on that I can't foresee yet.
 #[repr(transparent)]
@@ -40,8 +40,8 @@ impl InputKey {
         self.0
     }
 
-    pub(crate) const fn key(&self) -> InputKey {
-        InputKey(self.0 & 0x00FFFFFF)
+    pub(crate) const fn key(&self) -> Self {
+        Self(self.0 & 0x00FFFFFF)
     }
 
     pub(crate) const fn modifiers(&self) -> InputKeyMod {
@@ -52,8 +52,8 @@ impl InputKey {
         (self.0 & modifier.0) != 0
     }
 
-    pub(crate) const fn with_modifiers(&self, modifiers: InputKeyMod) -> InputKey {
-        InputKey(self.0 | modifiers.0)
+    pub(crate) const fn with_modifiers(&self, modifiers: InputKeyMod) -> Self {
+        Self(self.0 | modifiers.0)
     }
 }
 
@@ -67,16 +67,16 @@ impl InputKeyMod {
         Self(v)
     }
 
-    pub(crate) const fn contains(&self, modifier: InputKeyMod) -> bool {
+    pub(crate) const fn contains(&self, modifier: Self) -> bool {
         (self.0 & modifier.0) != 0
     }
 }
 
 impl std::ops::BitOr<InputKeyMod> for InputKey {
-    type Output = InputKey;
+    type Output = Self;
 
-    fn bitor(self, rhs: InputKeyMod) -> InputKey {
-        InputKey(self.0 | rhs.0)
+    fn bitor(self, rhs: InputKeyMod) -> Self {
+        Self(self.0 | rhs.0)
     }
 }
 
@@ -302,16 +302,15 @@ impl Parser {
 }
 
 /// An iterator that parses VT sequences into input events.
-///
-/// Can't implement [`Iterator`], because this is a "lending iterator".
 pub struct Stream<'parser, 'vt, 'input> {
     parser: &'parser mut Parser,
     stream: vt::Stream<'vt, 'input>,
 }
 
-impl<'input> Stream<'_, '_, 'input> {
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<Input<'input>> {
+impl<'input> Iterator for Stream<'_, '_, 'input> {
+    type Item = Input<'input>;
+
+    fn next(&mut self) -> Option<Input<'input>> {
         loop {
             if self.parser.bracketed_paste {
                 return self.handle_bracketed_paste();
@@ -492,7 +491,9 @@ impl<'input> Stream<'_, '_, 'input> {
             }
         }
     }
+}
 
+impl<'input> Stream<'_, '_, 'input> {
     /// Once we encounter the start of a bracketed paste
     /// we seek to the end of the paste in this function.
     ///
@@ -501,8 +502,8 @@ impl<'input> Stream<'_, '_, 'input> {
     /// <ESC>[201~    lots of text    <ESC>[201~
     /// ```
     ///
-    /// That text inbetween is then expected to be taken literally.
-    /// It can inbetween be anything though, including other escape sequences.
+    /// That in between text is then expected to be taken literally.
+    /// It can be in between anything though, including other escape sequences.
     /// This is the reason why this is a separate method.
     #[cold]
     fn handle_bracketed_paste(&mut self) -> Option<Input<'input>> {

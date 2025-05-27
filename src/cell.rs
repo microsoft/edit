@@ -49,7 +49,7 @@ mod release {
 
     impl<'b, T> Ref<'b, T> {
         #[inline(always)]
-        pub fn clone(orig: &Ref<'b, T>) -> Ref<'b, T> {
+        pub fn clone(orig: &Self) -> Self {
             Ref(orig.0)
         }
     }

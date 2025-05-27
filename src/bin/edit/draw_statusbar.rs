@@ -24,7 +24,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 
         ctx.table_next_row();
 
-        if ctx.button("newline", if tb.is_crlf() { "CRLF" } else { "LF" }) {
+        if ctx.button("newline", if tb.is_crlf() { "CRLF" } else { "LF" }, ButtonStyle::default()) {
             let is_crlf = tb.is_crlf();
             tb.normalize_newlines(!is_crlf);
         }
@@ -33,7 +33,8 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             ctx.steal_focus();
         }
 
-        state.wants_encoding_picker |= ctx.button("encoding", tb.encoding());
+        state.wants_encoding_picker |=
+            ctx.button("encoding", tb.encoding(), ButtonStyle::default());
         if state.wants_encoding_picker {
             if doc.path.is_some() {
                 ctx.block_begin("frame");
@@ -47,11 +48,11 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 ctx.attr_padding(Rect::two(0, 1));
                 ctx.attr_border();
                 {
-                    if ctx.button("reopen", loc(LocId::EncodingReopen)) {
+                    if ctx.button("reopen", loc(LocId::EncodingReopen), ButtonStyle::default()) {
                         state.wants_encoding_change = StateEncodingChange::Reopen;
                     }
                     ctx.focus_on_first_present();
-                    if ctx.button("convert", loc(LocId::EncodingConvert)) {
+                    if ctx.button("convert", loc(LocId::EncodingConvert), ButtonStyle::default()) {
                         state.wants_encoding_change = StateEncodingChange::Convert;
                     }
                 }
@@ -79,6 +80,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 }),
                 tb.tab_size(),
             ),
+            ButtonStyle::default(),
         );
         if state.wants_indentation_picker {
             ctx.table_begin("indentation-picker");
@@ -93,7 +95,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             ctx.attr_padding(Rect::two(0, 1));
             ctx.table_set_cell_gap(Size { width: 1, height: 0 });
             {
-                if ctx.consume_shortcut(vk::RETURN) {
+                if ctx.contains_focus() && ctx.consume_shortcut(vk::RETURN) {
                     ctx.toss_focus_up();
                 }
 
@@ -159,7 +161,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             &arena_format!(ctx.arena(), "{}/{}", tb.logical_line_count(), tb.visual_line_count(),),
         );
 
-        if tb.is_overtype() && ctx.button("overtype", "OVR") {
+        if tb.is_overtype() && ctx.button("overtype", "OVR", ButtonStyle::default()) {
             tb.set_overtype(false);
             ctx.needs_rerender();
         }
@@ -180,7 +182,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 filename = &filename_buf;
             }
 
-            state.wants_document_picker |= ctx.button("filename", filename);
+            state.wants_document_picker |= ctx.button("filename", filename, ButtonStyle::default());
             ctx.inherit_focus();
             ctx.attr_overflow(Overflow::TruncateMiddle);
             ctx.attr_position(Position::Right);
