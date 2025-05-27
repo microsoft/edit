@@ -621,7 +621,7 @@ impl LineBuffer {
 
             if left + cursor.visual_pos.x < 0 && cursor.offset < text.len() {
                 // `-left` must've intersected a wide glyph and since goto_visual stops _before_ reaching the target,
-                // we stoped before the wide glyph and thus must step forward to the next glyph.
+                // we stopped before the wide glyph and thus must step forward to the next glyph.
                 cursor = cfg.goto_logical(Point { x: cursor.logical_pos.x + 1, y: 0 });
             }
 

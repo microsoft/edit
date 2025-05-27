@@ -146,12 +146,12 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                 &mut state.search_options.use_regex,
             );
             if state.wants_search.kind == StateSearchKind::Replace
-                && ctx.button("replace-all", loc(LocId::SearchReplaceAll))
+                && ctx.button("replace-all", loc(LocId::SearchReplaceAll), ButtonStyle::default())
             {
                 change = true;
                 change_action = SearchAction::ReplaceAll;
             }
-            if ctx.button("close", loc(LocId::SearchClose)) {
+            if ctx.button("close", loc(LocId::SearchClose), ButtonStyle::default()) {
                 state.wants_search.kind = StateSearchKind::Hidden;
             }
 
@@ -229,6 +229,8 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
     {
+        let contains_focus = ctx.contains_focus();
+
         ctx.label("description", loc(LocId::UnsavedChangesDialogDescription));
         ctx.attr_padding(Rect::three(1, 2, 1));
 
@@ -241,22 +243,32 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
             ctx.table_next_row();
             ctx.inherit_focus();
 
-            if ctx.button("yes", loc(LocId::UnsavedChangesDialogYes)) {
+            if ctx.button(
+                "yes",
+                loc(LocId::UnsavedChangesDialogYes),
+                ButtonStyle::default().accelerator('S'),
+            ) {
                 action = Action::Save;
             }
             ctx.inherit_focus();
-            if ctx.button("no", loc(LocId::UnsavedChangesDialogNo)) {
+            if ctx.button(
+                "no",
+                loc(LocId::UnsavedChangesDialogNo),
+                ButtonStyle::default().accelerator('N'),
+            ) {
                 action = Action::Discard;
             }
-            if ctx.button("cancel", loc(LocId::Cancel)) {
+            if ctx.button("cancel", loc(LocId::Cancel), ButtonStyle::default()) {
                 action = Action::Cancel;
             }
 
-            // TODO: This should highlight the corresponding letter in the label.
-            if ctx.consume_shortcut(vk::S) {
-                action = Action::Save;
-            } else if ctx.consume_shortcut(vk::N) {
-                action = Action::Discard;
+            // Handle accelerator shortcuts
+            if contains_focus {
+                if ctx.consume_shortcut(vk::S) {
+                    action = Action::Save;
+                } else if ctx.consume_shortcut(vk::N) {
+                    action = Action::Discard;
+                }
             }
         }
         ctx.table_end();

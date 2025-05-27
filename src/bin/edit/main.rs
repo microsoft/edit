@@ -207,7 +207,7 @@ fn run() -> apperr::Result<()> {
                 );
 
                 // "μs" is 3 bytes and 2 columns.
-                let cols = status.len() as i32 - 3 + 2;
+                let cols = status.len() as edit::helpers::CoordType - 3 + 2;
 
                 // Since the status may shrink and grow, we may have to overwrite the previous one with whitespace.
                 let padding = (last_latency_width - cols).max(0);
@@ -279,7 +279,7 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         state.documents.add_untitled()?;
     }
 
-    state.file_picker_pending_dir = DisplayablePathBuf::new(cwd);
+    state.file_picker_pending_dir = DisplayablePathBuf::from_path(cwd);
     Ok(false)
 }
 
@@ -452,18 +452,18 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
             ctx.inherit_focus();
 
             if over_limit {
-                if ctx.button("ok", loc(LocId::Ok)) {
+                if ctx.button("ok", loc(LocId::Ok), ButtonStyle::default()) {
                     state.osc_clipboard_seen_generation = generation;
                 }
                 ctx.inherit_focus();
             } else {
-                if ctx.button("always", loc(LocId::Always)) {
+                if ctx.button("always", loc(LocId::Always), ButtonStyle::default()) {
                     state.osc_clipboard_always_send = true;
                     state.osc_clipboard_seen_generation = generation;
                     state.osc_clipboard_send_generation = generation;
                 }
 
-                if ctx.button("yes", loc(LocId::Yes)) {
+                if ctx.button("yes", loc(LocId::Yes), ButtonStyle::default()) {
                     state.osc_clipboard_seen_generation = generation;
                     state.osc_clipboard_send_generation = generation;
                 }
@@ -471,7 +471,7 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
                     ctx.inherit_focus();
                 }
 
-                if ctx.button("no", loc(LocId::No)) {
+                if ctx.button("no", loc(LocId::No), ButtonStyle::default()) {
                     state.osc_clipboard_seen_generation = generation;
                 }
                 if ctx.clipboard().len() >= 10 * LARGE_CLIPBOARD_THRESHOLD {

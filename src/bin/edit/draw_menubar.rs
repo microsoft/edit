@@ -91,6 +91,10 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
             state.wants_search.focus = true;
         }
     }
+    if ctx.menubar_menu_button(loc(LocId::EditSelectAll), 'A', kbmod::CTRL | vk::A) {
+        tb.select_all();
+        ctx.needs_rerender();
+    }
     ctx.menubar_menu_end();
 }
 
@@ -157,7 +161,7 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
             ctx.attr_padding(Rect::three(1, 2, 0));
             ctx.attr_position(Position::Center);
             {
-                if ctx.button("ok", loc(LocId::Ok)) {
+                if ctx.button("ok", loc(LocId::Ok), ButtonStyle::default()) {
                     state.wants_about = false;
                 }
                 ctx.inherit_focus();

@@ -204,6 +204,7 @@ pub struct TextBuffer {
     ruler: CoordType,
     encoding: &'static str,
     newlines_are_crlf: bool,
+    insert_final_newline: bool,
     overtype: bool,
 
     wants_cursor_visibility: bool,
@@ -249,7 +250,8 @@ impl TextBuffer {
             line_highlight_enabled: false,
             ruler: 0,
             encoding: "UTF-8",
-            newlines_are_crlf: cfg!(windows), // Unfortunately Windows users insist on CRLF
+            newlines_are_crlf: cfg!(windows), // Windows users want CRLF
+            insert_final_newline: false,
             overtype: false,
 
             wants_cursor_visibility: false,
@@ -379,6 +381,12 @@ impl TextBuffer {
         }
 
         self.newlines_are_crlf = crlf;
+    }
+
+    /// If enabled, automatically insert a final newline
+    /// when typing at the end of the file.
+    pub fn set_insert_final_newline(&mut self, enabled: bool) {
+        self.insert_final_newline = enabled;
     }
 
     /// Whether to insert or overtype text when writing.
@@ -621,6 +629,7 @@ impl TextBuffer {
         // * the logical line count
         // * the newline type (LF or CRLF)
         // * the indentation type (tabs or spaces)
+        // * whether there's a final newline
         {
             let chunk = self.read_forward(0);
             let mut offset = 0;
@@ -711,10 +720,13 @@ impl TextBuffer {
                 (_, lines) = unicode::newlines_forward(chunk, offset, lines, CoordType::MAX);
             }
 
+            let final_newline = chunk.ends_with(b"\n");
+
             // Add 1, because the last line doesn't end in a newline (it ends in the literal end).
             self.stats.logical_lines = lines + 1;
             self.stats.visual_lines = self.stats.logical_lines;
             self.newlines_are_crlf = newlines_are_crlf;
+            self.insert_final_newline = final_newline;
             self.indent_with_tabs = indent_with_tabs;
             self.tab_size = tab_size;
         }
@@ -1244,7 +1256,7 @@ impl TextBuffer {
                 self.measurement_config().with_cursor(top).goto_logical(bottom.logical_pos);
 
             // The second problem is that visual positions can be ambiguous. A single logical position
-            // can map to two visual positions: One at the end of the preceeding line in front of
+            // can map to two visual positions: One at the end of the preceding line in front of
             // a word wrap, and another at the start of the next line after the same word wrap.
             //
             // This, however, only applies if we go upwards, because only then `bottom ≅ cursor`,
@@ -1896,6 +1908,22 @@ impl TextBuffer {
             if offset >= text.len() {
                 break;
             }
+        }
+
+        // POSIX mandates that all valid lines end in a newline.
+        // This isn't all that common on Windows and so we have
+        // `self.final_newline` to control this.
+        //
+        // In order to not annoy people with this, we only add a
+        // newline if you just edited the very end of the buffer.
+        if self.insert_final_newline
+            && self.cursor.offset > 0
+            && self.cursor.offset == self.text_length()
+            && self.cursor.logical_pos.x > 0
+        {
+            let cursor = self.cursor;
+            self.edit_write(if self.newlines_are_crlf { b"\r\n" } else { b"\n" });
+            self.set_cursor_internal(cursor);
         }
 
         self.edit_end();

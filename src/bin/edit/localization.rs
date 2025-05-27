@@ -36,6 +36,7 @@ pub enum LocId {
     EditPaste,
     EditFind,
     EditReplace,
+    EditSelectAll,
 
     // View menu
     View,
@@ -455,6 +456,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "替换",
         /* zh_hant */ "取代",
     ],
+    // EditSelectAll
+    [
+        /* en      */ "Select All",
+        /* de      */ "Alles auswählen",
+        /* es      */ "Seleccionar todo",
+        /* fr      */ "Tout sélectionner",
+        /* it      */ "Seleziona tutto",
+        /* ja      */ "すべて選択",
+        /* ko      */ "모두 선택",
+        /* pt_br   */ "Selecionar tudo",
+        /* ru      */ "Выделить всё",
+        /* zh_hans */ "全选",
+        /* zh_hant */ "全選"
+    ],
 
     // View (a menu bar item)
     [
@@ -577,7 +592,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* es      */ "Guardar",
         /* fr      */ "Enregistrer",
         /* it      */ "Salva",
-        /* ja      */ "保存",
+        /* ja      */ "保存する",
         /* ko      */ "저장",
         /* pt_br   */ "Salvar",
         /* ru      */ "Сохранить",
@@ -765,7 +780,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* es      */ "May/Min",
         /* fr      */ "Resp. la casse",
         /* it      */ "Maius/minus",
-        /* ja      */ "大/小文字",
+        /* ja      */ "大/小文字を区別",
         /* ko      */ "대소문자",
         /* pt_br   */ "Maius/minus",
         /* ru      */ "Регистр",
@@ -779,7 +794,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* es      */ "Palabra",
         /* fr      */ "Mot entier",
         /* it      */ "Parola",
-        /* ja      */ "単語単位",
+        /* ja      */ "単語全体",
         /* ko      */ "전체 단어",
         /* pt_br   */ "Palavra",
         /* ru      */ "Слово",

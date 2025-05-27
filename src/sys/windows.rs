@@ -397,6 +397,21 @@ pub fn open_stdin_if_redirected() -> Option<File> {
     }
 }
 
+pub fn drives() -> impl Iterator<Item = char> {
+    unsafe {
+        let mut mask = FileSystem::GetLogicalDrives();
+        std::iter::from_fn(move || {
+            let bit = mask.trailing_zeros();
+            if bit >= 26 {
+                None
+            } else {
+                mask &= !(1 << bit);
+                Some((b'A' + bit as u8) as char)
+            }
+        })
+    }
+}
+
 /// A unique identifier for a file.
 pub enum FileId {
     Id(FileSystem::FILE_ID_INFO),
