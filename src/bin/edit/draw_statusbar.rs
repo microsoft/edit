@@ -33,7 +33,8 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             ctx.steal_focus();
         }
 
-        state.wants_encoding_picker |= ctx.button("encoding", tb.encoding(), ButtonStyle::default());
+        state.wants_encoding_picker |=
+            ctx.button("encoding", tb.encoding(), ButtonStyle::default());
         if state.wants_encoding_picker {
             if doc.path.is_some() {
                 ctx.block_begin("frame");
@@ -79,7 +80,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 }),
                 tb.tab_size(),
             ),
-            ButtonStyle::default()
+            ButtonStyle::default(),
         );
         if state.wants_indentation_picker {
             ctx.table_begin("indentation-picker");

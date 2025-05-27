@@ -235,7 +235,7 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     if dir.as_os_str().is_empty() {
         // If the path is empty, we are at the drive picker.
         // Add all drives as entries.
-        for drive in sys::drives() {
+        for drive in edit::sys::drives() {
             files.push(DisplayablePathBuf::from_string(format!("{drive}:\\")));
         }
 

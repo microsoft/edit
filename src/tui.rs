@@ -267,7 +267,7 @@ pub struct ButtonStyle {
 
 impl ButtonStyle {
     /// Draw an accelerator label: `[_E_xample button]` or `[Example button(X)]`
-    /// 
+    ///
     /// Must provide an upper-case ASCII character.
     pub fn accelerator(self, char: char) -> Self {
         Self { accelerator: Some(char), ..self }
@@ -687,7 +687,10 @@ impl Tui {
     fn report_context_completion<'a>(&'a mut self, ctx: &mut Context<'a, '_>) {
         // If this hits, you forgot to block_end() somewhere. The best way to figure
         // out where is to do a binary search of commenting out code in main.rs.
-        debug_assert!(ctx.tree.current_node.borrow().stack_parent.is_none(), "Dangling parent! Did you miss a block_end?");
+        debug_assert!(
+            ctx.tree.current_node.borrow().stack_parent.is_none(),
+            "Dangling parent! Did you miss a block_end?"
+        );
 
         // End the root node.
         ctx.block_end();
@@ -3062,7 +3065,11 @@ impl<'a> Context<'a, '_> {
         let mixin = self.tree.current_node.borrow().child_count as u64;
         self.next_block_id_mixin(mixin);
 
-        self.button_label("menu_button", text, ButtonStyle::default().accelerator(accelerator).bracketed(false));
+        self.button_label(
+            "menu_button",
+            text,
+            ButtonStyle::default().accelerator(accelerator).bracketed(false),
+        );
         self.attr_focusable();
         self.attr_padding(Rect::two(0, 1));
 
@@ -3136,7 +3143,11 @@ impl<'a> Context<'a, '_> {
         let clicked =
             self.button_activated() || self.consume_shortcut(InputKey::new(accelerator as u32));
 
-        self.button_label("menu_checkbox", text, ButtonStyle::default().bracketed(false).checked(checked).accelerator(accelerator));
+        self.button_label(
+            "menu_checkbox",
+            text,
+            ButtonStyle::default().bracketed(false).checked(checked).accelerator(accelerator),
+        );
         self.menubar_shortcut(shortcut);
 
         if clicked {
@@ -3195,7 +3206,7 @@ impl<'a> Context<'a, '_> {
         // Label text
         match style.accelerator {
             Some(accelerator) if accelerator.is_ascii_uppercase() => {
-                // Complex case: 
+                // Complex case:
                 // Locate the offset of the acclerator character in the label text
                 let mut off = text.len();
                 for (i, c) in text.bytes().enumerate() {
@@ -3227,12 +3238,12 @@ impl<'a> Context<'a, '_> {
                     self.styled_label_set_attributes(Attributes::None);
                     self.styled_label_add_text(")");
                 }
-            },
+            }
             _ => {
                 // Simple case:
                 // no accelerator character
                 self.styled_label_add_text(text);
-            },
+            }
         }
         // Label postfix
         if style.bracketed {
