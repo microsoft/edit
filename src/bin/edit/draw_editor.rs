@@ -187,8 +187,14 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
     if let Some(doc) = state.documents.active_mut() {
         if doc.path.is_some() {
-            if let Err(err) = doc.save(None) {
-                error_log_add(ctx, state, err);
+            match doc.save(None) {
+                Ok(_) => {
+                    if state.wants_close_after_save{
+                        state.documents.remove_active();
+                        state.wants_close_after_save = false;
+                    }
+                }
+                Err(err) => error_log_add(ctx, state, err),
             }
         } else {
             // No path? Show the file picker.
@@ -277,7 +283,10 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
 
     match action {
         Action::None => return,
-        Action::Save => state.wants_save = true,
+        Action::Save => {
+            state.wants_save = true;
+            state.wants_close_after_save = true;
+        }
         Action::Discard => state.documents.remove_active(),
         Action::Cancel => state.wants_exit = false,
     }

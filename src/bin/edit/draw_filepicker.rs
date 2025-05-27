@@ -183,6 +183,10 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             Ok(..) => {
                 ctx.needs_rerender();
                 done = true;
+                if state.wants_close_after_save {
+                    state.documents.remove_active();
+                    state.wants_close_after_save = false;
+                }
             }
             Err(err) => error_log_add(ctx, state, err),
         }
@@ -190,6 +194,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
     if done {
         state.wants_file_picker = StateFilePicker::None;
+        state.wants_close_after_save = false;
         state.file_picker_pending_name = Default::default();
         state.file_picker_entries = Default::default();
         state.file_picker_overwrite_warning = Default::default();

@@ -143,6 +143,7 @@ pub struct State {
     pub search_success: bool,
 
     pub wants_save: bool,
+    pub wants_close_after_save: bool,
     pub wants_statusbar_focus: bool,
     pub wants_encoding_picker: bool,
     pub wants_encoding_change: StateEncodingChange,
@@ -194,6 +195,7 @@ impl State {
             search_success: true,
 
             wants_save: false,
+            wants_close_after_save: false,
             wants_statusbar_focus: false,
             wants_encoding_picker: false,
             wants_encoding_change: StateEncodingChange::None,
