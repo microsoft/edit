@@ -41,14 +41,14 @@ impl fmt::Display for MetricFormatter<usize> {
 }
 
 /// A viewport coordinate type used throughout the application.
-pub type CoordType = i32;
+pub type CoordType = isize;
 
-/// To avoid overflow issues because you're adding two [`CoordType::MAX`] values together,
-/// you can use [`COORD_TYPE_SAFE_MIN`] and [`COORD_TYPE_SAFE_MAX`].
-pub const COORD_TYPE_SAFE_MAX: CoordType = 32767;
-
-/// See [`COORD_TYPE_SAFE_MAX`].
-pub const COORD_TYPE_SAFE_MIN: CoordType = -32767 - 1;
+/// To avoid overflow issues because you're adding two [`CoordType::MAX`]
+/// values together, you can use [`COORD_TYPE_SAFE_MAX`] instead.
+///
+/// It equates to half the bits contained in [`CoordType`], which
+/// for instance is 32767 (0x7FFF) when [`CoordType`] is a [`i32`].
+pub const COORD_TYPE_SAFE_MAX: CoordType = (1 << (CoordType::BITS / 2 - 1)) - 1;
 
 /// A 2D point. Uses [`CoordType`].
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]

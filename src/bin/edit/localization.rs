@@ -469,7 +469,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Выделить всё",
         /* zh_hans */ "全选",
         /* zh_hant */ "全選"
-    ]
+    ],
 
     // View (a menu bar item)
     [
