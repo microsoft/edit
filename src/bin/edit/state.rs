@@ -6,7 +6,6 @@ use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::{Path, PathBuf};
 
-use edit::buffer::TextBuffer;
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::tui::*;
@@ -164,13 +163,6 @@ pub struct State {
 
 impl State {
     pub fn new() -> apperr::Result<Self> {
-        let buffer = TextBuffer::new_rc(false)?;
-        {
-            let mut tb = buffer.borrow_mut();
-            tb.set_margin_enabled(true);
-            tb.set_line_highlight_enabled(true);
-        }
-
         Ok(Self {
             menubar_color_bg: 0,
             menubar_color_fg: 0,

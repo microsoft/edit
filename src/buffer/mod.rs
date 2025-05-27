@@ -250,9 +250,8 @@ impl TextBuffer {
             line_highlight_enabled: false,
             ruler: 0,
             encoding: "UTF-8",
-            // Windows users want CRLF and no final newline.
-            newlines_are_crlf: cfg!(windows),
-            insert_final_newline: !cfg!(windows),
+            newlines_are_crlf: cfg!(windows), // Windows users want CRLF
+            insert_final_newline: false,
             overtype: false,
 
             wants_cursor_visibility: false,
@@ -382,6 +381,12 @@ impl TextBuffer {
         }
 
         self.newlines_are_crlf = crlf;
+    }
+
+    /// If enabled, automatically insert a final newline
+    /// when typing at the end of the file.
+    pub fn set_insert_final_newline(&mut self, enabled: bool) {
+        self.insert_final_newline = enabled;
     }
 
     /// Whether to insert or overtype text when writing.

@@ -114,13 +114,7 @@ impl DocumentManager {
     }
 
     pub fn add_untitled(&mut self) -> apperr::Result<&mut Document> {
-        let buffer = TextBuffer::new_rc(false)?;
-        {
-            let mut tb = buffer.borrow_mut();
-            tb.set_margin_enabled(true);
-            tb.set_line_highlight_enabled(true);
-        }
-
+        let buffer = Self::create_buffer()?;
         let mut doc = Document {
             buffer,
             path: None,
@@ -167,13 +161,10 @@ impl DocumentManager {
             return Ok(doc);
         }
 
-        let buffer = TextBuffer::new_rc(false)?;
+        let buffer = Self::create_buffer()?;
         {
-            let mut tb = buffer.borrow_mut();
-            tb.set_margin_enabled(true);
-            tb.set_line_highlight_enabled(true);
-
             if let Some(file) = &mut file {
+                let mut tb = buffer.borrow_mut();
                 tb.read_file(file, None)?;
 
                 if let Some(goto) = goto
@@ -214,6 +205,17 @@ impl DocumentManager {
 
     pub fn open_for_writing(path: &Path) -> apperr::Result<File> {
         File::create(path).map_err(apperr::Error::from)
+    }
+
+    fn create_buffer() -> apperr::Result<RcTextBuffer> {
+        let buffer = TextBuffer::new_rc(false)?;
+        {
+            let mut tb = buffer.borrow_mut();
+            tb.set_insert_final_newline(!cfg!(windows)); // As mandated by POSIX.
+            tb.set_margin_enabled(true);
+            tb.set_line_highlight_enabled(true);
+        }
+        Ok(buffer)
     }
 
     // Parse a filename in the form of "filename:line:char".
