@@ -250,9 +250,7 @@ impl TextBuffer {
             line_highlight_enabled: false,
             ruler: 0,
             encoding: "UTF-8",
-            // Windows users are peculiar about CRLF and the existence of a
-            // final newline, so the defaults are dynamic per target platform
-            // to not incite any more riots...
+            // Windows users want CRLF and no final newline.
             newlines_are_crlf: cfg!(windows),
             insert_final_newline: !cfg!(windows),
             overtype: false,
