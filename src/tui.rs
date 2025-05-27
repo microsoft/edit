@@ -3087,6 +3087,7 @@ impl<'a> Context<'a, '_> {
     ///
     /// Returns true if the menu is open. Continue appending items to it in that case.
     pub fn menubar_menu_begin(&mut self, text: &str, accelerator: char) -> bool {
+        let accelerator = if cfg!(target_os = "macos") { '\0' } else { accelerator };
         let mixin = self.tree.current_node.borrow().child_count as u64;
         self.next_block_id_mixin(mixin);
 
@@ -3099,7 +3100,8 @@ impl<'a> Context<'a, '_> {
         self.attr_padding(Rect::two(0, 1));
 
         let contains_focus = self.contains_focus();
-        let keyboard_focus = !contains_focus
+        let keyboard_focus = accelerator != '\0'
+            && !contains_focus
             && self.consume_shortcut(kbmod::ALT | InputKey::new(accelerator as u32));
 
         if contains_focus || keyboard_focus {
