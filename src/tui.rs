@@ -1980,14 +1980,11 @@ impl<'a> Context<'a, '_> {
     /// Creates a button with the given text.
     /// Returns true if the button was activated.
     pub fn button(&mut self, classname: &'static str, text: &str, style: ButtonStyle) -> bool {
-        self.block_begin(classname);
+        self.button_label(classname, text, style);
         self.attr_focusable();
         if self.is_focused() {
             self.attr_reverse();
         }
-        self.button_label(text, style);
-        self.block_end();
-
         self.button_activated()
     }
 
@@ -3057,7 +3054,7 @@ impl<'a> Context<'a, '_> {
         let mixin = self.tree.current_node.borrow().child_count as u64;
         self.next_block_id_mixin(mixin);
 
-        self.button_label(text, ButtonStyle::default().accelerator(accelerator).bracketed(false));
+        self.button_label("menu_button", text, ButtonStyle::default().accelerator(accelerator).bracketed(false));
         self.attr_focusable();
         self.attr_padding(Rect::two(0, 1));
 
@@ -3131,7 +3128,7 @@ impl<'a> Context<'a, '_> {
         let clicked =
             self.button_activated() || self.consume_shortcut(InputKey::new(accelerator as u32));
 
-        self.button_label(text, ButtonStyle::default().bracketed(false).checked(checked).accelerator(accelerator));
+        self.button_label("menu_checkbox", text, ButtonStyle::default().bracketed(false).checked(checked).accelerator(accelerator));
         self.menubar_shortcut(shortcut);
 
         if clicked {
@@ -3181,9 +3178,9 @@ impl<'a> Context<'a, '_> {
 
     /// Renders a button label with an optional accelerator character
     /// May also renders a checkbox or square brackets for inline buttons
-    fn button_label(&mut self, text: &str, style: ButtonStyle) {
+    fn button_label(&mut self, classname: &'static str, text: &str, style: ButtonStyle) {
         // Label prefix
-        self.styled_label_begin("label");
+        self.styled_label_begin(classname);
         if style.bracketed {
             self.styled_label_add_text("[");
         }
