@@ -217,9 +217,11 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
 fn draw_dialog_saveas_refresh_files(state: &mut State) {
     let dir = state.file_picker_pending_dir.as_path();
     let mut files = Vec::new();
+    let mut off = 0;
 
     if dir.parent().is_some() {
         files.push(DisplayablePathBuf::from(".."));
+        off = 1;
     }
 
     if let Ok(iter) = fs::read_dir(dir) {
@@ -238,7 +240,6 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     }
 
     // Sort directories first, then by name, case-insensitive.
-    let off = files.len().saturating_sub(1);
     files[off..].sort_by(|a, b| {
         let a = a.as_bytes();
         let b = b.as_bytes();
