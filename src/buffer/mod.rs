@@ -1280,17 +1280,20 @@ impl TextBuffer {
 
         let mut start = offset;
         let pattern = search.pattern.as_bytes();
+        let pattern_len = pattern.len();
 
         let skip_table = {
-            let mut table = HashMap::new();
-            let pattern_len = pattern.len();
+            let mut table: [usize; 128] = [pattern.len(); 128];
 
             for i in 0..pattern_len.saturating_sub(1) {
                 let c = pattern[i];
+                if c > 128 {
+                    continue;
+                }
                 let skip_distance = pattern_len - i - 1;
 
-                table.insert(c.to_ascii_lowercase(), skip_distance);
-                table.insert(c.to_ascii_uppercase(), skip_distance);
+                table[c.to_ascii_lowercase() as usize] = skip_distance;
+                table[c.to_ascii_uppercase() as usize] = skip_distance;
             }
 
             table
@@ -1299,7 +1302,6 @@ impl TextBuffer {
         let mut hit = None;
 
         let buffer_len = self.buffer.len();
-        let pattern_len = pattern.len();
 
         while start <= buffer_len {
             let chunk = self.read_forward(start);
@@ -1314,7 +1316,8 @@ impl TextBuffer {
                     break;
                 }
 
-                skip = skip + skip_table.get(&chunk[skip + pattern_len - 1]).copied().unwrap_or(1);
+                skip +=
+                    skip_table.get(chunk[skip + pattern_len - 1] as usize).unwrap_or(&pattern_len);
             }
 
             start += chunk.len();
