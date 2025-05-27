@@ -2285,7 +2285,7 @@ impl<'a> Context<'a, '_> {
                             let trackable = track_rect.height() - tc.thumb_height;
                             let delta_y = mouse.y - self.tui.mouse_down_position.y;
                             tc.scroll_offset.y = tc.scroll_offset_y_drag_start
-                                + ((delta_y * scrollable_height) / trackable);
+                                + (delta_y as f32 / trackable as f32 * scrollable_height as f32) as CoordType;
                         }
                     }
                 }
@@ -2812,7 +2812,7 @@ impl<'a> Context<'a, '_> {
                                     let delta_y =
                                         self.tui.mouse_position.y - self.tui.mouse_down_position.y;
                                     sc.scroll_offset.y = sc.scroll_offset_y_drag_start
-                                        + ((delta_y * scrollable_height) / trackable);
+                                        + (delta_y as f32 / trackable as f32 * scrollable_height as f32) as CoordType;
                                 }
 
                                 self.set_input_consumed();
