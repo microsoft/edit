@@ -1,13 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![feature(
-    allocator_api,
-    let_chains,
-    linked_list_cursors,
-    os_string_truncate,
-    string_from_utf8_lossy_owned
-)]
+#![feature(allocator_api, linked_list_cursors, os_string_truncate, string_from_utf8_lossy_owned)]
 
 mod documents;
 mod draw_editor;
