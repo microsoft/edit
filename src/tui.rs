@@ -257,6 +257,11 @@ pub enum Overflow {
     TruncateTail,
 }
 
+struct ActionScope {
+    name: &'static str,
+    actions: &'static [(&'static str, InputKey)]
+}
+
 /// There's two types of lifetimes the TUI code needs to manage:
 /// * Across frames
 /// * Per frame
@@ -334,6 +339,10 @@ pub struct Tui {
     settling_have: i32,
     settling_want: i32,
     read_timeout: time::Duration,
+
+
+    registered_scopes: Vec<ActionScope>,
+    shortcut_overrides: Vec<(&'static str, &'static str, InputKey)>,
 }
 
 impl Tui {
@@ -385,6 +394,9 @@ impl Tui {
             settling_have: 0,
             settling_want: 0,
             read_timeout: time::Duration::MAX,
+
+            registered_scopes: Vec::with_capacity(16),
+            shortcut_overrides: Vec::with_capacity(16),
         };
         Self::clean_node_path(&mut tui.mouse_down_node_path);
         Self::clean_node_path(&mut tui.focused_node_path);
@@ -1237,6 +1249,24 @@ impl Tui {
         }
 
         self.focused_node_for_scrolling = focused_id;
+        true
+    }
+
+    pub fn declare_scope(&mut self, name: &'static str, actions: &'static [(&'static str, InputKey)]) {
+        self.registered_scopes.push(ActionScope {
+            name,
+            actions
+        })
+    }
+
+    /// Returns true if shortcut was updated, false if scope+action does not exist.
+    pub fn reassign_shortcut(&mut self, scope: &str, name: &str, value: InputKey) -> bool {
+        // All of this is just to not require the caller to keep the values, since we already have this exact string.
+        let Some(s) = self.registered_scopes.iter().filter(|s| s.name == scope).next() else { return false; };
+        let Some(action_stored) = s.actions.iter().filter(|a| a.0 == name).next() else { return false; };
+        let scope_stored = s.name;
+
+        self.shortcut_overrides.push((scope_stored, action_stored.0, value));
         true
     }
 }
@@ -3218,6 +3248,19 @@ impl<'a> Context<'a, '_> {
         }
         self.attr_padding(Rect { left: 0, top: 0, right: 2, bottom: 0 });
     }
+
+    pub fn scope_begin(&mut self, name: &str, key: u64) {
+
+    }
+
+    pub fn scope_end(&mut self) {}
+
+    pub fn consume_action(&mut self, name: &str) -> bool {
+        // ## Small explaination on how this system even works
+        // In the node tree, `scope_begin` and `scope_end` methods will place special nodes in the tree,
+        // action scope boundaries, that will define which shortcuts make sense in the current situation,
+        // as well as allow us to propogate the shortcuts.
+    }
 }
 
 /// See [`Tree::visit_all`].
@@ -3560,6 +3603,12 @@ struct ScrollareaContent {
     thumb_height: CoordType,
 }
 
+#[derive(Clone)]
+struct ActionScopeBoundaryContent {
+    name: &'static str,
+    key: u64
+}
+
 /// NOTE: Must not contain items that require drop().
 #[derive(Default)]
 enum NodeContent<'a> {
@@ -3571,6 +3620,7 @@ enum NodeContent<'a> {
     Text(TextContent<'a>),
     Textarea(TextareaContent<'a>),
     Scrollarea(ScrollareaContent),
+    ActionScopeBoundary(ActionScopeBoundaryContent),
 }
 
 /// NOTE: Must not contain items that require drop().
