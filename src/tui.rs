@@ -3207,7 +3207,7 @@ impl<'a> Context<'a, '_> {
         match style.accelerator {
             Some(accelerator) if accelerator.is_ascii_uppercase() => {
                 // Complex case:
-                // Locate the offset of the acclerator character in the label text
+                // Locate the offset of the accelerator character in the label text
                 let mut off = text.len();
                 for (i, c) in text.bytes().enumerate() {
                     // Perfect match (uppercase character) --> stop

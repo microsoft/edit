@@ -204,7 +204,7 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
         // we can detect this by checking if the length of the path didn't change.
         let dir = if cfg!(windows)
             && state.file_picker_pending_name == Path::new("..")
-            // It's unneccessary to check the contents of the paths.
+            // It's unnecessary to check the contents of the paths.
             && old_path.as_os_str().len() == path.as_os_str().len()
         {
             Path::new("")

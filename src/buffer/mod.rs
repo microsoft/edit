@@ -1240,7 +1240,7 @@ impl TextBuffer {
                 self.measurement_config().with_cursor(top).goto_logical(bottom.logical_pos);
 
             // The second problem is that visual positions can be ambiguous. A single logical position
-            // can map to two visual positions: One at the end of the preceeding line in front of
+            // can map to two visual positions: One at the end of the preceding line in front of
             // a word wrap, and another at the start of the next line after the same word wrap.
             //
             // This, however, only applies if we go upwards, because only then `bottom ≅ cursor`,
