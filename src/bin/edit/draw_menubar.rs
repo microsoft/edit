@@ -91,6 +91,10 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
             state.wants_search.focus = true;
         }
     }
+    if ctx.menubar_menu_button(loc(LocId::EditSelectAll), 'A', kbmod::CTRL | vk::A) {
+        tb.select_all();
+        ctx.needs_rerender();
+    }
     ctx.menubar_menu_end();
 }
 
