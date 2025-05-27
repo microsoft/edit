@@ -194,15 +194,14 @@ impl DocumentManager {
         };
         doc.set_path(path);
 
-        if self.list.len() == 1
-            && let Some(current_doc) = self.list.front()
-            && current_doc.path.is_none()
-            && current_doc.file_id.is_none()
-            && !current_doc.buffer.borrow().is_dirty()
+        if let Some(active) = self.active()
+            && active.path.is_none()
+            && active.file_id.is_none()
+            && !active.buffer.borrow().is_dirty()
         {
-            // If there is only one document, and it has no filename, and it is not dirty,
-            // replace it with the new document.
-            self.list.clear();
+            // If the current document is a pristine Untitled document with no
+            // name and no ID, replace it with the new document.
+            self.remove_active();
         }
 
         self.list.push_front(doc);
