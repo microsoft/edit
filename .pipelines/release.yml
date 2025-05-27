@@ -169,10 +169,16 @@ extends:
 
               - ${{ each platform in parameters.buildPlatforms }}:
                 - pwsh: |-
-                    $ReleaseName = "edit-$(EditVersion)-${{ replace(platform, 'pc-windows-msvc', 'windows') }}"
-                    $VpackArchName = Switch("${{split(platform, '-')[0]}}") { "x86_64" { "amd64" }; "aarch64" { "arm64" } }
-                    $Dest = New-Item -Type Directory "_staging/${ReleaseName}"
-                    # Copy the signed binaries from the vpack staging folder
-                    Get-ChildItem "$(ob_createvpack_vpackdirectory)/${VpackArchName}" -Include *.exe, *.pdb | Copy-Item -Destination $Dest -Verbose
-                    tar.exe -c -v --format=zip -f "$(ob_outputDirectory)\${ReleaseName}.zip" -C _staging $ReleaseName
+                    $Dest = New-Item -Type Directory "_staging/${env:RELEASE_NAME}"
+                    Write-Host "Staging files from ${env:VPACK_ROOT} at $Dest"
+                    Get-ChildItem $env:VPACK_ROOT -Include *.exe, *.pdb | Copy-Item -Destination $Dest -Verbose
+                    tar.exe -c -v --format=zip -f "$(ob_outputDirectory)\${env:RELEASE_NAME}.zip" -C _staging $env:RELEASE_NAME
+                  env:
+                    RELEASE_NAME: edit-$(EditVersion)-${{ replace(platform, 'pc-windows-msvc', 'windows') }}
+                    ${{ if eq(platform, 'i686-pc-windows-msvc') }}:
+                      VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/i386"
+                    ${{ elseif eq(platform, 'x86_64-pc-windows-msvc') }}:
+                      VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/amd64"
+                    ${{ else }}: # aarch64-pc-windows-msvc
+                      VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/arm64"
                   displayName: Produce ${{platform}} release archive
