@@ -131,7 +131,7 @@
 //!
 //!         // Thanks to the lack of callbacks, we can use a primitive
 //!         // if condition here, as well as in any potential C code.
-//!         if ctx.button("button", "Click me!") {
+//!         if ctx.button("button", "Click me!", ButtonStyle::default()) {
 //!             state.counter += 1;
 //!         }
 //!
