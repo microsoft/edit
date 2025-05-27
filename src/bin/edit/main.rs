@@ -280,6 +280,7 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     }
 
     state.file_picker_pending_dir = DisplayablePathBuf::from_path(cwd);
+    state.file_picker_pending_dir_revision = state.file_picker_pending_dir_revision.wrapping_add(1);
     Ok(false)
 }
 
