@@ -169,7 +169,7 @@ extends:
 
               - ${{ each platform in parameters.buildPlatforms }}:
                 - pwsh: |-
-                    $ReleaseName = "edit-$(EditVersion)-${{ replace(platform, 'pc-windows-msvc', 'windows' }}"
+                    $ReleaseName = "edit-$(EditVersion)-${{ replace(platform, 'pc-windows-msvc', 'windows') }}"
                     $VpackArchName = Switch("${{split(platform, '-')[0]}}") { "x86_64" { "amd64" }; "aarch64" { "arm64" } }
                     $Dest = New-Item -Type Directory _staging/$ReleaseName
                     # Copy the signed binaries from the vpack staging folder
