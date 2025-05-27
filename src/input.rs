@@ -350,9 +350,6 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                     match ch {
                         '\0' => return Some(Input::Keyboard(vk::ESCAPE)),
                         '\n' => return Some(Input::Keyboard(kbmod::CTRL_ALT | vk::RETURN)),
-                        // Handle literal "back-word" and "forward-word"
-                        'b' => { return Some(Input::Keyboard(kbmod::ALT | vk::LEFT)) }
-                        'f' => return Some(Input::Keyboard(kbmod::ALT | vk::RIGHT)),
                         ' '..='~' => {
                             let ch = ch as u32;
                             let key = ch & !0x20; // Shift a-z to A-Z
