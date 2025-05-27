@@ -257,6 +257,41 @@ pub enum Overflow {
     TruncateTail,
 }
 
+/// Controls the style with which a button label renders
+#[derive(Clone, Copy)]
+pub struct ButtonStyle {
+    accelerator: Option<char>,
+    checked: Option<bool>,
+    bracketed: bool,
+}
+
+impl ButtonStyle {
+    /// Draw an accelerator label: `[_E_xample button]` or `[Example button(X)]`
+    ///
+    /// Must provide an upper-case ASCII character.
+    pub fn accelerator(self, char: char) -> Self {
+        Self { accelerator: Some(char), ..self }
+    }
+    /// Draw a checkbox prefix: `[▣ Example Button]`
+    pub fn checked(self, checked: bool) -> Self {
+        Self { checked: Some(checked), ..self }
+    }
+    /// Draw with or without brackets: `[Example Button]` or `Example Button`
+    pub fn bracketed(self, bracketed: bool) -> Self {
+        Self { bracketed, ..self }
+    }
+}
+
+impl Default for ButtonStyle {
+    fn default() -> Self {
+        Self {
+            accelerator: None,
+            checked: None,
+            bracketed: true, // Default style for most buttons. Brackets may be disabled e.g. for buttons in menus
+        }
+    }
+}
+
 /// There's two types of lifetimes the TUI code needs to manage:
 /// * Across frames
 /// * Per frame
@@ -652,7 +687,10 @@ impl Tui {
     fn report_context_completion<'a>(&'a mut self, ctx: &mut Context<'a, '_>) {
         // If this hits, you forgot to block_end() somewhere. The best way to figure
         // out where is to do a binary search of commenting out code in main.rs.
-        debug_assert!(ctx.tree.current_node.borrow().stack_parent.is_none());
+        debug_assert!(
+            ctx.tree.current_node.borrow().stack_parent.is_none(),
+            "Dangling parent! Did you miss a block_end?"
+        );
 
         // End the root node.
         ctx.block_end();
@@ -1381,17 +1419,21 @@ impl<'a> Context<'a, '_> {
             self.focused_node = Some(focus_well);
         }
 
-        // Filter down to nodes that are focus wells and contain the focus.
-        // They're basically the "tab container".
-        if !focus_well.borrow().attributes.focus_well {
-            return;
-        }
-
         // The mere fact that there's a `focused_node` indicates that we're the
         // first `block_end()` call that's a focus well and also contains the focus.
         let Some(focused) = self.focused_node else {
             return;
         };
+
+        // Filter down to nodes that are focus wells and contain the focus. They're
+        // basically the "tab container". We test for the node depth to ensure that
+        // we don't accidentally pick a focus well next to or inside the focused node.
+        {
+            let n = focus_well.borrow();
+            if !n.attributes.focus_well || n.depth > focused.borrow().depth {
+                return;
+            }
+        }
 
         // Filter down to Tab/Shift+Tab inputs.
         if self.input_consumed {
@@ -1944,17 +1986,12 @@ impl<'a> Context<'a, '_> {
 
     /// Creates a button with the given text.
     /// Returns true if the button was activated.
-    pub fn button(&mut self, classname: &'static str, text: &str) -> bool {
-        self.styled_label_begin(classname);
+    pub fn button(&mut self, classname: &'static str, text: &str, style: ButtonStyle) -> bool {
+        self.button_label(classname, text, style);
         self.attr_focusable();
         if self.is_focused() {
             self.attr_reverse();
         }
-        self.styled_label_add_text("[");
-        self.styled_label_add_text(text);
-        self.styled_label_add_text("]");
-        self.styled_label_end();
-
         self.button_activated()
     }
 
@@ -2141,6 +2178,7 @@ impl<'a> Context<'a, '_> {
         let mut tb = tc.buffer.borrow_mut();
         let tb = &mut *tb;
         let mut make_cursor_visible = false;
+        let mut change_preferred_column = false;
 
         if self.tui.mouse_state != InputMouseState::None
             && self.tui.was_mouse_down_on_node(node_prev.id)
@@ -2623,9 +2661,7 @@ impl<'a> Context<'a, '_> {
                 _ => return false,
             }
 
-            if !matches!(key, vk::PRIOR | vk::NEXT | vk::UP | vk::DOWN) {
-                tc.preferred_column = tb.cursor_visual_pos().x;
-            }
+            change_preferred_column = !matches!(key, vk::PRIOR | vk::NEXT | vk::UP | vk::DOWN);
         } else {
             return false;
         }
@@ -2636,6 +2672,11 @@ impl<'a> Context<'a, '_> {
         }
         if !write.is_empty() {
             tb.write(write, write_raw);
+            change_preferred_column = true;
+        }
+
+        if change_preferred_column {
+            tc.preferred_column = tb.cursor_visual_pos().x;
         }
 
         self.set_input_consumed();
@@ -3024,7 +3065,11 @@ impl<'a> Context<'a, '_> {
         let mixin = self.tree.current_node.borrow().child_count as u64;
         self.next_block_id_mixin(mixin);
 
-        self.menubar_label(text, accelerator, None);
+        self.button_label(
+            "menu_button",
+            text,
+            ButtonStyle::default().accelerator(accelerator).bracketed(false),
+        );
         self.attr_focusable();
         self.attr_padding(Rect::two(0, 1));
 
@@ -3098,7 +3143,11 @@ impl<'a> Context<'a, '_> {
         let clicked =
             self.button_activated() || self.consume_shortcut(InputKey::new(accelerator as u32));
 
-        self.menubar_label(text, accelerator, Some(checked));
+        self.button_label(
+            "menu_checkbox",
+            text,
+            ButtonStyle::default().bracketed(false).checked(checked).accelerator(accelerator),
+        );
         self.menubar_shortcut(shortcut);
 
         if clicked {
@@ -3116,9 +3165,11 @@ impl<'a> Context<'a, '_> {
 
         if !self.input_consumed
             && let Some(key) = self.input_keyboard
-            && matches!(key, vk::ESCAPE | vk::UP | vk::DOWN | vk::LEFT | vk::RIGHT)
+            && matches!(key, vk::ESCAPE | vk::UP | vk::DOWN)
         {
             if matches!(key, vk::UP | vk::DOWN) {
+                // If the focus is on the menubar, and the user presses up/down,
+                // focus the first/last item of the flyout respectively.
                 let ln = self.tree.last_node.borrow();
                 if self.tui.is_node_focused(ln.parent.map_or(0, |n| n.borrow().id)) {
                     let selected_next =
@@ -3129,14 +3180,9 @@ impl<'a> Context<'a, '_> {
                     }
                 }
             } else if self.contains_focus() {
-                if key == vk::ESCAPE {
-                    // TODO: This should reassign the previous focused path.
-                    self.needs_rerender();
-                    self.set_input_consumed();
-                    Tui::clean_node_path(&mut self.tui.focused_node_path);
-                } else if !self.is_focused() {
-                    self.tui.pop_focusable_node(2);
-                }
+                // Otherwise, if the menu is the focused one and the
+                // user presses Escape, pass focus back to the menubar.
+                self.tui.pop_focusable_node(1);
             }
         }
     }
@@ -3146,51 +3192,64 @@ impl<'a> Context<'a, '_> {
         self.table_end();
     }
 
-    fn menubar_label(&mut self, text: &str, accelerator: char, checked: Option<bool>) {
-        if !accelerator.is_ascii_uppercase() {
-            self.label("label", text);
-            return;
+    /// Renders a button label with an optional accelerator character
+    /// May also renders a checkbox or square brackets for inline buttons
+    fn button_label(&mut self, classname: &'static str, text: &str, style: ButtonStyle) {
+        // Label prefix
+        self.styled_label_begin(classname);
+        if style.bracketed {
+            self.styled_label_add_text("[");
         }
-
-        let mut off = text.len();
-
-        for (i, c) in text.bytes().enumerate() {
-            // Perfect match (uppercase character) --> stop
-            if c as char == accelerator {
-                off = i;
-                break;
-            }
-            // Inexact match (lowercase character) --> use first hit
-            if (c & !0x20) as char == accelerator && off == text.len() {
-                off = i;
-            }
-        }
-
-        self.styled_label_begin("label");
-        if let Some(checked) = checked {
+        if let Some(checked) = style.checked {
             self.styled_label_add_text(if checked { "▣ " } else { "  " });
         }
+        // Label text
+        match style.accelerator {
+            Some(accelerator) if accelerator.is_ascii_uppercase() => {
+                // Complex case:
+                // Locate the offset of the acclerator character in the label text
+                let mut off = text.len();
+                for (i, c) in text.bytes().enumerate() {
+                    // Perfect match (uppercase character) --> stop
+                    if c as char == accelerator {
+                        off = i;
+                        break;
+                    }
+                    // Inexact match (lowercase character) --> use first hit
+                    if (c & !0x20) as char == accelerator && off == text.len() {
+                        off = i;
+                    }
+                }
 
-        if off < text.len() {
-            // Add an underline to the accelerator.
-            self.styled_label_add_text(&text[..off]);
-            self.styled_label_set_attributes(Attributes::Underlined);
-            self.styled_label_add_text(&text[off..off + 1]);
-            self.styled_label_set_attributes(Attributes::None);
-            self.styled_label_add_text(&text[off + 1..]);
-        } else {
-            // Add the accelerator in parentheses and underline it.
-            let ch = accelerator as u8;
-            self.styled_label_add_text(text);
-            self.styled_label_add_text("(");
-            self.styled_label_set_attributes(Attributes::Underlined);
-            self.styled_label_add_text(unsafe { str_from_raw_parts(&ch, 1) });
-            self.styled_label_set_attributes(Attributes::None);
-            self.styled_label_add_text(")");
+                if off < text.len() {
+                    // Add an underline to the accelerator.
+                    self.styled_label_add_text(&text[..off]);
+                    self.styled_label_set_attributes(Attributes::Underlined);
+                    self.styled_label_add_text(&text[off..off + 1]);
+                    self.styled_label_set_attributes(Attributes::None);
+                    self.styled_label_add_text(&text[off + 1..]);
+                } else {
+                    // Add the accelerator in parentheses and underline it.
+                    let ch = accelerator as u8;
+                    self.styled_label_add_text(text);
+                    self.styled_label_add_text("(");
+                    self.styled_label_set_attributes(Attributes::Underlined);
+                    self.styled_label_add_text(unsafe { str_from_raw_parts(&ch, 1) });
+                    self.styled_label_set_attributes(Attributes::None);
+                    self.styled_label_add_text(")");
+                }
+            }
+            _ => {
+                // Simple case:
+                // no accelerator character
+                self.styled_label_add_text(text);
+            }
         }
-
+        // Label postfix
+        if style.bracketed {
+            self.styled_label_add_text("]");
+        }
         self.styled_label_end();
-        self.attr_padding(Rect { left: 0, top: 0, right: 2, bottom: 0 });
     }
 
     fn menubar_shortcut(&mut self, shortcut: InputKey) {
@@ -3216,7 +3275,7 @@ impl<'a> Context<'a, '_> {
             self.block_begin("shortcut");
             self.block_end();
         }
-        self.attr_padding(Rect { left: 0, top: 0, right: 2, bottom: 0 });
+        self.attr_padding(Rect { left: 2, top: 0, right: 2, bottom: 0 });
     }
 }
 

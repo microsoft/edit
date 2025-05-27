@@ -63,7 +63,7 @@ impl Document {
         let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let dir = path.parent().map(ToOwned::to_owned).unwrap_or_default();
         self.filename = filename;
-        self.dir = Some(DisplayablePathBuf::new(dir));
+        self.dir = Some(DisplayablePathBuf::from_path(dir));
         self.path = Some(path);
         self.update_file_mode();
     }
