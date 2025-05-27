@@ -43,6 +43,12 @@ const SCRATCH_ARENA_CAPACITY: usize = 128 * MEBI;
 #[cfg(target_pointer_width = "64")]
 const SCRATCH_ARENA_CAPACITY: usize = 512 * MEBI;
 
+#[derive(PartialEq, Eq, Debug)]
+enum EarlyAction {
+    PrintHelp,
+    PrintVersion,
+}
+
 fn main() -> process::ExitCode {
     if cfg!(debug_assertions) {
         let hook = std::panic::take_hook();
@@ -62,9 +68,37 @@ fn main() -> process::ExitCode {
     }
 }
 
+fn check_for_early_exit_args() -> Option<EarlyAction> {
+    let args_os: Vec<std::ffi::OsString> = env::args_os().skip(1).collect();
+    for arg_os in args_os {
+        if arg_os == "-v" || arg_os == "--version" {
+            return Some(EarlyAction::PrintVersion);
+        }
+        if arg_os == "-h" || arg_os == "--help" {
+            return Some(EarlyAction::PrintHelp);
+        }
+        if cfg!(windows) && arg_os == "/?" {
+            // For Windows-specific help argument
+            return Some(EarlyAction::PrintHelp);
+        }
+    }
+    None
+}
+
 fn run() -> apperr::Result<()> {
     // Init `sys` first, as everything else may depend on its functionality (IO, function pointers, etc.).
     let _sys_deinit = sys::init()?;
+    if let Some(action) = check_for_early_exit_args() {
+        // arena::init() and localization::init() are NOT needed for this path
+        // as print_help() and print_version() don't use loc!().
+        match action {
+            EarlyAction::PrintHelp => print_help(), // Uses sys::write_stdout()
+            EarlyAction::PrintVersion => print_version(), // Uses sys::write_stdout()
+        }
+        return Ok(()); // Exit early after printing.
+    }
+    sys::ensure_interactive_tty()?;
+
     // Next init `arena`, so that `scratch_arena` works. `loc` depends on it.
     arena::init(SCRATCH_ARENA_CAPACITY)?;
     // Init the `loc` module, so that error messages are localized.
