@@ -166,3 +166,13 @@ extends:
                   search_root: "$(ob_createvpack_vpackdirectory)"
                   use_testsign: false
                   in_container: true
+
+              - ${{ each platform in parameters.buildPlatforms }}:
+                - pwsh: |-
+                    $ReleaseName = "edit-$(EditVersion)-${{ replace(platform, 'pc-windows-msvc', 'windows' }}"
+                    $VpackArchName = Switch("${{split(platform, '-')[0]}}") { "x86_64" { "amd64" }; "aarch64" { "arm64" } }
+                    $Dest = New-Item -Type Directory _staging/$ReleaseName
+                    # Copy the signed binaries from the vpack staging folder
+                    Get-ChildItem "$(ob_createvpack_vpackdirectory)/$VpackArchName" -Include *.exe, *.pdb | Copy-Item -Destination $Dest -Verbose
+                    tar.exe -c -v --format=zip -f $(ob_outputDirectory)\$(ReleaseName).zip -C _staging $ReleaseName
+                  displayName: Produce ${{platform}} release archive
