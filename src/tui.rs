@@ -260,7 +260,7 @@ pub enum Overflow {
 /// Controls the style with which a button label renders
 #[derive(Clone, Copy)]
 pub struct ButtonStyle {
-    accelerator:  Option<char>,
+    accelerator: Option<char>,
     checked: Option<bool>,
     bracketed: bool,
 }
