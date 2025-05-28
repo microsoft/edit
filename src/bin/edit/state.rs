@@ -42,8 +42,7 @@ pub struct DisplayablePathBuf {
 impl DisplayablePathBuf {
     #[allow(dead_code, reason = "only used on Windows")]
     pub fn from_string(str: String) -> Self {
-        let value = PathBuf::from(&str);
-        Self { value, str: Cow::Owned(str) }
+        Self::from_path(PathBuf::from(str))
     }
 
     pub fn from_path(value: PathBuf) -> Self {
