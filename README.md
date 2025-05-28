@@ -21,6 +21,13 @@ This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/
   ```
 * `edit` will be automatically added to your `PATH`. If typing `edit` doesn't work, open a new terminal.
 
+### Pacman (Arch Linux)
+
+* Run the following command on the terminal:
+  ```bash
+  sudo pacman -S ms-edit
+  ```
+  
 ## Build Instructions
 
 * [Install Rust](https://www.rust-lang.org/tools/install)
