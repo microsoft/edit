@@ -207,12 +207,7 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
         if reopen { loc(LocId::EncodingReopen) } else { loc(LocId::EncodingConvert) },
     );
     {
-        ctx.table_begin("encoding-picker");
-        ctx.table_set_columns(&[0]);
-
         {
-            ctx.table_next_row();
-
             ctx.scrollarea_begin("scrollarea", Size { width, height });
             ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
             ctx.inherit_focus();
@@ -276,8 +271,6 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
         }
 
         {
-            ctx.table_next_row();
-
             ctx.table_begin("encoding-search");
             ctx.table_set_columns(&[0, width]);
 
@@ -289,8 +282,6 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
 
             ctx.table_end();
         }
-
-        ctx.table_end();
     }
     if ctx.modal_end() {
         state.wants_encoding_change = StateEncodingChange::None;
