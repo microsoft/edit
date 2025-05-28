@@ -29,7 +29,7 @@ pub fn get_available_encodings() -> &'static Vec<EncodingInfo> {
     unsafe {
         if ENCODINGS.is_empty() {
             ENCODINGS.push(EncodingInfo { name: "UTF-8", aliases: vec![] });
-            ENCODINGS.push(EncodingInfo { name: "UTF-8-BOM", aliases: vec![] });
+            ENCODINGS.push(EncodingInfo { name: "UTF-8 BOM", aliases: vec![] });
 
             if let Ok(f) = init_if_needed() {
                 let mut n = 0;
