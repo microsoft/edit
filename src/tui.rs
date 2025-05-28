@@ -161,6 +161,8 @@ use crate::{apperr, arena_format, input, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
+const KBMOD_FOR_WORD_NAV: InputKeyMod =
+    if cfg!(target_os = "macos") { kbmod::ALT } else { kbmod::CTRL };
 
 type Input<'input> = input::Input<'input>;
 type InputKey = input::InputKey;
@@ -2495,7 +2497,7 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::LEFT => {
-                    let granularity = if modifiers.contains(kbmod::CTRL) {
+                    let granularity = if modifiers.contains(KBMOD_FOR_WORD_NAV) {
                         CursorMovement::Word
                     } else {
                         CursorMovement::Grapheme
@@ -2553,7 +2555,7 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::RIGHT => {
-                    let granularity = if modifiers.contains(kbmod::CTRL) {
+                    let granularity = if modifiers.contains(KBMOD_FOR_WORD_NAV) {
                         CursorMovement::Word
                     } else {
                         CursorMovement::Grapheme
@@ -2632,6 +2634,22 @@ impl<'a> Context<'a, '_> {
                 },
                 vk::A => match modifiers {
                     kbmod::CTRL => tb.select_all(),
+                    _ => return false,
+                },
+                vk::B => match modifiers {
+                    kbmod::ALT if cfg!(target_os = "macos") => {
+                        // On macOS, terminals commonly emit the Emacs style
+                        // Alt+B (ESC b) sequence for Alt+Left.
+                        tb.cursor_move_delta(CursorMovement::Word, -1);
+                    }
+                    _ => return false,
+                },
+                vk::F => match modifiers {
+                    kbmod::ALT if cfg!(target_os = "macos") => {
+                        // On macOS, terminals commonly emit the Emacs style
+                        // Alt+F (ESC f) sequence for Alt+Right.
+                        tb.cursor_move_delta(CursorMovement::Word, 1);
+                    }
                     _ => return false,
                 },
                 vk::H => match modifiers {
@@ -3069,6 +3087,7 @@ impl<'a> Context<'a, '_> {
     ///
     /// Returns true if the menu is open. Continue appending items to it in that case.
     pub fn menubar_menu_begin(&mut self, text: &str, accelerator: char) -> bool {
+        let accelerator = if cfg!(target_os = "macos") { '\0' } else { accelerator };
         let mixin = self.tree.current_node.borrow().child_count as u64;
         self.next_block_id_mixin(mixin);
 
@@ -3081,7 +3100,8 @@ impl<'a> Context<'a, '_> {
         self.attr_padding(Rect::two(0, 1));
 
         let contains_focus = self.contains_focus();
-        let keyboard_focus = !contains_focus
+        let keyboard_focus = accelerator != '\0'
+            && !contains_focus
             && self.consume_shortcut(kbmod::ALT | InputKey::new(accelerator as u32));
 
         if contains_focus || keyboard_focus {

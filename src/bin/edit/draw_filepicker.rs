@@ -83,14 +83,12 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             },
         );
         ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
-        ctx.next_block_id_mixin(state.file_picker_pending_dir.as_str().len() as u64);
+        ctx.next_block_id_mixin(state.file_picker_pending_dir_revision);
         {
             ctx.list_begin("files");
             ctx.inherit_focus();
             for entry in files {
-                match ctx
-                    .list_item(state.file_picker_pending_name == entry.as_path(), entry.as_str())
-                {
+                match ctx.list_item(false, entry.as_str()) {
                     ListSelection::Unchanged => {}
                     ListSelection::Selected => {
                         state.file_picker_pending_name = entry.as_path().into()
