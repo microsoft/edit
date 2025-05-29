@@ -52,6 +52,8 @@ impl LineCache {
             }
         }
 
+        if self.cache.len() == 0 { return; }
+        
         let len = text.len();
         let mut i = self.cache.len() - 1;
         loop {
