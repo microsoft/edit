@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::document::ReadableDocument;
+use crate::{document::ReadableDocument, simd::memchr2};
 
 /// Cache a line/offset pair every CACHE_EVERY lines to speed up line/offset calculations
 const CACHE_EVERY: usize = 1024 * 64;
@@ -19,26 +19,23 @@ impl LineCache {
 
         let mut offset = 0;
         let mut line = 0;
-        let mut last_line = 0;
         loop {
             let text = document.read_forward(offset);
-            if text.is_empty() {
-                return;
+            if text.is_empty() { return; }
+            
+            let mut off = 0;
+            loop {
+                off = memchr2(b'\n', b'\n', text, off);
+                if off == text.len() { break; }
+
+                if line % CACHE_EVERY == 0 {
+                    self.cache.push((offset+off, line));
+                }
+                line += 1;
+                off += 1;
             }
 
-            let len = text.len();
-            let mut i = 0;
-            while i < len {
-                if line != last_line && line % CACHE_EVERY == 0 {
-                    self.cache.push((offset + i, line));
-                    last_line = line;
-                }
-                if text[i] == b'\n' {
-                    line += 1;
-                }
-                i += 1;
-            }
-            offset += i;
+            offset += text.len();
         }
     }
 
@@ -102,14 +99,10 @@ impl LineCache {
         while i < len {
             if self.cache[i].1 >= target_count {
                 let ind = if !reverse {
-                    if i == 0 {
-                        return None;
-                    } // No previous line exists
+                    if i == 0 { return None; } // No previous line exists
                     i - 1
                 } else {
-                    if i == len - 1 {
-                        return None;
-                    } // No next line exists
+                    if i == len - 1 { return None; } // No next line exists
                     i
                 };
                 return Some(self.cache[ind]);
