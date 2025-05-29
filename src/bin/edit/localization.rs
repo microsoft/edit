@@ -170,7 +170,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* de      */ "OK",
         /* es      */ "Aceptar",
         /* fr      */ "OK",
-        /* is      */ "Í Lagi",
+        /* is      */ "Í lagi",
         /* it      */ "OK",
         /* ja      */ "OK",
         /* ko      */ "확인",
