@@ -63,7 +63,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         focus = StateSearchKind::Search;
 
         // If the selection is empty, focus the search input field.
-        // Otherwise, focus the replace input field, if it exists.
+        // Otherwise, focus the "replace" input field, if it exists.
         if let Some(selection) = doc.buffer.borrow_mut().extract_user_selection(false) {
             state.search_needle = String::from_utf8_lossy_owned(selection);
             focus = state.wants_search.kind;
@@ -278,8 +278,9 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
     let mut done = false;
 
     if let Some(doc) = state.documents.active_mut() {
-        ctx.modal_begin("goto", loc(LocId::FileGoto));
+        ctx.modal_begin("goto-menu", loc(LocId::FileGoto));
         {
+            ctx.scope_begin("goto", 1);
             if ctx.editline("goto-line", &mut state.goto_target) {
                 state.goto_invalid = false;
             }
@@ -291,7 +292,7 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
             ctx.attr_intrinsic_size(Size { width: 24, height: 1 });
             ctx.steal_focus();
 
-            if ctx.consume_shortcut(vk::RETURN) {
+            if ctx.consume_action("submit", SmolString::new("submit").unwrap()) {
                 match validate_goto_point(&state.goto_target) {
                     Ok(point) => {
                         let mut buf = doc.buffer.borrow_mut();
@@ -303,6 +304,7 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
                 }
                 ctx.needs_rerender();
             }
+            ctx.scope_end();
         }
         done |= ctx.modal_end();
     } else {

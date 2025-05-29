@@ -144,6 +144,7 @@
 //! ```
 
 use std::arch::breakpoint;
+use std::collections::HashMap;
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -166,6 +167,8 @@ type Input<'input> = input::Input<'input>;
 type InputKey = input::InputKey;
 type InputMouseState = input::InputMouseState;
 type InputText<'input> = input::InputText<'input>;
+
+pub type ActionId = SmolString;
 
 /// Since [`TextBuffer`] creation and management is expensive,
 /// we cache instances of them for reuse between frames.
@@ -259,7 +262,7 @@ pub enum Overflow {
 
 struct ActionScope {
     name: &'static str,
-    actions: &'static [(&'static str, InputKey)]
+    actions: &'static [(&'static str, InputKey)],
 }
 
 /// There's two types of lifetimes the TUI code needs to manage:
@@ -340,9 +343,9 @@ pub struct Tui {
     settling_want: i32,
     read_timeout: time::Duration,
 
-
     registered_scopes: Vec<ActionScope>,
     shortcut_overrides: Vec<(&'static str, &'static str, InputKey)>,
+    last_keyge: Option<HashMap<u64, HashMap<&'static str, ActionRequest>>>,
 }
 
 impl Tui {
@@ -397,6 +400,7 @@ impl Tui {
 
             registered_scopes: Vec::with_capacity(16),
             shortcut_overrides: Vec::with_capacity(16),
+            last_keyge: None
         };
         Self::clean_node_path(&mut tui.mouse_down_node_path);
         Self::clean_node_path(&mut tui.focused_node_path);
@@ -658,6 +662,12 @@ impl Tui {
 
             #[cfg(debug_assertions)]
             seen_ids: HashSet::new(),
+
+            keyge: Default::default(),
+            visited_action_consumers: Default::default(),
+            last_propogation_path: Default::default(),
+            skipped_consumers: Default::default(),
+            current_boundary: Default::default(),
         }
     }
 
@@ -689,6 +699,9 @@ impl Tui {
         unsafe {
             self.prev_tree = mem::transmute_copy(&ctx.tree);
             self.prev_node_map = NodeMap::new(mem::transmute(&self.arena_next), &self.prev_tree);
+            let mut keyge = HashMap::new();
+            mem::swap(&mut ctx.keyge, &mut keyge);
+            self.last_keyge = Some(keyge);
         }
 
         let mut focus_path_pop_min = 0;
@@ -1252,23 +1265,35 @@ impl Tui {
         true
     }
 
-    pub fn declare_scope(&mut self, name: &'static str, actions: &'static [(&'static str, InputKey)]) {
-        self.registered_scopes.push(ActionScope {
-            name,
-            actions
-        })
+    pub fn declare_scope(
+        &mut self,
+        name: &'static str,
+        actions: &'static [(&'static str, InputKey)],
+    ) {
+        self.registered_scopes.push(ActionScope { name, actions })
     }
 
     /// Returns true if shortcut was updated, false if scope+action does not exist.
     pub fn reassign_shortcut(&mut self, scope: &str, name: &str, value: InputKey) -> bool {
         // All of this is just to not require the caller to keep the values, since we already have this exact string.
-        let Some(s) = self.registered_scopes.iter().filter(|s| s.name == scope).next() else { return false; };
-        let Some(action_stored) = s.actions.iter().filter(|a| a.0 == name).next() else { return false; };
+        let Some(s) = self.registered_scopes.iter().filter(|s| s.name == scope).next() else {
+            return false;
+        };
+        let Some(action_stored) = s.actions.iter().filter(|a| a.0 == name).next() else {
+            return false;
+        };
         let scope_stored = s.name;
 
         self.shortcut_overrides.push((scope_stored, action_stored.0, value));
         true
     }
+}
+
+#[derive(Clone, Copy)]
+struct ActionRequest {
+    scope: &'static str,
+    name: &'static str,
+    id: SmolString,
 }
 
 /// Context is a temporary object that is created for each frame.
@@ -1294,6 +1319,13 @@ pub struct Context<'a, 'input> {
 
     #[cfg(debug_assertions)]
     seen_ids: HashSet<u64>,
+
+    keyge: HashMap<u64, HashMap<&'static str, ActionRequest>>,
+    visited_action_consumers: HashSet<ActionId>,
+
+    last_propogation_path: Vec<ActionId>,
+    skipped_consumers: HashSet<ActionId>,
+    current_boundary: Option<&'a NodeCell<'a>>,
 }
 
 impl<'a> Drop for Context<'a, '_> {
@@ -3250,16 +3282,157 @@ impl<'a> Context<'a, '_> {
     }
 
     pub fn scope_begin(&mut self, name: &str, key: u64) {
+        let classname = "asb";
+        let parent = self.tree.current_node;
+        let stored_scope = self.static_scope_name(name).expect("Invalidn scope name provided");
 
+        let mut id = hash_str(parent.borrow().id, classname);
+        if self.next_block_id_mixin != 0 {
+            id = hash(id, &self.next_block_id_mixin.to_ne_bytes());
+            self.next_block_id_mixin = 0;
+        }
+
+        // If this hits, you have tried to create a block with the same ID as a previous one
+        // somewhere up this call stack. Change the classname, or use next_block_id_mixin().
+        // TODO: HashMap
+        #[cfg(debug_assertions)]
+        if !self.seen_ids.insert(id) {
+            panic!("Duplicate node ID: {id:x}");
+        }
+
+        let node = Tree::alloc_node(self.arena());
+        {
+            let mut n = node.borrow_mut();
+            n.id = id;
+            n.classname = classname;
+            n.content = NodeContent::ActionScopeBoundary(ActionScopeBoundaryContent {
+                scope: stored_scope,
+                key,
+            })
+        }
+
+        self.tree.push_child(node);
+        self.current_boundary = Some(node);
     }
 
-    pub fn scope_end(&mut self) {}
+    pub fn scope_end(&mut self) {
+        self.tree.pop_stack();
+        self.current_boundary =
+            self.current_boundary.and_then(|node| node.borrow().action_scope_boundary())
+    }
 
-    pub fn consume_action(&mut self, name: &str) -> bool {
-        // ## Small explaination on how this system even works
-        // In the node tree, `scope_begin` and `scope_end` methods will place special nodes in the tree,
-        // action scope boundaries, that will define which shortcuts make sense in the current situation,
-        // as well as allow us to propogate the shortcuts.
+    pub fn consume_action(&mut self, name: &str, id: ActionId) -> bool {
+        let current_boundary =
+            self.current_boundary.expect("`consume_action` called outside of scope.");
+        let current_boundary_id = current_boundary.borrow().id;
+        let stored_scope =
+            if let NodeContent::ActionScopeBoundary(ref con) = current_boundary.borrow().content {
+                con.scope
+            } else {
+                panic!("`current_boundary` unexpectedly contains non-boundary node")
+            };
+        let stored_name =
+            self.static_action_name(stored_scope, name).expect("invalid action name passed");
+
+        if !self.visited_action_consumers.contains(&id) {
+            self.visited_action_consumers.insert(id);
+            let scope_action_requests;
+            if let Some(v) = self.keyge.get_mut(&current_boundary_id) {
+                scope_action_requests = v
+            } else {
+                self.keyge.insert(current_boundary_id, HashMap::new());
+                scope_action_requests = self.keyge.get_mut(&current_boundary_id).unwrap();
+            };
+            scope_action_requests
+                .insert(stored_name, ActionRequest { scope: stored_scope, name: stored_name, id });
+        }
+
+        if self.skipped_consumers.contains(&id) {
+            panic!(
+                "Action id {id} cannot be evaluated: It was skipped because one {}",
+                "of the parents requested the shortcut before children did."
+            )
+        }
+
+        if !self.last_propogation_path.contains(&id) {
+            return false;
+        }
+
+        loop {
+            let last = self.last_propogation_path.pop().expect("unreachable");
+            if last == id {
+                break;
+            }
+            self.skipped_consumers.insert(last);
+        }
+        self.set_input_consumed();
+        self.needs_rerender();
+        true
+    }
+
+    fn propagation_path(&self) -> Vec<ActionId> {
+        let Some(focused_node_id) = self.tui.focused_node_path.iter().last() else {
+            return vec![];
+        };
+        let Some(input) = self.input_keyboard else {
+            return vec![];
+        };
+        let Some(ref keyge) = self.tui.last_keyge else {
+            return vec![];
+        };
+        let mut path = vec![];
+        let mut current = self.tui.prev_node_map.get(*focused_node_id).expect("unreachable");
+        loop {
+            {
+                let cur = current.borrow();
+                match cur.content {
+                    NodeContent::ActionScopeBoundary(ref con) => {
+                        let scope =
+                            self.tui.registered_scopes.iter().find(|x| x.name == con.scope).expect(
+                                "unreachable: scope was validated when was inserted into node tree.",
+                            );
+                        let mut actions = scope.actions.to_vec();
+                        for (s, name, key) in self.tui.shortcut_overrides.iter() {
+                            if *s != scope.name {
+                                continue;
+                            }
+                            actions.iter_mut().find(|x| x.0 == *name).map(|x| x.1 = *key);
+                        }
+                        let Some(action) = actions.iter().find(|x| x.1 == input).map(|x| x.0)
+                        else {
+                            break;
+                        };
+                        let Some(request) = keyge
+                            .get(&cur.id)
+                            .and_then(|x| x.iter().find(|x| *x.0 == action).map(|x| *x.1))
+                        else {
+                            break;
+                        };
+                        path.push(request.id);
+                    }
+                    _ => (),
+                }
+            }
+            let Some(c) = current.borrow().parent else {
+                break;
+            };
+            current = c;
+        }
+        path.reverse();
+        path
+    }
+
+    fn static_scope_name(&self, name: &str) -> Option<&'static str> {
+        self.tui.registered_scopes.iter().find(|s| s.name == name).map(|s| s.name)
+    }
+
+    fn static_action_name(&self, scope: &'static str, name: &str) -> Option<&'static str> {
+        let scope = self.tui.registered_scopes.iter().find(|s| s.name == scope)?;
+        Some(scope.actions.iter().find(|a| a.0 == name)?.0)
+    }
+
+    pub fn compute_propagation_path(&mut self) {
+        self.last_propogation_path = self.propagation_path();
     }
 }
 
@@ -3511,7 +3684,7 @@ impl<'a> NodeMap<'a> {
     }
 
     /// Gets a node by its ID.
-    fn get(&mut self, id: u64) -> Option<&'a NodeCell<'a>> {
+    fn get(&self, id: u64) -> Option<&'a NodeCell<'a>> {
         let shift = self.shift;
         let mask = self.mask;
         let mut slot = id >> shift;
@@ -3605,8 +3778,8 @@ struct ScrollareaContent {
 
 #[derive(Clone)]
 struct ActionScopeBoundaryContent {
-    name: &'static str,
-    key: u64
+    scope: &'static str,
+    key: u64,
 }
 
 /// NOTE: Must not contain items that require drop().
@@ -3693,7 +3866,7 @@ struct Node<'a> {
     inner_clipped: Rect, // in screen-space, calculated during layout, restricted to the viewport
 }
 
-impl Node<'_> {
+impl<'a> Node<'a> {
     /// Given an outer rectangle (including padding and borders) of this node,
     /// this returns the inner rectangle (excluding padding and borders).
     fn outer_to_inner(&self, mut outer: Rect) -> Rect {
@@ -3931,5 +4104,15 @@ impl Node<'_> {
                 }
             }
         }
+    }
+
+    fn action_scope_boundary(&self) -> Option<&'a NodeCell<'a>> {
+        if self.parent.is_none() {
+            return None;
+        }
+        if let NodeContent::ActionScopeBoundary(_) = self.parent.unwrap().borrow().content {
+            return Some(self.parent.unwrap());
+        }
+        return self.parent.and_then(|node| node.borrow().action_scope_boundary());
     }
 }
