@@ -56,7 +56,7 @@ fn main() -> process::ExitCode {
     match run() {
         Ok(()) => process::ExitCode::SUCCESS,
         Err(err) => {
-            sys::write_stdout(&format!("{}\r\n", FormatApperr::from(err)));
+            sys::write_stderr(&format!("{}\r\n", FormatApperr::from(err)));
             process::ExitCode::FAILURE
         }
     }
@@ -64,7 +64,7 @@ fn main() -> process::ExitCode {
 
 fn run() -> apperr::Result<()> {
     // Init `sys` first, as everything else may depend on its functionality (IO, function pointers, etc.).
-    let _sys_deinit = sys::init()?;
+    sys::init()?;
     // Next init `arena`, so that `scratch_arena` works. `loc` depends on it.
     arena::init(SCRATCH_ARENA_CAPACITY)?;
     // Init the `loc` module, so that error messages are localized.
@@ -75,11 +75,11 @@ fn run() -> apperr::Result<()> {
         return Ok(());
     }
 
-    // sys::init() will switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
-    // Since the `read_file` call may hang for some reason, we must only call this afterwards.
-    // `set_modes()` will enable mouse mode which is equally annoying to switch out for users
-    // and so we do it afterwards, for similar reasons.
-    sys::switch_modes()?;
+    // sys::init_terminal() will switch the terminal to raw mode which prevents the user from
+    // pressing Ctrl+C. Since the `read_file` call may hang for some reason, we must only call
+    // this afterwards. `setup_terminal()` will enable mouse mode which is equally annoying to
+    // switch out for users and so we do it afterwards, for similar reasons.
+    let _terminal_deinit = sys::init_terminal()?;
 
     let mut vt_parser = vt::Parser::new();
     let mut input_parser = input::Parser::new();
@@ -230,7 +230,7 @@ fn run() -> apperr::Result<()> {
                 last_latency_width = cols;
             }
 
-            sys::write_stdout(&output);
+            sys::write_tty(&output);
         }
     }
 
@@ -509,14 +509,14 @@ impl Drop for RestoreModes {
     fn drop(&mut self) {
         // Same as in the beginning but in the reverse order.
         // It also includes DECSCUSR 0 to reset the cursor style and DECTCEM to show the cursor.
-        sys::write_stdout(
+        sys::write_tty(
             "\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1036l\x1b[?1002;1006;2004l\x1b[?1049l",
         );
     }
 }
 
 fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
-    sys::write_stdout(concat!(
+    sys::write_tty(concat!(
         // 1049: Alternative Screen Buffer
         //   I put the ASB switch in the beginning, just in case the terminal performs
         //   some additional state tracking beyond the modes we enable/disable.
