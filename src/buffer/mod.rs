@@ -22,6 +22,7 @@
 
 mod gap_buffer;
 mod navigation;
+mod line_cache;
 
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
@@ -35,6 +36,7 @@ use std::rc::Rc;
 use std::str;
 
 use gap_buffer::GapBuffer;
+use line_cache::LineCache;
 
 use crate::arena::{ArenaString, scratch_arena};
 use crate::cell::SemiRefCell;
@@ -172,6 +174,7 @@ pub type RcTextBuffer = Rc<TextBufferCell>;
 /// A text buffer for a text editor.
 pub struct TextBuffer {
     buffer: GapBuffer,
+    newlines: LineCache,
 
     undo_stack: LinkedList<SemiRefCell<HistoryEntry>>,
     redo_stack: LinkedList<SemiRefCell<HistoryEntry>>,
@@ -223,6 +226,7 @@ impl TextBuffer {
     pub fn new(small: bool) -> apperr::Result<Self> {
         Ok(Self {
             buffer: GapBuffer::new(small)?,
+            newlines: LineCache::new(),
 
             undo_stack: LinkedList::new(),
             redo_stack: LinkedList::new(),
@@ -579,6 +583,7 @@ impl TextBuffer {
         self.search = None;
         self.mark_as_clean();
         self.reflow(true);
+        self.newlines.from_document(&self.buffer);
     }
 
     /// Copies the contents of the buffer into a string.
@@ -1202,6 +1207,12 @@ impl TextBuffer {
         let mut seek_to_line_start = true;
 
         if y > result.logical_pos.y {
+            
+            if let Some((offset, count)) = self.newlines.nearest_offset(y as usize, false) {
+                result.offset = offset;
+                result.logical_pos.y = count as CoordType;
+            }
+
             while y > result.logical_pos.y {
                 let chunk = self.read_forward(result.offset);
                 if chunk.is_empty() {
@@ -1222,6 +1233,11 @@ impl TextBuffer {
         }
 
         if seek_to_line_start {
+            if let Some((offset, count)) = self.newlines.nearest_offset(y as usize, true) {
+                result.offset = offset;
+                result.logical_pos.y = count as CoordType;
+            }
+
             loop {
                 let chunk = self.read_backward(result.offset);
                 if chunk.is_empty() {
@@ -2198,6 +2214,9 @@ impl TextBuffer {
             undo.added.extend_from_slice(text);
         }
 
+        // Update newlines cache
+        self.newlines.insert(self.active_edit_off, text);
+
         // Write!
         self.buffer.replace(self.active_edit_off..self.active_edit_off, text);
 
@@ -2227,6 +2246,11 @@ impl TextBuffer {
         let deleted = &mut undo.deleted;
         self.buffer.extract_raw(off, to.offset, deleted, out_off);
 
+        // Update newlines cache
+        let mut replaced_text = Vec::new();
+        self.buffer.extract_raw(off, to.offset, &mut replaced_text, 0);
+        self.newlines.delete(off..to.offset, &replaced_text);
+        
         // Delete the portion from the buffer by enlarging the gap.
         let count = to.offset - off;
         self.buffer.allocate_gap(off, 0, count);
