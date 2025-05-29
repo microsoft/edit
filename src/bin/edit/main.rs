@@ -77,13 +77,15 @@ fn run() -> apperr::Result<()> {
 
     // sys::init() will switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // Since the `read_file` call may hang for some reason, we must only call this afterwards.
-    // `set_modes()` will enable mouse mode which is equally annoying to switch out for users
+    // `set_modes()` will enable mouse mode which is equally annoying to switch out for users,
     // and so we do it afterwards, for similar reasons.
     sys::switch_modes()?;
 
     let mut vt_parser = vt::Parser::new();
     let mut input_parser = input::Parser::new();
     let mut tui = Tui::new()?;
+
+    tui.declare_scope("goto", &[("back", vk::ESCAPE), ("submit", vk::RETURN)]);
 
     let _restore = setup_terminal(&mut tui, &mut vt_parser);
 
@@ -139,6 +141,8 @@ fn run() -> apperr::Result<()> {
                 let input = input_iter.next();
                 let more = input.is_some();
                 let mut ctx = tui.create_context(input);
+                // ctx.precompute_layout(|ctx| draw(ctx, &mut state));
+                ctx.compute_propagation_path();
 
                 draw(&mut ctx, &mut state);
 
