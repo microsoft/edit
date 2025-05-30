@@ -1655,27 +1655,24 @@ impl TextBuffer {
                             // Our manually constructed UTF8 is never going to be invalid. Trust.
                             line.push_str(unsafe { str::from_utf8_unchecked(&visualizer_buf) });
 
-                            let cursor_visualizer = self.cursor_move_to_offset_internal(
-                                cursor_beg,
-                                global_off + chunk_off - 1,
-                            );
-                            let mut visualizer_rect = Rect::two(
-                                destination.top + cursor_visualizer.visual_pos.y - origin.y,
-                                destination.left
+                            let visualizer_rect = {
+                                let cursor_visualizer = self.cursor_move_to_offset_internal(
+                                    cursor_beg,
+                                    global_off + chunk_off - 1,
+                                );
+                                let left = destination.left
                                     + self.margin_width
                                     + cursor_visualizer.visual_pos.x
-                                    - origin.x,
-                            );
-                            visualizer_rect.right += 1;
-                            visualizer_rect.bottom += 1;
-                            if visualizer_rect.top >= destination.top
-                                && visualizer_rect.left >= destination.left
-                            {
-                                let bg = fb.indexed(IndexedColor::Yellow);
-                                let fg = fb.contrasted(bg);
-                                fb.blend_bg(visualizer_rect, bg);
-                                fb.blend_fg(visualizer_rect, fg);
-                            }
+                                    - origin.x;
+                                let top =
+                                    destination.top + cursor_visualizer.visual_pos.y - origin.y;
+                                Rect { left, top, right: left + 1, bottom: top + 1 }
+                            };
+
+                            let bg = fb.indexed(IndexedColor::Yellow);
+                            let fg = fb.contrasted(bg);
+                            fb.blend_bg(visualizer_rect, bg);
+                            fb.blend_fg(visualizer_rect, fg);
                         }
                     }
 
