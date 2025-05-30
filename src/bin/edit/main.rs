@@ -158,12 +158,6 @@ fn run() -> apperr::Result<()> {
 
             draw(&mut ctx, &mut state);
 
-            #[cfg(feature = "debug-layout")]
-            {
-                drop(ctx);
-                state.buffer.buffer.copy_from_str(&tui.debug_layout());
-            }
-
             #[cfg(feature = "debug-latency")]
             {
                 passes += 1;

@@ -12,7 +12,6 @@ name = "lib"
 harness = false
 
 [features]
-debug-layout = []
 debug-latency = []
 
 # We use `opt-level = "s"` as it significantly reduces binary size.
