@@ -1654,6 +1654,27 @@ impl TextBuffer {
                             };
                             // Our manually constructed UTF8 is never going to be invalid. Trust.
                             line.push_str(unsafe { str::from_utf8_unchecked(&visualizer_buf) });
+
+                            let cursor_visualizer = self.cursor_move_to_offset_internal(
+                                cursor_beg,
+                                global_off + chunk_off + 1,
+                            );
+                            let mut visualizer_rect = Rect::two(
+                                destination.top + cursor_visualizer.visual_pos.y,
+                                destination.left
+                                    + self.margin_width
+                                    + cursor_visualizer.visual_pos.x,
+                            );
+                            visualizer_rect.right += 1;
+                            visualizer_rect.bottom += 1;
+                            fb.blend_bg(
+                                visualizer_rect,
+                                fb.indexed_alpha(IndexedColor::Red, 3, 3),
+                            );
+                            fb.blend_fg(
+                                visualizer_rect,
+                                fb.indexed_alpha(IndexedColor::BrightWhite, 3, 3),
+                            );
                         }
                     }
 
