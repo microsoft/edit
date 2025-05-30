@@ -41,11 +41,11 @@ pub struct DisplayablePathBuf {
 
 impl DisplayablePathBuf {
     #[allow(dead_code, reason = "only used on Windows")]
-    pub fn from_string(str: String) -> Self {
-        let cow = Cow::Borrowed(str.as_str());
-        let cow = unsafe { mem::transmute::<Cow<'_, str>, Cow<'_, str>>(cow) };
-        let value = PathBuf::from(str);
-        Self { value, str: cow }
+    pub fn from_string(string: String) -> Self {
+        let str = Cow::Borrowed(string.as_str());
+        let str = unsafe { mem::transmute::<Cow<'_, str>, Cow<'_, str>>(str) };
+        let value = PathBuf::from(string);
+        Self { value, str }
     }
 
     pub fn from_path(value: PathBuf) -> Self {
