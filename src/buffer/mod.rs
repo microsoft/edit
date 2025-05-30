@@ -1657,24 +1657,25 @@ impl TextBuffer {
 
                             let cursor_visualizer = self.cursor_move_to_offset_internal(
                                 cursor_beg,
-                                global_off + chunk_off + 1,
+                                global_off + chunk_off - 1,
                             );
                             let mut visualizer_rect = Rect::two(
-                                destination.top + cursor_visualizer.visual_pos.y,
+                                destination.top + cursor_visualizer.visual_pos.y - origin.y,
                                 destination.left
                                     + self.margin_width
-                                    + cursor_visualizer.visual_pos.x,
+                                    + cursor_visualizer.visual_pos.x
+                                    - origin.x,
                             );
                             visualizer_rect.right += 1;
                             visualizer_rect.bottom += 1;
-                            fb.blend_bg(
-                                visualizer_rect,
-                                fb.indexed_alpha(IndexedColor::Red, 3, 3),
-                            );
-                            fb.blend_fg(
-                                visualizer_rect,
-                                fb.indexed_alpha(IndexedColor::BrightWhite, 3, 3),
-                            );
+                            if visualizer_rect.top >= destination.top
+                                && visualizer_rect.left >= destination.left
+                            {
+                                let bg = fb.indexed(IndexedColor::Yellow);
+                                let fg = fb.contrasted(bg);
+                                fb.blend_bg(visualizer_rect, bg);
+                                fb.blend_fg(visualizer_rect, fg);
+                            }
                         }
                     }
 
