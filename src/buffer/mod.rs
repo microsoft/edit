@@ -1208,9 +1208,9 @@ impl TextBuffer {
 
         if y > result.logical_pos.y {
             
-            if let Some((offset, count)) = self.newlines.nearest_offset(y as usize, false) {
-                result.offset = offset;
-                result.logical_pos.y = count as CoordType;
+            if let Some(point) = self.newlines.nearest_offset(y as usize, false) {
+                result.offset = point.index;
+                result.logical_pos.y = point.line as CoordType;
             }
 
             while y > result.logical_pos.y {
@@ -1233,9 +1233,9 @@ impl TextBuffer {
         }
 
         if seek_to_line_start {
-            if let Some((offset, count)) = self.newlines.nearest_offset(y as usize, true) {
-                result.offset = offset;
-                result.logical_pos.y = count as CoordType;
+            if let Some(point) = self.newlines.nearest_offset(y as usize, true) {
+                result.offset = point.index;
+                result.logical_pos.y = point.line as CoordType;
             }
 
             loop {

@@ -5,8 +5,15 @@ use crate::{document::ReadableDocument, simd::memchr2};
 /// Cache a line/offset pair every CACHE_EVERY lines to speed up line/offset calculations
 const CACHE_EVERY: usize = 1024 * 64;
 
+#[derive(Clone)]
+pub struct CachePoint {
+    pub index: usize,
+    pub line: usize,
+    // pub snapshot: ParserSnapshot
+}
+
 pub struct LineCache {
-    cache: Vec<(usize, usize)>, // (index, line)
+    cache: Vec<CachePoint>,
 }
 
 impl LineCache {
@@ -29,7 +36,7 @@ impl LineCache {
                 if off == text.len() { break; }
 
                 if line % CACHE_EVERY == 0 {
-                    self.cache.push((offset+off, line));
+                    self.cache.push(CachePoint { index: offset+off, line });
                 }
                 line += 1;
                 off += 1;
@@ -49,24 +56,24 @@ impl LineCache {
             }
         }
 
-        if self.cache.len() == 0 { return; }
-        
-        let len = text.len();
-        let mut i = self.cache.len() - 1;
-        loop {
-            let (ref mut off, ref mut line) = self.cache[i];
-            if *off > range.start {
-                if *off < range.end {
-                    self.cache.remove(i); // cache point is within the deleted range
-                } else {
-                    *off -= len;
-                    *line -= newlines;
+        let mut beg_del = None;
+        let mut end_del = None;
+        for (i, point) in self.cache.iter_mut().enumerate() {
+            if point.index >= range.start {
+                if point.index < range.end {
+                    // cache point is within the deleted range
+                    if beg_del.is_none() { beg_del = Some(i); }
+                    end_del = Some(i + 1);
+                }
+                else {
+                    point.index -= text.len();
+                    point.line -= newlines;
                 }
             }
-            if i == 0 {
-                break;
-            }
-            i -= 1;
+        }
+
+        if let (Some(beg), Some(end)) = (beg_del, end_del) {
+            self.cache.drain(beg..end);
         }
     }
 
@@ -82,34 +89,28 @@ impl LineCache {
         }
 
         let len = text.len();
-        for &mut (ref mut off, ref mut line) in &mut self.cache {
-            if *off > offset {
-                *off += len;
-                *line += newlines;
+        for point in &mut self.cache {
+            if point.index > offset {
+                point.index += len;
+                point.line += newlines;
             }
         }
+
+        // TODO: This also needs to insert new cache points
     }
 
     /// Finds the nearest cached line-offset pair relative to a target line.
     /// If `reverse` is false, it returns the closest *before* the target.
     /// If `reverse` is true, it returns the closest *after or at* the target.
-    pub fn nearest_offset(&self, target_count: usize, reverse: bool) -> Option<(usize, usize)> {
-        let len = self.cache.len();
-        let mut i = 0;
-        while i < len {
-            if self.cache[i].1 >= target_count {
-                let ind = if !reverse {
-                    if i == 0 { return None; } // No previous line exists
-                    i - 1
-                } else {
-                    if i == len - 1 { return None; } // No next line exists
-                    i
-                };
-                return Some(self.cache[ind]);
+    pub fn nearest_offset(&self, target_count: usize, reverse: bool) -> Option<CachePoint> {
+        match self.cache.binary_search_by_key(&target_count, |p| p.line) {
+            Ok(i) => Some(self.cache[i].clone()),
+            Err(i) => {
+                if i == 0 || i == self.cache.len() { None }  // target < lowest cache point || target > highest cache point
+                else {
+                    Some(self.cache[ if reverse {i} else {i-1} ].clone())
+                }
             }
-            i += 1;
         }
-
-        None
     }
 }
