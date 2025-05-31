@@ -36,7 +36,7 @@ use std::str;
 
 use gap_buffer::GapBuffer;
 
-use crate::arena::{ArenaString, scratch_arena};
+use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::cell::SemiRefCell;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::framebuffer::{Framebuffer, IndexedColor};
@@ -1060,7 +1060,9 @@ impl TextBuffer {
         if let (Some(search), Some(..)) = (&mut self.search, &self.selection) {
             let search = search.get_mut();
             if search.selection_generation == self.selection_generation {
-                self.write(replacement.as_bytes(), true);
+                let scratch = scratch_arena(None);
+                let processed_replacement = self.get_regex_replacement(&scratch, replacement);
+                self.write(processed_replacement.as_bytes(), true);
             }
         }
 
@@ -1074,7 +1076,7 @@ impl TextBuffer {
         options: SearchOptions,
         replacement: &str,
     ) -> apperr::Result<()> {
-        let replacement = replacement.as_bytes();
+        let scratch = scratch_arena(None);
         let mut search = self.find_construct_search(pattern, options)?;
         let mut offset = 0;
 
@@ -1083,7 +1085,9 @@ impl TextBuffer {
             if !self.has_selection() {
                 break;
             }
-            self.write(replacement, true);
+
+            let processed_replacement = self.get_regex_replacement(&scratch, replacement);
+            self.write(processed_replacement.as_bytes(), true);
             offset = self.cursor.offset;
         }
 
@@ -2408,6 +2412,80 @@ impl TextBuffer {
     /// For interfacing with ICU.
     pub fn read_forward(&self, off: usize) -> &[u8] {
         self.buffer.read_forward(off)
+    }
+
+    /// Processes the replacement string when using regex for capture groups.
+    fn get_regex_replacement<'a>(
+        &mut self,
+        arena: &'a Arena,
+        replacement: &str,
+    ) -> ArenaString<'a> {
+        let mut result = ArenaString::with_capacity_in(replacement.len(), arena);
+
+        let Some(search) = &mut self.search else {
+            result.push_str(replacement);
+            return result;
+        };
+        let search = search.get_mut();
+
+        if !search.options.use_regex || !replacement.contains('$') {
+            result.push_str(replacement);
+            return result;
+        }
+
+        let Some(group_count) = search.regex.get_captured_group_count() else {
+            result.push_str(replacement);
+            return result;
+        };
+
+        let scratch = scratch_arena(Some(arena));
+        let mut chars = replacement.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            match ch {
+                '$' => {
+                    let mut digits = ArenaString::new_in(&scratch);
+                    let mut group_num: Option<i32> = None;
+
+                    while let Some(&next_ch) = chars.peek() {
+                        if digits.is_empty() && next_ch == '$' {
+                            // Consume the escaped dollar sign.
+                            chars.next();
+                            break;
+                        }
+
+                        if !next_ch.is_ascii_digit() {
+                            break;
+                        }
+
+                        digits.push(next_ch);
+
+                        let Ok(next_group_num) = digits.parse::<i32>() else {
+                            break;
+                        };
+                        if next_group_num > group_count {
+                            break;
+                        }
+
+                        group_num = Some(next_group_num);
+                        chars.next();
+                    }
+
+                    if let Some(group_num) = group_num {
+                        if let Some(range) = search.regex.get_captured_group_range(group_num) {
+                            let mut out = Vec::new();
+                            self.buffer.extract_raw(range.start, range.end, &mut out, 0);
+                            result.push_str(&String::from_utf8_lossy(&out));
+                        }
+                    } else {
+                        result.push(ch);
+                    }
+                }
+                _ => result.push(ch),
+            }
+        }
+
+        result
     }
 }
 
