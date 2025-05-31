@@ -1605,6 +1605,7 @@ impl TextBuffer {
 
                 let mut global_off = cursor_beg.offset;
                 let mut cursor_tab = cursor_beg;
+                let mut cursor_visualizer = cursor_beg;
 
                 while global_off < cursor_end.offset {
                     let chunk = self.read_forward(global_off);
@@ -1655,11 +1656,11 @@ impl TextBuffer {
                             // Our manually constructed UTF8 is never going to be invalid. Trust.
                             line.push_str(unsafe { str::from_utf8_unchecked(&visualizer_buf) });
 
+                            cursor_visualizer = self.cursor_move_to_offset_internal(
+                                cursor_visualizer,
+                                global_off + chunk_off - 1,
+                            );
                             let visualizer_rect = {
-                                let cursor_visualizer = self.cursor_move_to_offset_internal(
-                                    cursor_beg,
-                                    global_off + chunk_off - 1,
-                                );
                                 let left = destination.left
                                     + self.margin_width
                                     + cursor_visualizer.visual_pos.x
