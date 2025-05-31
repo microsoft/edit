@@ -259,11 +259,32 @@ pub enum Overflow {
     TruncateTail,
 }
 
+/// If specified, a checkmark 🗹 / ☐ to be prepended to the button text
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub enum Checkmark {
+    /// No checkmark (or space for it)
+    #[default]
+    Absent,
+    /// Add whitespace where a checkmark would be
+    /// (to keep aligned with checkmark'd buttons)
+    AlignOnly,
+    /// Add a 🗹 prefix
+    Checked,
+    /// Add a ☐ prefix
+    Unchecked,
+}
+
+impl From<bool> for Checkmark {
+    fn from(checked: bool) -> Self {
+        if checked { Checkmark::Checked } else { Checkmark::Unchecked }
+    }
+}
+
 /// Controls the style with which a button label renders
 #[derive(Clone, Copy)]
 pub struct ButtonStyle {
     accelerator: Option<char>,
-    checked: Option<bool>,
+    checkmark: Checkmark,
     bracketed: bool,
 }
 
@@ -275,8 +296,8 @@ impl ButtonStyle {
         Self { accelerator: Some(char), ..self }
     }
     /// Draw a checkbox prefix: `[🗹 Example Button]`
-    pub fn checked(self, checked: bool) -> Self {
-        Self { checked: Some(checked), ..self }
+    pub fn checkmark(self, checkmark: Checkmark) -> Self {
+        Self { checkmark, ..self }
     }
     /// Draw with or without brackets: `[Example Button]` or `Example Button`
     pub fn bracketed(self, bracketed: bool) -> Self {
@@ -288,7 +309,7 @@ impl Default for ButtonStyle {
     fn default() -> Self {
         Self {
             accelerator: None,
-            checked: None,
+            checkmark: Checkmark::Absent,
             bracketed: true, // Default style for most buttons. Brackets may be disabled e.g. for buttons in menus
         }
     }
@@ -2004,17 +2025,9 @@ impl<'a> Context<'a, '_> {
     /// Creates a checkbox with the given text.
     /// Returns true if the checkbox was activated.
     pub fn checkbox(&mut self, classname: &'static str, text: &str, checked: &mut bool) -> bool {
-        self.styled_label_begin(classname);
-        self.attr_focusable();
-        if self.is_focused() {
-            self.attr_reverse();
-        }
-        self.styled_label_add_text(if *checked { "[🗹 " } else { "[☐ " });
-        self.styled_label_add_text(text);
-        self.styled_label_add_text("]");
-        self.styled_label_end();
+        let activated =
+            self.button(classname, text, ButtonStyle::default().checkmark((*checked).into()));
 
-        let activated = self.button_activated();
         if activated {
             *checked = !*checked;
         }
@@ -3142,7 +3155,7 @@ impl<'a> Context<'a, '_> {
         accelerator: char,
         shortcut: InputKey,
     ) -> bool {
-        self.menubar_menu_checkbox(text, accelerator, shortcut, false)
+        self.menubar_menu_checkbox(text, accelerator, shortcut, Checkmark::AlignOnly)
     }
 
     /// Appends a checkbox to the current menu.
@@ -3152,7 +3165,7 @@ impl<'a> Context<'a, '_> {
         text: &str,
         accelerator: char,
         shortcut: InputKey,
-        checked: bool,
+        checkmark: Checkmark,
     ) -> bool {
         self.table_next_row();
         self.attr_focusable();
@@ -3173,7 +3186,7 @@ impl<'a> Context<'a, '_> {
         self.button_label(
             "menu_checkbox",
             text,
-            ButtonStyle::default().bracketed(false).checked(checked).accelerator(accelerator),
+            ButtonStyle::default().bracketed(false).checkmark(checkmark).accelerator(accelerator),
         );
         self.menubar_shortcut(shortcut);
 
@@ -3227,8 +3240,11 @@ impl<'a> Context<'a, '_> {
         if style.bracketed {
             self.styled_label_add_text("[");
         }
-        if let Some(checked) = style.checked {
-            self.styled_label_add_text(if checked { "🗹 " } else { "  " });
+        match style.checkmark {
+            Checkmark::Absent => {}
+            Checkmark::AlignOnly => self.styled_label_add_text("  "),
+            Checkmark::Checked => self.styled_label_add_text("🗹 "),
+            Checkmark::Unchecked => self.styled_label_add_text("☐ "),
         }
         // Label text
         match style.accelerator {
