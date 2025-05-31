@@ -34,10 +34,10 @@ const fn desired_mprotect(_: c_int) -> c_int {
 }
 
 struct State {
-    stdin: libc::c_int,
-    stdin_flags: libc::c_int,
-    stdout: libc::c_int,
-    stdout_initial_termios: Option<libc::termios>,
+    tty: libc::c_int,
+    tty_flags: libc::c_int,
+    initial_termios: Option<libc::termios>,
+    stdin_redirected: bool,
     inject_resize: bool,
     // Buffer for incomplete UTF-8 sequences (max 4 bytes needed)
     utf8_buf: [u8; 4],
@@ -45,10 +45,10 @@ struct State {
 }
 
 static mut STATE: State = State {
-    stdin: libc::STDIN_FILENO,
-    stdin_flags: 0,
-    stdout: libc::STDOUT_FILENO,
-    stdout_initial_termios: None,
+    tty: libc::STDOUT_FILENO,
+    tty_flags: 0,
+    initial_termios: None,
+    stdin_redirected: false,
     inject_resize: false,
     utf8_buf: [0; 4],
     utf8_len: 0,
@@ -60,15 +60,22 @@ extern "C" fn sigwinch_handler(_: libc::c_int) {
     }
 }
 
-pub fn init() -> apperr::Result<Deinit> {
+pub fn init() -> apperr::Result<()> {
+    unsafe {
+        STATE.stdin_redirected = libc::isatty(libc::STDIN_FILENO) == 0;
+        Ok({})
+    }
+}
+
+pub fn init_terminal() -> apperr::Result<Deinit> {
     unsafe {
         // Reopen stdin if it's redirected (= piped input).
-        if libc::isatty(STATE.stdin) == 0 {
-            STATE.stdin = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_RDONLY))?;
-        }
+        STATE.tty = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_RDWR))?;
 
         // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
-        STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
+        STATE.tty_flags = check_int_return(libc::fcntl(STATE.tty, libc::F_GETFL))?;
+
+        switch_modes()?;
 
         Ok(Deinit)
     }
@@ -80,15 +87,15 @@ impl Drop for Deinit {
     fn drop(&mut self) {
         unsafe {
             #[allow(static_mut_refs)]
-            if let Some(termios) = STATE.stdout_initial_termios.take() {
+            if let Some(termios) = STATE.initial_termios.take() {
                 // Restore the original terminal modes.
-                libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios);
+                libc::tcsetattr(STATE.tty, libc::TCSANOW, &termios);
             }
         }
     }
 }
 
-pub fn switch_modes() -> apperr::Result<()> {
+fn switch_modes() -> apperr::Result<()> {
     unsafe {
         // Set STATE.inject_resize to true whenever we get a SIGWINCH.
         let mut sigwinch_action: libc::sigaction = mem::zeroed();
@@ -97,9 +104,9 @@ pub fn switch_modes() -> apperr::Result<()> {
 
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
-        check_int_return(libc::tcgetattr(STATE.stdin, termios.as_mut_ptr()))?;
+        check_int_return(libc::tcgetattr(STATE.tty, termios.as_mut_ptr()))?;
         let mut termios = termios.assume_init();
-        STATE.stdout_initial_termios = Some(termios);
+        STATE.initial_termios = Some(termios);
 
         termios.c_iflag &= !(
             // When neither IGNBRK...
@@ -146,7 +153,7 @@ pub fn switch_modes() -> apperr::Result<()> {
 
         // Set the terminal to raw mode.
         termios.c_lflag &= !(libc::ICANON | libc::ECHO);
-        check_int_return(libc::tcsetattr(STATE.stdin, libc::TCSANOW, &termios))?;
+        check_int_return(libc::tcsetattr(STATE.tty, libc::TCSANOW, &termios))?;
 
         Ok(())
     }
@@ -162,7 +169,7 @@ fn get_window_size() -> (u16, u16) {
     let mut winsz: libc::winsize = unsafe { mem::zeroed() };
 
     for attempt in 1.. {
-        let ret = unsafe { libc::ioctl(STATE.stdout, libc::TIOCGWINSZ, &raw mut winsz) };
+        let ret = unsafe { libc::ioctl(STATE.tty, libc::TIOCGWINSZ, &raw mut winsz) };
         if ret == -1 || (winsz.ws_col != 0 && winsz.ws_row != 0) {
             break;
         }
@@ -210,7 +217,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
             if timeout != time::Duration::MAX {
                 let beg = time::Instant::now();
 
-                let mut pollfd = libc::pollfd { fd: STATE.stdin, events: libc::POLLIN, revents: 0 };
+                let mut pollfd = libc::pollfd { fd: STATE.tty, events: libc::POLLIN, revents: 0 };
                 let ret;
                 #[cfg(target_os = "linux")]
                 {
@@ -240,7 +247,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
 
             // Read from stdin.
             let spare = buf.spare_capacity_mut();
-            let ret = libc::read(STATE.stdin, spare.as_mut_ptr() as *mut _, spare.len());
+            let ret = libc::read(STATE.tty, spare.as_mut_ptr() as *mut _, spare.len());
             if ret > 0 {
                 buf.set_len(buf.len() + ret as usize);
                 break;
@@ -306,7 +313,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
     }
 }
 
-pub fn write_stdout(text: &str) {
+fn write_fd(fd: libc::c_int, text: &str) {
     if text.is_empty() {
         return;
     }
@@ -321,7 +328,7 @@ pub fn write_stdout(text: &str) {
     while written < buf.len() {
         let w = &buf[written..];
         let w = &buf[..w.len().min(GIBI)];
-        let n = unsafe { libc::write(STATE.stdout, w.as_ptr() as *const _, w.len()) };
+        let n = unsafe { libc::write(fd, w.as_ptr() as *const _, w.len()) };
 
         if n >= 0 {
             written += n as usize;
@@ -335,16 +342,29 @@ pub fn write_stdout(text: &str) {
     }
 }
 
+pub fn write_stdout(text: &str) {
+    write_fd(libc::STDOUT_FILENO, text);
+}
+
+pub fn write_stderr(text: &str) {
+    write_fd(libc::STDERR_FILENO, text);
+}
+
+pub fn write_tty(text: &str) {
+    write_fd(unsafe { STATE.tty }, text);
+}
+
 /// Sets/Resets `O_NONBLOCK` on the TTY handle.
 ///
 /// Note that setting this flag applies to both stdin and stdout, because the
 /// TTY is a bidirectional device and both handles refer to the same thing.
-fn set_tty_nonblocking(nonblock: bool) {
+fn set_tty_nonblocking(_nonblock: bool) {
+    let nonblock = true; // try doing it always?
     unsafe {
-        let is_nonblock = (STATE.stdin_flags & libc::O_NONBLOCK) != 0;
+        let is_nonblock = (STATE.tty_flags & libc::O_NONBLOCK) != 0;
         if is_nonblock != nonblock {
-            STATE.stdin_flags ^= libc::O_NONBLOCK;
-            let _ = libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
+            STATE.tty_flags ^= libc::O_NONBLOCK;
+            let _ = libc::fcntl(STATE.tty, libc::F_SETFL, STATE.tty_flags);
         }
     }
 }
@@ -352,11 +372,7 @@ fn set_tty_nonblocking(nonblock: bool) {
 pub fn open_stdin_if_redirected() -> Option<File> {
     unsafe {
         // Did we reopen stdin during `init()`?
-        if STATE.stdin != libc::STDIN_FILENO {
-            Some(File::from_raw_fd(libc::STDIN_FILENO))
-        } else {
-            None
-        }
+        if STATE.stdin_redirected { Some(File::from_raw_fd(libc::STDIN_FILENO)) } else { None }
     }
 }
 
