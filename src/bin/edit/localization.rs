@@ -661,7 +661,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // LargeClipboardWarningLine2
     [
         /* en      */ "You copied {size} which may take a long time to share.",
-        /* de      */ "Sie haben {size} kopiert, das Weitergeben könnte lange dauern.",
+        /* de      */ "Sie haben {size} kopiert. Das Weitergeben könnte länger dauern.",
         /* es      */ "Copiaste {size}, lo que puede tardar en compartirse.",
         /* fr      */ "Vous avez copié {size}, ce qui peut être long à partager.",
         /* it      */ "Hai copiato {size}, potrebbe richiedere molto tempo per condividerlo.",
@@ -675,7 +675,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // LargeClipboardWarningLine3
     [
         /* en      */ "Do you want to send it anyway?",
-        /* de      */ "Möchten Sie es trotzdem senden?",
+        /* de      */ "Möchten Sie die Daten trotzdem senden?",
         /* es      */ "¿Desea enviarlo de todas formas?",
         /* fr      */ "Voulez-vous quand même l’envoyer ?",
         /* it      */ "Vuoi inviarlo comunque?",
