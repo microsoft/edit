@@ -331,17 +331,17 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     ],
     // FileGoto
     [
-        /* en      */ "Go to Line/Column…",
-        /* de      */ "Gehe zu Zeile/Spalte…",
-        /* es      */ "Ir a línea/columna…",
-        /* fr      */ "Aller à la ligne/colonne…",
-        /* it      */ "Vai a riga/colonna…",
-        /* ja      */ "行/列へ移動…",
-        /* ko      */ "행/열로 이동…",
-        /* pt_br   */ "Ir para linha/coluna…",
-        /* ru      */ "Перейти к строке/столбцу…",
-        /* zh_hans */ "转到行/列…",
-        /* zh_hant */ "跳至行/列…",
+        /* en      */ "Go to Line:Column…",
+        /* de      */ "Gehe zu Zeile:Spalte…",
+        /* es      */ "Ir a línea:columna…",
+        /* fr      */ "Aller à la ligne:colonne…",
+        /* it      */ "Vai a riga:colonna…",
+        /* ja      */ "行:列へ移動…",
+        /* ko      */ "행:열로 이동…",
+        /* pt_br   */ "Ir para linha:coluna…",
+        /* ru      */ "Перейти к строке:столбцу…",
+        /* zh_hans */ "转到行:列…",
+        /* zh_hant */ "跳至行:列…",
     ],
 
     // Edit (a menu bar item)
