@@ -60,17 +60,51 @@ extern "C" fn sigwinch_handler(_: libc::c_int) {
     }
 }
 
-pub fn init() -> apperr::Result<Deinit> {
+// In src/sys/unix.rs
+pub fn ensure_interactive_tty() -> apperr::Result<()> {
     unsafe {
-        // Reopen stdin if it's redirected (= piped input).
+        // If the current STATE.stdin (which after sys::init() is libc::STDIN_FILENO)
+        // is not a TTY, it means input was redirected. For interactive mode,
+        // we want to use /dev/tty instead for actual user input.
         if libc::isatty(STATE.stdin) == 0 {
-            STATE.stdin = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_RDONLY))?;
+            let tty_fd = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_RDWR))?;
+            // Now STATE.stdin points to the actual TTY for interactive input.
+            STATE.stdin = tty_fd;
+            // Update stdin_flags for the new TTY file descriptor.
+            STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
         }
 
-        // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
+        // Similar logic could be applied to STATE.stdout if it also needs to be
+        // explicitly a TTY for some interactive features, though output redirection
+        // is often desired. For now, focusing on stdin as per the original issue.
+        // If STATE.stdout is also redirected and needs to be /dev/tty for output:
+        // if libc::isatty(STATE.stdout) == 0 {
+        //     let tty_out_fd = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_WRONLY))?;
+        //     STATE.stdout = tty_out_fd;
+        // }
+
+        Ok(())
+    }
+}
+
+pub fn init() -> apperr::Result<Deinit> {
+    unsafe {
+        // STATE.stdin is already libc::STDIN_FILENO by default.
+        // STATE.stdout is already libc::STDOUT_FILENO by default.
+
+        // DO NOT include the logic:
+        // // if libc::isatty(STATE.stdin) == 0 {
+        // //     STATE.stdin = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_RDONLY))?;
+        // // }
+
+        // Initialize stdin_flags based on the default STATE.stdin (libc::STDIN_FILENO).
+        // This is needed because sys::write_stdout -> set_tty_nonblocking uses these.
         STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
 
-        Ok(Deinit)
+        // Any other truly minimal, safe initializations for default stdio handles can go here.
+        // For example, ensuring STATE.stdout is usable for sys::write_stdout.
+
+        Ok(Deinit) // Deinit's drop only cares about stdout_initial_termios, which is None at this stage.
     }
 }
 
