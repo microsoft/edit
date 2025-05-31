@@ -2025,17 +2025,9 @@ impl<'a> Context<'a, '_> {
     /// Creates a checkbox with the given text.
     /// Returns true if the checkbox was activated.
     pub fn checkbox(&mut self, classname: &'static str, text: &str, checked: &mut bool) -> bool {
-        self.styled_label_begin(classname);
-        self.attr_focusable();
-        if self.is_focused() {
-            self.attr_reverse();
-        }
-        self.styled_label_add_text(if *checked { "[🗹 " } else { "[☐ " });
-        self.styled_label_add_text(text);
-        self.styled_label_add_text("]");
-        self.styled_label_end();
+        let activated =
+            self.button(classname, text, ButtonStyle::default().checkmark((*checked).into()));
 
-        let activated = self.button_activated();
         if activated {
             *checked = !*checked;
         }
