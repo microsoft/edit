@@ -675,7 +675,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // LargeClipboardWarningLine3
     [
         /* en      */ "Do you want to send it anyway?",
-        /* de      */ "Möchten Sie die Daten trotzdem senden?",
+        /* de      */ "Möchten Sie es trotzdem senden?",
         /* es      */ "¿Desea enviarlo de todas formas?",
         /* fr      */ "Voulez-vous quand même l’envoyer ?",
         /* it      */ "Vuoi inviarlo comunque?",
