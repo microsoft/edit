@@ -53,6 +53,8 @@ const MARGIN_TEMPLATE: &str = "                    │ ";
 /// Just a bunch of whitespace you can use for turning tabs into spaces.
 /// Happens to reuse MARGIN_TEMPLATE, because it has sufficient whitespace.
 const TAB_WHITESPACE: &str = MARGIN_TEMPLATE;
+const RENDERED_TAB_WHITESPACE: &str = "→       ";
+const RENDERED_WHITESPACE: &str = "·";
 
 /// Stores statistics about the whole document.
 #[derive(Copy, Clone)]
@@ -198,6 +200,7 @@ pub struct TextBuffer {
     margin_enabled: bool,
     word_wrap_column: CoordType,
     word_wrap_enabled: bool,
+    toggle_render_whitespace_enabled: bool,
     tab_size: CoordType,
     indent_with_tabs: bool,
     line_highlight_enabled: bool,
@@ -245,6 +248,7 @@ impl TextBuffer {
             margin_enabled: false,
             word_wrap_column: 0,
             word_wrap_enabled: false,
+            toggle_render_whitespace_enabled: false,
             tab_size: 4,
             indent_with_tabs: false,
             line_highlight_enabled: false,
@@ -464,6 +468,16 @@ impl TextBuffer {
             self.word_wrap_enabled = enabled;
             self.width = 0; // Force a reflow.
             self.make_cursor_visible();
+        }
+    }
+
+    pub fn is_toggle_render_whitespace_enabled(&self) -> bool {
+        self.toggle_render_whitespace_enabled
+    }
+
+    pub fn set_toggle_render_whitespace(&mut self, enabled: bool) {
+        if self.toggle_render_whitespace_enabled != enabled {
+            self.toggle_render_whitespace_enabled = enabled;
         }
     }
 
@@ -1591,7 +1605,11 @@ impl TextBuffer {
                     if cursor_next.visual_pos.x > origin.x {
                         let overlap = cursor_next.visual_pos.x - origin.x;
                         debug_assert!((1..=7).contains(&overlap));
-                        line.push_str(&TAB_WHITESPACE[..overlap as usize]);
+                        if self.toggle_render_whitespace_enabled {
+                            line.push_str(&RENDERED_TAB_WHITESPACE[..(overlap + 2) as usize]);
+                        } else {
+                            line.push_str(&TAB_WHITESPACE[..overlap as usize]);
+                        }
                         cursor_beg = cursor_next;
                     }
                 }
@@ -1617,7 +1635,13 @@ impl TextBuffer {
 
                         for chunk in chunk[beg..chunk_off].utf8_chunks() {
                             if !chunk.valid().is_empty() {
-                                line.push_str(chunk.valid());
+                                if self.toggle_render_whitespace_enabled {
+                                    line.push_str(
+                                        &chunk.valid().replace(' ', &RENDERED_WHITESPACE),
+                                    );
+                                } else {
+                                    line.push_str(chunk.valid());
+                                }
                             }
                             if !chunk.invalid().is_empty() {
                                 line.push('\u{FFFD}');
@@ -1636,12 +1660,25 @@ impl TextBuffer {
                                     global_off + chunk_off - 1,
                                 );
                                 let tab_size = self.tab_size - (cursor_tab.column % self.tab_size);
-                                line.push_str(&TAB_WHITESPACE[..tab_size as usize]);
+                                if self.toggle_render_whitespace_enabled {
+                                    line.push_str(
+                                        &RENDERED_TAB_WHITESPACE[..(tab_size + 2) as usize],
+                                    );
+                                } else {
+                                    line.push_str(&TAB_WHITESPACE[..tab_size as usize]);
+                                }
 
                                 // Since we know that we just aligned ourselves to the next tab stop,
                                 // we can trivially process any successive tabs.
                                 while chunk_off < chunk.len() && chunk[chunk_off] == b'\t' {
-                                    line.push_str(&TAB_WHITESPACE[..self.tab_size as usize]);
+                                    if self.toggle_render_whitespace_enabled {
+                                        line.push_str(
+                                            &RENDERED_TAB_WHITESPACE
+                                                [..(self.tab_size + 2) as usize],
+                                        );
+                                    } else {
+                                        line.push_str(&TAB_WHITESPACE[..self.tab_size as usize]);
+                                    }
                                     chunk_off += 1;
                                 }
                                 continue;
