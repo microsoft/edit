@@ -261,7 +261,7 @@ pub enum Overflow {
 
 /// If specified, a checkmark 🗹 / ☐ to be prepended to the button text
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
-pub enum Checkmark {
+enum Checkmark {
     /// No checkmark (or space for it)
     #[default]
     Absent,
@@ -295,13 +295,15 @@ impl ButtonStyle {
     pub fn accelerator(self, char: char) -> Self {
         Self { accelerator: Some(char), ..self }
     }
-    /// Draw a checkbox prefix: `[🗹 Example Button]`
-    pub fn checkmark(self, checkmark: Checkmark) -> Self {
-        Self { checkmark, ..self }
-    }
     /// Draw with or without brackets: `[Example Button]` or `Example Button`
     pub fn bracketed(self, bracketed: bool) -> Self {
         Self { bracketed, ..self }
+    }
+    /// Draw a checkbox prefix: `[🗹 Example Button]`
+    ///
+    /// Note: use `checkbox` or `menubar_menu_checkbox`
+    fn checkmark(self, checkmark: Checkmark) -> Self {
+        Self { checkmark, ..self }
     }
 }
 
@@ -3155,12 +3157,23 @@ impl<'a> Context<'a, '_> {
         accelerator: char,
         shortcut: InputKey,
     ) -> bool {
-        self.menubar_menu_checkbox(text, accelerator, shortcut, Checkmark::AlignOnly)
+        self.menubar_menu_item(text, accelerator, shortcut, Checkmark::AlignOnly)
     }
 
     /// Appends a checkbox to the current menu.
     /// Returns true if the checkbox was activated.
     pub fn menubar_menu_checkbox(
+        &mut self,
+        text: &str,
+        accelerator: char,
+        shortcut: InputKey,
+        checked: bool,
+    ) -> bool {
+        self.menubar_menu_item(text, accelerator, shortcut, checked.into())
+    }
+
+    /// Appends a button or checkbox to the current menu,
+    fn menubar_menu_item(
         &mut self,
         text: &str,
         accelerator: char,
