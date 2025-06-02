@@ -1607,6 +1607,11 @@ impl TextBuffer {
                         debug_assert!((1..=7).contains(&overlap));
                         if self.toggle_render_whitespace_enabled {
                             line.push_str(&RENDERED_TAB_WHITESPACE[..(overlap + 2) as usize]);
+
+                            let left = self.margin_width;
+                            let top = y + 1;
+                            let rect = Rect { left, top, right: left + overlap, bottom: top + 1 };
+                            fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
                         } else {
                             line.push_str(&TAB_WHITESPACE[..overlap as usize]);
                         }
@@ -1691,6 +1696,33 @@ impl TextBuffer {
                             };
                             // Our manually constructed UTF8 is never going to be invalid. Trust.
                             line.push_str(unsafe { str::from_utf8_unchecked(&visualizer_buf) });
+                        }
+                    }
+
+                    if self.toggle_render_whitespace_enabled {
+                        let mut cursor_whitespace_renderer = cursor_beg;
+
+                        let mut chunk_off = 0;
+
+                        while chunk_off < chunk.len() {
+                            let ch = chunk[chunk_off];
+
+                            if ch == b' ' || ch == b'\t' {
+                                cursor_whitespace_renderer = self.cursor_move_to_offset_internal(
+                                    cursor_whitespace_renderer,
+                                    global_off + chunk_off,
+                                );
+                                let left = destination.left
+                                    + self.margin_width
+                                    + cursor_whitespace_renderer.visual_pos.x
+                                    - origin.x;
+                                let top = destination.top + cursor_whitespace_renderer.visual_pos.y
+                                    - origin.y;
+                                let rect = Rect { left, top, right: left + 1, bottom: top + 1 };
+                                fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
+                            }
+
+                            chunk_off += 1;
                         }
                     }
 
