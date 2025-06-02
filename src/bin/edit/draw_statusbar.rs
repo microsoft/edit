@@ -161,9 +161,8 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             &arena_format!(ctx.arena(), "{}/{}", tb.logical_line_count(), tb.visual_line_count(),),
         );
 
-        let mut is_overtype = tb.is_overtype();
-        if ctx.checkbox("overtype", "OVR", &mut is_overtype) {
-            tb.set_overtype(is_overtype);
+        if tb.is_overtype() && ctx.button("overtype", "OVR", ButtonStyle::default()) {
+            tb.set_overtype(false);
             ctx.needs_rerender();
         }
 
