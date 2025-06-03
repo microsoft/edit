@@ -14,7 +14,6 @@ use crate::helpers::CoordType;
 /// This allows you to ensure (or test) whether `offset` is at a line start.
 ///
 /// It returns an offset *past* a newline and thus at the start of a line.
-/// If `line` is already before `line_stop`, it returns immediately.
 pub fn lines_bwd(
     haystack: &[u8],
     offset: usize,
@@ -29,7 +28,6 @@ pub fn lines_bwd(
     }
 }
 
-#[inline(never)]
 unsafe fn lines_bwd_raw(
     beg: *const u8,
     end: *const u8,
@@ -46,7 +44,6 @@ unsafe fn lines_bwd_raw(
     return unsafe { lines_bwd_fallback(beg, end, line, line_stop) };
 }
 
-#[inline]
 unsafe fn lines_bwd_fallback(
     beg: *const u8,
     mut end: *const u8,
@@ -54,17 +51,15 @@ unsafe fn lines_bwd_fallback(
     line_stop: CoordType,
 ) -> (*const u8, CoordType) {
     unsafe {
-        if line >= line_stop {
-            while !ptr::eq(end, beg) {
-                let n = end.sub(1);
-                if *n == b'\n' {
-                    if line == line_stop {
-                        break;
-                    }
-                    line -= 1;
+        while !ptr::eq(end, beg) {
+            let n = end.sub(1);
+            if *n == b'\n' {
+                if line <= line_stop {
+                    break;
                 }
-                end = n;
+                line -= 1;
             }
+            end = n;
         }
         (end, line)
     }
@@ -114,57 +109,53 @@ unsafe fn lines_bwd_avx2(
         }
 
         let lf = _mm256_set1_epi8(b'\n' as i8);
+        let line_stop = line_stop.min(line);
         let mut remaining = end.offset_from_unsigned(beg);
 
-        // Process large chunks backwards
-        if line >= line_stop && remaining >= 128 {
-            while remaining >= 128 {
-                let chunk_start = end.sub(128);
+        while remaining >= 128 {
+            let chunk_start = end.sub(128);
 
-                let v1 = _mm256_loadu_si256(chunk_start.add(0) as *const _);
-                let v2 = _mm256_loadu_si256(chunk_start.add(32) as *const _);
-                let v3 = _mm256_loadu_si256(chunk_start.add(64) as *const _);
-                let v4 = _mm256_loadu_si256(chunk_start.add(96) as *const _);
+            let v1 = _mm256_loadu_si256(chunk_start.add(0) as *const _);
+            let v2 = _mm256_loadu_si256(chunk_start.add(32) as *const _);
+            let v3 = _mm256_loadu_si256(chunk_start.add(64) as *const _);
+            let v4 = _mm256_loadu_si256(chunk_start.add(96) as *const _);
 
-                let mut sum = _mm256_setzero_si256();
-                sum = _mm256_sub_epi8(sum, _mm256_cmpeq_epi8(v1, lf));
-                sum = _mm256_sub_epi8(sum, _mm256_cmpeq_epi8(v2, lf));
-                sum = _mm256_sub_epi8(sum, _mm256_cmpeq_epi8(v3, lf));
-                sum = _mm256_sub_epi8(sum, _mm256_cmpeq_epi8(v4, lf));
+            let mut sum = _mm256_setzero_si256();
+            sum = _mm256_sub_epi8(sum, _mm256_cmpeq_epi8(v1, lf));
+            sum = _mm256_sub_epi8(sum, _mm256_cmpeq_epi8(v2, lf));
+            sum = _mm256_sub_epi8(sum, _mm256_cmpeq_epi8(v3, lf));
+            sum = _mm256_sub_epi8(sum, _mm256_cmpeq_epi8(v4, lf));
 
-                let sum = _mm256_sad_epu8(sum, _mm256_setzero_si256());
-                let sum = horizontal_sum_i64(sum);
+            let sum = _mm256_sad_epu8(sum, _mm256_setzero_si256());
+            let sum = horizontal_sum_i64(sum);
 
-                let line_next = line - sum as CoordType;
-                if line_next <= line_stop {
-                    break;
-                }
-
-                end = chunk_start;
-                remaining -= 128;
-                line = line_next;
+            let line_next = line - sum as CoordType;
+            if line_next <= line_stop {
+                break;
             }
+
+            end = chunk_start;
+            remaining -= 128;
+            line = line_next;
         }
 
-        if line >= line_stop && remaining >= 32 {
-            while remaining >= 32 {
-                let chunk_start = end.sub(32);
-                let v = _mm256_loadu_si256(chunk_start as *const _);
-                let c = _mm256_cmpeq_epi8(v, lf);
+        while remaining >= 32 {
+            let chunk_start = end.sub(32);
+            let v = _mm256_loadu_si256(chunk_start as *const _);
+            let c = _mm256_cmpeq_epi8(v, lf);
 
-                let ones = _mm256_and_si256(c, _mm256_set1_epi8(0x01));
-                let sum = _mm256_sad_epu8(ones, _mm256_setzero_si256());
-                let sum = horizontal_sum_i64(sum);
+            let ones = _mm256_and_si256(c, _mm256_set1_epi8(0x01));
+            let sum = _mm256_sad_epu8(ones, _mm256_setzero_si256());
+            let sum = horizontal_sum_i64(sum);
 
-                let line_next = line - sum as CoordType;
-                if line_next <= line_stop {
-                    break;
-                }
-
-                end = chunk_start;
-                remaining -= 32;
-                line = line_next;
+            let line_next = line - sum as CoordType;
+            if line_next <= line_stop {
+                break;
             }
+
+            end = chunk_start;
+            remaining -= 32;
+            line = line_next;
         }
 
         lines_bwd_fallback(beg, end, line, line_stop)
@@ -182,53 +173,50 @@ unsafe fn lines_bwd_neon(
         use std::arch::aarch64::*;
 
         let lf = vdupq_n_u8(b'\n');
+        let line_stop = line_stop.min(line);
         let mut remaining = end.offset_from_unsigned(beg);
 
-        if line >= line_stop && remaining >= 64 {
-            while remaining >= 64 {
-                let chunk_start = end.sub(64);
+        while remaining >= 64 {
+            let chunk_start = end.sub(64);
 
-                let v1 = vld1q_u8(chunk_start.add(0));
-                let v2 = vld1q_u8(chunk_start.add(16));
-                let v3 = vld1q_u8(chunk_start.add(32));
-                let v4 = vld1q_u8(chunk_start.add(48));
+            let v1 = vld1q_u8(chunk_start.add(0));
+            let v2 = vld1q_u8(chunk_start.add(16));
+            let v3 = vld1q_u8(chunk_start.add(32));
+            let v4 = vld1q_u8(chunk_start.add(48));
 
-                let mut sum = vdupq_n_u8(0);
-                sum = vsubq_u8(sum, vceqq_u8(v1, lf));
-                sum = vsubq_u8(sum, vceqq_u8(v2, lf));
-                sum = vsubq_u8(sum, vceqq_u8(v3, lf));
-                sum = vsubq_u8(sum, vceqq_u8(v4, lf));
+            let mut sum = vdupq_n_u8(0);
+            sum = vsubq_u8(sum, vceqq_u8(v1, lf));
+            sum = vsubq_u8(sum, vceqq_u8(v2, lf));
+            sum = vsubq_u8(sum, vceqq_u8(v3, lf));
+            sum = vsubq_u8(sum, vceqq_u8(v4, lf));
 
-                let sum = vaddvq_u8(sum);
+            let sum = vaddvq_u8(sum);
 
-                let line_next = line - sum as CoordType;
-                if line_next <= line_stop {
-                    break;
-                }
-
-                end = chunk_start;
-                remaining -= 64;
-                line = line_next;
+            let line_next = line - sum as CoordType;
+            if line_next <= line_stop {
+                break;
             }
+
+            end = chunk_start;
+            remaining -= 64;
+            line = line_next;
         }
 
-        if line >= line_stop && remaining >= 16 {
-            while remaining >= 16 {
-                let chunk_start = end.sub(16);
-                let v = vld1q_u8(chunk_start);
-                let c = vceqq_u8(v, lf);
-                let c = vandq_u8(c, vdupq_n_u8(0x01));
-                let sum = vaddvq_u8(c);
+        while remaining >= 16 {
+            let chunk_start = end.sub(16);
+            let v = vld1q_u8(chunk_start);
+            let c = vceqq_u8(v, lf);
+            let c = vandq_u8(c, vdupq_n_u8(0x01));
+            let sum = vaddvq_u8(c);
 
-                let line_next = line - sum as CoordType;
-                if line_next <= line_stop {
-                    break;
-                }
-
-                end = chunk_start;
-                remaining -= 16;
-                line = line_next;
+            let line_next = line - sum as CoordType;
+            if line_next <= line_stop {
+                break;
             }
+
+            end = chunk_start;
+            remaining -= 16;
+            line = line_next;
         }
 
         lines_bwd_fallback(beg, end, line, line_stop)
@@ -287,7 +275,7 @@ mod test {
     #[test]
     fn seeks_to_start() {
         for i in 6..=11 {
-            let (off, line) = lines_bwd(b"Hello\nWorld\n", i, 123, 123);
+            let (off, line) = lines_bwd(b"Hello\nWorld\n", i, 123, 456);
             assert_eq!(off, 6); // After "Hello\n"
             assert_eq!(line, 123); // Still on the same line
         }

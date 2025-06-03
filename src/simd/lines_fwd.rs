@@ -26,7 +26,6 @@ pub fn lines_fwd(
     }
 }
 
-#[inline(never)]
 unsafe fn lines_fwd_raw(
     beg: *const u8,
     end: *const u8,
@@ -43,7 +42,6 @@ unsafe fn lines_fwd_raw(
     return unsafe { lines_fwd_fallback(beg, end, line, line_stop) };
 }
 
-#[inline]
 unsafe fn lines_fwd_fallback(
     mut beg: *const u8,
     end: *const u8,
@@ -113,9 +111,9 @@ unsafe fn lines_fwd_avx2(
         let lf = _mm256_set1_epi8(b'\n' as i8);
         let mut remaining = end.offset_from_unsigned(beg);
 
-        // Unrolling the loop after this one by 4x speeds things up by >3x.
-        // It allows us to accumulate matches before doing a single `vpsadbw`.
-        if line < line_stop && remaining >= 128 {
+        if line < line_stop {
+            // Unrolling the loop by 4x speeds things up by >3x.
+            // It allows us to accumulate matches before doing a single `vpsadbw`.
             while remaining >= 128 {
                 let v1 = _mm256_loadu_si256(beg.add(0) as *const _);
                 let v2 = _mm256_loadu_si256(beg.add(32) as *const _);
@@ -143,9 +141,7 @@ unsafe fn lines_fwd_avx2(
                 remaining -= 128;
                 line = line_next;
             }
-        }
 
-        if line < line_stop && remaining >= 32 {
             while remaining >= 32 {
                 let v = _mm256_loadu_si256(beg as *const _);
                 let c = _mm256_cmpeq_epi8(v, lf);
@@ -185,7 +181,7 @@ unsafe fn lines_fwd_neon(
         let lf = vdupq_n_u8(b'\n');
         let mut remaining = end.offset_from_unsigned(beg);
 
-        if line < line_stop && remaining >= 64 {
+        if line < line_stop {
             while remaining >= 64 {
                 let v1 = vld1q_u8(beg.add(0));
                 let v2 = vld1q_u8(beg.add(16));
@@ -211,10 +207,7 @@ unsafe fn lines_fwd_neon(
                 remaining -= 64;
                 line = line_next;
             }
-        }
 
-        // Process remaining bytes in smaller chunks
-        if line < line_stop && remaining >= 16 {
             while remaining >= 16 {
                 let v = vld1q_u8(beg);
                 let c = vceqq_u8(v, lf);
