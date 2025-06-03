@@ -118,7 +118,12 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
             tb.set_word_wrap(!word_wrap);
             ctx.needs_rerender();
         }
-        if ctx.menubar_menu_checkbox(loc(LocId::ViewToggleRenderWhitespace), 'R', vk::NULL, toggle_render_whitespace) {
+        if ctx.menubar_menu_checkbox(
+            loc(LocId::ViewToggleRenderWhitespace),
+            'R',
+            vk::NULL,
+            toggle_render_whitespace,
+        ) {
             tb.set_toggle_render_whitespace(!toggle_render_whitespace);
             ctx.needs_rerender();
         }
