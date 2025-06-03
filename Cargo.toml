@@ -54,4 +54,7 @@ features = [
 ]
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.6", features = ["html_reports"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+zstd = { version = "0.13", default-features = false }
