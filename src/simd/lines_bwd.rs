@@ -13,7 +13,7 @@ use crate::helpers::CoordType;
 /// seeks backwards even if the `line` is already at `line_stop`.
 /// This allows you to ensure (or test) whether `offset` is at a line start.
 ///
-/// It returns an offset *past* the newline (= at the start of the next line).
+/// It returns an offset *past* a newline and thus at the start of a line.
 /// If `line` is already before `line_stop`, it returns immediately.
 pub fn lines_bwd(
     haystack: &[u8],
