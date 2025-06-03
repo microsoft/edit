@@ -43,7 +43,6 @@ pub enum LocId {
     ViewFocusStatusbar,
     ViewWordWrap,
     ViewDocumentPicker,
-    ViewToggleRenderWhitespace,
 
     // Help menu
     Help,
@@ -527,20 +526,6 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Выбор документа…",
         /* zh_hans */ "文档选择器…",
         /* zh_hant */ "文件選擇器…",
-    ],
-    // ViewToggleRenderWhitespace
-    [
-        /* en      */ "Toggle Render Whitespace",
-        /* de      */ "Rendern von Leerzeichen umschalten",
-        /* es      */ "Alternar representación de espacio en blanco",
-        /* fr      */ "Activer/désactiver Restituer l'espace",
-        /* it      */ "Attiva/Disattiva rendering spazi vuoti",
-        /* ja      */ "空白文字の表示の切り替え",
-        /* ko      */ "공백 렌더링 설정/해제",
-        /* pt_br   */ "Ativar/Desativar Renderização de Espaço em Branco",
-        /* ru      */ "Переключить отображение пробелов",
-        /* zh_hans */ "切换呈现空格",
-        /* zh_hant */ "切換轉譯空白字元",
     ],
 
     // Help (a menu bar item)
