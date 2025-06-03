@@ -2,12 +2,109 @@
 // Licensed under the MIT License.
 
 use std::hint::black_box;
+use std::io::Cursor;
 use std::{mem, vec};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
 use edit::simd::MemsetSafe;
-use edit::{hash, oklab, simd, unicode};
+use edit::{arena, buffer, hash, oklab, simd, unicode};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct EditingTracePatch(pub usize, pub usize, pub String);
+
+#[derive(Deserialize)]
+pub struct EditingTraceTransaction {
+    pub patches: Vec<EditingTracePatch>,
+}
+
+#[derive(Deserialize)]
+pub struct EditingTraceData {
+    #[serde(rename = "startContent")]
+    pub start_content: String,
+    #[serde(rename = "endContent")]
+    pub end_content: String,
+    pub txns: Vec<EditingTraceTransaction>,
+}
+
+fn bench_buffer(c: &mut Criterion) {
+    let data = include_bytes!("../assets/editing-traces/rustcode.json.zst");
+    let data = zstd::decode_all(Cursor::new(data)).unwrap();
+    let data: EditingTraceData = serde_json::from_slice(&data).unwrap();
+    let mut patches_with_coords = Vec::new();
+
+    {
+        let mut tb = buffer::TextBuffer::new(false).unwrap();
+        tb.set_crlf(false);
+        tb.write(data.start_content.as_bytes(), true);
+
+        for t in &data.txns {
+            for p in &t.patches {
+                tb.cursor_move_to_offset(p.0);
+                let beg = tb.cursor_logical_pos();
+
+                tb.delete(buffer::CursorMovement::Grapheme, p.1 as CoordType);
+
+                tb.write(p.2.as_bytes(), true);
+                patches_with_coords.push((beg, p.1 as CoordType, p.2.clone()));
+            }
+        }
+
+        let mut actual = String::new();
+        tb.save_as_string(&mut actual);
+        assert_eq!(actual, data.end_content);
+    }
+
+    let bench_gap_buffer = || {
+        let mut buf = buffer::GapBuffer::new(false).unwrap();
+        buf.replace(0..usize::MAX, data.start_content.as_bytes());
+
+        for t in &data.txns {
+            for p in &t.patches {
+                buf.replace(p.0..p.0 + p.1, p.2.as_bytes());
+            }
+        }
+
+        buf
+    };
+
+    let bench_text_buffer = || {
+        let mut tb = buffer::TextBuffer::new(false).unwrap();
+        tb.set_crlf(false);
+        tb.write(data.start_content.as_bytes(), true);
+
+        for p in &patches_with_coords {
+            tb.cursor_move_to_logical(p.0);
+            tb.delete(buffer::CursorMovement::Grapheme, p.1);
+            tb.write(p.2.as_bytes(), true);
+        }
+
+        tb
+    };
+
+    // Sanity check: If this fails, the implementation is incorrect.
+    {
+        let buf = bench_gap_buffer();
+        let mut actual = Vec::new();
+        buf.extract_raw(0..usize::MAX, &mut actual, 0);
+        assert_eq!(actual, data.end_content.as_bytes());
+    }
+    {
+        let mut tb = bench_text_buffer();
+        let mut actual = String::new();
+        tb.save_as_string(&mut actual);
+        assert_eq!(actual, data.end_content);
+    }
+
+    c.benchmark_group("buffer")
+        .bench_function(BenchmarkId::new("GapBuffer", "rustcode"), |b| {
+            b.iter(bench_gap_buffer);
+        })
+        .bench_function(BenchmarkId::new("TextBuffer", "rustcode"), |b| {
+            b.iter(bench_text_buffer);
+        });
+}
 
 fn bench_hash(c: &mut Criterion) {
     c.benchmark_group("hash")
@@ -125,6 +222,9 @@ fn bench_unicode(c: &mut Criterion) {
 }
 
 fn bench(c: &mut Criterion) {
+    arena::init(128 * MEBI).unwrap();
+
+    bench_buffer(c);
     bench_hash(c);
     bench_oklab(c);
     bench_simd_lines_fwd(c);
