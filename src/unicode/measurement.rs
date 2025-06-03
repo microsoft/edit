@@ -7,7 +7,6 @@ use super::Utf8Chars;
 use super::tables::*;
 use crate::document::ReadableDocument;
 use crate::helpers::{CoordType, Point};
-use crate::simd::{memchr2, memrchr2};
 
 /// Stores a position inside a [`ReadableDocument`].
 ///
@@ -483,104 +482,6 @@ impl<'doc> MeasurementConfig<'doc> {
             std::cmp::Ordering::Equal => target.x,
             std::cmp::Ordering::Greater => 0,
         }
-    }
-}
-
-/// Seeks forward to the given line start.
-///
-/// If given a piece of `text`, and assuming you're currently at `offset` which
-/// is on the logical line `line`, this will seek forward until the logical line
-/// `line_stop` is reached. For instance, if `line` is 0 and `line_stop` is 2,
-/// it'll seek forward past 2 line feeds.
-///
-/// This function always stops exactly past a line feed
-/// and thus returns a position at the start of a line.
-///
-/// # Warning
-///
-/// If the end of `text` is hit before reaching `line_stop`, the function
-/// will return an offset of `text.len()`, not at the start of a line.
-///
-/// # Parameters
-///
-/// * `text`: The text to search in.
-/// * `offset`: The offset to start searching from.
-/// * `line`: The current line.
-/// * `line_stop`: The line to stop at.
-///
-/// # Returns
-///
-/// A tuple consisting of:
-/// * The new offset.
-/// * The line number that was reached.
-pub fn newlines_forward(
-    text: &[u8],
-    mut offset: usize,
-    mut line: CoordType,
-    line_stop: CoordType,
-) -> (usize, CoordType) {
-    // Leaving the cursor at the beginning of the current line when the limit
-    // is 0 makes this function behave identical to ucd_newlines_backward.
-    if line >= line_stop {
-        return newlines_backward(text, offset, line, line_stop);
-    }
-
-    let len = text.len();
-    offset = offset.min(len);
-
-    loop {
-        // TODO: This code could be optimized by replacing memchr with manual line counting.
-        //
-        // If `line_stop` is very far away, we could accumulate newline counts horizontally
-        // in a AVX2 register (= 32 u8 slots). Then, every 256 bytes we compute the horizontal
-        // sum via `_mm256_sad_epu8` yielding us the newline count in the last block.
-        //
-        // We could also just use `_mm256_sad_epu8` on each fetch as-is.
-        offset = memchr2(b'\n', b'\n', text, offset);
-        if offset >= len {
-            break;
-        }
-
-        offset += 1;
-        line += 1;
-        if line >= line_stop {
-            break;
-        }
-    }
-
-    (offset, line)
-}
-
-/// Seeks backward to the given line start.
-///
-/// See [`newlines_forward`] for details.
-/// This function does almost the same thing, but in reverse.
-///
-/// # Warning
-///
-/// In addition to the notes in [`newlines_forward`]:
-///
-/// No matter what parameters are given, [`newlines_backward`] only returns an
-/// offset at the start of a line. Put differently, even if `line == line_stop`,
-/// it'll seek backward to the line start.
-pub fn newlines_backward(
-    text: &[u8],
-    mut offset: usize,
-    mut line: CoordType,
-    line_stop: CoordType,
-) -> (usize, CoordType) {
-    offset = offset.min(text.len());
-
-    loop {
-        offset = match memrchr2(b'\n', b'\n', text, offset) {
-            Some(i) => i,
-            None => return (0, line),
-        };
-        if line <= line_stop {
-            // +1: Past the newline, at the start of the current line.
-            return (offset + 1, line);
-        }
-        line -= 1;
     }
 }
 
@@ -1158,23 +1059,6 @@ mod test {
                 wrap_opp: false,
             }
         );
-    }
-
-    #[test]
-    fn test_newlines_and_strip() {
-        // Offset line 0: 0
-        // Offset line 1: 6
-        // Offset line 2: 13
-        // Offset line 3: 18
-        let text = "line1\nline2\r\nline3".as_bytes();
-
-        assert_eq!(newlines_forward(text, 0, 0, 2), (13, 2));
-        assert_eq!(newlines_forward(text, 0, 0, 0), (0, 0));
-        assert_eq!(newlines_forward(text, 100, 2, 100), (18, 2));
-
-        assert_eq!(newlines_backward(text, 18, 2, 1), (6, 1));
-        assert_eq!(newlines_backward(text, 18, 2, 0), (0, 0));
-        assert_eq!(newlines_backward(text, 100, 2, 1), (6, 1));
     }
 
     #[test]

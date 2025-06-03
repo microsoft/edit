@@ -157,7 +157,7 @@ use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedC
 use crate::hash::*;
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
-use crate::{apperr, arena_format, input, unicode};
+use crate::{apperr, arena_format, input, simd, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
@@ -2690,7 +2690,7 @@ impl<'a> Context<'a, '_> {
         }
 
         if single_line && !write.is_empty() {
-            let (end, _) = unicode::newlines_forward(write, 0, 0, 1);
+            let (end, _) = simd::lines_fwd(write, 0, 0, 1);
             write = unicode::strip_newline(&write[..end]);
         }
         if !write.is_empty() {

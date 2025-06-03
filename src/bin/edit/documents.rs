@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
-use edit::simd::memrchr2;
 use edit::{apperr, path, sys};
 
 use crate::state::DisplayablePathBuf;
@@ -237,8 +236,12 @@ impl DocumentManager {
             Some(num)
         }
 
+        fn find_colon_rev(bytes: &[u8], offset: usize) -> Option<usize> {
+            (0..offset.min(bytes.len())).rev().find(|&i| bytes[i] == b':')
+        }
+
         let bytes = path.as_os_str().as_encoded_bytes();
-        let colend = match memrchr2(b':', b':', bytes, bytes.len()) {
+        let colend = match find_colon_rev(bytes, bytes.len()) {
             // Reject filenames that would result in an empty filename after stripping off the :line:char suffix.
             // For instance, a filename like ":123:456" will not be processed by this function.
             Some(colend) if colend > 0 => colend,
@@ -253,7 +256,7 @@ impl DocumentManager {
         let mut len = colend;
         let mut goto = Point { x: 0, y: last };
 
-        if let Some(colbeg) = memrchr2(b':', b':', bytes, colend) {
+        if let Some(colbeg) = find_colon_rev(bytes, colend) {
             // Same here: Don't allow empty filenames.
             if colbeg != 0
                 && let Some(first) = parse(&bytes[colbeg + 1..colend])
