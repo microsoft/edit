@@ -182,7 +182,7 @@ fn run() -> apperr::Result<()> {
             }
 
             if state.osc_clipboard_sync {
-                write_osc_clipboard(&mut output, &mut state, &mut tui);
+                write_osc_clipboard(&mut tui, &mut state, &mut output);
             }
 
             #[cfg(feature = "debug-latency")]
@@ -487,7 +487,7 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
 }
 
 #[cold]
-fn write_osc_clipboard(output: &mut ArenaString, state: &mut State, tui: &mut Tui) {
+fn write_osc_clipboard(tui: &mut Tui, state: &mut State, output: &mut ArenaString) {
     let clipboard = tui.clipboard_mut();
     let data = clipboard.read();
 
