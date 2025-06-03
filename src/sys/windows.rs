@@ -515,9 +515,11 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
 ///
 /// This function is unsafe because it uses raw pointers.
 /// Make sure to only pass pointers acquired from [`virtual_reserve`].
-pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
+pub unsafe fn virtual_release(base: NonNull<u8>, _size: usize) {
     unsafe {
-        Memory::VirtualFree(base.as_ptr() as *mut _, size, Memory::MEM_RELEASE);
+        // NOTE: `VirtualFree` fails if the pointer isn't
+        // a valid base address or if the size isn't zero.
+        Memory::VirtualFree(base.as_ptr() as *mut _, 0, Memory::MEM_RELEASE);
     }
 }
 
