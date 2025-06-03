@@ -181,8 +181,8 @@ fn run() -> apperr::Result<()> {
                 }
             }
 
-            if state.osc_clipboard_send_generation == tui.clipboard_generation() {
-                write_osc_clipboard(&mut output, &mut state, &tui);
+            if state.osc_clipboard_sync {
+                write_osc_clipboard(&mut output, &mut state, &mut tui);
             }
 
             #[cfg(feature = "debug-latency")]
@@ -323,7 +323,7 @@ fn draw(ctx: &mut Context, state: &mut State) {
     if state.wants_about {
         draw_dialog_about(ctx, state);
     }
-    if state.osc_clipboard_seen_generation != ctx.clipboard_generation() {
+    if ctx.clipboard_ref().wants_host_sync() {
         draw_handle_clipboard_change(ctx, state);
     }
     if state.error_log_count != 0 {
@@ -396,15 +396,16 @@ fn write_terminal_title(output: &mut ArenaString, filename: &str) {
 const LARGE_CLIPBOARD_THRESHOLD: usize = 4 * KIBI;
 
 fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
-    let generation = ctx.clipboard_generation();
+    let data_len = ctx.clipboard_ref().read().len();
 
-    if state.osc_clipboard_always_send || ctx.clipboard().len() < LARGE_CLIPBOARD_THRESHOLD {
-        state.osc_clipboard_seen_generation = generation;
-        state.osc_clipboard_send_generation = generation;
+    if state.osc_clipboard_always_send || data_len < LARGE_CLIPBOARD_THRESHOLD {
+        ctx.clipboard_mut().mark_as_synchronized();
+        state.osc_clipboard_sync = true;
         return;
     }
 
-    let over_limit = ctx.clipboard().len() >= SCRATCH_ARENA_CAPACITY / 4;
+    let over_limit = data_len >= SCRATCH_ARENA_CAPACITY / 4;
+    let mut done = None;
 
     ctx.modal_begin("warning", loc(LocId::WarningDialogTitle));
     {
@@ -419,7 +420,7 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
         } else {
             let label2 = {
                 let template = loc(LocId::LargeClipboardWarningLine2);
-                let size = arena_format!(ctx.arena(), "{}", MetricFormatter(ctx.clipboard().len()));
+                let size = arena_format!(ctx.arena(), "{}", MetricFormatter(data_len));
 
                 let mut label =
                     ArenaString::with_capacity_in(template.len() + size.len(), ctx.arena());
@@ -448,28 +449,26 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
 
             if over_limit {
                 if ctx.button("ok", loc(LocId::Ok), ButtonStyle::default()) {
-                    state.osc_clipboard_seen_generation = generation;
+                    done = Some(true);
                 }
                 ctx.inherit_focus();
             } else {
                 if ctx.button("always", loc(LocId::Always), ButtonStyle::default()) {
                     state.osc_clipboard_always_send = true;
-                    state.osc_clipboard_seen_generation = generation;
-                    state.osc_clipboard_send_generation = generation;
+                    done = Some(true);
                 }
 
                 if ctx.button("yes", loc(LocId::Yes), ButtonStyle::default()) {
-                    state.osc_clipboard_seen_generation = generation;
-                    state.osc_clipboard_send_generation = generation;
+                    done = Some(true);
                 }
-                if ctx.clipboard().len() < 10 * LARGE_CLIPBOARD_THRESHOLD {
+                if data_len < 10 * LARGE_CLIPBOARD_THRESHOLD {
                     ctx.inherit_focus();
                 }
 
                 if ctx.button("no", loc(LocId::No), ButtonStyle::default()) {
-                    state.osc_clipboard_seen_generation = generation;
+                    done = Some(false);
                 }
-                if ctx.clipboard().len() >= 10 * LARGE_CLIPBOARD_THRESHOLD {
+                if data_len >= 10 * LARGE_CLIPBOARD_THRESHOLD {
                     ctx.inherit_focus();
                 }
             }
@@ -477,24 +476,33 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
         ctx.table_end();
     }
     if ctx.modal_end() {
-        state.osc_clipboard_seen_generation = generation;
+        done = Some(false);
+    }
+
+    if let Some(sync) = done {
+        state.osc_clipboard_sync = sync;
+        ctx.clipboard_mut().mark_as_synchronized();
+        ctx.needs_rerender();
     }
 }
 
 #[cold]
-fn write_osc_clipboard(output: &mut ArenaString, state: &mut State, tui: &Tui) {
-    let clipboard = tui.clipboard();
-    if !clipboard.is_empty() {
+fn write_osc_clipboard(output: &mut ArenaString, state: &mut State, tui: &mut Tui) {
+    let clipboard = tui.clipboard_mut();
+    let data = clipboard.read();
+
+    if !data.is_empty() {
         // Rust doubles the size of a string when it needs to grow it.
-        // If `clipboard` is *really* large, this may then double
+        // If `data` is *really* large, this may then double
         // the size of the `output` from e.g. 100MB to 200MB. Not good.
         // We can avoid that by reserving the needed size in advance.
-        output.reserve_exact(base64::encode_len(clipboard.len()) + 16);
+        output.reserve_exact(base64::encode_len(data.len()) + 16);
         output.push_str("\x1b]52;c;");
-        base64::encode(output, clipboard);
+        base64::encode(output, data);
         output.push_str("\x1b\\");
     }
-    state.osc_clipboard_send_generation = tui.clipboard_generation().wrapping_sub(1);
+
+    state.osc_clipboard_sync = false;
 }
 
 struct RestoreModes;

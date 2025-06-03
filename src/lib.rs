@@ -21,6 +21,7 @@ pub mod apperr;
 pub mod base64;
 pub mod buffer;
 pub mod cell;
+pub mod clipboard;
 pub mod document;
 pub mod framebuffer;
 pub mod hash;

@@ -38,6 +38,7 @@ use gap_buffer::GapBuffer;
 
 use crate::arena::{ArenaString, scratch_arena};
 use crate::cell::SemiRefCell;
+use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
@@ -1060,7 +1061,7 @@ impl TextBuffer {
         if let (Some(search), Some(..)) = (&mut self.search, &self.selection) {
             let search = search.get_mut();
             if search.selection_generation == self.selection_generation {
-                self.write(replacement.as_bytes(), true);
+                self.write(replacement.as_bytes(), self.cursor, true);
             }
         }
 
@@ -1083,7 +1084,7 @@ impl TextBuffer {
             if !self.has_selection() {
                 break;
             }
-            self.write(replacement, true);
+            self.write(replacement, self.cursor, true);
             offset = self.cursor.offset;
         }
 
@@ -1780,22 +1781,66 @@ impl TextBuffer {
         Some(RenderResult { visual_pos_x_max })
     }
 
-    /// Inserts `text` at the current cursor position.
-    ///
-    /// If there's a current selection, it will be replaced.
-    /// The selection is cleared after the call.
-    pub fn write(&mut self, text: &[u8], raw: bool) {
+    pub fn cut(&mut self, clipboard: &mut Clipboard) {
+        self.cut_copy(clipboard, true);
+    }
+
+    pub fn copy(&mut self, clipboard: &mut Clipboard) {
+        self.cut_copy(clipboard, false);
+    }
+
+    fn cut_copy(&mut self, clipboard: &mut Clipboard, cut: bool) {
+        let line_copy = !self.has_selection();
+        let selection = self.extract_selection(cut);
+        clipboard.write(selection);
+        clipboard.write_was_line_copy(line_copy);
+    }
+
+    pub fn paste(&mut self, clipboard: &Clipboard) {
+        let data = clipboard.read();
+        if data.is_empty() {
+            return;
+        }
+
+        let pos = self.cursor_logical_pos();
+        let at = if clipboard.is_line_copy() {
+            self.goto_line_start(self.cursor, pos.y)
+        } else {
+            self.cursor
+        };
+
+        self.write(data, at, true);
+
+        if clipboard.is_line_copy() {
+            self.cursor_move_to_logical(Point { x: pos.x, y: pos.y + 1 });
+        }
+    }
+
+    /// Inserts the user input `text` at the current cursor position.
+    /// Replaces tabs with whitespace if needed, etc.
+    pub fn write_canon(&mut self, text: &[u8]) {
+        self.write(text, self.cursor, false);
+    }
+
+    /// Inserts `text` as-is at the current cursor position.
+    /// The only transformation applied is that newlines are normalized.
+    pub fn write_raw(&mut self, text: &[u8]) {
+        self.write(text, self.cursor, true);
+    }
+
+    fn write(&mut self, text: &[u8], at: Cursor, raw: bool) {
         if text.is_empty() {
             return;
         }
 
+        let history_type = if raw { HistoryType::Other } else { HistoryType::Write };
         if let Some((beg, end)) = self.selection_range_internal(false) {
-            self.edit_begin(HistoryType::Write, beg);
+            self.edit_begin(history_type, beg);
             self.edit_delete(end);
             self.set_selection(None);
         }
         if self.active_edit_depth <= 0 {
-            self.edit_begin(HistoryType::Write, self.cursor);
+            self.edit_begin(history_type, at);
         }
 
         let mut offset = 0;
@@ -2072,7 +2117,8 @@ impl TextBuffer {
 
     /// Extracts the contents of the current selection.
     /// May optionally delete it, if requested. This is meant to be used for Ctrl+X.
-    pub fn extract_selection(&mut self, delete: bool) -> Vec<u8> {
+    fn extract_selection(&mut self, delete: bool) -> Vec<u8> {
+        let line_copy = !self.has_selection();
         let Some((beg, end)) = self.selection_range_internal(true) else {
             return Vec::new();
         };
@@ -2085,6 +2131,11 @@ impl TextBuffer {
             self.edit_delete(end);
             self.edit_end();
             self.set_selection(None);
+        }
+
+        // Line copies (= Ctrl+C when there's no selection) always end with a newline.
+        if line_copy && !out.ends_with(b"\n") {
+            out.replace_range(out.len().., if self.newlines_are_crlf { b"\r\n" } else { b"\n" });
         }
 
         out
