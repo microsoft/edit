@@ -199,6 +199,13 @@ impl DocumentManager {
         Ok(self.list.front_mut().unwrap())
     }
 
+    pub fn reflow_all(&self) {
+        for doc in &self.list {
+            let mut tb = doc.buffer.borrow_mut();
+            tb.reflow();
+        }
+    }
+
     pub fn open_for_reading(path: &Path) -> apperr::Result<File> {
         File::open(path).map_err(apperr::Error::from)
     }

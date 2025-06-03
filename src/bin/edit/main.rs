@@ -29,12 +29,12 @@ use draw_menubar::*;
 use draw_statusbar::*;
 use edit::arena::{self, Arena, ArenaString, scratch_arena};
 use edit::framebuffer::{self, IndexedColor};
-use edit::helpers::{KIBI, MEBI, MetricFormatter, Rect, Size};
+use edit::helpers::{CoordType, KIBI, MEBI, MetricFormatter, Rect, Size};
 use edit::input::{self, kbmod, vk};
 use edit::oklab::oklab_blend;
 use edit::tui::*;
 use edit::vt::{self, Token};
-use edit::{apperr, arena_format, base64, path, sys};
+use edit::{apperr, arena_format, base64, path, sys, unicode};
 use localization::*;
 use state::*;
 
@@ -85,7 +85,7 @@ fn run() -> apperr::Result<()> {
     let mut input_parser = input::Parser::new();
     let mut tui = Tui::new()?;
 
-    let _restore = setup_terminal(&mut tui, &mut vt_parser);
+    let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
 
     state.menubar_color_bg = oklab_blend(
         tui.indexed(IndexedColor::Background),
@@ -509,7 +509,7 @@ impl Drop for RestoreModes {
     }
 }
 
-fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
+fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) -> RestoreModes {
     sys::write_stdout(concat!(
         // 1049: Alternative Screen Buffer
         //   I put the ASB switch in the beginning, just in case the terminal performs
@@ -524,6 +524,12 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
         "\x1b]4;8;?;9;?;10;?;11;?;12;?;13;?;14;?;15;?\x07",
         // OSC 10 and 11 queries for the current foreground and background colors.
         "\x1b]10;?\x07\x1b]11;?\x07",
+        // Test whether ambiguous width characters are two columns wide.
+        // We use "…", because it's the most common ambiguous width character we use,
+        // and the old Windows conhost doesn't actually use wcwidth, it measures the
+        // actual display width of the character and assigns it columns accordingly.
+        // We detect it by writing the character and asking for the cursor position.
+        "\r…\x1b[6n",
         // CSI c reports the terminal capabilities.
         // It also helps us to detect the end of the responses, because not all
         // terminals support the OSC queries, but all of them support CSI c.
@@ -534,6 +540,7 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
     let mut osc_buffer = String::new();
     let mut indexed_colors = framebuffer::DEFAULT_THEME;
     let mut color_responses = 0;
+    let mut ambiguous_width = 1;
 
     while !done {
         let scratch = scratch_arena(None);
@@ -544,7 +551,12 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
         let mut vt_stream = vt_parser.parse(&input);
         while let Some(token) = vt_stream.next() {
             match token {
-                Token::Csi(state) if state.final_byte == 'c' => done = true,
+                Token::Csi(csi) => match csi.final_byte {
+                    'c' => done = true,
+                    // CPR (Cursor Position Report) response.
+                    'R' => ambiguous_width = csi.params[1] as CoordType - 1,
+                    _ => {}
+                },
                 Token::Osc { mut data, partial } => {
                     if partial {
                         osc_buffer.push_str(data);
@@ -599,6 +611,11 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
                 _ => {}
             }
         }
+    }
+
+    if ambiguous_width == 2 {
+        unicode::setup_ambiguous_width(2);
+        state.documents.reflow_all();
     }
 
     if color_responses == indexed_colors.len() {
