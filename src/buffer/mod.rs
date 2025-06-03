@@ -1347,7 +1347,7 @@ impl TextBuffer {
 
         if self.word_wrap_column <= 0 {
             // Identical to the fast-pass in `cursor_move_to_logical_internal()`.
-            if pos.y != cursor.logical_pos.y || pos.x < cursor.logical_pos.x {
+            if pos.y != cursor.visual_pos.y || pos.x < cursor.visual_pos.x {
                 cursor = self.goto_line_start(cursor, pos.y);
             }
         } else {
