@@ -2,7 +2,9 @@
 // Licensed under the MIT License.
 
 use std::alloc::{Allocator, Layout};
+use std::alloc::{Allocator, Layout};
 use std::ops::Range;
+use std::ptr::NonNull;
 use std::ptr::NonNull;
 
 use super::virtual_mem::{VALLOCATOR, VirtualAllocator, VirtualMemory};
@@ -144,6 +146,12 @@ impl GapBuffer {
                 }
                 BackingBuffer::Vec(vec) => vec.copy_within(move_src..move_src + move_len, move_dst),
             }
+            match &mut self.buffer {
+                BackingBuffer::VirtualMemory(buf) => {
+                    buf.copy_within(move_src..move_src + move_len, move_dst)
+                }
+                BackingBuffer::Vec(vec) => vec.copy_within(move_src..move_src + move_len, move_dst),
+            }
 
             if cfg!(debug_assertions) {
                 // Fill the moved-out bytes with 0xCD to make debugging easier.
@@ -220,6 +228,8 @@ impl GapBuffer {
                 },
                 BackingBuffer::Vec(buf) => {
                     buf.resize(bytes_new, 0);
+                BackingBuffer::Vec(buf) => {
+                    buf.resize(bytes_new, 0);
                 }
             }
 
@@ -238,9 +248,23 @@ impl GapBuffer {
             BackingBuffer::Vec(buf) => {
                 buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_len_new);
             }
+        // When the gap expands, it will consume the contents bordering it.
+        // Those contents need to be moved out of the newly enlarged gap
+        let gap_end_old = self.gap_off + gap_len_old;
+        let gap_len_new = self.gap_off + gap_len_new;
+        let buf_contents_len = self.text_length - self.gap_off;
+        match &mut self.buffer {
+            BackingBuffer::VirtualMemory(buf) => {
+                buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_len_new);
+            }
+            BackingBuffer::Vec(buf) => {
+                buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_len_new);
+            }
         };
 
         if cfg!(debug_assertions) {
+            let start = self.gap_off + gap_len_old;
+            let end = start + gap_len_new - gap_len_old;
             // Fill the moved-out bytes with 0xCD to make debugging easier.
             match &mut self.buffer {
                 BackingBuffer::VirtualMemory(buf) => unsafe {
@@ -378,6 +402,10 @@ impl ReadableDocument for GapBuffer {
             BackingBuffer::VirtualMemory(buf) => &buf[beg..beg + len],
             BackingBuffer::Vec(buf) => &buf[beg..beg + len],
         }
+        match &self.buffer {
+            BackingBuffer::VirtualMemory(buf) => &buf[beg..beg + len],
+            BackingBuffer::Vec(buf) => &buf[beg..beg + len],
+        }
     }
 
     fn read_backward(&self, off: usize) -> &[u8] {
@@ -397,6 +425,10 @@ impl ReadableDocument for GapBuffer {
             len = off - self.gap_off;
         }
 
+        match &self.buffer {
+            BackingBuffer::VirtualMemory(buf) => &buf[beg..beg + len],
+            BackingBuffer::Vec(buf) => &buf[beg..beg + len],
+        }
         match &self.buffer {
             BackingBuffer::VirtualMemory(buf) => &buf[beg..beg + len],
             BackingBuffer::Vec(buf) => &buf[beg..beg + len],
