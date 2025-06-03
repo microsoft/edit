@@ -1228,8 +1228,7 @@ impl TextBuffer {
                     break;
                 }
 
-                let (delta, line) =
-                    simd::lines_bwd(chunk, chunk.len(), result.logical_pos.y, result.logical_pos.y);
+                let (delta, line) = simd::lines_bwd(chunk, chunk.len(), result.logical_pos.y, y);
                 result.offset -= chunk.len() - delta;
                 result.logical_pos.y = line;
                 if delta > 0 {
