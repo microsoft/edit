@@ -37,7 +37,7 @@ lto = "thin"                # Similarly, speed up linking by a ton
 libc = "0.2"
 
 [target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
+winresource = "0.1.22"
 
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.59"
