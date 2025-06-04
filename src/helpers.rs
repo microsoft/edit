@@ -5,6 +5,8 @@
 
 use std::alloc::Allocator;
 use std::cmp::Ordering;
+use std::fmt::{Debug, Display};
+use std::hash::Hash;
 use std::io::Read;
 use std::mem::{self, MaybeUninit};
 use std::ops::{Bound, Range, RangeBounds};
@@ -291,3 +293,79 @@ impl AsciiStringHelpers for str {
         p.len() <= s.len() && s[..p.len()].eq_ignore_ascii_case(p)
     }
 }
+
+pub enum StackStringError {
+    ContentTooLong,
+}
+
+impl Debug for StackStringError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "desirable content is too long to fit in the string.")
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct StackString<const N: usize> {
+    length: usize,
+    data: [u8; N],
+}
+
+impl<const N: usize> StackString<N> {
+    pub fn new(src: &str) -> Result<Self, StackStringError> {
+        let bytes = src.bytes().collect::<Vec<u8>>();
+        if bytes.len() > N {
+            return Err(StackStringError::ContentTooLong);
+        }
+        let mut data = [0u8; N];
+        // Horrible mem copy
+        // TODO: Fix ASAP
+        unsafe {
+            let chunk = std::slice::from_raw_parts_mut(data.as_mut_ptr(), bytes.len());
+            chunk.copy_from_slice(&bytes);
+        }
+        Ok(Self { length: bytes.len(), data })
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+}
+
+impl<const N: usize> AsRef<str> for StackString<N> {
+    fn as_ref(&self) -> &str {
+        // SAFETY: We constructed the string
+        unsafe { std::str::from_utf8_unchecked(&self.data[0..self.length]) }
+    }
+}
+
+impl<const N: usize> PartialEq for StackString<N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+
+    fn ne(&self, other: &Self) -> bool {
+        self.as_str() != other.as_str()
+    }
+}
+
+impl<const N: usize> Eq for StackString<N> {}
+
+impl<const N: usize> Hash for StackString<N> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl<const N: usize> Display for StackString<N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <str as Display>::fmt(self.as_str(), f)
+    }
+}
+
+impl<const N: usize> Debug for StackString<N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <str as Debug>::fmt(self.as_str(), f)
+    }
+}
+
+pub type SmolString = StackString<16>;
