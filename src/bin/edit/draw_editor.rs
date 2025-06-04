@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::num::ParseIntError;
+
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::icu;
@@ -123,9 +125,11 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         ctx.table_begin("options");
         ctx.table_set_cell_gap(Size { width: 2, height: 0 });
         {
+            let mut change = false;
+            let mut change_action = SearchAction::Search;
+
             ctx.table_next_row();
 
-            let mut change = false;
             change |= ctx.checkbox(
                 "match-case",
                 loc(LocId::SearchMatchCase),
@@ -141,20 +145,20 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                 loc(LocId::SearchUseRegex),
                 &mut state.search_options.use_regex,
             );
+            if state.wants_search.kind == StateSearchKind::Replace
+                && ctx.button("replace-all", loc(LocId::SearchReplaceAll), ButtonStyle::default())
+            {
+                change = true;
+                change_action = SearchAction::ReplaceAll;
+            }
+            if ctx.button("close", loc(LocId::SearchClose), ButtonStyle::default()) {
+                state.wants_search.kind = StateSearchKind::Hidden;
+            }
+
             if change {
-                action = SearchAction::Search;
+                action = change_action;
                 state.wants_search.focus = true;
                 ctx.needs_rerender();
-            }
-
-            if state.wants_search.kind == StateSearchKind::Replace
-                && ctx.button("replace-all", loc(LocId::SearchReplaceAll))
-            {
-                action = SearchAction::ReplaceAll;
-            }
-
-            if ctx.button("close", loc(LocId::SearchClose)) {
-                state.wants_search.kind = StateSearchKind::Hidden;
             }
         }
         ctx.table_end();
@@ -202,7 +206,6 @@ pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
 pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     let Some(doc) = state.documents.active() else {
         state.wants_close = false;
-        state.wants_exit = true;
         return;
     };
 
@@ -225,6 +228,8 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
     {
+        let contains_focus = ctx.contains_focus();
+
         ctx.label("description", loc(LocId::UnsavedChangesDialogDescription));
         ctx.attr_padding(Rect::three(1, 2, 1));
 
@@ -237,22 +242,32 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
             ctx.table_next_row();
             ctx.inherit_focus();
 
-            if ctx.button("yes", loc(LocId::UnsavedChangesDialogYes)) {
+            if ctx.button(
+                "yes",
+                loc(LocId::UnsavedChangesDialogYes),
+                ButtonStyle::default().accelerator('S'),
+            ) {
                 action = Action::Save;
             }
             ctx.inherit_focus();
-            if ctx.button("no", loc(LocId::UnsavedChangesDialogNo)) {
+            if ctx.button(
+                "no",
+                loc(LocId::UnsavedChangesDialogNo),
+                ButtonStyle::default().accelerator('N'),
+            ) {
                 action = Action::Discard;
             }
-            if ctx.button("cancel", loc(LocId::Cancel)) {
+            if ctx.button("cancel", loc(LocId::Cancel), ButtonStyle::default()) {
                 action = Action::Cancel;
             }
 
-            // TODO: This should highlight the corresponding letter in the label.
-            if ctx.consume_shortcut(vk::S) {
-                action = Action::Save;
-            } else if ctx.consume_shortcut(vk::N) {
-                action = Action::Discard;
+            // Handle accelerator shortcuts
+            if contains_focus {
+                if ctx.consume_shortcut(vk::S) {
+                    action = Action::Save;
+                } else if ctx.consume_shortcut(vk::N) {
+                    action = Action::Discard;
+                }
             }
         }
         ctx.table_end();
@@ -270,4 +285,58 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
 
     state.wants_close = false;
     ctx.toss_focus_up();
+}
+
+pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
+    let mut done = false;
+
+    if let Some(doc) = state.documents.active_mut() {
+        ctx.modal_begin("goto", loc(LocId::FileGoto));
+        {
+            if ctx.editline("goto-line", &mut state.goto_target) {
+                state.goto_invalid = false;
+            }
+            if state.goto_invalid {
+                ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+            }
+
+            ctx.attr_intrinsic_size(Size { width: 24, height: 1 });
+            ctx.steal_focus();
+
+            if ctx.consume_shortcut(vk::RETURN) {
+                match validate_goto_point(&state.goto_target) {
+                    Ok(point) => {
+                        let mut buf = doc.buffer.borrow_mut();
+                        buf.cursor_move_to_logical(point);
+                        buf.make_cursor_visible();
+                        done = true;
+                    }
+                    Err(_) => state.goto_invalid = true,
+                }
+                ctx.needs_rerender();
+            }
+        }
+        done |= ctx.modal_end();
+    } else {
+        done = true;
+    }
+
+    if done {
+        state.wants_goto = false;
+        state.goto_target.clear();
+        state.goto_invalid = false;
+        ctx.needs_rerender();
+    }
+}
+
+fn validate_goto_point(line: &str) -> Result<Point, ParseIntError> {
+    let mut coords = [0; 2];
+    let (y, x) = line.split_once(':').unwrap_or((line, "0"));
+    // Using a loop here avoids 2 copies of the str->int code.
+    // This makes the binary more compact.
+    for (i, s) in [x, y].iter().enumerate() {
+        coords[i] = s.parse::<CoordType>()?.saturating_sub(1);
+    }
+    Ok(Point { x: coords[0], y: coords[1] })
 }

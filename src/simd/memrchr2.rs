@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn test_page_boundary() {
         let page = unsafe {
-            const PAGE_SIZE: usize = 64 * 1024;  // 64 KiB to cover many architectures.
+            const PAGE_SIZE: usize = 64 * 1024; // 64 KiB to cover many architectures.
 
             // 3 pages: uncommitted, committed, uncommitted
             let ptr = sys::virtual_reserve(PAGE_SIZE * 3).unwrap();

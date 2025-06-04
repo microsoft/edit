@@ -397,6 +397,21 @@ pub fn open_stdin_if_redirected() -> Option<File> {
     }
 }
 
+pub fn drives() -> impl Iterator<Item = char> {
+    unsafe {
+        let mut mask = FileSystem::GetLogicalDrives();
+        std::iter::from_fn(move || {
+            let bit = mask.trailing_zeros();
+            if bit >= 26 {
+                None
+            } else {
+                mask &= !(1 << bit);
+                Some((b'A' + bit as u8) as char)
+            }
+        })
+    }
+}
+
 /// A unique identifier for a file.
 pub enum FileId {
     Id(FileSystem::FILE_ID_INFO),
@@ -406,14 +421,14 @@ pub enum FileId {
 impl PartialEq for FileId {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (FileId::Id(left), FileId::Id(right)) => {
+            (Self::Id(left), Self::Id(right)) => {
                 // Lowers to an efficient word-wise comparison.
                 const SIZE: usize = std::mem::size_of::<FileSystem::FILE_ID_INFO>();
                 let a: &[u8; SIZE] = unsafe { mem::transmute(left) };
                 let b: &[u8; SIZE] = unsafe { mem::transmute(right) };
                 a == b
             }
-            (FileId::Path(left), FileId::Path(right)) => left == right,
+            (Self::Path(left), Self::Path(right)) => left == right,
             _ => false,
         }
     }
@@ -500,9 +515,11 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
 ///
 /// This function is unsafe because it uses raw pointers.
 /// Make sure to only pass pointers acquired from [`virtual_reserve`].
-pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
+pub unsafe fn virtual_release(base: NonNull<u8>, _size: usize) {
     unsafe {
-        Memory::VirtualFree(base.as_ptr() as *mut _, size, Memory::MEM_RELEASE);
+        // NOTE: `VirtualFree` fails if the pointer isn't
+        // a valid base address or if the size isn't zero.
+        Memory::VirtualFree(base.as_ptr() as *mut _, 0, Memory::MEM_RELEASE);
     }
 }
 

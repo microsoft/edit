@@ -34,7 +34,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::str;
 
-use gap_buffer::GapBuffer;
+pub use gap_buffer::GapBuffer;
 
 use crate::arena::{ArenaString, scratch_arena};
 use crate::cell::SemiRefCell;
@@ -204,6 +204,7 @@ pub struct TextBuffer {
     ruler: CoordType,
     encoding: &'static str,
     newlines_are_crlf: bool,
+    insert_final_newline: bool,
     overtype: bool,
 
     wants_cursor_visibility: bool,
@@ -213,7 +214,7 @@ impl TextBuffer {
     /// Creates a new text buffer inside an [`Rc`].
     /// See [`TextBuffer::new()`].
     pub fn new_rc(small: bool) -> apperr::Result<RcTextBuffer> {
-        let buffer = TextBuffer::new(small)?;
+        let buffer = Self::new(small)?;
         Ok(Rc::new(SemiRefCell::new(buffer)))
     }
 
@@ -249,7 +250,8 @@ impl TextBuffer {
             line_highlight_enabled: false,
             ruler: 0,
             encoding: "UTF-8",
-            newlines_are_crlf: cfg!(windows), // Unfortunately Windows users insist on CRLF
+            newlines_are_crlf: cfg!(windows), // Windows users want CRLF
+            insert_final_newline: false,
             overtype: false,
 
             wants_cursor_visibility: false,
@@ -310,6 +312,11 @@ impl TextBuffer {
     /// The newline type used in the document. LF or CRLF.
     pub fn is_crlf(&self) -> bool {
         self.newlines_are_crlf
+    }
+
+    /// Changes the newline type without normalizing the document.
+    pub fn set_crlf(&mut self, crlf: bool) {
+        self.newlines_are_crlf = crlf;
     }
 
     /// Changes the newline type used in the document.
@@ -379,6 +386,12 @@ impl TextBuffer {
         }
 
         self.newlines_are_crlf = crlf;
+    }
+
+    /// If enabled, automatically insert a final newline
+    /// when typing at the end of the file.
+    pub fn set_insert_final_newline(&mut self, enabled: bool) {
+        self.insert_final_newline = enabled;
     }
 
     /// Whether to insert or overtype text when writing.
@@ -621,6 +634,7 @@ impl TextBuffer {
         // * the logical line count
         // * the newline type (LF or CRLF)
         // * the indentation type (tabs or spaces)
+        // * whether there's a final newline
         {
             let chunk = self.read_forward(0);
             let mut offset = 0;
@@ -711,10 +725,13 @@ impl TextBuffer {
                 (_, lines) = unicode::newlines_forward(chunk, offset, lines, CoordType::MAX);
             }
 
+            let final_newline = chunk.ends_with(b"\n");
+
             // Add 1, because the last line doesn't end in a newline (it ends in the literal end).
             self.stats.logical_lines = lines + 1;
             self.stats.visual_lines = self.stats.logical_lines;
             self.newlines_are_crlf = newlines_are_crlf;
+            self.insert_final_newline = final_newline;
             self.indent_with_tabs = indent_with_tabs;
             self.tab_size = tab_size;
         }
@@ -903,9 +920,14 @@ impl TextBuffer {
     }
 
     fn set_selection(&mut self, selection: Option<TextBufferSelection>) -> u32 {
-        self.selection = selection;
+        self.selection = selection.filter(|s| s.beg != s.end);
         self.selection_generation = self.selection_generation.wrapping_add(1);
         self.selection_generation
+    }
+
+    /// Moves the cursor by `offset` and updates the selection to contain it.
+    pub fn selection_update_offset(&mut self, offset: usize) {
+        self.set_cursor_for_selection(self.cursor_move_to_offset_internal(self.cursor, offset));
     }
 
     /// Moves the cursor to `visual_pos` and updates the selection to contain it.
@@ -1083,6 +1105,10 @@ impl TextBuffer {
         pattern: &str,
         options: SearchOptions,
     ) -> apperr::Result<ActiveSearch> {
+        if pattern.is_empty() {
+            return Err(apperr::Error::Icu(1)); // U_ILLEGAL_ARGUMENT_ERROR
+        }
+
         let sanitized_pattern = if options.whole_word && options.use_regex {
             Cow::Owned(format!(r"\b(?:{pattern})\b"))
         } else if options.whole_word {
@@ -1136,11 +1162,10 @@ impl TextBuffer {
 
     fn find_select_next(&mut self, search: &mut ActiveSearch, offset: usize, wrap: bool) {
         if search.buffer_generation != self.buffer.generation() {
-            unsafe { search.regex.set_text(&search.text) };
+            unsafe { search.regex.set_text(&mut search.text, offset) };
             search.buffer_generation = self.buffer.generation();
-        }
-
-        if search.next_search_offset != offset {
+            search.next_search_offset = offset;
+        } else if search.next_search_offset != offset {
             search.next_search_offset = offset;
             search.regex.reset(offset);
         }
@@ -1241,7 +1266,7 @@ impl TextBuffer {
                 self.measurement_config().with_cursor(top).goto_logical(bottom.logical_pos);
 
             // The second problem is that visual positions can be ambiguous. A single logical position
-            // can map to two visual positions: One at the end of the preceeding line in front of
+            // can map to two visual positions: One at the end of the preceding line in front of
             // a word wrap, and another at the start of the next line after the same word wrap.
             //
             // This, however, only applies if we go upwards, because only then `bottom ≅ cursor`,
@@ -1322,11 +1347,11 @@ impl TextBuffer {
 
         if self.word_wrap_column <= 0 {
             // Identical to the fast-pass in `cursor_move_to_logical_internal()`.
-            if pos.y != cursor.logical_pos.y || pos.x < cursor.logical_pos.x {
+            if pos.y != cursor.visual_pos.y || pos.x < cursor.visual_pos.x {
                 cursor = self.goto_line_start(cursor, pos.y);
             }
         } else {
-            // `goto_visual()` can only seek foward, so we need to seek backward here if needed.
+            // `goto_visual()` can only seek forward, so we need to seek backward here if needed.
             // NOTE that this intentionally doesn't use the `Eq` trait of `Point`, because if
             // `pos.y == cursor.visual_pos.y` we don't need to go to `cursor.logical_pos.y - 1`.
             while pos.y < cursor.visual_pos.y {
@@ -1895,6 +1920,22 @@ impl TextBuffer {
             }
         }
 
+        // POSIX mandates that all valid lines end in a newline.
+        // This isn't all that common on Windows and so we have
+        // `self.final_newline` to control this.
+        //
+        // In order to not annoy people with this, we only add a
+        // newline if you just edited the very end of the buffer.
+        if self.insert_final_newline
+            && self.cursor.offset > 0
+            && self.cursor.offset == self.text_length()
+            && self.cursor.logical_pos.x > 0
+        {
+            let cursor = self.cursor;
+            self.edit_write(if self.newlines_are_crlf { b"\r\n" } else { b"\n" });
+            self.set_cursor_internal(cursor);
+        }
+
         self.edit_end();
     }
 
@@ -1904,7 +1945,9 @@ impl TextBuffer {
     /// The selection is cleared after the call.
     /// Deletes characters from the buffer based on a delta from the cursor.
     pub fn delete(&mut self, granularity: CursorMovement, delta: CoordType) {
-        debug_assert!(delta == -1 || delta == 1);
+        if delta == 0 {
+            return;
+        }
 
         let mut beg;
         let mut end;
@@ -1912,8 +1955,8 @@ impl TextBuffer {
         if let Some(r) = self.selection_range_internal(false) {
             (beg, end) = r;
         } else {
-            if (delta == -1 && self.cursor.offset == 0)
-                || (delta == 1 && self.cursor.offset >= self.text_length())
+            if (delta < 0 && self.cursor.offset == 0)
+                || (delta > 0 && self.cursor.offset >= self.text_length())
             {
                 // Nothing to delete.
                 return;
@@ -1983,7 +2026,7 @@ impl TextBuffer {
         let end = self.cursor_move_to_logical_internal(beg, Point { x: CoordType::MAX, y: end.y });
 
         let mut replacement = Vec::new();
-        self.buffer.extract_raw(beg.offset, end.offset, &mut replacement, 0);
+        self.buffer.extract_raw(beg.offset..end.offset, &mut replacement, 0);
 
         let initial_len = replacement.len();
         let mut offset = 0;
@@ -2047,7 +2090,7 @@ impl TextBuffer {
         };
 
         let mut out = Vec::new();
-        self.buffer.extract_raw(beg.offset, end.offset, &mut out, 0);
+        self.buffer.extract_raw(beg.offset..end.offset, &mut out, 0);
 
         if delete && !out.is_empty() {
             self.edit_begin(HistoryType::Delete, beg);
@@ -2194,7 +2237,7 @@ impl TextBuffer {
 
         // Copy the deleted portion into the undo entry.
         let deleted = &mut undo.deleted;
-        self.buffer.extract_raw(off, to.offset, deleted, out_off);
+        self.buffer.extract_raw(off..to.offset, deleted, out_off);
 
         // Delete the portion from the buffer by enlarging the gap.
         let count = to.offset - off;

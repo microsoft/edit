@@ -223,8 +223,8 @@ pub fn read_input() -> Option<Input<'static>> {
             STATE.inject_resize = false;
             let t = get_window_size();
             Some(Input::Resize(Size {
-                width: t.0 as i32,
-                height: t.1 as i32,
+                width: t.0 as isize,
+                height: t.1 as isize,
             }))
         } else {
             transform_single_key(&wait_and_read_single_key_ex()?)

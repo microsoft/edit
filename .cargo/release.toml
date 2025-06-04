@@ -20,7 +20,4 @@ rustflags = [
 # = Huge reduction in binary size by removing all that.
 [unstable]
 build-std = ["std", "panic_abort"]
-build-std-features = ["panic_immediate_abort"]
-
-[build]
-target = "x86_64-unknown-uefi"
+build-std-features = ["panic_immediate_abort", "optimize_for_size"]

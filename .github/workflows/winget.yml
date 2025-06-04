@@ -1,0 +1,31 @@
+name: Submit release to the WinGet community repository
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish-winget:
+    name: Submit to WinGet repository
+
+    # winget-create is only supported on Windows
+    runs-on: windows-latest
+
+    # Only submit stable releases
+    if: ${{ !github.event.release.prerelease }}
+    steps:
+      - name: Submit package using wingetcreate
+        run: |
+          # Get installer info from release event
+          $assets = '${{ toJSON(github.event.release.assets) }}' | ConvertFrom-Json
+          $x64InstallerUrl = $assets | Where-Object -Property name -like '*x86_64-windows.zip' | Select-Object -ExpandProperty browser_download_url
+          $arm64InstallerUrl = $assets | Where-Object -Property name -like '*aarch64-windows.zip' | Select-Object -ExpandProperty browser_download_url
+          $packageVersion = (${{ toJSON(github.event.release.tag_name) }}).Trim('v')
+
+          # Update package using wingetcreate
+          curl.exe -JLO https://aka.ms/wingetcreate/latest
+          .\wingetcreate.exe update Microsoft.Edit `
+            --version $packageVersion `
+            --urls $x64InstallerUrl $arm64InstallerUrl `
+            --token "${{ secrets.WINGET_TOKEN }}" `
+            --submit

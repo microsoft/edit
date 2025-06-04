@@ -1,6 +1,6 @@
 [package]
 name = "edit"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.87"
 repository = "https://github.com/microsoft/edit"
@@ -12,7 +12,6 @@ name = "lib"
 harness = false
 
 [features]
-debug-layout = []
 debug-latency = []
 
 # We use `opt-level = "s"` as it significantly reduces binary size.
@@ -44,7 +43,7 @@ r-efi = { version = "5.2.0" }
 libc = "0.2"
 
 [target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
+winresource = "0.1.22"
 
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.59"
@@ -61,4 +60,7 @@ features = [
 ]
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.6", features = ["html_reports"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+zstd = { version = "0.13", default-features = false }
