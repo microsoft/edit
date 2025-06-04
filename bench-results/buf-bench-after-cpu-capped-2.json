@@ -1,0 +1,115 @@
+{
+  "name": "buf-bench-after-cpu-capped-2",
+  "benchmarks": {
+    "buffer/GapBuffer/rustcode": {
+      "baseline": "buf-bench-after-cpu-capped-2",
+      "fullname": "buf-bench-after-cpu-capped-2/buffer/GapBuffer/rustcode",
+      "criterion_benchmark_v1": {
+        "group_id": "buffer",
+        "function_id": "GapBuffer",
+        "value_str": "rustcode",
+        "throughput": null,
+        "full_id": "buffer/GapBuffer/rustcode",
+        "directory_name": "buffer/gapbuffer/rustcode"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1002387.879621368,
+            "upper_bound": 1042834.2386286592
+          },
+          "point_estimate": 1021528.172379659,
+          "standard_error": 10342.74325689895
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 966981.25,
+            "upper_bound": 1027100.0
+          },
+          "point_estimate": 990083.125,
+          "standard_error": 14454.196716413988
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 51060.80753606801,
+            "upper_bound": 103222.79418765791
+          },
+          "point_estimate": 77122.13939469721,
+          "standard_error": 12466.576484025582
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1001834.9233758356,
+            "upper_bound": 1072503.092923103
+          },
+          "point_estimate": 1034671.8912368848,
+          "standard_error": 18061.99940679013
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 73857.35409670675,
+            "upper_bound": 131689.62799860444
+          },
+          "point_estimate": 103700.49747103229,
+          "standard_error": 14900.83822680182
+        }
+      }
+    },
+    "buffer/TextBuffer/rustcode": {
+      "baseline": "buf-bench-after-cpu-capped-2",
+      "fullname": "buf-bench-after-cpu-capped-2/buffer/TextBuffer/rustcode",
+      "criterion_benchmark_v1": {
+        "group_id": "buffer",
+        "function_id": "TextBuffer",
+        "value_str": "rustcode",
+        "throughput": null,
+        "full_id": "buffer/TextBuffer/rustcode",
+        "directory_name": "buffer/textbuffer/rustcode"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 19510866.191666663,
+            "upper_bound": 20088211.899999995
+          },
+          "point_estimate": 19784631.999999996,
+          "standard_error": 146921.0540019836
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 19101233.333333336,
+            "upper_bound": 19486850.0
+          },
+          "point_estimate": 19273700.0,
+          "standard_error": 85445.61227909612
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 514979.86535727984,
+            "upper_bound": 1060824.9911665935
+          },
+          "point_estimate": 687852.2577881813,
+          "standard_error": 137686.7786703265
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1062811.736448924,
+            "upper_bound": 1856235.51316822
+          },
+          "point_estimate": 1482849.6146176518,
+          "standard_error": 203371.85677824717
+        }
+      }
+    }
+  }
+}

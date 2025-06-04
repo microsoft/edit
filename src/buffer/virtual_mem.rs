@@ -1,62 +1,8 @@
-use std::alloc::{AllocError, Allocator, Layout};
 use std::ops::{self, Deref, DerefMut, Range, RangeBounds};
 use std::ptr::{self, NonNull};
 use std::slice;
 
 use crate::{apperr, sys};
-
-// TODO: It's very possible the Allocator API implementation for the sys allocator is no longer needed
-
-/// The virtual system allocator backed by [`VirtualAlloc`](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc).
-pub static VALLOCATOR: VirtualAllocator = VirtualAllocator;
-
-#[derive(Debug, Clone, Copy)]
-pub struct VirtualAllocator;
-
-unsafe impl Allocator for VirtualAllocator {
-    /// Attempts to allocate a block of virtual memory.
-    ///
-    /// On success, returns a [`NonNull<[u8]>`][NonNull] meeting the size and alignment guarantees of `layout`.
-    ///
-    /// The returned block may have a larger size than specified by `layout.size()`, and may or may
-    /// not have its contents initialized.
-    ///
-    /// The returned block of memory remains valid as long as it is [*currently allocated*] and the shorter of:
-    ///   - the borrow-checker lifetime of the allocator type itself.
-    ///   - as long as at the allocator and all its clones has not been dropped.
-    ///
-    /// # Warning
-    /// The returned block of memory has not been commited. Attempting to use the block of memory without commiting it will cause a `STATUS_ACCESS_VIOLATION`.
-    ///
-    /// # Errors
-    ///
-    /// Returning `Err` indicates that either memory is exhausted or `layout` does not meet
-    /// allocator's size or alignment constraints.
-    ///
-    /// Implementations are encouraged to return `Err` on memory exhaustion rather than panicking or
-    /// aborting, but this is not a strict requirement. (Specifically: it is *legal* to implement
-    /// this trait atop an underlying native allocation library that aborts on memory exhaustion.)
-    ///
-    /// Clients wishing to abort computation in response to an allocation error are encouraged to
-    /// call the [`handle_alloc_error`] function, rather than directly invoking `panic!` or similar.
-    ///
-    /// [`handle_alloc_error`]: ../../alloc/alloc/fn.handle_alloc_error.html
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let size = layout.size();
-        unsafe {
-            match sys::virtual_reserve(size) {
-                Ok(ptr) => {
-                    Ok(NonNull::new_unchecked(ptr::slice_from_raw_parts_mut(ptr.as_ptr(), size)))
-                }
-                Err(_) => Err(AllocError),
-            }
-        }
-    }
-
-    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        unsafe { sys::virtual_release(ptr, layout.size()) };
-    }
-}
 
 /// A smart pointer to a virtual memory allocation from [`VirtualAlloc`].
 ///
@@ -83,17 +29,25 @@ impl VirtualMemory {
     /// Create a new block of virtual memory.
     pub unsafe fn new(size: usize) -> Self {
         // The align is one because `T` is a byte
-        let ptr = unsafe { sys::virtual_reserve(size).unwrap() };
-
-        // let p = NonNull::new_unchecked(ptr::slice_from_raw_parts_mut(ptr.as_ptr(), size));
-
-        Self { ptr, size, commited: 0 }
+        Self { ptr: unsafe { sys::virtual_reserve(size).unwrap() }, size, commited: 0 }
     }
 
-    /// Commit another `size` bytes. Return a result indicating success
+    /// Commit another `size` bytes. Return a result indicating success.
     pub unsafe fn commit(&mut self, size: usize) -> apperr::Result<()> {
-        // TODO: Add check the range is contained within the allocation
-        unsafe { sys::virtual_commit(self.ptr.add(self.commited), size) }
+        // Check the range is contained within the allocation
+        // TODO: this might be redundant since commit also checks if it's a legal commit
+        // It also seems to substantially slow down the function so omit for now
+        // assert!(
+        //     self.size >= self.len() + size,
+        //     "Index {} is greater than the allocation {}.",
+        //     self.len() + size,
+        //     self.size
+        // );
+
+        let out = unsafe { sys::virtual_commit(self.ptr.add(self.commited), size) };
+        // Update commited
+        self.commited += size;
+        out
     }
 
     /// This method is based on [`slice::copy_within`](https://doc.rust-lang.org/src/core/slice/mod.rs.html#3792-3794).

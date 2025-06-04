@@ -1,14 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::alloc::{Allocator, Layout};
 use std::ops::Range;
-use std::ptr::NonNull;
 
-use super::virtual_mem::{VALLOCATOR, VirtualAllocator, VirtualMemory};
+use super::virtual_mem::VirtualMemory;
+use crate::apperr;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::helpers::*;
-use crate::{apperr, sys};
 
 #[cfg(target_pointer_width = "32")]
 const LARGE_CAPACITY: usize = 128 * MEBI;
@@ -208,13 +206,7 @@ impl GapBuffer {
 
             match &mut self.buffer {
                 BackingBuffer::VirtualMemory(buf) => unsafe {
-                    if buf.commit(bytes_new - bytes_old).is_err()
-                    // if sys::virtual_commit(
-                    //     NonNull::new_unchecked(buf.as_mut_ptr()).add(bytes_old),
-                    //     bytes_new - bytes_old,
-                    // )
-                    // .is_err()
-                    {
+                    if buf.commit(bytes_new - bytes_old).is_err() {
                         return;
                     }
                 },
@@ -229,14 +221,14 @@ impl GapBuffer {
         // When the gap expands, it will consume the contents bordering it.
         // Those contents need to be moved out of the newly enlarged gap
         let gap_end_old = self.gap_off + gap_len_old;
-        let gap_len_new = self.gap_off + gap_len_new;
+        let gap_end_new = self.gap_off + gap_len_new;
         let buf_contents_len = self.text_length - self.gap_off;
         match &mut self.buffer {
             BackingBuffer::VirtualMemory(buf) => {
-                buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_len_new);
+                buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_end_new);
             }
             BackingBuffer::Vec(buf) => {
-                buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_len_new);
+                buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_end_new);
             }
         };
 

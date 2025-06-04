@@ -1,0 +1,1349 @@
+{
+  "name": "buf-bench-after",
+  "benchmarks": {
+    "buffer/GapBuffer/rustcode": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/buffer/GapBuffer/rustcode",
+      "criterion_benchmark_v1": {
+        "group_id": "buffer",
+        "function_id": "GapBuffer",
+        "value_str": "rustcode",
+        "throughput": null,
+        "full_id": "buffer/GapBuffer/rustcode",
+        "directory_name": "buffer/gapbuffer/rustcode"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 661604.4515138062,
+            "upper_bound": 672278.6045192363
+          },
+          "point_estimate": 666691.3877416258,
+          "standard_error": 2730.599160056713
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 655701.3157894737,
+            "upper_bound": 664344.0
+          },
+          "point_estimate": 659371.3794926004,
+          "standard_error": 2093.8145731461696
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 11307.057073331527,
+            "upper_bound": 21308.42594055227
+          },
+          "point_estimate": 14450.995112295954,
+          "standard_error": 2507.278362529079
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 659918.750890489,
+            "upper_bound": 673393.8150006392
+          },
+          "point_estimate": 665896.2800354662,
+          "standard_error": 3457.492629843259
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 20268.02475013371,
+            "upper_bound": 33242.3305347351
+          },
+          "point_estimate": 27335.71652180324,
+          "standard_error": 3306.9099514779837
+        }
+      }
+    },
+    "buffer/TextBuffer/rustcode": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/buffer/TextBuffer/rustcode",
+      "criterion_benchmark_v1": {
+        "group_id": "buffer",
+        "function_id": "TextBuffer",
+        "value_str": "rustcode",
+        "throughput": null,
+        "full_id": "buffer/TextBuffer/rustcode",
+        "directory_name": "buffer/textbuffer/rustcode"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 13296770.20625,
+            "upper_bound": 13455038.05
+          },
+          "point_estimate": 13371287.25,
+          "standard_error": 40532.11093253527
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 13214625.0,
+            "upper_bound": 13309050.0
+          },
+          "point_estimate": 13262350.0,
+          "standard_error": 23802.906509992896
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 199076.11146569252,
+            "upper_bound": 326468.51420402527
+          },
+          "point_estimate": 258120.65541744232,
+          "standard_error": 30339.431660433085
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 279855.8456533916,
+            "upper_bound": 525665.0379486386
+          },
+          "point_estimate": 407854.91812168696,
+          "standard_error": 63381.34445707003
+        }
+      }
+    },
+    "hash/hash/1024": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/hash/hash/1024",
+      "criterion_benchmark_v1": {
+        "group_id": "hash",
+        "function_id": "hash",
+        "value_str": "1024",
+        "throughput": {
+          "Bytes": 1024,
+          "Elements": null
+        },
+        "full_id": "hash/hash/1024",
+        "directory_name": "hash/hash/1024"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 28.48246150433288,
+            "upper_bound": 29.226024306411276
+          },
+          "point_estimate": 28.83403882816905,
+          "standard_error": 0.19044555025961676
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 28.108621131125012,
+            "upper_bound": 28.525393864245387
+          },
+          "point_estimate": 28.25736160944514,
+          "standard_error": 0.11526077547972811
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.8198430941705179,
+            "upper_bound": 1.3238718625337644
+          },
+          "point_estimate": 1.0780037754175027,
+          "standard_error": 0.12650202316266052
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 28.276952232836873,
+            "upper_bound": 29.408289214447706
+          },
+          "point_estimate": 28.80381715774252,
+          "standard_error": 0.29034693125522765
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.364678970799562,
+            "upper_bound": 2.431015655659509
+          },
+          "point_estimate": 1.923474499667322,
+          "standard_error": 0.2737766788955964
+        }
+      }
+    },
+    "hash/hash/16": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/hash/hash/16",
+      "criterion_benchmark_v1": {
+        "group_id": "hash",
+        "function_id": "hash",
+        "value_str": "16",
+        "throughput": {
+          "Bytes": 16,
+          "Elements": null
+        },
+        "full_id": "hash/hash/16",
+        "directory_name": "hash/hash/16"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.8558515265839004,
+            "upper_bound": 1.8897002138029544
+          },
+          "point_estimate": 1.8706162954683396,
+          "standard_error": 0.008709519701831186
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.840918769409124,
+            "upper_bound": 1.8559669592831227
+          },
+          "point_estimate": 1.8477244865273272,
+          "standard_error": 0.0039334549332204665
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.025404667765905515,
+            "upper_bound": 0.04410820655826429
+          },
+          "point_estimate": 0.03526180277636503,
+          "standard_error": 0.004621996772593917
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.8435825368830625,
+            "upper_bound": 1.8600424125404245
+          },
+          "point_estimate": 1.8513504384214912,
+          "standard_error": 0.004202786187787014
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.0388800481576063,
+            "upper_bound": 0.1319015482250362
+          },
+          "point_estimate": 0.08760515923477745,
+          "standard_error": 0.02522578777295084
+        }
+      }
+    },
+    "hash/hash/8": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/hash/hash/8",
+      "criterion_benchmark_v1": {
+        "group_id": "hash",
+        "function_id": "hash",
+        "value_str": "8",
+        "throughput": {
+          "Bytes": 8,
+          "Elements": null
+        },
+        "full_id": "hash/hash/8",
+        "directory_name": "hash/hash/8"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.8528850528691991,
+            "upper_bound": 1.874382260306292
+          },
+          "point_estimate": 1.8630402883301471,
+          "standard_error": 0.005492348222921278
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.839105786395584,
+            "upper_bound": 1.8543362533686585
+          },
+          "point_estimate": 1.847000401840616,
+          "standard_error": 0.003620543365542457
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.02881265189587632,
+            "upper_bound": 0.0475018526634596
+          },
+          "point_estimate": 0.03887701084917874,
+          "standard_error": 0.004596160467558457
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.8489595196581303,
+            "upper_bound": 1.8680931348047711
+          },
+          "point_estimate": 1.8583625309523315,
+          "standard_error": 0.004898679562203562
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.03984193163733121,
+            "upper_bound": 0.06868344086773656
+          },
+          "point_estimate": 0.05511338007881784,
+          "standard_error": 0.007396385713399813
+        }
+      }
+    },
+    "oklab/oklab_blend": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/oklab/oklab_blend",
+      "criterion_benchmark_v1": {
+        "group_id": "oklab",
+        "function_id": "oklab_blend",
+        "value_str": null,
+        "throughput": null,
+        "full_id": "oklab/oklab_blend",
+        "directory_name": "oklab/oklab_blend"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 53.72736358114262,
+            "upper_bound": 54.25694552268539
+          },
+          "point_estimate": 53.97073574910834,
+          "standard_error": 0.13508333380286924
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 53.37015833922071,
+            "upper_bound": 53.70647288809804
+          },
+          "point_estimate": 53.54936443650142,
+          "standard_error": 0.07658320363005335
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.3654696612264463,
+            "upper_bound": 0.7625551904018192
+          },
+          "point_estimate": 0.5642399489000545,
+          "standard_error": 0.0918952141250247
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 53.68370914510804,
+            "upper_bound": 54.19921188463965
+          },
+          "point_estimate": 53.925101607087946,
+          "standard_error": 0.13177877359488763
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.7993600766278244,
+            "upper_bound": 1.864544216430508
+          },
+          "point_estimate": 1.3554504816742616,
+          "standard_error": 0.27515692413793225
+        }
+      }
+    },
+    "oklab/srgb_to_oklab": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/oklab/srgb_to_oklab",
+      "criterion_benchmark_v1": {
+        "group_id": "oklab",
+        "function_id": "srgb_to_oklab",
+        "value_str": null,
+        "throughput": null,
+        "full_id": "oklab/srgb_to_oklab",
+        "directory_name": "oklab/srgb_to_oklab"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 6.742558112721414,
+            "upper_bound": 6.834198331187388
+          },
+          "point_estimate": 6.786703446943019,
+          "standard_error": 0.023360733129848363
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 6.680952118484788,
+            "upper_bound": 6.787114429041495
+          },
+          "point_estimate": 6.746530665412418,
+          "standard_error": 0.026964940573580544
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.1569717938654712,
+            "upper_bound": 0.2722403386469603
+          },
+          "point_estimate": 0.22032675029045057,
+          "standard_error": 0.031146246278876556
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 6.7070839196380545,
+            "upper_bound": 6.802921052728872
+          },
+          "point_estimate": 6.751974584276018,
+          "standard_error": 0.024359051369093568
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.1860004680833349,
+            "upper_bound": 0.2798339949882181
+          },
+          "point_estimate": 0.2350250652017515,
+          "standard_error": 0.02394123685576825
+        }
+      }
+    },
+    "simd/memchr2/1032": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/simd/memchr2/1032",
+      "criterion_benchmark_v1": {
+        "group_id": "simd",
+        "function_id": "memchr2",
+        "value_str": "1032",
+        "throughput": {
+          "Bytes": 1033,
+          "Elements": null
+        },
+        "full_id": "simd/memchr2/1032",
+        "directory_name": "simd/memchr2/1032"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 16.248128070929024,
+            "upper_bound": 16.405965831827636
+          },
+          "point_estimate": 16.320515795179066,
+          "standard_error": 0.04037257449621059
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 16.150992297000023,
+            "upper_bound": 16.303050825419835
+          },
+          "point_estimate": 16.21178639887487,
+          "standard_error": 0.04116332329487315
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.18404225970378205,
+            "upper_bound": 0.3256134671481991
+          },
+          "point_estimate": 0.24624909032406492,
+          "standard_error": 0.03614572929370219
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 16.205845319053818,
+            "upper_bound": 16.378881104657605
+          },
+          "point_estimate": 16.279968509111665,
+          "standard_error": 0.04440997256387206
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.2532946178056695,
+            "upper_bound": 0.5710193741725942
+          },
+          "point_estimate": 0.40626357714785294,
+          "standard_error": 0.0885147800691353
+        }
+      }
+    },
+    "simd/memchr2/40": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/simd/memchr2/40",
+      "criterion_benchmark_v1": {
+        "group_id": "simd",
+        "function_id": "memchr2",
+        "value_str": "40",
+        "throughput": {
+          "Bytes": 41,
+          "Elements": null
+        },
+        "full_id": "simd/memchr2/40",
+        "directory_name": "simd/memchr2/40"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3.759318075613125,
+            "upper_bound": 3.803526296892168
+          },
+          "point_estimate": 3.7792513915012207,
+          "standard_error": 0.011284839152747658
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3.737825776234041,
+            "upper_bound": 3.7554850021072848
+          },
+          "point_estimate": 3.747076933221272,
+          "standard_error": 0.003977650389856772
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.03323212051401534,
+            "upper_bound": 0.05798966446431
+          },
+          "point_estimate": 0.04758572048752536,
+          "standard_error": 0.0064258359009793506
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3.7476883743000258,
+            "upper_bound": 3.7894117782824233
+          },
+          "point_estimate": 3.766312511243013,
+          "standard_error": 0.010749741130618011
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.06497624718677686,
+            "upper_bound": 0.16042975708589957
+          },
+          "point_estimate": 0.11314157507959084,
+          "standard_error": 0.025639051070273183
+        }
+      }
+    },
+    "simd/memchr2/72": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/simd/memchr2/72",
+      "criterion_benchmark_v1": {
+        "group_id": "simd",
+        "function_id": "memchr2",
+        "value_str": "72",
+        "throughput": {
+          "Bytes": 73,
+          "Elements": null
+        },
+        "full_id": "simd/memchr2/72",
+        "directory_name": "simd/memchr2/72"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4.048206751944136,
+            "upper_bound": 4.0809660927876905
+          },
+          "point_estimate": 4.064097574390926,
+          "standard_error": 0.008378824122021424
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4.024892789067956,
+            "upper_bound": 4.06373550190183
+          },
+          "point_estimate": 4.04009725583226,
+          "standard_error": 0.01074828424237792
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.05114459943067354,
+            "upper_bound": 0.08679148809466365
+          },
+          "point_estimate": 0.06858068820610279,
+          "standard_error": 0.009034415929592416
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4.051216405490705,
+            "upper_bound": 4.092537027221217
+          },
+          "point_estimate": 4.070874454565078,
+          "standard_error": 0.010539293535485331
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.06526491061384569,
+            "upper_bound": 0.10181187963144656
+          },
+          "point_estimate": 0.08405078062891007,
+          "standard_error": 0.009377042804804937
+        }
+      }
+    },
+    "simd/memchr2/8": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/simd/memchr2/8",
+      "criterion_benchmark_v1": {
+        "group_id": "simd",
+        "function_id": "memchr2",
+        "value_str": "8",
+        "throughput": {
+          "Bytes": 9,
+          "Elements": null
+        },
+        "full_id": "simd/memchr2/8",
+        "directory_name": "simd/memchr2/8"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3.401665880343845,
+            "upper_bound": 3.4307291227385694
+          },
+          "point_estimate": 3.41552688010567,
+          "standard_error": 0.007419531774991899
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3.382908034580528,
+            "upper_bound": 3.402089569704244
+          },
+          "point_estimate": 3.393332161891978,
+          "standard_error": 0.005307956326834717
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.03719717936418647,
+            "upper_bound": 0.06618831985814262
+          },
+          "point_estimate": 0.05346486176994143,
+          "standard_error": 0.007518990147925518
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3.3972420982428515,
+            "upper_bound": 3.43248754586512
+          },
+          "point_estimate": 3.414012257516755,
+          "standard_error": 0.009056264688817402
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.055255714351040264,
+            "upper_bound": 0.0931093661803894
+          },
+          "point_estimate": 0.07474884362972217,
+          "standard_error": 0.00972970217357259
+        }
+      }
+    },
+    "simd/memset<u32>/1032": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/simd/memset<u32>/1032",
+      "criterion_benchmark_v1": {
+        "group_id": "simd",
+        "function_id": "memset<u32>",
+        "value_str": "1032",
+        "throughput": {
+          "Bytes": 1032,
+          "Elements": null
+        },
+        "full_id": "simd/memset<u32>/1032",
+        "directory_name": "simd/memset_u32_/1032"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4.460287097171179,
+            "upper_bound": 4.502096027265259
+          },
+          "point_estimate": 4.48041028216978,
+          "standard_error": 0.010677270285728869
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4.454034192966449,
+            "upper_bound": 4.495327875294379
+          },
+          "point_estimate": 4.466516087611508,
+          "standard_error": 0.011812336841744724
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.06437336908127204,
+            "upper_bound": 0.13162887987915348
+          },
+          "point_estimate": 0.1046283584188555,
+          "standard_error": 0.01860224419608551
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4.48066446526183,
+            "upper_bound": 4.525505474982357
+          },
+          "point_estimate": 4.502727041705933,
+          "standard_error": 0.011447803418178802
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.08207919567944409,
+            "upper_bound": 0.13337580771558014
+          },
+          "point_estimate": 0.10688451907016731,
+          "standard_error": 0.013409560426576528
+        }
+      }
+    },
+    "simd/memset<u32>/40": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/simd/memset<u32>/40",
+      "criterion_benchmark_v1": {
+        "group_id": "simd",
+        "function_id": "memset<u32>",
+        "value_str": "40",
+        "throughput": {
+          "Bytes": 40,
+          "Elements": null
+        },
+        "full_id": "simd/memset<u32>/40",
+        "directory_name": "simd/memset_u32_/40"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.6033694091516473,
+            "upper_bound": 1.61866260877789
+          },
+          "point_estimate": 1.6104498303989965,
+          "standard_error": 0.003896994286830861
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.5928172568219277,
+            "upper_bound": 1.6057123359145242
+          },
+          "point_estimate": 1.59980392002255,
+          "standard_error": 0.003501099295828548
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.017473442487066074,
+            "upper_bound": 0.03035213033087256
+          },
+          "point_estimate": 0.025962261491219243,
+          "standard_error": 0.003142338716999043
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.6006596441151937,
+            "upper_bound": 1.617630805892945
+          },
+          "point_estimate": 1.6082018277640788,
+          "standard_error": 0.004324093685586167
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.024937040313452292,
+            "upper_bound": 0.052842169209339096
+          },
+          "point_estimate": 0.039112766863662565,
+          "standard_error": 0.007261029484402569
+        }
+      }
+    },
+    "simd/memset<u32>/72": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/simd/memset<u32>/72",
+      "criterion_benchmark_v1": {
+        "group_id": "simd",
+        "function_id": "memset<u32>",
+        "value_str": "72",
+        "throughput": {
+          "Bytes": 72,
+          "Elements": null
+        },
+        "full_id": "simd/memset<u32>/72",
+        "directory_name": "simd/memset_u32_/72"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2.436553852748011,
+            "upper_bound": 2.4606711920788027
+          },
+          "point_estimate": 2.4483122943182836,
+          "standard_error": 0.006162236248337045
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2.422236730176899,
+            "upper_bound": 2.45402710752564
+          },
+          "point_estimate": 2.4345623231286466,
+          "standard_error": 0.008022761577643991
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.041398045407368904,
+            "upper_bound": 0.06564593379592695
+          },
+          "point_estimate": 0.053531544909426035,
+          "standard_error": 0.006213341287470866
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2.4314723908591183,
+            "upper_bound": 2.4588157213095574
+          },
+          "point_estimate": 2.4446085037463496,
+          "standard_error": 0.006977704469175077
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.05067449384328379,
+            "upper_bound": 0.07179326547168728
+          },
+          "point_estimate": 0.06200254556094953,
+          "standard_error": 0.00539960178241646
+        }
+      }
+    },
+    "simd/memset<u32>/8": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/simd/memset<u32>/8",
+      "criterion_benchmark_v1": {
+        "group_id": "simd",
+        "function_id": "memset<u32>",
+        "value_str": "8",
+        "throughput": {
+          "Bytes": 8,
+          "Elements": null
+        },
+        "full_id": "simd/memset<u32>/8",
+        "directory_name": "simd/memset_u32_/8"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.596828828746543,
+            "upper_bound": 1.6156227222312374
+          },
+          "point_estimate": 1.605010909994716,
+          "standard_error": 0.004830547170394897
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.5864511600972735,
+            "upper_bound": 1.5953737995203645
+          },
+          "point_estimate": 1.59026541221539,
+          "standard_error": 0.002405939974293406
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.010152294368334834,
+            "upper_bound": 0.0211566653363435
+          },
+          "point_estimate": 0.015041263935504309,
+          "standard_error": 0.0028403370594153494
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.594609817816705,
+            "upper_bound": 1.6086954630674517
+          },
+          "point_estimate": 1.6012140291260522,
+          "standard_error": 0.0036088462859151134
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.024009792320905422,
+            "upper_bound": 0.07311995971054566
+          },
+          "point_estimate": 0.04859542355022332,
+          "standard_error": 0.014266659260342035
+        }
+      }
+    },
+    "simd/memset<u8>/1032": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/simd/memset<u8>/1032",
+      "criterion_benchmark_v1": {
+        "group_id": "simd",
+        "function_id": "memset<u8>",
+        "value_str": "1032",
+        "throughput": {
+          "Bytes": 1032,
+          "Elements": null
+        },
+        "full_id": "simd/memset<u8>/1032",
+        "directory_name": "simd/memset_u8_/1032"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4.811466992194766,
+            "upper_bound": 4.86462815151497
+          },
+          "point_estimate": 4.835143241920225,
+          "standard_error": 0.013595373825693766
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4.7726082520582755,
+            "upper_bound": 4.824961245789761
+          },
+          "point_estimate": 4.798596261085962,
+          "standard_error": 0.011914534305785934
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.045853136474319794,
+            "upper_bound": 0.09582394415741533
+          },
+          "point_estimate": 0.068362900112957,
+          "standard_error": 0.01166209207744104
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4.800987014618623,
+            "upper_bound": 4.846340177745942
+          },
+          "point_estimate": 4.822262372762805,
+          "standard_error": 0.011625058102681666
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.08003390433656597,
+            "upper_bound": 0.198834891790007
+          },
+          "point_estimate": 0.1368725627742088,
+          "standard_error": 0.03558170483647161
+        }
+      }
+    },
+    "simd/memset<u8>/40": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/simd/memset<u8>/40",
+      "criterion_benchmark_v1": {
+        "group_id": "simd",
+        "function_id": "memset<u8>",
+        "value_str": "40",
+        "throughput": {
+          "Bytes": 40,
+          "Elements": null
+        },
+        "full_id": "simd/memset<u8>/40",
+        "directory_name": "simd/memset_u8_/40"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.9804464842131848,
+            "upper_bound": 1.999203020816367
+          },
+          "point_estimate": 1.989321001084435,
+          "standard_error": 0.004790659742975794
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.9715612788482848,
+            "upper_bound": 1.9819861029374544
+          },
+          "point_estimate": 1.9770661382620216,
+          "standard_error": 0.0030171973492670624
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.01632824211111007,
+            "upper_bound": 0.031222641135969943
+          },
+          "point_estimate": 0.021982552874313412,
+          "standard_error": 0.003840144319511126
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.974595852265572,
+            "upper_bound": 1.9920151755322255
+          },
+          "point_estimate": 1.982558445735255,
+          "standard_error": 0.004457045509842519
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.03325588256094896,
+            "upper_bound": 0.06253860743616087
+          },
+          "point_estimate": 0.04820608853507442,
+          "standard_error": 0.007569779377784354
+        }
+      }
+    },
+    "simd/memset<u8>/72": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/simd/memset<u8>/72",
+      "criterion_benchmark_v1": {
+        "group_id": "simd",
+        "function_id": "memset<u8>",
+        "value_str": "72",
+        "throughput": {
+          "Bytes": 72,
+          "Elements": null
+        },
+        "full_id": "simd/memset<u8>/72",
+        "directory_name": "simd/memset_u8_/72"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2.006741206177584,
+            "upper_bound": 2.0401227303263374
+          },
+          "point_estimate": 2.021778788166785,
+          "standard_error": 0.008564267171261613
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.996223844031349,
+            "upper_bound": 2.010035868554242
+          },
+          "point_estimate": 2.0007100641437052,
+          "standard_error": 0.003685169913177379
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.03140141380804849,
+            "upper_bound": 0.054563207943234174
+          },
+          "point_estimate": 0.042478302329276865,
+          "standard_error": 0.005801247776595889
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2.003241249441805,
+            "upper_bound": 2.0500936488596953
+          },
+          "point_estimate": 2.0223997002344283,
+          "standard_error": 0.012320836990825463
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.043557276050149696,
+            "upper_bound": 0.12152762938146752
+          },
+          "point_estimate": 0.08629267370692492,
+          "standard_error": 0.019763173413721264
+        }
+      }
+    },
+    "simd/memset<u8>/8": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/simd/memset<u8>/8",
+      "criterion_benchmark_v1": {
+        "group_id": "simd",
+        "function_id": "memset<u8>",
+        "value_str": "8",
+        "throughput": {
+          "Bytes": 8,
+          "Elements": null
+        },
+        "full_id": "simd/memset<u8>/8",
+        "directory_name": "simd/memset_u8_/8"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.0309153560812407,
+            "upper_bound": 1.041238587481979
+          },
+          "point_estimate": 1.0357656674743576,
+          "standard_error": 0.0026332442022764693
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.024816728521713,
+            "upper_bound": 1.0319658201224136
+          },
+          "point_estimate": 1.027030364014606,
+          "standard_error": 0.001747616615634524
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.012137592180591114,
+            "upper_bound": 0.020335806057851343
+          },
+          "point_estimate": 0.014805841948494944,
+          "standard_error": 0.0019557991667432384
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1.028600920043698,
+            "upper_bound": 1.0374052097763633
+          },
+          "point_estimate": 1.0327228251059013,
+          "standard_error": 0.0022566195636076216
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 0.01832605479988729,
+            "upper_bound": 0.03487403384425861
+          },
+          "point_estimate": 0.02641338551507602,
+          "standard_error": 0.004349755776132028
+        }
+      }
+    },
+    "unicode::MeasurementConfig::goto_logical/basic": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/unicode::MeasurementConfig::goto_logical/basic",
+      "criterion_benchmark_v1": {
+        "group_id": "unicode::MeasurementConfig::goto_logical",
+        "function_id": "basic",
+        "value_str": null,
+        "throughput": {
+          "Bytes": 3270,
+          "Elements": null
+        },
+        "full_id": "unicode::MeasurementConfig::goto_logical/basic",
+        "directory_name": "unicode__measurementconfig__goto_logical/basic"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 7665.223543809148,
+            "upper_bound": 7735.347642381776
+          },
+          "point_estimate": 7698.664574454265,
+          "standard_error": 17.85654377884434
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 7620.605970964365,
+            "upper_bound": 7706.914292511747
+          },
+          "point_estimate": 7654.308502763683,
+          "standard_error": 21.74032756059951
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 108.16652039989492,
+            "upper_bound": 182.27178037981335
+          },
+          "point_estimate": 135.74422729416457,
+          "standard_error": 19.1420406843389
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 7643.599674593625,
+            "upper_bound": 7731.805741823572
+          },
+          "point_estimate": 7681.984047068366,
+          "standard_error": 22.621880590179963
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 135.1912153578715,
+            "upper_bound": 220.86401428846705
+          },
+          "point_estimate": 178.89651698146994,
+          "standard_error": 21.974208934542258
+        }
+      }
+    },
+    "unicode::MeasurementConfig::goto_logical/word_wrap": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/unicode::MeasurementConfig::goto_logical/word_wrap",
+      "criterion_benchmark_v1": {
+        "group_id": "unicode::MeasurementConfig::goto_logical",
+        "function_id": "word_wrap",
+        "value_str": null,
+        "throughput": {
+          "Bytes": 3270,
+          "Elements": null
+        },
+        "full_id": "unicode::MeasurementConfig::goto_logical/word_wrap",
+        "directory_name": "unicode__measurementconfig__goto_logical/word_wrap"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 8492.809351930548,
+            "upper_bound": 8594.120410989734
+          },
+          "point_estimate": 8539.190285405304,
+          "standard_error": 25.971834080600956
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 8434.79499566456,
+            "upper_bound": 8507.233234325433
+          },
+          "point_estimate": 8456.165037722036,
+          "standard_error": 19.057184849279206
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 101.88811451208846,
+            "upper_bound": 186.5821588260932
+          },
+          "point_estimate": 144.1497764466706,
+          "standard_error": 20.82883537820821
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 8435.633940259004,
+            "upper_bound": 8496.880002648628
+          },
+          "point_estimate": 8464.955327450081,
+          "standard_error": 15.654860366257534
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 159.87297004775914,
+            "upper_bound": 368.7341308512161
+          },
+          "point_estimate": 260.5430792699878,
+          "standard_error": 58.96197257488275
+        }
+      }
+    },
+    "unicode::Utf8Chars/next": {
+      "baseline": "buf-bench-after",
+      "fullname": "buf-bench-after/unicode::Utf8Chars/next",
+      "criterion_benchmark_v1": {
+        "group_id": "unicode::Utf8Chars",
+        "function_id": "next",
+        "value_str": null,
+        "throughput": {
+          "Bytes": 3270,
+          "Elements": null
+        },
+        "full_id": "unicode::Utf8Chars/next",
+        "directory_name": "unicode__utf8chars/next"
+      },
+      "criterion_estimates_v1": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2142.5774404166464,
+            "upper_bound": 2164.208268386406
+          },
+          "point_estimate": 2152.6104541789855,
+          "standard_error": 5.552391799218277
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2129.7412189808174,
+            "upper_bound": 2142.535776837968
+          },
+          "point_estimate": 2134.366300532559,
+          "standard_error": 3.23507668279082
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 18.956241823622985,
+            "upper_bound": 31.288337359207297
+          },
+          "point_estimate": 24.316237314985717,
+          "standard_error": 2.9958880834320074
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2140.745361665412,
+            "upper_bound": 2161.049246312116
+          },
+          "point_estimate": 2150.1731052238965,
+          "standard_error": 5.169370708602203
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 34.55576710966386,
+            "upper_bound": 75.75704710428144
+          },
+          "point_estimate": 56.03481813863871,
+          "standard_error": 10.669151023617063
+        }
+      }
+    }
+  }
+}
