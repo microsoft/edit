@@ -393,7 +393,7 @@ fn write_terminal_title(output: &mut ArenaString, filename: &str) {
     output.push_str("edit\x1b\\");
 }
 
-const LARGE_CLIPBOARD_THRESHOLD: usize = 4 * KIBI;
+const LARGE_CLIPBOARD_THRESHOLD: usize = 128 * KIBI;
 
 fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
     let data_len = ctx.clipboard_ref().read().len();
