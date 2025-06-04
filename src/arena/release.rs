@@ -158,6 +158,17 @@ impl Arena {
         unsafe { ptr.cast().as_mut() }
     }
 
+    // FIXME: Temporary replacement while `maybe_uninit_uninit_array_transpose` is unstable (rust-lang#96097). Once
+    // stable, any calls to this method can be replaced with `alloc_uninit::<MaybeUninit<[T; N]>>().transpose()`, to
+    // avoid the need to have both methods here.
+    #[allow(clippy::mut_from_ref)]
+    pub fn alloc_uninit_array<T, const N: usize>(&self) -> &mut [MaybeUninit<T>; N] {
+        let bytes = mem::size_of::<T>() * N;
+        let alignment = mem::align_of::<T>();
+        let ptr = self.alloc_raw(bytes, alignment).unwrap();
+        unsafe { ptr.cast().as_mut() }
+    }
+
     #[allow(clippy::mut_from_ref)]
     pub fn alloc_uninit_slice<T>(&self, count: usize) -> &mut [MaybeUninit<T>] {
         let bytes = mem::size_of::<T>() * count;
