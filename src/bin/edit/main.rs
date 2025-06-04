@@ -15,6 +15,7 @@ use std::borrow::Cow;
 #[cfg(feature = "debug-latency")]
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::{env, process};
 
 use draw_editor::*;
@@ -537,7 +538,11 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
 
     while !done {
         let scratch = scratch_arena(None);
-        let Some(input) = sys::read_stdin(&scratch, vt_parser.read_timeout()) else {
+
+        // We explicitly don't set a read timeout, because we're not
+        // waiting for user keyboard input. If we encounter a lone ESC,
+        // it's unlikely to be from a ESC keypress, but rather from a VT sequence.
+        let Some(input) = sys::read_stdin(&scratch, Duration::MAX) else {
             break;
         };
 
