@@ -22,7 +22,6 @@
 
 mod gap_buffer;
 mod navigation;
-mod line_cache;
 
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
@@ -35,8 +34,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::str;
 
-use gap_buffer::GapBuffer;
-use line_cache::LineCache;
+pub use gap_buffer::GapBuffer;
 
 use crate::arena::{ArenaString, scratch_arena};
 use crate::cell::SemiRefCell;
@@ -174,7 +172,6 @@ pub type RcTextBuffer = Rc<TextBufferCell>;
 /// A text buffer for a text editor.
 pub struct TextBuffer {
     buffer: GapBuffer,
-    newlines: LineCache,
 
     undo_stack: LinkedList<SemiRefCell<HistoryEntry>>,
     redo_stack: LinkedList<SemiRefCell<HistoryEntry>>,
@@ -226,7 +223,6 @@ impl TextBuffer {
     pub fn new(small: bool) -> apperr::Result<Self> {
         Ok(Self {
             buffer: GapBuffer::new(small)?,
-            newlines: LineCache::new(),
 
             undo_stack: LinkedList::new(),
             redo_stack: LinkedList::new(),
@@ -316,6 +312,11 @@ impl TextBuffer {
     /// The newline type used in the document. LF or CRLF.
     pub fn is_crlf(&self) -> bool {
         self.newlines_are_crlf
+    }
+
+    /// Changes the newline type without normalizing the document.
+    pub fn set_crlf(&mut self, crlf: bool) {
+        self.newlines_are_crlf = crlf;
     }
 
     /// Changes the newline type used in the document.
@@ -583,7 +584,6 @@ impl TextBuffer {
         self.search = None;
         self.mark_as_clean();
         self.reflow(true);
-        self.newlines.from_document(&self.buffer);
     }
 
     /// Copies the contents of the buffer into a string.
@@ -925,6 +925,11 @@ impl TextBuffer {
         self.selection_generation
     }
 
+    /// Moves the cursor by `offset` and updates the selection to contain it.
+    pub fn selection_update_offset(&mut self, offset: usize) {
+        self.set_cursor_for_selection(self.cursor_move_to_offset_internal(self.cursor, offset));
+    }
+
     /// Moves the cursor to `visual_pos` and updates the selection to contain it.
     pub fn selection_update_visual(&mut self, visual_pos: Point) {
         self.set_cursor_for_selection(self.cursor_move_to_visual_internal(self.cursor, visual_pos));
@@ -1207,12 +1212,6 @@ impl TextBuffer {
         let mut seek_to_line_start = true;
 
         if y > result.logical_pos.y {
-            
-            if let Some(point) = self.newlines.nearest_offset(y as usize, false) {
-                result.offset = point.index;
-                result.logical_pos.y = point.line as CoordType;
-            }
-
             while y > result.logical_pos.y {
                 let chunk = self.read_forward(result.offset);
                 if chunk.is_empty() {
@@ -1233,11 +1232,6 @@ impl TextBuffer {
         }
 
         if seek_to_line_start {
-            if let Some(point) = self.newlines.nearest_offset(y as usize, true) {
-                result.offset = point.index;
-                result.logical_pos.y = point.line as CoordType;
-            }
-
             loop {
                 let chunk = self.read_backward(result.offset);
                 if chunk.is_empty() {
@@ -1353,7 +1347,7 @@ impl TextBuffer {
 
         if self.word_wrap_column <= 0 {
             // Identical to the fast-pass in `cursor_move_to_logical_internal()`.
-            if pos.y != cursor.logical_pos.y || pos.x < cursor.logical_pos.x {
+            if pos.y != cursor.visual_pos.y || pos.x < cursor.visual_pos.x {
                 cursor = self.goto_line_start(cursor, pos.y);
             }
         } else {
@@ -1951,7 +1945,9 @@ impl TextBuffer {
     /// The selection is cleared after the call.
     /// Deletes characters from the buffer based on a delta from the cursor.
     pub fn delete(&mut self, granularity: CursorMovement, delta: CoordType) {
-        debug_assert!(delta == -1 || delta == 1);
+        if delta == 0 {
+            return;
+        }
 
         let mut beg;
         let mut end;
@@ -1959,8 +1955,8 @@ impl TextBuffer {
         if let Some(r) = self.selection_range_internal(false) {
             (beg, end) = r;
         } else {
-            if (delta == -1 && self.cursor.offset == 0)
-                || (delta == 1 && self.cursor.offset >= self.text_length())
+            if (delta < 0 && self.cursor.offset == 0)
+                || (delta > 0 && self.cursor.offset >= self.text_length())
             {
                 // Nothing to delete.
                 return;
@@ -2030,7 +2026,7 @@ impl TextBuffer {
         let end = self.cursor_move_to_logical_internal(beg, Point { x: CoordType::MAX, y: end.y });
 
         let mut replacement = Vec::new();
-        self.buffer.extract_raw(beg.offset, end.offset, &mut replacement, 0);
+        self.buffer.extract_raw(beg.offset..end.offset, &mut replacement, 0);
 
         let initial_len = replacement.len();
         let mut offset = 0;
@@ -2094,7 +2090,7 @@ impl TextBuffer {
         };
 
         let mut out = Vec::new();
-        self.buffer.extract_raw(beg.offset, end.offset, &mut out, 0);
+        self.buffer.extract_raw(beg.offset..end.offset, &mut out, 0);
 
         if delete && !out.is_empty() {
             self.edit_begin(HistoryType::Delete, beg);
@@ -2214,9 +2210,6 @@ impl TextBuffer {
             undo.added.extend_from_slice(text);
         }
 
-        // Update newlines cache
-        self.newlines.insert(self.active_edit_off, text);
-
         // Write!
         self.buffer.replace(self.active_edit_off..self.active_edit_off, text);
 
@@ -2244,13 +2237,8 @@ impl TextBuffer {
 
         // Copy the deleted portion into the undo entry.
         let deleted = &mut undo.deleted;
-        self.buffer.extract_raw(off, to.offset, deleted, out_off);
+        self.buffer.extract_raw(off..to.offset, deleted, out_off);
 
-        // Update newlines cache
-        let mut replaced_text = Vec::new();
-        self.buffer.extract_raw(off, to.offset, &mut replaced_text, 0);
-        self.newlines.delete(off..to.offset, &replaced_text);
-        
         // Delete the portion from the buffer by enlarging the gap.
         let count = to.offset - off;
         self.buffer.allocate_gap(off, 0, count);
