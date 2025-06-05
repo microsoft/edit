@@ -202,6 +202,7 @@ pub fn draw_dialog_settings(ctx: &mut Context, state: &mut State) {
                 tb.set_word_wrap(word_wrap);
                 ctx.needs_rerender();
             }
+            ctx.attr_padding(Rect::three(1, 0, 0));
             ctx.attr_overflow(Overflow::TruncateTail);
             ctx.attr_position(Position::Center);
 
