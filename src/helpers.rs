@@ -41,14 +41,14 @@ impl fmt::Display for MetricFormatter<usize> {
 }
 
 /// A viewport coordinate type used throughout the application.
-pub type CoordType = i32;
+pub type CoordType = isize;
 
-/// To avoid overflow issues because you're adding two [`CoordType::MAX`] values together,
-/// you can use [`COORD_TYPE_SAFE_MIN`] and [`COORD_TYPE_SAFE_MAX`].
-pub const COORD_TYPE_SAFE_MAX: CoordType = 32767;
-
-/// See [`COORD_TYPE_SAFE_MAX`].
-pub const COORD_TYPE_SAFE_MIN: CoordType = -32767 - 1;
+/// To avoid overflow issues because you're adding two [`CoordType::MAX`]
+/// values together, you can use [`COORD_TYPE_SAFE_MAX`] instead.
+///
+/// It equates to half the bits contained in [`CoordType`], which
+/// for instance is 32767 (0x7FFF) when [`CoordType`] is a [`i32`].
+pub const COORD_TYPE_SAFE_MAX: CoordType = (1 << (CoordType::BITS / 2 - 1)) - 1;
 
 /// A 2D point. Uses [`CoordType`].
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,11 +58,11 @@ pub struct Point {
 }
 
 impl Point {
-    pub const MIN: Point = Point { x: CoordType::MIN, y: CoordType::MIN };
-    pub const MAX: Point = Point { x: CoordType::MAX, y: CoordType::MAX };
+    pub const MIN: Self = Self { x: CoordType::MIN, y: CoordType::MIN };
+    pub const MAX: Self = Self { x: CoordType::MAX, y: CoordType::MAX };
 }
 
-impl PartialOrd<Point> for Point {
+impl PartialOrd<Self> for Point {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -70,10 +70,7 @@ impl PartialOrd<Point> for Point {
 
 impl Ord for Point {
     fn cmp(&self, other: &Self) -> Ordering {
-        match self.y.cmp(&other.y) {
-            Ordering::Equal => self.x.cmp(&other.x),
-            ord => ord,
-        }
+        self.y.cmp(&other.y).then(self.x.cmp(&other.x))
     }
 }
 
@@ -149,7 +146,7 @@ impl Rect {
         let r = l.max(r);
         let b = t.max(b);
 
-        Rect { left: l, top: t, right: r, bottom: b }
+        Self { left: l, top: t, right: r, bottom: b }
     }
 }
 
@@ -274,4 +271,23 @@ pub const fn slice_as_uninit_ref<T>(slice: &[T]) -> &[MaybeUninit<T>] {
 #[inline(always)]
 pub const fn slice_as_uninit_mut<T>(slice: &mut [T]) -> &mut [MaybeUninit<T>] {
     unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut MaybeUninit<T>, slice.len()) }
+}
+
+/// Helpers for ASCII string comparisons.
+pub trait AsciiStringHelpers {
+    /// Tests if a string starts with a given ASCII prefix.
+    ///
+    /// This function name really is a mouthful, but it's a combination
+    /// of [`str::starts_with`] and [`str::eq_ignore_ascii_case`].
+    fn starts_with_ignore_ascii_case(&self, prefix: &str) -> bool;
+}
+
+impl AsciiStringHelpers for str {
+    fn starts_with_ignore_ascii_case(&self, prefix: &str) -> bool {
+        // Casting to bytes first ensures we skip any UTF8 boundary checks.
+        // Since the comparison is ASCII, we don't need to worry about that.
+        let s = self.as_bytes();
+        let p = prefix.as_bytes();
+        p.len() <= s.len() && s[..p.len()].eq_ignore_ascii_case(p)
+    }
 }

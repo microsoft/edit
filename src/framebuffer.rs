@@ -58,9 +58,25 @@ pub const INDEXED_COLORS_COUNT: usize = 18;
 
 /// Fallback theme. Matches Windows Terminal's Ottosson theme.
 pub const DEFAULT_THEME: [u32; INDEXED_COLORS_COUNT] = [
-    0xff000000, 0xff212cbe, 0xff3aae3f, 0xff4a9abe, 0xffbe4d20, 0xffbe54bb, 0xffb2a700, 0xffbebebe,
-    0xff808080, 0xff303eff, 0xff51ea58, 0xff44c9ff, 0xffff6a2f, 0xffff74fc, 0xfff0e100, 0xffffffff,
-    0xff000000, 0xffffffff,
+    0xff000000, // Black
+    0xff212cbe, // Red
+    0xff3aae3f, // Green
+    0xff4a9abe, // Yellow
+    0xffbe4d20, // Blue
+    0xffbe54bb, // Magenta
+    0xffb2a700, // Cyan
+    0xffbebebe, // White
+    0xff808080, // BrightBlack
+    0xff303eff, // BrightRed
+    0xff51ea58, // BrightGreen
+    0xff44c9ff, // BrightYellow
+    0xffff6a2f, // BrightBlue
+    0xffff74fc, // BrightMagenta
+    0xfff0e100, // BrightCyan
+    0xffffffff, // BrightWhite
+    // --------
+    0xff000000, // Background
+    0xffbebebe, // Foreground
 ];
 
 /// A shoddy framebuffer for terminal applications.
@@ -100,7 +116,7 @@ impl Framebuffer {
             frame_counter: 0,
             auto_colors: [
                 DEFAULT_THEME[IndexedColor::Black as usize],
-                DEFAULT_THEME[IndexedColor::White as usize],
+                DEFAULT_THEME[IndexedColor::BrightWhite as usize],
             ],
             contrast_colors: [const { Cell::new((0, 0)) }; CACHE_TABLE_SIZE],
             background_fill: DEFAULT_THEME[IndexedColor::Background as usize],
@@ -621,7 +637,7 @@ impl LineBuffer {
 
             if left + cursor.visual_pos.x < 0 && cursor.offset < text.len() {
                 // `-left` must've intersected a wide glyph and since goto_visual stops _before_ reaching the target,
-                // we stoped before the wide glyph and thus must step forward to the next glyph.
+                // we stopped before the wide glyph and thus must step forward to the next glyph.
                 cursor = cfg.goto_logical(Point { x: cursor.logical_pos.x + 1, y: 0 });
             }
 
@@ -793,12 +809,12 @@ pub struct Attributes(u8);
 
 #[allow(non_upper_case_globals)]
 impl Attributes {
-    pub const None: Attributes = Attributes(0);
-    pub const Italic: Attributes = Attributes(0b1);
-    pub const Underlined: Attributes = Attributes(0b10);
-    pub const All: Attributes = Attributes(0b11);
+    pub const None: Self = Self(0);
+    pub const Italic: Self = Self(0b1);
+    pub const Underlined: Self = Self(0b10);
+    pub const All: Self = Self(0b11);
 
-    pub const fn is(self, attr: Attributes) -> bool {
+    pub const fn is(self, attr: Self) -> bool {
         (self.0 & attr.0) == attr.0
     }
 }
@@ -806,18 +822,18 @@ impl Attributes {
 unsafe impl MemsetSafe for Attributes {}
 
 impl BitOr for Attributes {
-    type Output = Attributes;
+    type Output = Self;
 
     fn bitor(self, rhs: Self) -> Self::Output {
-        Attributes(self.0 | rhs.0)
+        Self(self.0 | rhs.0)
     }
 }
 
 impl BitXor for Attributes {
-    type Output = Attributes;
+    type Output = Self;
 
     fn bitxor(self, rhs: Self) -> Self::Output {
-        Attributes(self.0 ^ rhs.0)
+        Self(self.0 ^ rhs.0)
     }
 }
 

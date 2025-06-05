@@ -13,7 +13,7 @@ enum CharClass {
     Word,
 }
 
-const fn construct_classifier(seperators: &[u8]) -> [CharClass; 256] {
+const fn construct_classifier(separators: &[u8]) -> [CharClass; 256] {
     let mut classifier = [CharClass::Word; 256];
 
     classifier[b' ' as usize] = CharClass::Whitespace;
@@ -22,9 +22,9 @@ const fn construct_classifier(seperators: &[u8]) -> [CharClass; 256] {
     classifier[b'\r' as usize] = CharClass::Newline;
 
     let mut i = 0;
-    let len = seperators.len();
+    let len = separators.len();
     while i < len {
-        let ch = seperators[i];
+        let ch = separators[i];
         assert!(ch < 128, "Only ASCII separators are supported.");
         classifier[ch as usize] = CharClass::Separator;
         i += 1;
@@ -58,7 +58,7 @@ fn word_navigation<T: WordNavigation>(mut nav: T) -> usize {
     // Skip any whitespace.
     nav.skip_class(CharClass::Whitespace);
 
-    // Skip one word or seperator and take note of the class.
+    // Skip one word or separator and take note of the class.
     let class = nav.peek(CharClass::Whitespace);
     if matches!(class, CharClass::Separator | CharClass::Word) {
         nav.next();

@@ -7,7 +7,7 @@
 # Avoid linking with vcruntime140.dll by statically linking everything,
 # and then explicitly linking with ucrtbase.dll dynamically.
 # We do this, because vcruntime140.dll is an optional Windows component.
-[target.'cfg(target_os = "windows")']
+[target.'cfg(all(target_os = "windows", target_env = "msvc"))']
 rustflags = [
     "-Ctarget-feature=+crt-static",
     "-Clink-args=/DEFAULTLIB:ucrt.lib",
@@ -20,4 +20,4 @@ rustflags = [
 # = Huge reduction in binary size by removing all that.
 [unstable]
 build-std = ["std", "panic_abort"]
-build-std-features = ["panic_immediate_abort"]
+build-std-features = ["panic_immediate_abort", "optimize_for_size"]

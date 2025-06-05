@@ -8,14 +8,30 @@
 
 use std::ffi::{CStr, c_int, c_void};
 use std::fs::{self, File};
-use std::mem::{self, MaybeUninit};
+use std::mem::{self, ManuallyDrop, MaybeUninit};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
-use std::ptr::{self, NonNull, null, null_mut};
+use std::path::Path;
+use std::ptr::{self, NonNull, null_mut};
 use std::{thread, time};
 
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::helpers::*;
 use crate::{apperr, arena_format};
+
+#[cfg(target_os = "netbsd")]
+const fn desired_mprotect(flags: c_int) -> c_int {
+    // NetBSD allows an mmap(2) caller to specify what protection flags they
+    // will use later via mprotect. It does not allow a caller to move from
+    // PROT_NONE to PROT_READ | PROT_WRITE.
+    //
+    // see PROT_MPROTECT in man 2 mmap
+    flags << 3
+}
+
+#[cfg(not(target_os = "netbsd"))]
+const fn desired_mprotect(_: c_int) -> c_int {
+    libc::PROT_NONE
+}
 
 struct State {
     stdin: libc::c_int,
@@ -195,11 +211,19 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                 let beg = time::Instant::now();
 
                 let mut pollfd = libc::pollfd { fd: STATE.stdin, events: libc::POLLIN, revents: 0 };
-                let ts = libc::timespec {
-                    tv_sec: timeout.as_secs() as libc::time_t,
-                    tv_nsec: timeout.subsec_nanos() as libc::c_long,
-                };
-                let ret = libc::ppoll(&mut pollfd, 1, &ts, null());
+                let ret;
+                #[cfg(target_os = "linux")]
+                {
+                    let ts = libc::timespec {
+                        tv_sec: timeout.as_secs() as libc::time_t,
+                        tv_nsec: timeout.subsec_nanos() as libc::c_long,
+                    };
+                    ret = libc::ppoll(&mut pollfd, 1, &ts, ptr::null());
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    ret = libc::poll(&mut pollfd, 1, timeout.as_millis() as libc::c_int);
+                }
                 if ret < 0 {
                     return None; // Error? Let's assume it's an EOF.
                 }
@@ -225,7 +249,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                 return None; // EOF
             }
             if ret < 0 {
-                match *libc::__errno_location() {
+                match errno() {
                     libc::EINTR if STATE.inject_resize => break,
                     libc::EAGAIN if timeout == time::Duration::ZERO => break,
                     libc::EINTR | libc::EAGAIN => {}
@@ -304,7 +328,7 @@ pub fn write_stdout(text: &str) {
             continue;
         }
 
-        let err = unsafe { *libc::__errno_location() };
+        let err = errno();
         if err != libc::EINTR {
             return;
         }
@@ -342,8 +366,13 @@ pub struct FileId {
     st_ino: libc::ino_t,
 }
 
-/// Returns a unique identifier for the given file.
-pub fn file_id(file: &File) -> apperr::Result<FileId> {
+/// Returns a unique identifier for the given file by handle or path.
+pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
+    let file = match file {
+        Some(f) => f,
+        None => &File::open(path)?,
+    };
+
     unsafe {
         let mut stat = MaybeUninit::<libc::stat>::uninit();
         check_int_return(libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()))?;
@@ -365,7 +394,7 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
         let ptr = libc::mmap(
             null_mut(),
             size,
-            libc::PROT_NONE,
+            desired_mprotect(libc::PROT_READ | libc::PROT_WRITE),
             libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
             -1,
             0,
@@ -407,7 +436,7 @@ pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> apperr::Result<(
 unsafe fn load_library(name: &CStr) -> apperr::Result<NonNull<c_void>> {
     unsafe {
         NonNull::new(libc::dlopen(name.as_ptr(), libc::RTLD_LAZY))
-            .ok_or_else(|| errno_to_apperr(libc::ELIBACC))
+            .ok_or_else(|| errno_to_apperr(libc::ENOENT))
     }
 }
 
@@ -423,7 +452,7 @@ pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apper
     unsafe {
         let sym = libc::dlsym(handle.as_ptr(), name.as_ptr());
         if sym.is_null() {
-            Err(errno_to_apperr(libc::ELIBACC))
+            Err(errno_to_apperr(libc::ENOENT))
         } else {
             Ok(mem::transmute_copy(&sym))
         }
@@ -507,7 +536,7 @@ where
     if suffix.is_empty() {
         name
     } else {
-        // SAFETY: In this particualar case we know that the string
+        // SAFETY: In this particular case we know that the string
         // is valid UTF-8, because it comes from icu.rs.
         let name = unsafe { name.to_str().unwrap_unchecked() };
 
@@ -526,15 +555,29 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
     let mut locales = Vec::new_in(arena);
 
     for key in ["LANGUAGE", "LC_ALL", "LANG"] {
-        if let Ok(val) = std::env::var(key) {
-            locales.extend(
-                val.split(':').filter(|s| !s.is_empty()).map(|s| ArenaString::from_str(arena, s)),
-            );
+        if let Ok(val) = std::env::var(key)
+            && !val.is_empty()
+        {
+            locales.extend(val.split(':').filter(|s| !s.is_empty()).map(|s| {
+                // Replace all underscores with dashes,
+                // because the localization code expects pt-br, not pt_BR.
+                let mut res = Vec::new_in(arena);
+                res.extend(s.as_bytes().iter().map(|&b| if b == b'_' { b'-' } else { b }));
+                unsafe { ArenaString::from_utf8_unchecked(res) }
+            }));
             break;
         }
     }
 
     locales
+}
+
+#[inline]
+fn errno() -> i32 {
+    // Under `-O -Copt-level=s` the 1.87 compiler fails to fully inline and
+    // remove the raw_os_error() call. This leaves us with the drop() call.
+    // ManuallyDrop fixes that and results in a direct `std::sys::os::errno` call.
+    ManuallyDrop::new(std::io::Error::last_os_error()).raw_os_error().unwrap_or(0)
 }
 
 #[inline]
@@ -565,5 +608,5 @@ const fn errno_to_apperr(no: c_int) -> apperr::Error {
 }
 
 fn check_int_return(ret: libc::c_int) -> apperr::Result<libc::c_int> {
-    if ret < 0 { Err(errno_to_apperr(unsafe { *libc::__errno_location() })) } else { Ok(ret) }
+    if ret < 0 { Err(errno_to_apperr(errno())) } else { Ok(ret) }
 }
