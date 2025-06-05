@@ -297,10 +297,6 @@ fn encoding_picker_update_list(state: &mut State) {
         }
     }
 
-    if matches.is_empty() {
-        return;
-    }
-
     matches.sort_by(|a, b| b.0.cmp(&a.0));
     state.encoding_picker_results = Some(Vec::from_iter(matches.iter().map(|(_, enc)| *enc)));
 }
