@@ -539,10 +539,10 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
     while !done {
         let scratch = scratch_arena(None);
 
-        // We explicitly don't set a read timeout, because we're not
+        // We explicitly set a high read timeout, because we're not
         // waiting for user keyboard input. If we encounter a lone ESC,
         // it's unlikely to be from a ESC keypress, but rather from a VT sequence.
-        let Some(input) = sys::read_stdin(&scratch, Duration::MAX) else {
+        let Some(input) = sys::read_stdin(&scratch, Duration::from_secs(3)) else {
             break;
         };
 
