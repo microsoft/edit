@@ -195,7 +195,6 @@ pub struct TextBuffer {
 
     width: CoordType,
     margin_width: CoordType,
-    margin_enabled: bool,
     word_wrap_column: CoordType,
     word_wrap_enabled: bool,
     tab_size: CoordType,
@@ -243,7 +242,6 @@ impl TextBuffer {
 
             width: 0,
             margin_width: 0,
-            margin_enabled: false,
             word_wrap_column: 0,
             word_wrap_enabled: false,
             tab_size: 4,
@@ -423,17 +421,6 @@ impl TextBuffer {
         self.margin_width
     }
 
-    /// Is the left margin enabled?
-    pub fn set_margin_enabled(&mut self, enabled: bool) -> bool {
-        if self.margin_enabled == enabled {
-            false
-        } else {
-            self.margin_enabled = enabled;
-            self.reflow();
-            true
-        }
-    }
-
     /// Gets the width of the text contents for layout.
     pub fn text_width(&self) -> CoordType {
         self.width - self.margin_width
@@ -543,7 +530,7 @@ impl TextBuffer {
         // +1 onto logical_lines, because line numbers are 1-based.
         // +1 onto log10, because we want the digit width and not the actual log10.
         // +3 onto log10, because we append " | " to the line numbers to form the margin.
-        self.margin_width = if self.margin_enabled {
+        self.margin_width = if self.line_numbers {
             self.stats.logical_lines.ilog10() as CoordType + 4
         } else {
             0
@@ -1528,7 +1515,7 @@ impl TextBuffer {
         let scratch = scratch_arena(None);
         let width = destination.width();
         let height = destination.height();
-        let line_number_width = self.margin_width.max(3) as usize - 3;
+        let line_number_width = if self.line_numbers { self.margin_width.max(3) as usize - 3 } else { 0 };
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut line = ArenaString::new_in(&scratch);
@@ -1566,7 +1553,7 @@ impl TextBuffer {
                 self.cursor_for_rendering = Some(cursor_beg);
             }
 
-            if line_number_width != 0 && self.line_numbers {
+            if line_number_width != 0 {
                 if visual_line >= self.stats.visual_lines {
                     // Past the end of the buffer? Place "    | " in the margin.
                     // Since we know that we won't see line numbers greater than i64::MAX (9223372036854775807)

@@ -219,7 +219,7 @@ impl DocumentManager {
         {
             let mut tb = buffer.borrow_mut();
             tb.set_insert_final_newline(!cfg!(windows)); // As mandated by POSIX.
-            tb.set_margin_enabled(true);
+            tb.set_line_numbers(true);
             tb.set_line_highlight_enabled(true);
         }
         Ok(buffer)
