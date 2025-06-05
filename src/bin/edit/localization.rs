@@ -44,6 +44,7 @@ pub enum LocId {
     ViewWordWrap,
     ViewDocumentPicker,
     ViewLineNumbers,
+    ViewRelativeLineNumbers,
 
     // Help menu
     Help,
@@ -541,6 +542,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Показать номера строк",
         /* zh_hans */ "显示行号",
         /* zh_hant */ "顯示行號",
+    ],
+    // ViewRelativeLineNumbers
+    [
+        /* en      */ "Use Relative Line Numbers",
+        /* de      */ "Verwende relative Zeilennummern",
+        /* es      */ "Utiliza números de línea relativos",
+        /* fr      */ "Utilisez des numéros de ligne relatifs",
+        /* it      */ "Utilizza numeri di riga relativi",
+        /* ja      */ "相対行番号を使用してください",
+        /* ko      */ "상대 행 번호를 사용하십시오.",
+        /* pt_br   */ "Use números relativos de linhas",
+        /* ru      */ "Используйте относительные номера строк",
+        /* zh_hans */ "使用相对行号",
+        /* zh_hant */ "使用相对行号",
     ],
 
     // Help (a menu bar item)

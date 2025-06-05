@@ -105,6 +105,7 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
 
     if let Some(doc) = state.documents.active() {
         let mut tb = doc.buffer.borrow_mut();
+        let relative_numbers = tb.is_relative_line_numbers();
         let line_number = tb.is_line_numbers_enabled();
         let word_wrap = tb.is_word_wrap_enabled();
 
@@ -116,6 +117,10 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
         }
         if ctx.menubar_menu_checkbox(loc(LocId::ViewLineNumbers), 'N', kbmod::ALT | vk::L, line_number) {
             tb.set_line_numbers(!line_number);
+            ctx.needs_rerender();
+        }
+        if line_number && ctx.menubar_menu_checkbox(loc(LocId::ViewRelativeLineNumbers), 'R', kbmod::ALT | vk::R, relative_numbers) {
+            tb.set_relative_line_numbers(!relative_numbers);
             ctx.needs_rerender();
         }
         if ctx.menubar_menu_checkbox(loc(LocId::ViewWordWrap), 'W', kbmod::ALT | vk::Z, word_wrap) {

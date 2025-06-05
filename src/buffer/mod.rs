@@ -502,6 +502,11 @@ impl TextBuffer {
         }
     }
 
+    /// Sets a ruler column, e.g. 80.
+    pub fn set_ruler(&mut self, column: CoordType) {
+        self.ruler = column;
+    }
+
     /// Returns whether tabs are used for indentation.
     pub fn indent_with_tabs(&self) -> bool {
         self.indent_with_tabs
@@ -522,15 +527,25 @@ impl TextBuffer {
         self.line_numbers != LineNumber::Absent
     }
 
+    /// Returns whether line numbers are visible and relative.
+    pub fn is_relative_line_numbers(&self) -> bool {
+        self.line_numbers == LineNumber::Relative
+    }
+
     /// Sets the visibility of row numbers.
     pub fn set_line_numbers(&mut self, enabled: bool) {
         self.line_numbers = if enabled { LineNumber::Present } else { LineNumber::Absent };
         self.reflow();
     }
 
-    /// Sets a ruler column, e.g. 80.
-    pub fn set_ruler(&mut self, column: CoordType) {
-        self.ruler = column;
+    /// Sets the visibility of relative row numbers.
+    pub fn set_relative_line_numbers(&mut self, enabled: bool) {
+        self.line_numbers = if enabled {
+            LineNumber::Relative
+        } else {
+            LineNumber::Present
+        };
+        self.reflow();
     }
 
     pub fn reflow(&mut self) {
