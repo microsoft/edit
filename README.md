@@ -8,10 +8,16 @@ This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/
 
 ## Installation
 
-Platform | Instructions
----------|-------------
-Windows (Winget) | `winget install Microsoft.Edit`
-Other | You can download binaries from our [releases page](https://github.com/microsoft/edit/releases/latest).<br>(Windows packages include a PDB file which can be deleted.)
+[![Packaging status](https://repology.org/badge/vertical-allrepos/microsoft-edit.svg?exclude_unsupported=1)](https://repology.org/project/microsoft-edit/versions)
+
+You can also download binaries from our [Release page](https://github.com/microsoft/edit/releases/latest).
+
+### Windows
+
+You can install the latest version with WinGet:
+```powershell
+winget install Microsoft.Edit
+```
 
 ### Notes to Package Maintainers
 
