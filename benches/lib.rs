@@ -37,7 +37,7 @@ fn bench_buffer(c: &mut Criterion) {
     {
         let mut tb = buffer::TextBuffer::new(false).unwrap();
         tb.set_crlf(false);
-        tb.write(data.start_content.as_bytes(), true);
+        tb.write_raw(data.start_content.as_bytes());
 
         for t in &data.txns {
             for p in &t.patches {
@@ -46,7 +46,7 @@ fn bench_buffer(c: &mut Criterion) {
 
                 tb.delete(buffer::CursorMovement::Grapheme, p.1 as CoordType);
 
-                tb.write(p.2.as_bytes(), true);
+                tb.write_raw(p.2.as_bytes());
                 patches_with_coords.push((beg, p.1 as CoordType, p.2.clone()));
             }
         }
@@ -72,12 +72,12 @@ fn bench_buffer(c: &mut Criterion) {
     let bench_text_buffer = || {
         let mut tb = buffer::TextBuffer::new(false).unwrap();
         tb.set_crlf(false);
-        tb.write(data.start_content.as_bytes(), true);
+        tb.write_raw(data.start_content.as_bytes());
 
         for p in &patches_with_coords {
             tb.cursor_move_to_logical(p.0);
             tb.delete(buffer::CursorMovement::Grapheme, p.1);
-            tb.write(p.2.as_bytes(), true);
+            tb.write_raw(p.2.as_bytes());
         }
 
         tb

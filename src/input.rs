@@ -6,6 +6,8 @@
 //! In the future this allows us to take apart the application and
 //! support input schemes that aren't VT, such as UEFI, or GUI.
 
+use std::mem;
+
 use crate::helpers::{CoordType, Point, Size};
 use crate::vt;
 
@@ -217,16 +219,6 @@ pub mod kbmod {
     pub const CTRL_ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x07000000);
 }
 
-/// Text input.
-///
-/// "Keyboard" input is also "text" input and vice versa.
-/// It differs in that text input can also be Unicode.
-#[derive(Clone, Copy)]
-pub struct InputText<'a> {
-    pub text: &'a str,
-    pub bracketed: bool,
-}
-
 /// Mouse input state. Up/Down, Left/Right, etc.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum InputMouseState {
@@ -261,9 +253,10 @@ pub enum Input<'input> {
     /// Window resize event.
     Resize(Size),
     /// Text input.
-    ///
     /// Note that [`Input::Keyboard`] events can also be text.
-    Text(InputText<'input>),
+    Text(&'input str),
+    /// A clipboard paste.
+    Paste(Vec<u8>),
     /// Keyboard input.
     Keyboard(InputKey),
     /// Mouse input.
@@ -273,6 +266,7 @@ pub enum Input<'input> {
 /// Parses VT sequences into input events.
 pub struct Parser {
     bracketed_paste: bool,
+    bracketed_paste_buf: Vec<u8>,
     x10_mouse_want: bool,
     x10_mouse_buf: [u8; 3],
     x10_mouse_len: usize,
@@ -285,6 +279,7 @@ impl Parser {
     pub fn new() -> Self {
         Self {
             bracketed_paste: false,
+            bracketed_paste_buf: Vec::new(),
             x10_mouse_want: false,
             x10_mouse_buf: [0; 3],
             x10_mouse_len: 0,
@@ -333,7 +328,7 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
 
             match self.stream.next()? {
                 vt::Token::Text(text) => {
-                    return Some(Input::Text(InputText { text, bracketed: false }));
+                    return Some(Input::Text(text));
                 }
                 vt::Token::Ctrl(ch) => match ch {
                     '\0' | '\t' | '\r' => return Some(Input::Keyboard(InputKey::new(ch as u32))),
@@ -519,8 +514,13 @@ impl<'input> Stream<'_, '_, 'input> {
         }
 
         if end != beg {
-            let input = self.stream.input();
-            Some(Input::Text(InputText { text: &input[beg..end], bracketed: true }))
+            self.parser
+                .bracketed_paste_buf
+                .extend_from_slice(&self.stream.input().as_bytes()[beg..end]);
+        }
+
+        if !self.parser.bracketed_paste {
+            Some(Input::Paste(mem::take(&mut self.parser.bracketed_paste_buf)))
         } else {
             None
         }

@@ -152,6 +152,7 @@ use std::{iter, mem, ptr, time};
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::{CursorMovement, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
+use crate::clipboard::Clipboard;
 use crate::document::WriteableDocument;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::hash::*;
@@ -167,7 +168,6 @@ const KBMOD_FOR_WORD_NAV: InputKeyMod =
 type Input<'input> = input::Input<'input>;
 type InputKey = input::InputKey;
 type InputMouseState = input::InputMouseState;
-type InputText<'input> = input::InputText<'input>;
 
 /// Since [`TextBuffer`] creation and management is expensive,
 /// we cache instances of them for reuse between frames.
@@ -363,10 +363,7 @@ pub struct Tui {
     cached_text_buffers: Vec<CachedTextBuffer>,
 
     /// The clipboard contents.
-    clipboard: Vec<u8>,
-    /// A counter that is incremented every time the clipboard changes.
-    /// Allows for tracking clipboard changes without comparing contents.
-    clipboard_generation: u32,
+    clipboard: Clipboard,
 
     settling_have: i32,
     settling_want: i32,
@@ -416,8 +413,7 @@ impl Tui {
 
             cached_text_buffers: Vec::with_capacity(16),
 
-            clipboard: Vec::new(),
-            clipboard_generation: 0,
+            clipboard: Default::default(),
 
             settling_have: 0,
             settling_want: 0,
@@ -490,16 +486,14 @@ impl Tui {
         self.framebuffer.contrasted(color)
     }
 
-    /// Returns the current clipboard contents.
-    pub fn clipboard(&self) -> &[u8] {
+    /// Returns the clipboard.
+    pub fn clipboard_ref(&self) -> &Clipboard {
         &self.clipboard
     }
 
-    /// Returns the current clipboard generation.
-    /// The generation changes every time the clipboard contents change.
-    /// This allows you to track clipboard changes.
-    pub fn clipboard_generation(&self) -> u32 {
-        self.clipboard_generation
+    /// Returns the clipboard (mutable).
+    pub fn clipboard_mut(&mut self) -> &mut Clipboard {
+        &mut self.clipboard
     }
 
     /// Starts a new frame and returns a [`Context`] for it.
@@ -553,10 +547,16 @@ impl Tui {
                 // This causes us to ignore the keyboard input here. We need a way to inform the caller over
                 // how much of the input text we actually processed in a single frame. Or perhaps we could use
                 // the needs_settling logic?
-                if !text.bracketed && text.text.len() == 1 {
-                    let ch = text.text.as_bytes()[0];
+                if text.len() == 1 {
+                    let ch = text.as_bytes()[0];
                     input_keyboard = InputKey::from_ascii(ch as char)
                 }
+            }
+            Some(Input::Paste(paste)) => {
+                let clipboard = self.clipboard_mut();
+                clipboard.write(paste);
+                clipboard.mark_as_synchronized();
+                input_keyboard = Some(kbmod::CTRL | vk::V);
             }
             Some(Input::Keyboard(keyboard)) => {
                 input_keyboard = Some(keyboard);
@@ -1291,7 +1291,7 @@ pub struct Context<'a, 'input> {
     tui: &'a mut Tui,
 
     /// Current text input, if any.
-    input_text: Option<InputText<'input>>,
+    input_text: Option<&'input str>,
     /// Current keyboard input, if any.
     input_keyboard: Option<InputKey>,
     input_mouse_modifiers: InputKeyMod,
@@ -1353,25 +1353,14 @@ impl<'a> Context<'a, '_> {
         self.tui.framebuffer.contrasted(color)
     }
 
-    /// Returns the current clipboard contents.
-    pub fn clipboard(&self) -> &[u8] {
-        self.tui.clipboard()
+    /// Returns the clipboard.
+    pub fn clipboard_ref(&self) -> &Clipboard {
+        &self.tui.clipboard
     }
 
-    /// Returns the current clipboard generation.
-    /// The generation changes every time the clipboard contents change.
-    /// This allows you to track clipboard changes.
-    pub fn clipboard_generation(&self) -> u32 {
-        self.tui.clipboard_generation()
-    }
-
-    /// Sets the clipboard contents.
-    pub fn set_clipboard(&mut self, data: Vec<u8>) {
-        if !data.is_empty() {
-            self.tui.clipboard = data;
-            self.tui.clipboard_generation = self.tui.clipboard_generation.wrapping_add(1);
-            self.needs_rerender();
-        }
+    /// Returns the clipboard (mutable).
+    pub fn clipboard_mut(&mut self) -> &mut Clipboard {
+        &mut self.tui.clipboard
     }
 
     /// Tell the UI framework that your state changed and you need another layout pass.
@@ -2037,11 +2026,7 @@ impl<'a> Context<'a, '_> {
 
     /// Creates a text input field.
     /// Returns true if the text contents changed.
-    pub fn editline<'s, 'b: 's>(
-        &'s mut self,
-        classname: &'static str,
-        text: &'b mut dyn WriteableDocument,
-    ) -> bool {
+    pub fn editline(&mut self, classname: &'static str, text: &mut dyn WriteableDocument) -> bool {
         self.textarea_internal(classname, TextBufferPayload::Editline(text))
     }
 
@@ -2307,14 +2292,10 @@ impl<'a> Context<'a, '_> {
             return false;
         }
 
-        let mut write: &[u8] = b"";
-        let mut write_raw = false;
+        let mut write: &[u8] = &[];
 
         if let Some(input) = &self.input_text {
-            write = input.text.as_bytes();
-            write_raw = input.bracketed;
-            tc.preferred_column = tb.cursor_visual_pos().x;
-            make_cursor_visible = true;
+            write = input.as_bytes();
         } else if let Some(input) = &self.input_keyboard {
             let key = input.key();
             let modifiers = input.modifiers();
@@ -2620,15 +2601,12 @@ impl<'a> Context<'a, '_> {
                     _ => return false,
                 },
                 vk::INSERT => match modifiers {
-                    kbmod::SHIFT => {
-                        write = &self.tui.clipboard;
-                        write_raw = true;
-                    }
-                    kbmod::CTRL => self.set_clipboard(tb.extract_selection(false)),
+                    kbmod::SHIFT => tb.paste(self.clipboard_ref()),
+                    kbmod::CTRL => tb.copy(self.clipboard_mut()),
                     _ => tb.set_overtype(!tb.is_overtype()),
                 },
                 vk::DELETE => match modifiers {
-                    kbmod::SHIFT => self.set_clipboard(tb.extract_selection(true)),
+                    kbmod::SHIFT => tb.cut(self.clipboard_mut()),
                     kbmod::CTRL => tb.delete(CursorMovement::Word, 1),
                     _ => tb.delete(CursorMovement::Grapheme, 1),
                 },
@@ -2657,18 +2635,15 @@ impl<'a> Context<'a, '_> {
                     _ => return false,
                 },
                 vk::X => match modifiers {
-                    kbmod::CTRL => self.set_clipboard(tb.extract_selection(true)),
+                    kbmod::CTRL => tb.cut(self.clipboard_mut()),
                     _ => return false,
                 },
                 vk::C => match modifiers {
-                    kbmod::CTRL => self.set_clipboard(tb.extract_selection(false)),
+                    kbmod::CTRL => tb.copy(self.clipboard_mut()),
                     _ => return false,
                 },
                 vk::V => match modifiers {
-                    kbmod::CTRL => {
-                        write = &self.tui.clipboard;
-                        write_raw = true;
-                    }
+                    kbmod::CTRL => tb.paste(self.clipboard_ref()),
                     _ => return false,
                 },
                 vk::Y => match modifiers {
@@ -2694,8 +2669,9 @@ impl<'a> Context<'a, '_> {
             write = unicode::strip_newline(&write[..end]);
         }
         if !write.is_empty() {
-            tb.write(write, write_raw);
+            tb.write_canon(write);
             change_preferred_column = true;
+            make_cursor_visible = true;
         }
 
         if change_preferred_column {
