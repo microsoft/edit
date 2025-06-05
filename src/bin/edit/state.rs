@@ -144,9 +144,12 @@ pub struct State {
     pub search_options: buffer::SearchOptions,
     pub search_success: bool,
 
+    pub wants_encoding_picker: bool,
+    pub encoding_picker_needle: String,
+    pub encoding_picker_results: Option<Vec<icu::Encoding>>,
+
     pub wants_save: bool,
     pub wants_statusbar_focus: bool,
-    pub wants_encoding_picker: bool,
     pub wants_encoding_change: StateEncodingChange,
     pub wants_indentation_picker: bool,
     pub wants_document_picker: bool,
@@ -162,8 +165,6 @@ pub struct State {
     pub osc_clipboard_send_generation: u32,
     pub osc_clipboard_always_send: bool,
     pub exit: bool,
-
-    pub encoding_picker_needle: String,
 }
 
 impl State {
@@ -191,9 +192,12 @@ impl State {
             search_options: Default::default(),
             search_success: true,
 
+            wants_encoding_picker: false,
+            encoding_picker_needle: Default::default(),
+            encoding_picker_results: Default::default(),
+
             wants_save: false,
             wants_statusbar_focus: false,
-            wants_encoding_picker: false,
             wants_encoding_change: StateEncodingChange::None,
             wants_indentation_picker: false,
             wants_document_picker: false,
@@ -209,8 +213,6 @@ impl State {
             osc_clipboard_send_generation: 0,
             osc_clipboard_always_send: false,
             exit: false,
-
-            encoding_picker_needle: Default::default(),
         })
     }
 }
