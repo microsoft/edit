@@ -656,7 +656,12 @@ impl Regex {
     /// # Safety
     ///
     /// The caller must ensure that the given `Text` outlives the `Regex` instance.
-    pub unsafe fn set_text(&mut self, text: &Text, offset: usize) {
+    pub unsafe fn set_text(&mut self, text: &mut Text, offset: usize) {
+        // Get `utext_access_impl` to detect the `TextBuffer::generation` change,
+        // and refresh its contents. This ensures that ICU doesn't reuse
+        // stale `UText::chunk_contents`, as it has no way tell that it's stale.
+        utext_access(text.0, offset as i64, true);
+
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
         unsafe { (f.uregex_setUText)(self.0, text.0 as *const _ as *mut _, &mut status) };

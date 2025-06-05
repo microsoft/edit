@@ -157,7 +157,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             ),
         );
 
-        #[cfg(any(feature = "debug-layout", feature = "debug-latency"))]
+        #[cfg(feature = "debug-latency")]
         ctx.label(
             "stats",
             &arena_format!(ctx.arena(), "{}/{}", tb.logical_line_count(), tb.visual_line_count(),),

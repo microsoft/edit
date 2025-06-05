@@ -9,8 +9,7 @@
     linked_list_cursors,
     maybe_uninit_fill,
     maybe_uninit_slice,
-    maybe_uninit_uninit_array_transpose,
-    os_string_truncate
+    maybe_uninit_uninit_array_transpose
 )]
 #![allow(clippy::missing_transmute_annotations, clippy::new_without_default, stable_features)]
 

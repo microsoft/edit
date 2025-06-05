@@ -245,17 +245,9 @@ impl GapBuffer {
         self.text_length = 0;
     }
 
-    pub fn extract_raw(
-        &self,
-        mut beg: usize,
-        mut end: usize,
-        out: &mut Vec<u8>,
-        mut out_off: usize,
-    ) {
-        debug_assert!(beg <= end && end <= self.text_length);
-
-        end = end.min(self.text_length);
-        beg = beg.min(end);
+    pub fn extract_raw(&self, range: Range<usize>, out: &mut Vec<u8>, mut out_off: usize) {
+        let end = range.end.min(self.text_length);
+        let mut beg = range.start.min(end);
         out_off = out_off.min(out.len());
 
         if beg >= end {

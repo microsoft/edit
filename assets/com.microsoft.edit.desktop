@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Microsoft Edit
+GenericName=Text Editor
+Comment=A simple editor for simple needs
+Icon=edit
+Exec=edit %U
+Terminal=true
+MimeType=text/plain
+Keywords=text;editor

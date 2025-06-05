@@ -41,9 +41,11 @@ pub struct DisplayablePathBuf {
 
 impl DisplayablePathBuf {
     #[allow(dead_code, reason = "only used on Windows")]
-    pub fn from_string(str: String) -> Self {
-        let value = PathBuf::from(&str);
-        Self { value, str: Cow::Owned(str) }
+    pub fn from_string(string: String) -> Self {
+        let str = Cow::Borrowed(string.as_str());
+        let str = unsafe { mem::transmute::<Cow<'_, str>, Cow<'_, str>>(str) };
+        let value = PathBuf::from(string);
+        Self { value, str }
     }
 
     pub fn from_path(value: PathBuf) -> Self {
@@ -131,6 +133,7 @@ pub struct State {
 
     pub wants_file_picker: StateFilePicker,
     pub file_picker_pending_dir: DisplayablePathBuf,
+    pub file_picker_pending_dir_revision: u64, // Bumped every time `file_picker_pending_dir` changes.
     pub file_picker_pending_name: PathBuf,
     pub file_picker_entries: Option<Vec<DisplayablePathBuf>>,
     pub file_picker_overwrite_warning: Option<PathBuf>, // The path the warning is about.
@@ -177,6 +180,7 @@ impl State {
 
             wants_file_picker: StateFilePicker::None,
             file_picker_pending_dir: Default::default(),
+            file_picker_pending_dir_revision: 0,
             file_picker_pending_name: Default::default(),
             file_picker_entries: None,
             file_picker_overwrite_warning: None,

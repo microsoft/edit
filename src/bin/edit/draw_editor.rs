@@ -206,7 +206,6 @@ pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
 pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     let Some(doc) = state.documents.active() else {
         state.wants_close = false;
-        state.wants_exit = true;
         return;
     };
 
