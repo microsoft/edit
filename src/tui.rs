@@ -2321,21 +2321,6 @@ impl<'a> Context<'a, '_> {
 
             make_cursor_visible = true;
 
-
-            
-            // In textarea_handle_input(), if it's a single-line input field and receives ↑/↓ keys,
-            // directly return false, let the key bubble up to the outer layer.
-
-            // Logic:
-            // 1. When the cursor is in the file name input field, pressing ↓ will be captured by the outer
-            // layer logic and the focus will be switched to the autocomplete floating window;
-            // 2. After the floating window gains focus, the list component continues to receive and process
-            // subsequent ↑/↓ navigation;
-            // 3. Pressing ↑ from the top of the floating window will return to the input box.
-            if single_line && matches!(key, vk::UP | vk::DOWN) {
-                return false;
-            }
-
             match key {
                 vk::BACK => {
                     let granularity = if modifiers == kbmod::CTRL {
@@ -2526,6 +2511,9 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::UP => {
+                    if single_line {
+                        return false;
+                    }
                     match modifiers {
                         kbmod::NONE => {
                             let mut x = tc.preferred_column;
@@ -2583,57 +2571,62 @@ impl<'a> Context<'a, '_> {
                         tb.cursor_move_delta(granularity, 1);
                     }
                 }
-                vk::DOWN => match modifiers {
-                    kbmod::NONE => {
-                        let mut x = tc.preferred_column;
-                        let mut y = tb.cursor_visual_pos().y + 1;
-
-                        // If there's a selection we put the cursor below it.
-                        if let Some((_, end)) = tb.selection_range() {
-                            x = end.visual_pos.x;
-                            y = end.visual_pos.y + 1;
-                            tc.preferred_column = x;
-                        }
-
-                        // If the cursor was already on the last line,
-                        // move it to the end of the buffer.
-                        if y >= tb.visual_line_count() {
-                            x = CoordType::MAX;
-                        }
-
-                        tb.cursor_move_to_visual(Point { x, y });
-
-                        // If we fell into the `if y >= tb.get_visual_line_count()` above, we wanted to
-                        // update the `preferred_column` but didn't know yet what it was. Now we know!
-                        if x == CoordType::MAX {
-                            tc.preferred_column = tb.cursor_visual_pos().x;
-                        }
+                vk::DOWN => {
+                    if single_line {
+                        return false;
                     }
-                    kbmod::CTRL => {
-                        tc.scroll_offset.y += 1;
-                        make_cursor_visible = false;
-                    }
-                    kbmod::SHIFT => {
-                        // If the cursor was already on the last line,
-                        // move it to the end of the buffer.
-                        if tb.cursor_visual_pos().y >= tb.visual_line_count() - 1 {
-                            tc.preferred_column = CoordType::MAX;
-                        }
+                    match modifiers {
+                        kbmod::NONE => {
+                            let mut x = tc.preferred_column;
+                            let mut y = tb.cursor_visual_pos().y + 1;
 
-                        tb.selection_update_visual(Point {
-                            x: tc.preferred_column,
-                            y: tb.cursor_visual_pos().y + 1,
-                        });
+                            // If there's a selection we put the cursor below it.
+                            if let Some((_, end)) = tb.selection_range() {
+                                x = end.visual_pos.x;
+                                y = end.visual_pos.y + 1;
+                                tc.preferred_column = x;
+                            }
 
-                        if tc.preferred_column == CoordType::MAX {
-                            tc.preferred_column = tb.cursor_visual_pos().x;
+                            // If the cursor was already on the last line,
+                            // move it to the end of the buffer.
+                            if y >= tb.visual_line_count() {
+                                x = CoordType::MAX;
+                            }
+
+                            tb.cursor_move_to_visual(Point { x, y });
+
+                            // If we fell into the `if y >= tb.get_visual_line_count()` above, we wanted to
+                            // update the `preferred_column` but didn't know yet what it was. Now we know!
+                            if x == CoordType::MAX {
+                                tc.preferred_column = tb.cursor_visual_pos().x;
+                            }
                         }
+                        kbmod::CTRL => {
+                            tc.scroll_offset.y += 1;
+                            make_cursor_visible = false;
+                        }
+                        kbmod::SHIFT => {
+                            // If the cursor was already on the last line,
+                            // move it to the end of the buffer.
+                            if tb.cursor_visual_pos().y >= tb.visual_line_count() - 1 {
+                                tc.preferred_column = CoordType::MAX;
+                            }
+
+                            tb.selection_update_visual(Point {
+                                x: tc.preferred_column,
+                                y: tb.cursor_visual_pos().y + 1,
+                            });
+
+                            if tc.preferred_column == CoordType::MAX {
+                                tc.preferred_column = tb.cursor_visual_pos().x;
+                            }
+                        }
+                        kbmod::CTRL_ALT => {
+                            // TODO: Add cursor above
+                        }
+                        _ => return false,
                     }
-                    kbmod::CTRL_ALT => {
-                        // TODO: Add cursor above
-                    }
-                    _ => return false,
-                },
+                }
                 vk::INSERT => match modifiers {
                     kbmod::SHIFT => {
                         write = &self.tui.clipboard;
@@ -2980,6 +2973,23 @@ impl<'a> Context<'a, '_> {
             ListSelection::Selected
         } else {
             ListSelection::Unchanged
+        }
+    }
+
+    /// [`Context::steal_focus`], but for a list view.
+    ///
+    /// This exists, because didn't want to figure out how to get
+    /// [`Context::styled_list_item_end`] to recognize a regular,
+    /// programmatic focus steal.
+    pub fn list_item_steal_focus(&mut self) {
+        self.steal_focus();
+
+        match &mut self.tree.current_node.borrow_mut().content {
+            NodeContent::List(content) => {
+                content.selected = self.tree.last_node.borrow().id;
+                content.selected_node = Some(self.tree.last_node);
+            }
+            _ => unreachable!(),
         }
     }
 
@@ -3540,18 +3550,11 @@ impl<'a> NodeMap<'a> {
         // Since we aren't expected to have millions of nodes,
         // we allocate 4x the number of slots for a 25% fill factor.
         let width = (4 * tree.count + 1).ilog2().max(1) as usize;
-        let slot_count = 1 << width;
+        let slots = 1 << width;
         let shift = 64 - width;
-        let mask = (slot_count - 1) as u64;
+        let mask = (slots - 1) as u64;
 
-        let slots_uninit = arena.alloc_uninit_slice::<Option<&'a NodeCell<'a>>>(slot_count);
-        for slot in slots_uninit.iter_mut() {
-            slot.write(None);
-        }
-        // SAFETY: At this point every element of the slice is initialised (we just wrote `None`),
-        // so it is safe to reinterpret it as a slice of initialised values.
-        // Convert the slice to its initialised form (mutable for population).
-        let slots_slice_mut: &'a mut [Option<&'a NodeCell<'a>>] = unsafe { &mut *(slots_uninit as *mut [_] as *mut [Option<&'a NodeCell<'a>>]) };
+        let slots = arena.alloc_uninit_slice(slots).write_filled(None);
         let mut node = tree.root_first;
 
         loop {
@@ -3559,8 +3562,8 @@ impl<'a> NodeMap<'a> {
             let mut slot = n.id >> shift;
 
             loop {
-                if slots_slice_mut[slot as usize].is_none() {
-                    slots_slice_mut[slot as usize] = Some(node);
+                if slots[slot as usize].is_none() {
+                    slots[slot as usize] = Some(node);
                     break;
                 }
                 slot = (slot + 1) & mask;
@@ -3572,8 +3575,7 @@ impl<'a> NodeMap<'a> {
             };
         }
 
-        let slots_slice = &*slots_slice_mut;
-        Self { slots: slots_slice, shift, mask }
+        Self { slots, shift, mask }
     }
 
     /// Gets a node by its ID.

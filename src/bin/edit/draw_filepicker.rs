@@ -59,122 +59,73 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
             ctx.label("name-label", loc(LocId::SaveAsDialogNameLabel));
 
-            // If suggestions are open, allow Down/Up arrows to move focus into/out of them.
-            let suggestions_open = state
-                .file_picker_autocomplete
-                .as_ref()
-                .map_or(false, |s| !s.is_empty());
-
-            let filename_changed: bool =
-                ctx.editline("name", &mut state.file_picker_pending_name);
-
-            ctx.focus_on_first_present();
-            if state.wants_file_picker_file_name_focus {
-                ctx.steal_focus();
-                state.wants_file_picker_file_name_focus = false;
-            }
-            let filename_focused = ctx.is_focused();
-
-            if filename_changed && filename_focused {
-                update_autocomplete_suggestions(state);
-            }
-
-            if filename_focused {
-                // When the panel is available and the ↓ key is pressed, move focus to the first item in the panel.
-                if suggestions_open && ctx.consume_shortcut(vk::DOWN) {
-                    state.wants_file_picker_autocomplete_focus = true;
-                }
-                if ctx.consume_shortcut(vk::TAB) {
-                    if let Some(suggestions) = &state.file_picker_autocomplete {
-                        if !suggestions.is_empty() {
-                            let first_suggestion = suggestions[0].clone();
-                            state.file_picker_pending_name = first_suggestion.as_path().into();
-                            state.file_picker_autocomplete = None;
-                            ctx.needs_rerender();
-                        }
-                    } else {
-                        // If there are no suggestions, we can just move to the next field
-                        state.wants_file_picker_file_list_focus = true;
-                    }
-                }
-            }
-
+            let name_changed = ctx.editline("name", &mut state.file_picker_pending_name);
             ctx.inherit_focus();
-            if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
-                activated = true;
+
+            if ctx.contains_focus() {
+                if name_changed && ctx.is_focused() {
+                    update_autocomplete_suggestions(state);
+                }
+            } else if !state.file_picker_autocomplete.is_empty() {
+                state.file_picker_autocomplete.clear();
             }
 
-            // We may need to clear the panel after traversing the suggestions, so use a flag to delay the write back.
-            let mut autocomplete_clear = false;
+            if !state.file_picker_autocomplete.is_empty() {
+                let bg = ctx.indexed_alpha(IndexedColor::Background, 3, 4);
+                let fg = ctx.contrasted(bg);
+                let focus_list_beg = ctx.is_focused() && ctx.consume_shortcut(vk::DOWN);
+                let focus_list_end = ctx.is_focused() && ctx.consume_shortcut(vk::UP);
+                let mut autocomplete_done = ctx.consume_shortcut(vk::ESCAPE);
 
-            if let Some(suggestions) = &state.file_picker_autocomplete {
-                ctx.block_begin("autocomplete-panel");
-                if state.file_picker_autocomplete.as_ref()
-                        .map_or(false, |s| !s.is_empty()) {
-                    ctx.attr_float(FloatSpec {
-                        anchor: Anchor::Last,
-                        gravity_x: 0.0,
-                        gravity_y: 0.0,
-                        offset_x: 0.0,
-                        offset_y: 1.0,
-                    });
-                    ctx.attr_border();
-                    ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Background, 3, 4));
-                    ctx.attr_foreground_rgba(ctx.contrasted(ctx.indexed_alpha(IndexedColor::Background, 3, 4)));
-                    ctx.attr_padding(Rect { left: 0, top: 0, right: 0, bottom: 0 });
-
-                    ctx.list_begin("suggestions");
-                    ctx.inherit_focus();
-
-                    // If we want to give focus to the autocomplete panel (after pressing ↓),
-                    // then steal focus immediately after creating the first item.
-                    let mut need_focus_steal = state.wants_file_picker_autocomplete_focus;
-
-                    for (idx, suggestion) in suggestions.iter().enumerate() {
-                        let selected_now = state.file_picker_pending_name == suggestion.as_path();
-
-                        match ctx.list_item(selected_now, suggestion.as_str()) {
-                            ListSelection::Unchanged => {}
-                            ListSelection::Selected => {
-                                state.file_picker_pending_name = suggestion.as_path().into();
-                            }
-                            ListSelection::Activated => {
-                                state.file_picker_pending_name = suggestion.as_path().into();
-                                autocomplete_clear = true;
-                            }
-                        }
-
-                        // Steal focus when entering the list for the first time.
-                        if need_focus_steal {
-                            ctx.steal_focus();
-                            state.wants_file_picker_autocomplete_focus = false;
-                            need_focus_steal = false;
-                        }
-
-                        // Selected item style: when the node is focused, ListContent is already colored,
-                        // but we still need to know when synchronizing the text.
-                        if ctx.is_focused() {
+                ctx.list_begin("suggestions");
+                ctx.attr_float(FloatSpec {
+                    anchor: Anchor::Last,
+                    gravity_x: 0.0,
+                    gravity_y: 0.0,
+                    offset_x: 0.0,
+                    offset_y: 1.0,
+                });
+                ctx.attr_border();
+                ctx.attr_background_rgba(bg);
+                ctx.attr_foreground_rgba(fg);
+                {
+                    for (idx, suggestion) in state.file_picker_autocomplete.iter().enumerate() {
+                        let sel = ctx.list_item(false, suggestion.as_str());
+                        if sel != ListSelection::Unchanged {
                             state.file_picker_pending_name = suggestion.as_path().into();
-                        } else if suggestion.as_str().ends_with('/') {
-                            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Blue));
+                        }
+                        if sel == ListSelection::Activated {
+                            autocomplete_done = true;
                         }
 
-                        // If focused on the first item and the up arrow is pressed, return to the input box.
-                        if idx == 0 && ctx.is_focused() && ctx.consume_shortcut(vk::UP) {
-                            state.wants_file_picker_file_name_focus = true;
+                        let is_first = idx == 0;
+                        let is_last = idx == state.file_picker_autocomplete.len() - 1;
+                        if (is_first && focus_list_beg) || (is_last && focus_list_end) {
+                            ctx.list_item_steal_focus();
+                        } else if ctx.is_focused()
+                            && ((is_first && ctx.consume_shortcut(vk::UP))
+                                || (is_last && ctx.consume_shortcut(vk::DOWN)))
+                        {
                             ctx.toss_focus_up();
                         }
                     }
-
-                    ctx.list_end();
                 }
-                ctx.block_end();
+                ctx.list_end();
+
+                // If the user typed something, we want to put focus back into the editline.
+                // TODO: The input should be processed by the editline and not simply get swallowed.
+                if ctx.keyboard_input().is_some() {
+                    ctx.set_input_consumed();
+                    autocomplete_done = true;
+                }
+
+                if autocomplete_done {
+                    state.file_picker_autocomplete.clear();
+                }
             }
 
-            // If we need to clear the autocomplete panel, do it now to avoid borrowing conflicts.
-            if autocomplete_clear {
-                state.file_picker_autocomplete = None;
-                ctx.needs_rerender();
+            if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
+                activated = true;
             }
         }
         ctx.table_end();
@@ -200,10 +151,6 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         {
             ctx.list_begin("files");
             ctx.inherit_focus();
-            if state.wants_file_picker_file_list_focus {
-                ctx.steal_focus();
-                state.wants_file_picker_file_list_focus = false;
-            }
             for entry in files {
                 match ctx.list_item(false, entry.as_str()) {
                     ListSelection::Unchanged => {}
@@ -219,9 +166,6 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             if ctx.contains_focus() && ctx.consume_shortcut(vk::BACK) {
                 state.file_picker_pending_name = "..".into();
                 activated = true;
-            }
-            if ctx.contains_focus() && ctx.consume_shortcut(vk::TAB) {
-                state.wants_file_picker_file_name_focus = true;
             }
         }
         ctx.scrollarea_end();
@@ -343,12 +287,9 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     if dir != state.file_picker_pending_dir.as_path() {
         state.file_picker_pending_dir = DisplayablePathBuf::from_path(dir.to_path_buf());
         state.file_picker_entries = None;
-        state.file_picker_autocomplete = None;
     }
 
     state.file_picker_pending_name = name;
-
-    update_autocomplete_suggestions(state);
     if state.file_picker_pending_name.as_os_str().is_empty() { None } else { Some(path) }
 }
 
@@ -404,64 +345,35 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     });
 
     state.file_picker_entries = Some(files);
-    update_autocomplete_suggestions(state);
 }
 
 fn update_autocomplete_suggestions(state: &mut State) {
+    state.file_picker_autocomplete.clear();
+
     if state.file_picker_pending_name.as_os_str().is_empty() {
-        state.file_picker_autocomplete = None;
         return;
     }
 
-    let filename_input =
-        state.file_picker_pending_name.to_string_lossy().to_string().to_lowercase();
+    let needle = state.file_picker_pending_name.as_os_str().as_encoded_bytes();
+    let mut matches = Vec::new();
 
-
-    if let Some(files) = &state.file_picker_entries {
-        let mut matches = Vec::new();
-
-        for entry in files {
-            let entry_str = entry.as_str();
-
-            // Skip the parent directory entry ".." only.
-            if entry_str == ".." {
-                continue;
-            }
-
-            // Use prefix matching and contains matching
-            let entry_lower = entry_str.to_lowercase();
-            let match_score = if entry_lower.starts_with(&filename_input) {
-                // Prefix matches score high
-                10000 - entry_lower.len() as i32 // Shorter matches rank higher
-            } else if entry_lower.contains(&filename_input) {
-                // Non-prefix matches score lower
-                5000 - entry_lower.len() as i32
-            } else {
-                0
-            };
-
-            // If there is a match, add it to suggestions
-            if match_score > 0 {
-                matches.push((entry.clone(), match_score));
+    if let Some(entries) = &state.file_picker_entries {
+        // Remove the first entry, which is always "..".
+        for entry in &entries[1.min(entries.len())..] {
+            let haystack = entry.as_bytes();
+            // We only want items that are longer than the needle,
+            // because we're looking for suggestions, not for matches.
+            if haystack.len() > needle.len()
+                && let haystack = &haystack[..needle.len()]
+                && icu::compare_strings(haystack, needle) == Ordering::Equal
+            {
+                matches.push(entry.clone());
+                if matches.len() >= 5 {
+                    break; // Limit to 5 suggestions
+                }
             }
         }
-
-        // Sort by score
-        matches.sort_by(|a, b| b.1.cmp(&a.1));
-
-        let matches: Vec<DisplayablePathBuf> =
-            matches.into_iter().map(|(entry, _)| entry).collect();
-
-        // Limit the number of suggestions
-        const MAX_SUGGESTIONS: usize = 5;
-        let matches = if matches.len() > MAX_SUGGESTIONS {
-            matches[..MAX_SUGGESTIONS].to_vec()
-        } else {
-            matches
-        };
-
-        state.file_picker_autocomplete = if matches.is_empty() { None } else { Some(matches) };
-    } else {
-        state.file_picker_autocomplete = None;
     }
+
+    state.file_picker_autocomplete = matches;
 }
