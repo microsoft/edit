@@ -347,18 +347,18 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     ],
     // FileGoto
     [
-        /* en      */ "Go to Line/Column…",
-        /* de      */ "Gehe zu Zeile/Spalte…",
-        /* es      */ "Ir a línea/columna…",
-        /* fr      */ "Aller à la ligne/colonne…",
-        /* it      */ "Vai a riga/colonna…",
-        /* ja      */ "行/列へ移動…",
-        /* ko      */ "행/열로 이동…",
-        /* pl      */ "Idź do wiersza/kolumny…",
-        /* pt_br   */ "Ir para linha/coluna…",
-        /* ru      */ "Перейти к строке/столбцу…",
-        /* zh_hans */ "转到行/列…",
-        /* zh_hant */ "跳至行/列…",
+        /* en      */ "Go to Line:Column…",
+        /* de      */ "Gehe zu Zeile:Spalte…",
+        /* es      */ "Ir a línea:columna…",
+        /* fr      */ "Aller à la ligne:colonne…",
+        /* it      */ "Vai a riga:colonna…",
+        /* ja      */ "行:列へ移動…",
+        /* ko      */ "행:열로 이동…",
+        /* pl      */ "Idź do wiersza:kolumny…",
+        /* pt_br   */ "Ir para linha:coluna…",
+        /* ru      */ "Перейти к строке:столбцу…",
+        /* zh_hans */ "转到行:列…",
+        /* zh_hant */ "跳至行:列…",
     ],
 
     // Edit (a menu bar item)
@@ -700,7 +700,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // LargeClipboardWarningLine2
     [
         /* en      */ "You copied {size} which may take a long time to share.",
-        /* de      */ "Sie haben {size} kopiert, das Weitergeben könnte lange dauern.",
+        /* de      */ "Sie haben {size} kopiert. Das Weitergeben könnte länger dauern.",
         /* es      */ "Copiaste {size}, lo que puede tardar en compartirse.",
         /* fr      */ "Vous avez copié {size}, ce qui peut être long à partager.",
         /* it      */ "Hai copiato {size}, potrebbe richiedere molto tempo per condividerlo.",
