@@ -53,6 +53,8 @@ const MARGIN_TEMPLATE: &str = "                    │ ";
 /// Just a bunch of whitespace you can use for turning tabs into spaces.
 /// Happens to reuse MARGIN_TEMPLATE, because it has sufficient whitespace.
 const TAB_WHITESPACE: &str = MARGIN_TEMPLATE;
+const RENDERED_TAB_WHITESPACE: &str = "→       ";
+const RENDERED_WHITESPACE: &str = "⸱";
 
 /// Stores statistics about the whole document.
 #[derive(Copy, Clone)]
@@ -1516,6 +1518,7 @@ impl TextBuffer {
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut line = ArenaString::new_in(&scratch);
+        let mut line_whitespace_rendered = ArenaString::new_in(&scratch);
         let mut visual_pos_x_max = 0;
 
         // Pick the cursor closer to the `origin.y`.
@@ -1533,9 +1536,11 @@ impl TextBuffer {
         };
 
         line.reserve(width as usize * 2);
+        line_whitespace_rendered.reserve(width as usize * 2);
 
         for y in 0..height {
             line.clear();
+            line_whitespace_rendered.clear();
 
             let visual_line = origin.y + y;
             let mut cursor_beg =
@@ -1602,6 +1607,8 @@ impl TextBuffer {
                         let overlap = cursor_next.visual_pos.x - origin.x;
                         debug_assert!((1..=7).contains(&overlap));
                         line.push_str(&TAB_WHITESPACE[..overlap as usize]);
+                        line_whitespace_rendered
+                            .push_str(&RENDERED_TAB_WHITESPACE[..(overlap + 2) as usize]);
                         cursor_beg = cursor_next;
                     }
                 }
@@ -1629,9 +1636,12 @@ impl TextBuffer {
                         for chunk in chunk[beg..chunk_off].utf8_chunks() {
                             if !chunk.valid().is_empty() {
                                 line.push_str(chunk.valid());
+                                line_whitespace_rendered
+                                    .push_str(&chunk.valid().replace(' ', &RENDERED_WHITESPACE));
                             }
                             if !chunk.invalid().is_empty() {
                                 line.push('\u{FFFD}');
+                                line_whitespace_rendered.push('\u{FFFD}');
                             }
                         }
 
@@ -1648,11 +1658,16 @@ impl TextBuffer {
                                 );
                                 let tab_size = self.tab_size - (cursor_tab.column % self.tab_size);
                                 line.push_str(&TAB_WHITESPACE[..tab_size as usize]);
+                                line_whitespace_rendered
+                                    .push_str(&RENDERED_TAB_WHITESPACE[..(tab_size + 2) as usize]);
 
                                 // Since we know that we just aligned ourselves to the next tab stop,
                                 // we can trivially process any successive tabs.
                                 while chunk_off < chunk.len() && chunk[chunk_off] == b'\t' {
                                     line.push_str(&TAB_WHITESPACE[..self.tab_size as usize]);
+                                    line_whitespace_rendered.push_str(
+                                        &RENDERED_TAB_WHITESPACE[..(self.tab_size + 2) as usize],
+                                    );
                                     chunk_off += 1;
                                 }
                                 continue;
@@ -1665,6 +1680,8 @@ impl TextBuffer {
                             };
                             // Our manually constructed UTF8 is never going to be invalid. Trust.
                             line.push_str(unsafe { str::from_utf8_unchecked(&visualizer_buf) });
+                            line_whitespace_rendered
+                                .push_str(unsafe { str::from_utf8_unchecked(&visualizer_buf) });
 
                             cursor_visualizer = self.cursor_move_to_offset_internal(
                                 cursor_visualizer,
@@ -1740,6 +1757,49 @@ impl TextBuffer {
                 let fg = fb.contrasted(bg);
                 fb.blend_bg(rect, bg);
                 fb.blend_fg(rect, fg);
+
+                // Overwrite line in selection with whitespace rendered line's content
+                let beg_logical = beg - origin.x;
+                let end_logical = end - origin.x;
+                let beg_byte = line_whitespace_rendered
+                    .char_indices()
+                    .nth(beg_logical as usize)
+                    .map(|(i, _)| i)
+                    .unwrap_or(line_whitespace_rendered.len());
+                let end_byte = line_whitespace_rendered
+                    .char_indices()
+                    .nth(end_logical as usize)
+                    .map(|(i, _)| i)
+                    .unwrap_or(line_whitespace_rendered.len());
+                fb.replace_text(
+                    destination.top + y,
+                    destination.left + self.margin_width + beg_logical,
+                    destination.left + self.margin_width + end_logical,
+                    &line_whitespace_rendered[beg_byte..end_byte],
+                );
+
+                // Color rendered whitespaces
+                let mut cursor_whitespace_renderer = cursor_beg;
+                let mut whitespace_renderer_offset = beg;
+                while whitespace_renderer_offset < end {
+                    let ch_index =
+                        destination.left + whitespace_renderer_offset + self.margin_width
+                            - origin.x;
+                    let ch = line.chars().nth(ch_index as usize);
+
+                    if ch == Some(' ') || ch == Some('\t') {
+                        cursor_whitespace_renderer = self.cursor_move_to_offset_internal(
+                            cursor_whitespace_renderer,
+                            cursor_beg.offset + whitespace_renderer_offset as usize,
+                        );
+                        let left = ch_index;
+                        let top = destination.top + y;
+                        let rect = Rect { left, top, right: left + 1, bottom: top + 1 };
+                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
+                    }
+
+                    whitespace_renderer_offset += 1;
+                }
             }
 
             cursor = cursor_end;
