@@ -179,9 +179,10 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
 }
 
 pub fn draw_dialog_settings(ctx: &mut Context, state: &mut State) {
+    let button_style = ButtonStyle::default().bracketed(true);
     let doc = state.documents.active().unwrap();
     let mut tb = doc.buffer.borrow_mut();
-    let mut word_wrap = tb.is_word_wrap_enabled();
+    let word_wrap = tb.is_word_wrap_enabled();
 
     ctx.modal_begin("settings", loc(LocId::SettingsDialogTitle));
     {
@@ -198,8 +199,8 @@ pub fn draw_dialog_settings(ctx: &mut Context, state: &mut State) {
             ctx.attr_overflow(Overflow::TruncateTail);
             ctx.attr_position(Position::Center);
 
-            if ctx.checkbox("word-wrap", loc(LocId::ViewWordWrap), &mut word_wrap) {
-                tb.set_word_wrap(word_wrap);
+            if ctx.button("word-wrap", loc(LocId::ViewWordWrap), button_style.accelerator('W')) {
+                tb.set_word_wrap(!word_wrap);
                 ctx.needs_rerender();
             }
             ctx.attr_padding(Rect::three(1, 0, 0));
