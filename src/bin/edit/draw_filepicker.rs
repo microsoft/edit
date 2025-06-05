@@ -3,13 +3,13 @@
 
 use std::cmp::Ordering;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::input::vk;
 use edit::tui::*;
-use edit::{icu, path, sys};
+use edit::{icu, path};
 
 use crate::localization::*;
 use crate::state::*;
@@ -83,14 +83,12 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             },
         );
         ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
-        ctx.next_block_id_mixin(state.file_picker_pending_dir.as_str().len() as u64);
+        ctx.next_block_id_mixin(state.file_picker_pending_dir_revision);
         {
             ctx.list_begin("files");
             ctx.inherit_focus();
             for entry in files {
-                match ctx
-                    .list_item(state.file_picker_pending_name == entry.as_path(), entry.as_str())
-                {
+                match ctx.list_item(false, entry.as_str()) {
                     ListSelection::Unchanged => {}
                     ListSelection::Selected => {
                         state.file_picker_pending_name = entry.as_path().into()
@@ -114,9 +112,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             // Check if the file already exists and show an overwrite warning in that case.
             if state.wants_file_picker != StateFilePicker::Open
                 && let Some(path) = doit.as_deref()
-                && let Some(doc) = state.documents.active()
-                && let Some(file_id) = &doc.file_id
-                && sys::file_id(None, path).is_ok_and(|id| &id == file_id)
+                && path.exists()
             {
                 state.file_picker_overwrite_warning = doit.take();
             }
@@ -133,6 +129,8 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
         ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
         {
+            let contains_focus = ctx.contains_focus();
+
             ctx.label("description", loc(LocId::FileOverwriteWarningDescription));
             ctx.attr_overflow(Overflow::TruncateTail);
             ctx.attr_padding(Rect::three(1, 2, 1));
@@ -146,18 +144,20 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 ctx.table_next_row();
                 ctx.inherit_focus();
 
-                save = ctx.button("yes", loc(LocId::Yes));
+                save = ctx.button("yes", loc(LocId::Yes), ButtonStyle::default());
                 ctx.inherit_focus();
 
-                if ctx.button("no", loc(LocId::No)) {
+                if ctx.button("no", loc(LocId::No), ButtonStyle::default()) {
                     state.file_picker_overwrite_warning = None;
                 }
             }
             ctx.table_end();
 
-            save |= ctx.consume_shortcut(vk::Y);
-            if ctx.consume_shortcut(vk::N) {
-                state.file_picker_overwrite_warning = None;
+            if contains_focus {
+                save |= ctx.consume_shortcut(vk::Y);
+                if ctx.consume_shortcut(vk::N) {
+                    state.file_picker_overwrite_warning = None;
+                }
             }
         }
         if ctx.modal_end() {
@@ -196,19 +196,31 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
 // Returns Some(path) if the path refers to a file.
 fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
-    let path = state.file_picker_pending_dir.as_path();
-    let path = path.join(&state.file_picker_pending_name);
+    let old_path = state.file_picker_pending_dir.as_path();
+    let path = old_path.join(&state.file_picker_pending_name);
     let path = path::normalize(&path);
 
     let (dir, name) = if path.is_dir() {
-        (path.as_path(), PathBuf::new())
+        // If the current path is C:\ and the user selects "..", we want to
+        // navigate to the drive picker. Since `path::normalize` will turn C:\.. into C:\,
+        // we can detect this by checking if the length of the path didn't change.
+        let dir = if cfg!(windows)
+            && state.file_picker_pending_name == Path::new("..")
+            // It's unnecessary to check the contents of the paths.
+            && old_path.as_os_str().len() == path.as_os_str().len()
+        {
+            Path::new("")
+        } else {
+            path.as_path()
+        };
+        (dir, PathBuf::new())
     } else {
         let dir = path.parent().unwrap_or(&path);
         let name = path.file_name().map_or(Default::default(), |s| s.into());
         (dir, name)
     };
     if dir != state.file_picker_pending_dir.as_path() {
-        state.file_picker_pending_dir = DisplayablePathBuf::new(dir.to_path_buf());
+        state.file_picker_pending_dir = DisplayablePathBuf::from_path(dir.to_path_buf());
         state.file_picker_entries = None;
     }
 
@@ -219,9 +231,23 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
 fn draw_dialog_saveas_refresh_files(state: &mut State) {
     let dir = state.file_picker_pending_dir.as_path();
     let mut files = Vec::new();
+    let mut off = 0;
 
-    if dir.parent().is_some() {
+    #[cfg(windows)]
+    if dir.as_os_str().is_empty() {
+        // If the path is empty, we are at the drive picker.
+        // Add all drives as entries.
+        for drive in edit::sys::drives() {
+            files.push(DisplayablePathBuf::from_string(format!("{drive}:\\")));
+        }
+
+        state.file_picker_entries = Some(files);
+        return;
+    }
+
+    if cfg!(windows) || dir.parent().is_some() {
         files.push(DisplayablePathBuf::from(".."));
+        off = 1;
     }
 
     if let Ok(iter) = fs::read_dir(dir) {
@@ -240,7 +266,6 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     }
 
     // Sort directories first, then by name, case-insensitive.
-    let off = files.len().saturating_sub(1);
     files[off..].sort_by(|a, b| {
         let a = a.as_bytes();
         let b = b.as_bytes();

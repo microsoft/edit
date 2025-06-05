@@ -34,7 +34,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::str;
 
-use gap_buffer::GapBuffer;
+pub use gap_buffer::GapBuffer;
 
 use crate::arena::{ArenaString, scratch_arena};
 use crate::cell::SemiRefCell;
@@ -204,6 +204,7 @@ pub struct TextBuffer {
     ruler: CoordType,
     encoding: &'static str,
     newlines_are_crlf: bool,
+    insert_final_newline: bool,
     overtype: bool,
 
     wants_cursor_visibility: bool,
@@ -249,7 +250,8 @@ impl TextBuffer {
             line_highlight_enabled: false,
             ruler: 0,
             encoding: "UTF-8",
-            newlines_are_crlf: cfg!(windows), // Unfortunately Windows users insist on CRLF
+            newlines_are_crlf: cfg!(windows), // Windows users want CRLF
+            insert_final_newline: false,
             overtype: false,
 
             wants_cursor_visibility: false,
@@ -310,6 +312,11 @@ impl TextBuffer {
     /// The newline type used in the document. LF or CRLF.
     pub fn is_crlf(&self) -> bool {
         self.newlines_are_crlf
+    }
+
+    /// Changes the newline type without normalizing the document.
+    pub fn set_crlf(&mut self, crlf: bool) {
+        self.newlines_are_crlf = crlf;
     }
 
     /// Changes the newline type used in the document.
@@ -381,6 +388,12 @@ impl TextBuffer {
         self.newlines_are_crlf = crlf;
     }
 
+    /// If enabled, automatically insert a final newline
+    /// when typing at the end of the file.
+    pub fn set_insert_final_newline(&mut self, enabled: bool) {
+        self.insert_final_newline = enabled;
+    }
+
     /// Whether to insert or overtype text when writing.
     pub fn is_overtype(&self) -> bool {
         self.overtype
@@ -414,7 +427,7 @@ impl TextBuffer {
             false
         } else {
             self.margin_enabled = enabled;
-            self.reflow(true);
+            self.reflow();
             true
         }
     }
@@ -469,7 +482,7 @@ impl TextBuffer {
             false
         } else {
             self.width = width;
-            self.reflow(true);
+            self.reflow();
             true
         }
     }
@@ -486,7 +499,7 @@ impl TextBuffer {
             false
         } else {
             self.tab_size = width;
-            self.reflow(true);
+            self.reflow();
             true
         }
     }
@@ -511,7 +524,7 @@ impl TextBuffer {
         self.ruler = column;
     }
 
-    fn reflow(&mut self, force: bool) {
+    pub fn reflow(&mut self) {
         // +1 onto logical_lines, because line numbers are 1-based.
         // +1 onto log10, because we want the digit width and not the actual log10.
         // +3 onto log10, because we append " | " to the line numbers to form the margin.
@@ -523,24 +536,25 @@ impl TextBuffer {
 
         let text_width = self.text_width();
         // 2 columns are required, because otherwise wide glyphs wouldn't ever fit.
-        let word_wrap_column =
+        self.word_wrap_column =
             if self.word_wrap_enabled && text_width >= 2 { text_width } else { 0 };
 
-        if force || self.word_wrap_column > word_wrap_column {
-            self.word_wrap_column = word_wrap_column;
-
-            if self.cursor.offset != 0 {
-                self.cursor = self
-                    .cursor_move_to_logical_internal(Default::default(), self.cursor.logical_pos);
-            }
-
-            // Recalculate the line statistics.
-            if self.word_wrap_enabled {
-                let end = self.cursor_move_to_logical_internal(self.cursor, Point::MAX);
-                self.stats.visual_lines = end.visual_pos.y + 1;
+        // Recalculate the cursor position.
+        self.cursor = self.cursor_move_to_logical_internal(
+            if self.word_wrap_column > 0 {
+                Default::default()
             } else {
-                self.stats.visual_lines = self.stats.logical_lines;
-            }
+                self.goto_line_start(self.cursor, self.cursor.logical_pos.y)
+            },
+            self.cursor.logical_pos,
+        );
+
+        // Recalculate the line statistics.
+        if self.word_wrap_column > 0 {
+            let end = self.cursor_move_to_logical_internal(self.cursor, Point::MAX);
+            self.stats.visual_lines = end.visual_pos.y + 1;
+        } else {
+            self.stats.visual_lines = self.stats.logical_lines;
         }
 
         self.cursor_for_rendering = None;
@@ -570,7 +584,7 @@ impl TextBuffer {
         self.set_selection(None);
         self.search = None;
         self.mark_as_clean();
-        self.reflow(true);
+        self.reflow();
     }
 
     /// Copies the contents of the buffer into a string.
@@ -621,6 +635,7 @@ impl TextBuffer {
         // * the logical line count
         // * the newline type (LF or CRLF)
         // * the indentation type (tabs or spaces)
+        // * whether there's a final newline
         {
             let chunk = self.read_forward(0);
             let mut offset = 0;
@@ -711,10 +726,13 @@ impl TextBuffer {
                 (_, lines) = unicode::newlines_forward(chunk, offset, lines, CoordType::MAX);
             }
 
+            let final_newline = chunk.ends_with(b"\n");
+
             // Add 1, because the last line doesn't end in a newline (it ends in the literal end).
             self.stats.logical_lines = lines + 1;
             self.stats.visual_lines = self.stats.logical_lines;
             self.newlines_are_crlf = newlines_are_crlf;
+            self.insert_final_newline = final_newline;
             self.indent_with_tabs = indent_with_tabs;
             self.tab_size = tab_size;
         }
@@ -903,9 +921,14 @@ impl TextBuffer {
     }
 
     fn set_selection(&mut self, selection: Option<TextBufferSelection>) -> u32 {
-        self.selection = selection;
+        self.selection = selection.filter(|s| s.beg != s.end);
         self.selection_generation = self.selection_generation.wrapping_add(1);
         self.selection_generation
+    }
+
+    /// Moves the cursor by `offset` and updates the selection to contain it.
+    pub fn selection_update_offset(&mut self, offset: usize) {
+        self.set_cursor_for_selection(self.cursor_move_to_offset_internal(self.cursor, offset));
     }
 
     /// Moves the cursor to `visual_pos` and updates the selection to contain it.
@@ -1083,6 +1106,10 @@ impl TextBuffer {
         pattern: &str,
         options: SearchOptions,
     ) -> apperr::Result<ActiveSearch> {
+        if pattern.is_empty() {
+            return Err(apperr::Error::Icu(1)); // U_ILLEGAL_ARGUMENT_ERROR
+        }
+
         let sanitized_pattern = if options.whole_word && options.use_regex {
             Cow::Owned(format!(r"\b(?:{pattern})\b"))
         } else if options.whole_word {
@@ -1136,11 +1163,10 @@ impl TextBuffer {
 
     fn find_select_next(&mut self, search: &mut ActiveSearch, offset: usize, wrap: bool) {
         if search.buffer_generation != self.buffer.generation() {
-            unsafe { search.regex.set_text(&search.text) };
+            unsafe { search.regex.set_text(&mut search.text, offset) };
             search.buffer_generation = self.buffer.generation();
-        }
-
-        if search.next_search_offset != offset {
+            search.next_search_offset = offset;
+        } else if search.next_search_offset != offset {
             search.next_search_offset = offset;
             search.regex.reset(offset);
         }
@@ -1241,7 +1267,7 @@ impl TextBuffer {
                 self.measurement_config().with_cursor(top).goto_logical(bottom.logical_pos);
 
             // The second problem is that visual positions can be ambiguous. A single logical position
-            // can map to two visual positions: One at the end of the preceeding line in front of
+            // can map to two visual positions: One at the end of the preceding line in front of
             // a word wrap, and another at the start of the next line after the same word wrap.
             //
             // This, however, only applies if we go upwards, because only then `bottom ≅ cursor`,
@@ -1322,7 +1348,7 @@ impl TextBuffer {
 
         if self.word_wrap_column <= 0 {
             // Identical to the fast-pass in `cursor_move_to_logical_internal()`.
-            if pos.y != cursor.logical_pos.y || pos.x < cursor.logical_pos.x {
+            if pos.y != cursor.visual_pos.y || pos.x < cursor.visual_pos.x {
                 cursor = self.goto_line_start(cursor, pos.y);
             }
         } else {
@@ -1590,6 +1616,7 @@ impl TextBuffer {
 
                 let mut global_off = cursor_beg.offset;
                 let mut cursor_tab = cursor_beg;
+                let mut cursor_visualizer = cursor_beg;
 
                 while global_off < cursor_end.offset {
                     let chunk = self.read_forward(global_off);
@@ -1639,6 +1666,25 @@ impl TextBuffer {
                             };
                             // Our manually constructed UTF8 is never going to be invalid. Trust.
                             line.push_str(unsafe { str::from_utf8_unchecked(&visualizer_buf) });
+
+                            cursor_visualizer = self.cursor_move_to_offset_internal(
+                                cursor_visualizer,
+                                global_off + chunk_off - 1,
+                            );
+                            let visualizer_rect = {
+                                let left = destination.left
+                                    + self.margin_width
+                                    + cursor_visualizer.visual_pos.x
+                                    - origin.x;
+                                let top =
+                                    destination.top + cursor_visualizer.visual_pos.y - origin.y;
+                                Rect { left, top, right: left + 1, bottom: top + 1 }
+                            };
+
+                            let bg = fb.indexed(IndexedColor::Yellow);
+                            let fg = fb.contrasted(bg);
+                            fb.blend_bg(visualizer_rect, bg);
+                            fb.blend_fg(visualizer_rect, fg);
                         }
                     }
 
@@ -1895,6 +1941,22 @@ impl TextBuffer {
             }
         }
 
+        // POSIX mandates that all valid lines end in a newline.
+        // This isn't all that common on Windows and so we have
+        // `self.final_newline` to control this.
+        //
+        // In order to not annoy people with this, we only add a
+        // newline if you just edited the very end of the buffer.
+        if self.insert_final_newline
+            && self.cursor.offset > 0
+            && self.cursor.offset == self.text_length()
+            && self.cursor.logical_pos.x > 0
+        {
+            let cursor = self.cursor;
+            self.edit_write(if self.newlines_are_crlf { b"\r\n" } else { b"\n" });
+            self.set_cursor_internal(cursor);
+        }
+
         self.edit_end();
     }
 
@@ -1904,7 +1966,9 @@ impl TextBuffer {
     /// The selection is cleared after the call.
     /// Deletes characters from the buffer based on a delta from the cursor.
     pub fn delete(&mut self, granularity: CursorMovement, delta: CoordType) {
-        debug_assert!(delta == -1 || delta == 1);
+        if delta == 0 {
+            return;
+        }
 
         let mut beg;
         let mut end;
@@ -1912,8 +1976,8 @@ impl TextBuffer {
         if let Some(r) = self.selection_range_internal(false) {
             (beg, end) = r;
         } else {
-            if (delta == -1 && self.cursor.offset == 0)
-                || (delta == 1 && self.cursor.offset >= self.text_length())
+            if (delta < 0 && self.cursor.offset == 0)
+                || (delta > 0 && self.cursor.offset >= self.text_length())
             {
                 // Nothing to delete.
                 return;
@@ -1962,12 +2026,12 @@ impl TextBuffer {
         Point { x: chars, y: cursor.logical_pos.y }
     }
 
-    fn get_indent_type_preference(&self, delta: i32) -> Vec<u8> {
+    fn get_indent_type_preference(&self, delta: isize) -> Vec<u8> {
         if self.indent_with_tabs { vec![b'\t'; delta as usize] } 
         else { vec![b' '; delta as usize * self.tab_size as usize] }
     }
 
-    fn get_bytes_to_unindent_by(line: &[u8], cursor_pos: usize, tab_size: usize) -> (usize, usize) {
+    fn get_bytes_to_unindent_by(line: &[u8], cursor_pos: usize, tab_size: usize) -> (isize, usize) {
         let mut start = cursor_pos;
         let mut width = 0;
         let mut pos = cursor_pos;
@@ -1979,10 +2043,10 @@ impl TextBuffer {
                 _ => break,
             }
         }
-        (line[start..cursor_pos].iter().filter(|&&b| b == b' ' || b == b'\t').count(), start)
+        (line[start..cursor_pos].iter().filter(|&&b| b == b' ' || b == b'\t').count() as isize, start)
     }
     
-    fn update_cursor_after_indent(&mut self, change_x: i32, selection_range: Option<(Point, Point)>, cursor_pos: Point) {
+    fn update_cursor_after_indent(&mut self, change_x: isize, selection_range: Option<(Point, Point)>, cursor_pos: Point) {
         match selection_range {
             Some((beg, end)) => {
                 self.selection = Some(TextBufferSelection {
@@ -1998,19 +2062,19 @@ impl TextBuffer {
         }
     }
     
-    fn apply_indent_to_line(&mut self, delta: i32, start_point: Point, selection_range: Option<(Point, Point)>, cursor_pos: Point) {
+    fn apply_indent_to_line(&mut self, delta: isize, start_point: Point, selection_range: Option<(Point, Point)>, cursor_pos: Point) {
         if delta > 0 {
             let insert_offset = self.cursor_move_to_logical_internal(self.cursor, start_point).offset;
             self.edit_begin(HistoryType::Other, self.cursor_move_to_offset_internal(self.cursor, insert_offset));
             self.edit_write(&self.get_indent_type_preference(delta));
             self.edit_end();
-            let width_delta = if self.indent_with_tabs { delta } else { delta * self.tab_size };
+            let width_delta: isize = if self.indent_with_tabs { delta } else { delta * self.tab_size };
             self.update_cursor_after_indent(width_delta, selection_range, cursor_pos);
         } else {
             let line_start = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: start_point.y });
             let target_offset = self.cursor_move_to_logical_internal(line_start, start_point).offset;
             let mut line_bytes = Vec::new();
-            self.buffer.extract_raw(line_start.offset, target_offset, &mut line_bytes, 0);
+            self.buffer.extract_raw(line_start.offset..target_offset, &mut line_bytes, 0);
             let cursor_byte_offset = target_offset - line_start.offset;
             let (removed_count, del_start) = Self::get_bytes_to_unindent_by(&line_bytes, cursor_byte_offset, self.tab_size as usize);
             if removed_count > 0 {
@@ -2019,12 +2083,12 @@ impl TextBuffer {
                 self.edit_begin(HistoryType::Other, self.cursor_move_to_offset_internal(self.cursor, del_start_offset));
                 self.edit_delete(self.cursor_move_to_offset_internal(self.cursor, del_end_offset));
                 self.edit_end();
-                self.update_cursor_after_indent(-(removed_count as i32), selection_range, cursor_pos);
+                self.update_cursor_after_indent(-(removed_count as isize), selection_range, cursor_pos);
             }
         }
     }
 
-    fn handle_current_line_indent(&mut self, delta: i32) {
+    fn handle_current_line_indent(&mut self, delta: isize) {
         let cursor_pos = self.cursor.logical_pos;
         let (start_point, selection_range) = self.selection
             .map(|sel| { let [start, end] = minmax(sel.beg, sel.end); (start, Some((start, end))) })
@@ -2032,7 +2096,7 @@ impl TextBuffer {
         self.apply_indent_to_line(delta, start_point, selection_range, cursor_pos);
     }
 
-    fn handle_multi_line_indent(&mut self, delta: i32) {
+    fn handle_multi_line_indent(&mut self, delta: isize) {
         let sel = self.selection.unwrap(); // We know it's multiline, so selection exists
         let [start, end] = minmax(sel.beg, sel.end);
         
@@ -2044,10 +2108,10 @@ impl TextBuffer {
                 let line_start_cursor = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: line_y });
                 let mut temp_bytes = Vec::new();
                 let sample_end = (line_start_cursor.offset + (self.tab_size as usize * 2).min(50)).min(self.buffer.len());
-                self.buffer.extract_raw(line_start_cursor.offset, sample_end, &mut temp_bytes, 0);
+                self.buffer.extract_raw(line_start_cursor.offset..sample_end, &mut temp_bytes, 0);
                 let whitespace_end = temp_bytes.iter().take_while(|&&b| matches!(b, b' ' | b'\t')).count();
                 let cursor_x = if whitespace_end > 0 { whitespace_end.min(self.tab_size as usize) } else { 0 };
-                self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, Point { x: cursor_x as i32, y: line_y }));
+                self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, Point { x: cursor_x as isize, y: line_y }));
             }
             self.handle_current_line_indent(delta); 
         }
@@ -2062,7 +2126,7 @@ impl TextBuffer {
     }
 
     // Changes the indent of the current selection or line.
-    pub fn change_indent(&mut self, delta: i32) {
+    pub fn change_indent(&mut self, delta: isize) {
         let is_multiline = self.selection.map(|sel| { let [start, end] = minmax(sel.beg, sel.end); start.y != end.y }).unwrap_or(false);
         
         if is_multiline {
@@ -2080,7 +2144,7 @@ impl TextBuffer {
         };
 
         let mut out = Vec::new();
-        self.buffer.extract_raw(beg.offset, end.offset, &mut out, 0);
+        self.buffer.extract_raw(beg.offset..end.offset, &mut out, 0);
 
         if delete && !out.is_empty() {
             self.edit_begin(HistoryType::Delete, beg);
@@ -2227,7 +2291,7 @@ impl TextBuffer {
 
         // Copy the deleted portion into the undo entry.
         let deleted = &mut undo.deleted;
-        self.buffer.extract_raw(off, to.offset, deleted, out_off);
+        self.buffer.extract_raw(off..to.offset, deleted, out_off);
 
         // Delete the portion from the buffer by enlarging the gap.
         let count = to.offset - off;
@@ -2282,9 +2346,7 @@ impl TextBuffer {
         }
 
         self.search = None;
-
-        // Also takes care of clearing `cursor_for_rendering`.
-        self.reflow(false);
+        self.cursor_for_rendering = None;
     }
 
     /// Undo the last edit operation.
@@ -2398,8 +2460,7 @@ impl TextBuffer {
             }
         }
 
-        // Also takes care of clearing `cursor_for_rendering`.
-        self.reflow(false);
+        self.cursor_for_rendering = None;
     }
 
     /// For interfacing with ICU.

@@ -18,6 +18,21 @@ use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::helpers::*;
 use crate::{apperr, arena_format};
 
+#[cfg(target_os = "netbsd")]
+const fn desired_mprotect(flags: c_int) -> c_int {
+    // NetBSD allows an mmap(2) caller to specify what protection flags they
+    // will use later via mprotect. It does not allow a caller to move from
+    // PROT_NONE to PROT_READ | PROT_WRITE.
+    //
+    // see PROT_MPROTECT in man 2 mmap
+    flags << 3
+}
+
+#[cfg(not(target_os = "netbsd"))]
+const fn desired_mprotect(_: c_int) -> c_int {
+    libc::PROT_NONE
+}
+
 struct State {
     stdin: libc::c_int,
     stdin_flags: libc::c_int,
@@ -379,7 +394,7 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
         let ptr = libc::mmap(
             null_mut(),
             size,
-            libc::PROT_NONE,
+            desired_mprotect(libc::PROT_READ | libc::PROT_WRITE),
             libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
             -1,
             0,
