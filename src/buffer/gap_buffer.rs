@@ -2,12 +2,11 @@
 // Licensed under the MIT License.
 
 use std::ops::Range;
-use std::ptr::{self, NonNull};
-use std::slice;
 
+use super::virtual_mem::VirtualMemory;
+use crate::apperr;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::helpers::*;
-use crate::{apperr, sys};
 
 #[cfg(target_pointer_width = "32")]
 const LARGE_CAPACITY: usize = 128 * MEBI;
@@ -23,18 +22,8 @@ const SMALL_GAP_CHUNK: usize = 16;
 // TODO: Instead of having a specialization for small buffers here,
 // tui.rs could also just keep a MRU set of large buffers around.
 enum BackingBuffer {
-    VirtualMemory(NonNull<u8>, usize),
+    VirtualMemory(VirtualMemory),
     Vec(Vec<u8>),
-}
-
-impl Drop for BackingBuffer {
-    fn drop(&mut self) {
-        unsafe {
-            if let Self::VirtualMemory(ptr, reserve) = *self {
-                sys::virtual_release(ptr, reserve);
-            }
-        }
-    }
 }
 
 /// Most people know how Vec<T> works: It has some spare capacity at the end,
@@ -42,8 +31,6 @@ impl Drop for BackingBuffer {
 /// is the same thing, but the spare capacity can be anywhere in the buffer.
 /// This variant is optimized for large buffers and uses virtual memory.
 pub struct GapBuffer {
-    /// Pointer to the buffer.
-    text: NonNull<u8>,
     /// Maximum size of the buffer, including gap.
     reserve: usize,
     /// Size of the buffer, including gap.
@@ -65,20 +52,16 @@ impl GapBuffer {
     pub fn new(small: bool) -> apperr::Result<Self> {
         let reserve;
         let buffer;
-        let text;
 
         if small {
             reserve = SMALL_CAPACITY;
-            text = NonNull::dangling();
             buffer = BackingBuffer::Vec(Vec::new());
         } else {
             reserve = LARGE_CAPACITY;
-            text = unsafe { sys::virtual_reserve(reserve)? };
-            buffer = BackingBuffer::VirtualMemory(text, reserve);
+            buffer = BackingBuffer::VirtualMemory(unsafe { VirtualMemory::new(LARGE_CAPACITY) });
         }
 
         Ok(Self {
-            text,
             reserve,
             commit: 0,
             text_length: 0,
@@ -124,7 +107,13 @@ impl GapBuffer {
         }
 
         self.generation = self.generation.wrapping_add(1);
-        unsafe { slice::from_raw_parts_mut(self.text.add(self.gap_off).as_ptr(), self.gap_len) }
+
+        match &mut self.buffer {
+            BackingBuffer::VirtualMemory(buf) => {
+                &mut buf[self.gap_off..self.gap_off + self.gap_len]
+            }
+            BackingBuffer::Vec(buf) => &mut buf[self.gap_off..self.gap_off + self.gap_len],
+        }
     }
 
     fn move_gap(&mut self, off: usize) {
@@ -147,11 +136,23 @@ impl GapBuffer {
             let move_dst = if left { off + self.gap_len } else { self.gap_off };
             let move_len = if left { self.gap_off - off } else { off - self.gap_off };
 
-            unsafe { self.text.add(move_src).copy_to(self.text.add(move_dst), move_len) };
+            match &mut self.buffer {
+                BackingBuffer::VirtualMemory(buf) => {
+                    buf.copy_within(move_src..move_src + move_len, move_dst)
+                }
+                BackingBuffer::Vec(vec) => vec.copy_within(move_src..move_src + move_len, move_dst),
+            }
 
             if cfg!(debug_assertions) {
                 // Fill the moved-out bytes with 0xCD to make debugging easier.
-                unsafe { self.text.add(off).write_bytes(0xCD, self.gap_len) };
+                match &mut self.buffer {
+                    BackingBuffer::VirtualMemory(buf) => unsafe {
+                        buf.as_mut_ptr().add(off).write_bytes(0xCD, self.gap_len)
+                    },
+                    BackingBuffer::Vec(buf) => unsafe {
+                        buf.as_mut_ptr().add(off).write_bytes(0xCD, self.gap_len)
+                    },
+                }
             }
         }
 
@@ -161,7 +162,15 @@ impl GapBuffer {
     fn delete_text(&mut self, delete: usize) {
         if cfg!(debug_assertions) {
             // Fill the deleted bytes with 0xCD to make debugging easier.
-            unsafe { self.text.add(self.gap_off + self.gap_len).write_bytes(0xCD, delete) };
+            let old_gap = self.gap_off + self.gap_len;
+            match &mut self.buffer {
+                BackingBuffer::VirtualMemory(buf) => unsafe {
+                    buf.as_mut_ptr().add(old_gap).write_bytes(0xCD, self.gap_len)
+                },
+                BackingBuffer::Vec(buf) => unsafe {
+                    buf.as_mut_ptr().add(old_gap).write_bytes(0xCD, self.gap_len)
+                },
+            }
         }
 
         self.gap_len += delete;
@@ -186,6 +195,8 @@ impl GapBuffer {
         let bytes_old = self.commit;
         let bytes_new = self.text_length + gap_len_new;
 
+        // If the size of the new buf after expanding the gap is larger the an the currently committed range,
+        // we have to expand the commited range
         if bytes_new > bytes_old {
             let bytes_new = (bytes_new + alloc_chunk - 1) & !(alloc_chunk - 1);
 
@@ -194,32 +205,43 @@ impl GapBuffer {
             }
 
             match &mut self.buffer {
-                BackingBuffer::VirtualMemory(ptr, _) => unsafe {
-                    if sys::virtual_commit(ptr.add(bytes_old), bytes_new - bytes_old).is_err() {
+                BackingBuffer::VirtualMemory(buf) => unsafe {
+                    if buf.commit(bytes_new - bytes_old).is_err() {
                         return;
                     }
                 },
-                BackingBuffer::Vec(v) => {
-                    v.resize(bytes_new, 0);
-                    self.text = unsafe { NonNull::new_unchecked(v.as_mut_ptr()) };
+                BackingBuffer::Vec(buf) => {
+                    buf.resize(bytes_new, 0);
                 }
             }
 
             self.commit = bytes_new;
         }
 
-        let gap_beg = unsafe { self.text.add(self.gap_off) };
-        unsafe {
-            ptr::copy(
-                gap_beg.add(gap_len_old).as_ptr(),
-                gap_beg.add(gap_len_new).as_ptr(),
-                self.text_length - self.gap_off,
-            )
+        // When the gap expands, it will consume the contents bordering it.
+        // Those contents need to be moved out of the newly enlarged gap
+        let gap_end_old = self.gap_off + gap_len_old;
+        let gap_end_new = self.gap_off + gap_len_new;
+        let buf_contents_len = self.text_length - self.gap_off;
+        match &mut self.buffer {
+            BackingBuffer::VirtualMemory(buf) => {
+                buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_end_new);
+            }
+            BackingBuffer::Vec(buf) => {
+                buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_end_new);
+            }
         };
 
         if cfg!(debug_assertions) {
             // Fill the moved-out bytes with 0xCD to make debugging easier.
-            unsafe { gap_beg.add(gap_len_old).write_bytes(0xCD, gap_len_new - gap_len_old) };
+            match &mut self.buffer {
+                BackingBuffer::VirtualMemory(buf) => unsafe {
+                    buf.as_mut_ptr().add(gap_len_old).write_bytes(0xCD, gap_len_new - gap_len_old)
+                },
+                BackingBuffer::Vec(buf) => unsafe {
+                    buf.as_mut_ptr().add(gap_len_old).write_bytes(0xCD, gap_len_new - gap_len_old)
+                },
+            }
         }
 
         self.gap_len = gap_len_new;
@@ -344,7 +366,10 @@ impl ReadableDocument for GapBuffer {
             len = self.text_length - off;
         }
 
-        unsafe { slice::from_raw_parts(self.text.add(beg).as_ptr(), len) }
+        match &self.buffer {
+            BackingBuffer::VirtualMemory(buf) => &buf[beg..beg + len],
+            BackingBuffer::Vec(buf) => &buf[beg..beg + len],
+        }
     }
 
     fn read_backward(&self, off: usize) -> &[u8] {
@@ -364,6 +389,9 @@ impl ReadableDocument for GapBuffer {
             len = off - self.gap_off;
         }
 
-        unsafe { slice::from_raw_parts(self.text.add(beg).as_ptr(), len) }
+        match &self.buffer {
+            BackingBuffer::VirtualMemory(buf) => &buf[beg..beg + len],
+            BackingBuffer::Vec(buf) => &buf[beg..beg + len],
+        }
     }
 }

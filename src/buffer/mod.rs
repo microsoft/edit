@@ -22,6 +22,7 @@
 
 mod gap_buffer;
 mod navigation;
+mod virtual_mem;
 
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
