@@ -46,6 +46,7 @@ pub enum LocId {
 
     // Help menu
     Help,
+    HelpSettings,
     HelpAbout,
 
     // Exit dialog
@@ -57,6 +58,10 @@ pub enum LocId {
     // About dialog
     AboutDialogTitle,
     AboutDialogVersion,
+
+    // Settings dialog
+    SettingsDialogTitle,
+    SettingsDialogDescription,
 
     // Shown when the clipboard size exceeds the limit for OSC 52
     LargeClipboardWarningLine1,
@@ -542,6 +547,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "帮助",
         /* zh_hant */ "幫助",
     ],
+    // HelpSettings
+    [
+        /* en      */ "Settings…",
+        /* de      */ "Einstellungen…",
+        /* es      */ "Configuración…",
+        /* fr      */ "Paramètres…",
+        /* it      */ "Impostazioni…",
+        /* ja      */ "設定…",
+        /* ko      */ "설정…",
+        /* pt_br   */ "Configurações…",
+        /* ru      */ "Настройки…",
+        /* zh_hans */ "设置…",
+        /* zh_hant */ "設定…",
+    ],
     // HelpAbout
     [
         /* en      */ "About",
@@ -641,6 +660,35 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Версия: ",
         /* zh_hans */ "版本: ",
         /* zh_hant */ "版本: ",
+    ],
+
+    // SettingsDialogTitle
+    [
+        /* en      */ "Settings",
+        /* de      */ "Einstellungen",
+        /* es      */ "Configuración",
+        /* fr      */ "Paramètres",
+        /* it      */ "Impostazioni",
+        /* ja      */ "設定",
+        /* ko      */ "설정",
+        /* pt_br   */ "Configurações",
+        /* ru      */ "Настройки",
+        /* zh_hans */ "设置",
+        /* zh_hant */ "設定",
+    ],
+    // SettingsDialogDescription
+    [
+        /* en      */ "Configure Microsoft Edit settings.",
+        /* de      */ "Konfigurieren Sie die Einstellungen von Microsoft Edit.",
+        /* es      */ "Configura la configuración de Microsoft Edit.",
+        /* fr      */ "Configurez les paramètres de Microsoft Edit.",
+        /* it      */ "Configura le impostazioni di Microsoft Edit.",
+        /* ja      */ "Microsoft Edit の設定を行います。",
+        /* ko      */ "Microsoft Edit 설정을 구성합니다.",
+        /* pt_br   */ "Configure as configurações do Microsoft Edit.",
+        /* ru      */ "Настройте параметры Microsoft Edit.",
+        /* zh_hans */ "配置 Microsoft Edit 设置。",
+        /* zh_hant */ "設定 Microsoft Edit 的選項。",
     ],
 
     // Shown when the clipboard size exceeds the limit for OSC 52

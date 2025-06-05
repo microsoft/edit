@@ -314,6 +314,9 @@ fn draw(ctx: &mut Context, state: &mut State) {
     if state.wants_document_picker {
         draw_document_picker(ctx, state);
     }
+    if state.wants_settings {
+        draw_dialog_settings(ctx, state);
+    }
     if state.wants_about {
         draw_dialog_about(ctx, state);
     }
