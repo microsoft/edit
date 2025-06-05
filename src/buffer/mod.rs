@@ -44,7 +44,7 @@ use crate::helpers::*;
 use crate::oklab::oklab_blend;
 use crate::simd::memchr2;
 use crate::unicode::{self, Cursor, MeasurementConfig};
-use crate::{apperr, icu};
+use crate::{apperr, icu, simd};
 
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,
@@ -341,7 +341,7 @@ impl TextBuffer {
                     break 'outer;
                 }
 
-                let (delta, line) = unicode::newlines_forward(chunk, 0, 0, 1);
+                let (delta, line) = simd::lines_fwd(chunk, 0, 0, 1);
                 off += delta;
                 if line == 1 {
                     break;
@@ -684,7 +684,7 @@ impl TextBuffer {
                     }
                 }
 
-                (offset, lines) = unicode::newlines_forward(chunk, offset, lines, lines + 1);
+                (offset, lines) = simd::lines_fwd(chunk, offset, lines, lines + 1);
 
                 // Check if the preceding line ended in CRLF.
                 if offset >= 2 && &chunk[offset - 2..offset] == b"\r\n" {
@@ -723,7 +723,7 @@ impl TextBuffer {
 
             // If the file has more than 1000 lines, figure out how many are remaining.
             if offset < chunk.len() {
-                (_, lines) = unicode::newlines_forward(chunk, offset, lines, CoordType::MAX);
+                (_, lines) = simd::lines_fwd(chunk, offset, lines, CoordType::MAX);
             }
 
             let final_newline = chunk.ends_with(b"\n");
@@ -1219,7 +1219,7 @@ impl TextBuffer {
                     break;
                 }
 
-                let (delta, line) = unicode::newlines_forward(chunk, 0, result.logical_pos.y, y);
+                let (delta, line) = simd::lines_fwd(chunk, 0, result.logical_pos.y, y);
                 result.offset += delta;
                 result.logical_pos.y = line;
             }
@@ -1239,8 +1239,7 @@ impl TextBuffer {
                     break;
                 }
 
-                let (delta, line) =
-                    unicode::newlines_backward(chunk, chunk.len(), result.logical_pos.y, y);
+                let (delta, line) = simd::lines_bwd(chunk, chunk.len(), result.logical_pos.y, y);
                 result.offset -= chunk.len() - delta;
                 result.logical_pos.y = line;
                 if delta > 0 {
@@ -2409,7 +2408,7 @@ impl TextBuffer {
                 let mut offset = cursor.offset;
 
                 while beg < added.len() {
-                    let (end, line) = unicode::newlines_forward(added, beg, 0, 1);
+                    let (end, line) = simd::lines_fwd(added, beg, 0, 1);
                     let has_newline = line != 0;
                     let link = &added[beg..end];
                     let line = unicode::strip_newline(link);
