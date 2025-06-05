@@ -201,6 +201,7 @@ pub struct TextBuffer {
     tab_size: CoordType,
     indent_with_tabs: bool,
     line_highlight_enabled: bool,
+    line_numbers: bool,
     ruler: CoordType,
     encoding: &'static str,
     newlines_are_crlf: bool,
@@ -248,6 +249,7 @@ impl TextBuffer {
             tab_size: 4,
             indent_with_tabs: false,
             line_highlight_enabled: false,
+            line_numbers: true,
             ruler: 0,
             encoding: "UTF-8",
             newlines_are_crlf: cfg!(windows), // Windows users want CRLF
@@ -517,6 +519,19 @@ impl TextBuffer {
     /// Sets whether the line the cursor is on should be highlighted.
     pub fn set_line_highlight_enabled(&mut self, enabled: bool) {
         self.line_highlight_enabled = enabled;
+    }
+
+    /// Returns whether line numbers are enabled.
+    pub fn is_line_numbers_enabled(&self) -> bool {
+        self.line_numbers
+    }
+
+    /// Sets the visibility of row numbers.
+    pub fn set_line_numbers(&mut self, enabled: bool) {
+        if self.line_numbers != enabled {
+            self.line_numbers = enabled;
+            self.reflow();
+        }
     }
 
     /// Sets a ruler column, e.g. 80.
@@ -1551,7 +1566,7 @@ impl TextBuffer {
                 self.cursor_for_rendering = Some(cursor_beg);
             }
 
-            if line_number_width != 0 {
+            if line_number_width != 0 && self.line_numbers {
                 if visual_line >= self.stats.visual_lines {
                     // Past the end of the buffer? Place "    | " in the margin.
                     // Since we know that we won't see line numbers greater than i64::MAX (9223372036854775807)

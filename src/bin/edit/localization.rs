@@ -43,6 +43,7 @@ pub enum LocId {
     ViewFocusStatusbar,
     ViewWordWrap,
     ViewDocumentPicker,
+    ViewLineNumbers,
 
     // Help menu
     Help,
@@ -526,6 +527,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Выбор документа…",
         /* zh_hans */ "文档选择器…",
         /* zh_hant */ "文件選擇器…",
+    ],
+    // ViewLineNumbers
+    [
+        /* en      */ "Show Line Numbers",
+        /* de      */ "Zeilennummern anzeigen",
+        /* es      */ "Mostrar números de línea",
+        /* fr      */ "Afficher les numéros de ligne",
+        /* it      */ "Mostra numeri di riga",
+        /* ja      */ "行番号を表示する",
+        /* ko      */ "줄 번호 표시",
+        /* pt_br   */ "Mostrar números de linha",
+        /* ru      */ "Показать номера строк",
+        /* zh_hans */ "显示行号",
+        /* zh_hant */ "顯示行號",
     ],
 
     // Help (a menu bar item)
