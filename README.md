@@ -10,7 +10,7 @@ This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/
 
 [![Packaging status](https://repology.org/badge/vertical-allrepos/microsoft-edit.svg?exclude_unsupported=1)](https://repology.org/project/microsoft-edit/versions)
 
-You can also download binaries from our [Release page](https://github.com/microsoft/edit/releases/latest).
+You can also download binaries from [our Releases page](https://github.com/microsoft/edit/releases/latest).
 
 ### Windows
 
