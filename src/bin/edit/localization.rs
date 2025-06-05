@@ -61,7 +61,8 @@ pub enum LocId {
 
     // Settings dialog
     SettingsDialogTitle,
-    SettingsDialogDescription,
+    SettingsDialogDescription1,
+    SettingsDialogDescription2,
 
     // Shown when the clipboard size exceeds the limit for OSC 52
     LargeClipboardWarningLine1,
@@ -676,7 +677,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "设置",
         /* zh_hant */ "設定",
     ],
-    // SettingsDialogDescription
+    // SettingsDialogDescription1
     [
         /* en      */ "Configure Microsoft Edit settings.",
         /* de      */ "Konfigurieren Sie die Einstellungen von Microsoft Edit.",
@@ -689,6 +690,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Настройте параметры Microsoft Edit.",
         /* zh_hans */ "配置 Microsoft Edit 设置。",
         /* zh_hant */ "設定 Microsoft Edit 的選項。",
+    ],
+    // SettingsDialogDescription2
+    [
+        /* en      */ "You can also configure settings per file in the editor.",
+        /* de      */ "Sie können auch Einstellungen pro Datei im Editor konfigurieren.",
+        /* es      */ "También puedes configurar la configuración por archivo en el editor.",
+        /* fr      */ "Vous pouvez également configurer les paramètres par fichier dans l’éditeur.",
+        /* it      */ "Puoi anche configurare le impostazioni per file nell'editor.",
+        /* ja      */ "エディターでファイルごとに設定を行うこともできます。",
+        /* ko      */ "편집기에서 파일별로 설정을 구성할 수 있습니다.",
+        /* pt_br   */ "Você também pode configurar as configurações por arquivo no editor.",
+        /* ru      */ "Вы также можете настроить параметры для файла в редакторе.",
+        /* zh_hans */ "您还可以在编辑器中为每个文件配置设置。",
+        /* zh_hant */ "您也可以在編輯器中為每個檔案設定選項。",
     ],
 
     // Shown when the clipboard size exceeds the limit for OSC 52

@@ -179,13 +179,29 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
 }
 
 pub fn draw_dialog_settings(ctx: &mut Context, state: &mut State) {
+    let doc = state.documents.active().unwrap();
+    let mut tb = doc.buffer.borrow_mut();
+    let mut word_wrap = tb.is_word_wrap_enabled();
+
     ctx.modal_begin("settings", loc(LocId::SettingsDialogTitle));
     {
         ctx.block_begin("content");
         ctx.inherit_focus();
-        ctx.attr_padding(Rect::three(1, 2, 1));
+        ctx.attr_padding(Rect::three(1, 1, 1));
         {
-            ctx.label("description", loc(LocId::SettingsDialogDescription));
+            ctx.label("description1", loc(LocId::SettingsDialogDescription1));
+            ctx.attr_overflow(Overflow::TruncateTail);
+            ctx.attr_position(Position::Center);
+
+            ctx.label("description2", loc(LocId::SettingsDialogDescription2));
+            ctx.attr_background_rgba(0xFF00FFFF);
+            ctx.attr_overflow(Overflow::TruncateTail);
+            ctx.attr_position(Position::Center);
+
+            if ctx.checkbox("word-wrap", loc(LocId::ViewWordWrap), &mut word_wrap) {
+                tb.set_word_wrap(word_wrap);
+                ctx.needs_rerender();
+            }
             ctx.attr_overflow(Overflow::TruncateTail);
             ctx.attr_position(Position::Center);
 
