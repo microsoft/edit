@@ -81,6 +81,15 @@ enum HistoryType {
     Delete,
 }
 
+/// The line number type controls how the line numbers are rendered.
+#[derive(Default, Copy, Clone, Eq, PartialEq)]
+enum LineNumber {
+    Absent,
+    #[default]
+    Present,
+    Relative,
+}
+
 /// An undo/redo entry.
 struct HistoryEntry {
     /// [`TextBuffer::cursor`] position before the change was made.
@@ -195,12 +204,12 @@ pub struct TextBuffer {
 
     width: CoordType,
     margin_width: CoordType,
-    margin_enabled: bool,
     word_wrap_column: CoordType,
     word_wrap_enabled: bool,
     tab_size: CoordType,
     indent_with_tabs: bool,
     line_highlight_enabled: bool,
+    line_numbers: LineNumber,
     ruler: CoordType,
     encoding: &'static str,
     newlines_are_crlf: bool,
@@ -242,12 +251,12 @@ impl TextBuffer {
 
             width: 0,
             margin_width: 0,
-            margin_enabled: false,
             word_wrap_column: 0,
             word_wrap_enabled: false,
             tab_size: 4,
             indent_with_tabs: false,
             line_highlight_enabled: false,
+            line_numbers: LineNumber::Relative,
             ruler: 0,
             encoding: "UTF-8",
             newlines_are_crlf: cfg!(windows), // Windows users want CRLF
@@ -421,17 +430,6 @@ impl TextBuffer {
         self.margin_width
     }
 
-    /// Is the left margin enabled?
-    pub fn set_margin_enabled(&mut self, enabled: bool) -> bool {
-        if self.margin_enabled == enabled {
-            false
-        } else {
-            self.margin_enabled = enabled;
-            self.reflow();
-            true
-        }
-    }
-
     /// Gets the width of the text contents for layout.
     pub fn text_width(&self) -> CoordType {
         self.width - self.margin_width
@@ -504,6 +502,11 @@ impl TextBuffer {
         }
     }
 
+    /// Sets a ruler column, e.g. 80.
+    pub fn set_ruler(&mut self, column: CoordType) {
+        self.ruler = column;
+    }
+
     /// Returns whether tabs are used for indentation.
     pub fn indent_with_tabs(&self) -> bool {
         self.indent_with_tabs
@@ -519,16 +522,37 @@ impl TextBuffer {
         self.line_highlight_enabled = enabled;
     }
 
-    /// Sets a ruler column, e.g. 80.
-    pub fn set_ruler(&mut self, column: CoordType) {
-        self.ruler = column;
+    /// Returns whether line numbers are visible.
+    pub fn is_line_numbers_enabled(&self) -> bool {
+        self.line_numbers != LineNumber::Absent
+    }
+
+    /// Returns whether line numbers are visible and relative.
+    pub fn is_relative_line_numbers(&self) -> bool {
+        self.line_numbers == LineNumber::Relative
+    }
+
+    /// Sets the visibility of row numbers.
+    pub fn set_line_numbers(&mut self, enabled: bool) {
+        self.line_numbers = if enabled { LineNumber::Present } else { LineNumber::Absent };
+        self.reflow();
+    }
+
+    /// Sets the visibility of relative row numbers.
+    pub fn set_relative_line_numbers(&mut self, enabled: bool) {
+        self.line_numbers = if enabled {
+            LineNumber::Relative
+        } else {
+            LineNumber::Present
+        };
+        self.reflow();
     }
 
     pub fn reflow(&mut self) {
         // +1 onto logical_lines, because line numbers are 1-based.
         // +1 onto log10, because we want the digit width and not the actual log10.
         // +3 onto log10, because we append " | " to the line numbers to form the margin.
-        self.margin_width = if self.margin_enabled {
+        self.margin_width = if self.line_numbers != LineNumber::Absent {
             self.stats.logical_lines.ilog10() as CoordType + 4
         } else {
             0
@@ -1512,11 +1536,16 @@ impl TextBuffer {
         let scratch = scratch_arena(None);
         let width = destination.width();
         let height = destination.height();
-        let line_number_width = self.margin_width.max(3) as usize - 3;
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut line = ArenaString::new_in(&scratch);
         let mut visual_pos_x_max = 0;
+
+        let line_number_width = if self.line_numbers != LineNumber::Absent {
+            self.margin_width.max(3) as usize - 3 
+        } else { 
+            0
+        };
 
         // Pick the cursor closer to the `origin.y`.
         let mut cursor = {
@@ -1551,6 +1580,14 @@ impl TextBuffer {
             }
 
             if line_number_width != 0 {
+                let line_number = cursor_beg.logical_pos.y + 1;
+                let mut print_number = line_number;
+                if self.line_numbers == LineNumber::Relative {
+                    let cursor_position = self.cursor.logical_pos.y + 1;
+                    let relative_postion = (line_number - cursor_position).abs();
+                    print_number = if relative_postion == 0 { line_number } else { relative_postion };
+                };
+
                 if visual_line >= self.stats.visual_lines {
                     // Past the end of the buffer? Place "    | " in the margin.
                     // Since we know that we won't see line numbers greater than i64::MAX (9223372036854775807)
@@ -1561,10 +1598,10 @@ impl TextBuffer {
                     line.push_str(&MARGIN_TEMPLATE[off..]);
                 } else if self.word_wrap_column <= 0 || cursor_beg.logical_pos.x == 0 {
                     // Regular line? Place "123 | " in the margin.
-                    _ = write!(line, "{:1$} │ ", cursor_beg.logical_pos.y + 1, line_number_width);
+                    _ = write!(line, "{:1$} │ ", print_number, line_number_width);
                 } else {
                     // Wrapped line? Place " ... | " in the margin.
-                    let number_width = (cursor_beg.logical_pos.y + 1).ilog10() as usize + 1;
+                    let number_width = print_number.ilog10() as usize + 1;
                     _ = write!(
                         line,
                         "{0:1$}{0:∙<2$} │ ",
