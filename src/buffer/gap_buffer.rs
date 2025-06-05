@@ -1,14 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::alloc::{Allocator, Layout};
 use std::ops::Range;
-use std::ptr::NonNull;
 
-use super::virtual_mem::{VALLOCATOR, VirtualAllocator};
+use super::virtual_mem::VirtualMemory;
+use crate::apperr;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::helpers::*;
-use crate::{apperr, sys};
 
 #[cfg(target_pointer_width = "32")]
 const LARGE_CAPACITY: usize = 128 * MEBI;
@@ -24,7 +22,7 @@ const SMALL_GAP_CHUNK: usize = 16;
 // TODO: Instead of having a specialization for small buffers here,
 // tui.rs could also just keep a MRU set of large buffers around.
 enum BackingBuffer {
-    VirtualMemory(Box<[u8], VirtualAllocator>),
+    VirtualMemory(VirtualMemory),
     Vec(Vec<u8>),
 }
 
@@ -60,13 +58,7 @@ impl GapBuffer {
             buffer = BackingBuffer::Vec(Vec::new());
         } else {
             reserve = LARGE_CAPACITY;
-            let ptr = unsafe {
-                VALLOCATOR
-                    .allocate(Layout::from_size_align_unchecked(LARGE_CAPACITY, align_of::<u8>()))
-                    .unwrap()
-            };
-            let buf = unsafe { Box::from_non_null_in(ptr, VALLOCATOR) };
-            buffer = BackingBuffer::VirtualMemory(buf);
+            buffer = BackingBuffer::VirtualMemory(unsafe { VirtualMemory::new(LARGE_CAPACITY) });
         }
 
         Ok(Self {
@@ -117,7 +109,9 @@ impl GapBuffer {
         self.generation = self.generation.wrapping_add(1);
 
         match &mut self.buffer {
-            BackingBuffer::VirtualMemory(buf) => &mut buf[off..off + self.gap_len],
+            BackingBuffer::VirtualMemory(buf) => {
+                &mut buf[self.gap_off..self.gap_off + self.gap_len]
+            }
             BackingBuffer::Vec(buf) => &mut buf[self.gap_off..self.gap_off + self.gap_len],
         }
     }
@@ -151,19 +145,13 @@ impl GapBuffer {
 
             if cfg!(debug_assertions) {
                 // Fill the moved-out bytes with 0xCD to make debugging easier.
-                let start = self.gap_off;
-                let end = start + self.gap_len;
                 match &mut self.buffer {
-                    BackingBuffer::VirtualMemory(buf) => {
-                        for i in start..end {
-                            buf[i] = 0;
-                        }
-                    }
-                    BackingBuffer::Vec(buf) => {
-                        for i in start..end {
-                            buf[i] = 0;
-                        }
-                    }
+                    BackingBuffer::VirtualMemory(buf) => unsafe {
+                        buf.as_mut_ptr().add(off).write_bytes(0xCD, self.gap_len)
+                    },
+                    BackingBuffer::Vec(buf) => unsafe {
+                        buf.as_mut_ptr().add(off).write_bytes(0xCD, self.gap_len)
+                    },
                 }
             }
         }
@@ -174,17 +162,14 @@ impl GapBuffer {
     fn delete_text(&mut self, delete: usize) {
         if cfg!(debug_assertions) {
             // Fill the deleted bytes with 0xCD to make debugging easier.
+            let old_gap = self.gap_off + self.gap_len;
             match &mut self.buffer {
-                BackingBuffer::VirtualMemory(buf) => {
-                    for i in self.gap_off + self.gap_len..delete {
-                        buf[i] = 0;
-                    }
-                }
-                BackingBuffer::Vec(buf) => {
-                    for i in self.gap_off + self.gap_len..delete {
-                        buf[i] = 0;
-                    }
-                }
+                BackingBuffer::VirtualMemory(buf) => unsafe {
+                    buf.as_mut_ptr().add(old_gap).write_bytes(0xCD, self.gap_len)
+                },
+                BackingBuffer::Vec(buf) => unsafe {
+                    buf.as_mut_ptr().add(old_gap).write_bytes(0xCD, self.gap_len)
+                },
             }
         }
 
@@ -210,6 +195,8 @@ impl GapBuffer {
         let bytes_old = self.commit;
         let bytes_new = self.text_length + gap_len_new;
 
+        // If the size of the new buf after expanding the gap is larger the an the currently committed range,
+        // we have to expand the commited range
         if bytes_new > bytes_old {
             let bytes_new = (bytes_new + alloc_chunk - 1) & !(alloc_chunk - 1);
 
@@ -219,14 +206,7 @@ impl GapBuffer {
 
             match &mut self.buffer {
                 BackingBuffer::VirtualMemory(buf) => unsafe {
-                    // This function appears to expand the range of the initiallized memory past the boundries of the new gap
-                    // iow I guess it's notifying the program that the bytes after the gap are initialized because the were not previously
-                    if sys::virtual_commit(
-                        NonNull::new_unchecked(buf.as_mut_ptr()).add(bytes_old),
-                        bytes_new - bytes_old,
-                    )
-                    .is_err()
-                    {
+                    if buf.commit(bytes_new - bytes_old).is_err() {
                         return;
                     }
                 },
@@ -241,32 +221,26 @@ impl GapBuffer {
         // When the gap expands, it will consume the contents bordering it.
         // Those contents need to be moved out of the newly enlarged gap
         let gap_end_old = self.gap_off + gap_len_old;
-        let gap_len_new = self.gap_off + gap_len_new;
+        let gap_end_new = self.gap_off + gap_len_new;
         let buf_contents_len = self.text_length - self.gap_off;
         match &mut self.buffer {
             BackingBuffer::VirtualMemory(buf) => {
-                buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_len_new);
+                buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_end_new);
             }
             BackingBuffer::Vec(buf) => {
-                buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_len_new);
+                buf.copy_within(gap_end_old..gap_end_old + buf_contents_len, gap_end_new);
             }
         };
 
         if cfg!(debug_assertions) {
-            let start = self.gap_off + gap_len_old;
-            let end = start + gap_len_new - gap_len_old;
             // Fill the moved-out bytes with 0xCD to make debugging easier.
             match &mut self.buffer {
-                BackingBuffer::VirtualMemory(buf) => {
-                    for i in start..end {
-                        buf[i] = 0;
-                    }
-                }
-                BackingBuffer::Vec(buf) => {
-                    for i in start..end {
-                        buf[i] = 0;
-                    }
-                }
+                BackingBuffer::VirtualMemory(buf) => unsafe {
+                    buf.as_mut_ptr().add(gap_len_old).write_bytes(0xCD, gap_len_new - gap_len_old)
+                },
+                BackingBuffer::Vec(buf) => unsafe {
+                    buf.as_mut_ptr().add(gap_len_old).write_bytes(0xCD, gap_len_new - gap_len_old)
+                },
             }
         }
 
