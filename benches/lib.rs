@@ -53,7 +53,11 @@ fn bench_buffer(c: &mut Criterion) {
 
         let mut actual = String::new();
         tb.save_as_string(&mut actual);
-        assert_eq!(actual, data.end_content);
+        if actual != data.end_content {
+            // TODO: I did this because the assert prints the entire zst which is sort of obnoxious
+            // no reason to actually keep this change in a final version
+            panic!("assertion `left == right` failed")
+        }
     }
 
     let bench_gap_buffer = || {
