@@ -730,14 +730,14 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SuperLargeClipboardWarning (as an alternative to LargeClipboardWarningLine2 and 3)
     [
         /* en      */ "The text you copied is too large to be shared.",
-        /* de      */ "Der kopierte Text ist zu el_GRoß, um geteilt zu werden.",
+        /* de      */ "Der kopierte Text ist zu groß, um geteilt zu werden.",
         /* el_GR   */ "Το κείμενο που αντιγράψατε είναι πολύ μεγάλο για να κοινοποιηθεί.",
-        /* es      */ "El texto que copiaste es demasiado el_GRande para compartirse.",
+        /* es      */ "El texto que copiaste es demasiado grande para compartirse.",
         /* fr      */ "Le texte que vous avez copié est trop volumineux pour être partagé.",
-        /* it      */ "Il testo copiato è troppo el_GRande per essere condiviso.",
+        /* it      */ "Il testo copiato è troppo grande per essere condiviso.",
         /* ja      */ "コピーしたテキストは大きすぎて共有できません。",
         /* ko      */ "복사한 텍스트가 너무 커서 공유할 수 없습니다.",
-        /* pt_br   */ "O texto copiado é el_GRande demais para ser compartilhado.",
+        /* pt_br   */ "O texto copiado é grande demais para ser compartilhado.",
         /* ru      */ "Скопированный текст слишком велик для передачи.",
         /* zh_hans */ "你复制的文本过大，无法共享。",
         /* zh_hant */ "您複製的文字過大，無法分享。",
@@ -823,7 +823,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchMatchCase (toggle)
     [
         /* en      */ "Match Case",
-        /* de      */ "el_GRoß/Klein",
+        /* de      */ "Groß/Klein",
         /* el_GR   */ "Μεγάλα/μικρά",
         /* es      */ "May/Min",
         /* fr      */ "Resp. la casse",
@@ -896,7 +896,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "關閉",
     ],
 
-    // Encodinel_GReopen
+    // EncodingReopen
     [
         /* en      */ "Reopen with encoding…",
         /* de      */ "Mit Kodierung erneut öffnen…",
