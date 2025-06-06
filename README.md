@@ -27,6 +27,13 @@ We're aware of the potential conflict of "edit" with existing commands and as su
 Names such as "ms-edit" should be avoided.
 Assigning an "edit" alias is recommended if possible.
 
+### Pacman (Arch Linux)
+
+* Run the following command on the terminal:
+  ```bash
+  sudo pacman -S ms-edit
+  ```
+  
 ## Build Instructions
 
 * [Install Rust](https://www.rust-lang.org/tools/install)
