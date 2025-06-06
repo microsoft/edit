@@ -44,10 +44,10 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         ReplaceAll,
     }
 
-    if let Err(err) = icu::init() {
-        error_log_add(ctx, state, err);
-        state.wants_search.kind = StateSearchKind::Disabled;
-        return;
+    let mut use_icu = true;
+
+    if let Err(_) = icu::init() {
+        use_icu = false;
     }
 
     let Some(doc) = state.documents.active() else {
@@ -130,21 +130,23 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 
             ctx.table_next_row();
 
-            change |= ctx.checkbox(
-                "match-case",
-                loc(LocId::SearchMatchCase),
-                &mut state.search_options.match_case,
-            );
-            change |= ctx.checkbox(
-                "whole-word",
-                loc(LocId::SearchWholeWord),
-                &mut state.search_options.whole_word,
-            );
-            change |= ctx.checkbox(
-                "use-regex",
-                loc(LocId::SearchUseRegex),
-                &mut state.search_options.use_regex,
-            );
+            if use_icu {
+                change |= ctx.checkbox(
+                    "match-case",
+                    loc(LocId::SearchMatchCase),
+                    &mut state.search_options.match_case,
+                );
+                change |= ctx.checkbox(
+                    "whole-word",
+                    loc(LocId::SearchWholeWord),
+                    &mut state.search_options.whole_word,
+                );
+                change |= ctx.checkbox(
+                    "use-regex",
+                    loc(LocId::SearchUseRegex),
+                    &mut state.search_options.use_regex,
+                );
+            }
             if state.wants_search.kind == StateSearchKind::Replace
                 && ctx.button("replace-all", loc(LocId::SearchReplaceAll), ButtonStyle::default())
             {
@@ -167,18 +169,22 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 
     state.search_success = match action {
         SearchAction::None => return,
-        SearchAction::Search => {
-            doc.buffer.borrow_mut().find_and_select(&state.search_needle, state.search_options)
-        }
+        SearchAction::Search => doc.buffer.borrow_mut().find_and_select(
+            &state.search_needle,
+            state.search_options,
+            use_icu,
+        ),
         SearchAction::Replace => doc.buffer.borrow_mut().find_and_replace(
             &state.search_needle,
             state.search_options,
             &state.search_replacement,
+            use_icu,
         ),
         SearchAction::ReplaceAll => doc.buffer.borrow_mut().find_and_replace_all(
             &state.search_needle,
             state.search_options,
             &state.search_replacement,
+            use_icu,
         ),
     }
     .is_ok();

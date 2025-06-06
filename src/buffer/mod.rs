@@ -25,7 +25,7 @@ mod navigation;
 
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
-use std::collections::LinkedList;
+use std::collections::{HashMap, LinkedList};
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{Read as _, Write as _};
@@ -36,7 +36,7 @@ use std::str;
 
 pub use gap_buffer::GapBuffer;
 
-use crate::arena::{ArenaString, scratch_arena};
+use crate::arena::{scratch_arena, ArenaString};
 use crate::cell::SemiRefCell;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::framebuffer::{Framebuffer, IndexedColor};
@@ -100,8 +100,43 @@ struct HistoryEntry {
     added: Vec<u8>,
 }
 
-/// Caches an ICU search operation.
-struct ActiveSearch {
+/// Caches a search operation.
+enum ActiveSearch {
+    ICU(IcuActiveSearch),
+    Fallback(FallbackActiveSearch),
+}
+
+impl ActiveSearch {
+    fn pattern(&self) -> &str {
+        match self {
+            ActiveSearch::ICU(s) => &s.pattern,
+            ActiveSearch::Fallback(s) => &s.pattern,
+        }
+    }
+
+    fn selection_generation(&self) -> u32 {
+        match self {
+            ActiveSearch::ICU(s) => s.selection_generation,
+            ActiveSearch::Fallback(s) => s.selection_generation,
+        }
+    }
+
+    fn next_search_offset(&self) -> usize {
+        match self {
+            ActiveSearch::ICU(s) => s.next_search_offset,
+            ActiveSearch::Fallback(s) => s.next_search_offset,
+        }
+    }
+
+    fn no_matches(&self) -> bool {
+        match self {
+            ActiveSearch::ICU(s) => s.no_matches,
+            ActiveSearch::Fallback(s) => s.no_matches,
+        }
+    }
+}
+
+struct IcuActiveSearch {
     /// The search pattern.
     pattern: String,
     /// The search options.
@@ -114,6 +149,19 @@ struct ActiveSearch {
     /// This is used to detect if we need to refresh the
     /// [`ActiveSearch::regex`] object.
     buffer_generation: u32,
+    /// [`TextBuffer::selection_generation`] when the search was
+    /// created. When the user manually selects text, we need to
+    /// refresh the [`ActiveSearch::pattern`] with it.
+    selection_generation: u32,
+    /// Stores the text buffer offset in between searches.
+    next_search_offset: usize,
+    /// If we know there were no hits, we can skip searching.
+    no_matches: bool,
+}
+
+struct FallbackActiveSearch {
+    /// The search pattern.
+    pattern: String,
     /// [`TextBuffer::selection_generation`] when the search was
     /// created. When the user manually selects text, we need to
     /// refresh the [`ActiveSearch::pattern`] with it.
@@ -1008,11 +1056,18 @@ impl TextBuffer {
     }
 
     /// Find the next occurrence of the given `pattern` and select it.
-    pub fn find_and_select(&mut self, pattern: &str, options: SearchOptions) -> apperr::Result<()> {
+    pub fn find_and_select(
+        &mut self,
+        pattern: &str,
+        options: SearchOptions,
+        use_icu: bool,
+    ) -> apperr::Result<()> {
         if let Some(search) = &mut self.search {
             let search = search.get_mut();
-            // When the search input changes we must reset the search.
-            if search.pattern != pattern || search.options != options {
+            // When the search input changes we must reset the search
+            if search.pattern() != pattern
+                || matches!(search, ActiveSearch::ICU(s) if s.options != options)
+            {
                 self.search = None;
             }
 
@@ -1031,7 +1086,7 @@ impl TextBuffer {
         let search = match &self.search {
             Some(search) => unsafe { &mut *search.get() },
             None => {
-                let search = self.find_construct_search(pattern, options)?;
+                let search = self.find_construct_search(pattern, options, use_icu)?;
                 self.search = Some(UnsafeCell::new(search));
                 unsafe { &mut *self.search.as_ref().unwrap().get() }
             }
@@ -1039,7 +1094,7 @@ impl TextBuffer {
 
         // If we previously searched through the entire document and found 0 matches,
         // then we can avoid searching again.
-        if search.no_matches {
+        if search.no_matches() {
             return Ok(());
         }
 
@@ -1047,8 +1102,8 @@ impl TextBuffer {
         // we still need to move the start of the search to the new cursor position.
         let next_search_offset = match self.selection {
             Some(TextBufferSelection { beg, end }) => {
-                if self.selection_generation == search.selection_generation {
-                    search.next_search_offset
+                if self.selection_generation == search.selection_generation() {
+                    search.next_search_offset()
                 } else {
                     self.cursor_move_to_logical_internal(self.cursor, beg.min(end)).offset
                 }
@@ -1056,7 +1111,12 @@ impl TextBuffer {
             _ => self.cursor.offset,
         };
 
-        self.find_select_next(search, next_search_offset, true);
+        match search {
+            ActiveSearch::ICU(s) => self.find_select_next(s, next_search_offset, true),
+            ActiveSearch::Fallback(s) => {
+                self.find_select_next_fallback(s, next_search_offset, true)
+            }
+        }
         Ok(())
     }
 
@@ -1066,16 +1126,17 @@ impl TextBuffer {
         pattern: &str,
         options: SearchOptions,
         replacement: &str,
+        use_icu: bool,
     ) -> apperr::Result<()> {
         // Editors traditionally replace the previous search hit, not the next possible one.
         if let (Some(search), Some(..)) = (&mut self.search, &self.selection) {
             let search = search.get_mut();
-            if search.selection_generation == self.selection_generation {
+            if search.selection_generation() == self.selection_generation {
                 self.write(replacement.as_bytes(), true);
             }
         }
 
-        self.find_and_select(pattern, options)
+        self.find_and_select(pattern, options, use_icu)
     }
 
     /// Find all occurrences of the given `pattern` and replace them with `replacement`.
@@ -1084,13 +1145,17 @@ impl TextBuffer {
         pattern: &str,
         options: SearchOptions,
         replacement: &str,
+        use_icu: bool,
     ) -> apperr::Result<()> {
         let replacement = replacement.as_bytes();
-        let mut search = self.find_construct_search(pattern, options)?;
+        let mut search = self.find_construct_search(pattern, options, use_icu)?;
         let mut offset = 0;
 
         loop {
-            self.find_select_next(&mut search, offset, false);
+            match &mut search {
+                ActiveSearch::ICU(s) => self.find_select_next(s, offset, false),
+                ActiveSearch::Fallback(s) => self.find_select_next_fallback(s, offset, false),
+            }
             if !self.has_selection() {
                 break;
             }
@@ -1105,9 +1170,19 @@ impl TextBuffer {
         &self,
         pattern: &str,
         options: SearchOptions,
+        use_icu: bool,
     ) -> apperr::Result<ActiveSearch> {
         if pattern.is_empty() {
             return Err(apperr::Error::Icu(1)); // U_ILLEGAL_ARGUMENT_ERROR
+        }
+
+        if !use_icu {
+            return Ok(ActiveSearch::Fallback(FallbackActiveSearch {
+                pattern: pattern.to_string(),
+                selection_generation: 0,
+                next_search_offset: 0,
+                no_matches: false,
+            }));
         }
 
         let sanitized_pattern = if options.whole_word && options.use_regex {
@@ -1149,7 +1224,7 @@ impl TextBuffer {
         let text = unsafe { icu::Text::new(self)? };
         let regex = unsafe { icu::Regex::new(&sanitized_pattern, flags, &text)? };
 
-        Ok(ActiveSearch {
+        Ok(ActiveSearch::ICU(IcuActiveSearch {
             pattern: pattern.to_string(),
             options,
             text,
@@ -1158,10 +1233,10 @@ impl TextBuffer {
             selection_generation: 0,
             next_search_offset: 0,
             no_matches: false,
-        })
+        }))
     }
 
-    fn find_select_next(&mut self, search: &mut ActiveSearch, offset: usize, wrap: bool) {
+    fn find_select_next(&mut self, search: &mut IcuActiveSearch, offset: usize, wrap: bool) {
         if search.buffer_generation != self.buffer.generation() {
             unsafe { search.regex.set_text(&mut search.text, offset) };
             search.buffer_generation = self.buffer.generation();
@@ -1187,6 +1262,91 @@ impl TextBuffer {
 
             let beg = self.cursor_move_to_offset_internal(self.cursor, range.start);
             let end = self.cursor_move_to_offset_internal(beg, range.end);
+
+            unsafe { self.set_cursor(end) };
+            self.make_cursor_visible();
+
+            self.set_selection(Some(TextBufferSelection {
+                beg: beg.logical_pos,
+                end: end.logical_pos,
+            }))
+        } else {
+            // Avoid searching through the entire document again if we know there's nothing to find.
+            search.no_matches = true;
+            self.set_selection(None)
+        };
+    }
+
+    /// A fallback version used when the ICU library is not available.
+    /// Uses a basic Boyer-Moore-Horspool algorithm
+    fn find_select_next_fallback(
+        &mut self,
+        search: &mut FallbackActiveSearch,
+        offset: usize,
+        wrap: bool,
+    ) {
+        if search.next_search_offset != offset {
+            search.next_search_offset = offset;
+        }
+
+        let mut start = offset;
+        let pattern = search.pattern.as_bytes();
+        let pattern_len = pattern.len();
+
+        let skip_table = {
+            let mut table: [usize; 128] = [pattern.len(); 128];
+
+            for i in 0..pattern_len.saturating_sub(1) {
+                let c = pattern[i];
+                if c > 128 {
+                    continue;
+                }
+                let skip_distance = pattern_len - i - 1;
+
+                table[c.to_ascii_lowercase() as usize] = skip_distance;
+                table[c.to_ascii_uppercase() as usize] = skip_distance;
+            }
+
+            table
+        };
+
+        let mut hit = None;
+
+        let buffer_len = self.buffer.len();
+
+        while start <= buffer_len {
+            let chunk = self.read_forward(start);
+            if chunk.len() < pattern_len {
+                break;
+            }
+
+            let mut skip = 0;
+            while chunk.len() - skip >= pattern_len {
+                if chunk[skip..skip + pattern_len].eq_ignore_ascii_case(&pattern) {
+                    hit = Some(start + skip);
+                    break;
+                }
+
+                skip +=
+                    skip_table.get(chunk[skip + pattern_len - 1] as usize).unwrap_or(&pattern_len);
+            }
+
+            start += chunk.len();
+        }
+
+        // If we hit the end of the buffer, and we know that there's something to find,
+        // start the search again from the beginning (= wrap around).
+        if wrap && hit.is_none() && search.next_search_offset != 0 {
+            search.next_search_offset = 0;
+            return self.find_select_next_fallback(search, 0, false);
+        }
+
+        search.selection_generation = if let Some(found_offset) = hit {
+            // Now the search offset is no more at the start of the buffer.
+            search.next_search_offset = found_offset + pattern.len();
+
+            let beg = self.cursor_move_to_offset_internal(self.cursor, found_offset);
+            let end = self.cursor_move_to_offset_internal(beg, found_offset + pattern.len());
 
             unsafe { self.set_cursor(end) };
             self.make_cursor_visible();
@@ -2132,7 +2292,7 @@ impl TextBuffer {
 
         if let Some(search) = &self.search {
             let search = unsafe { &*search.get() };
-            if search.selection_generation == self.selection_generation {
+            if search.selection_generation() == self.selection_generation {
                 return None;
             }
         }
