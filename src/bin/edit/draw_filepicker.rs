@@ -58,8 +58,72 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.inherit_focus();
 
             ctx.label("name-label", loc(LocId::SaveAsDialogNameLabel));
-            ctx.editline("name", &mut state.file_picker_pending_name);
+
+            let name_changed = ctx.editline("name", &mut state.file_picker_pending_name);
             ctx.inherit_focus();
+
+            if ctx.contains_focus() {
+                if name_changed && ctx.is_focused() {
+                    update_autocomplete_suggestions(state);
+                }
+            } else if !state.file_picker_autocomplete.is_empty() {
+                state.file_picker_autocomplete.clear();
+            }
+
+            if !state.file_picker_autocomplete.is_empty() {
+                let bg = ctx.indexed_alpha(IndexedColor::Background, 3, 4);
+                let fg = ctx.contrasted(bg);
+                let focus_list_beg = ctx.is_focused() && ctx.consume_shortcut(vk::DOWN);
+                let focus_list_end = ctx.is_focused() && ctx.consume_shortcut(vk::UP);
+                let mut autocomplete_done = ctx.consume_shortcut(vk::ESCAPE);
+
+                ctx.list_begin("suggestions");
+                ctx.attr_float(FloatSpec {
+                    anchor: Anchor::Last,
+                    gravity_x: 0.0,
+                    gravity_y: 0.0,
+                    offset_x: 0.0,
+                    offset_y: 1.0,
+                });
+                ctx.attr_border();
+                ctx.attr_background_rgba(bg);
+                ctx.attr_foreground_rgba(fg);
+                {
+                    for (idx, suggestion) in state.file_picker_autocomplete.iter().enumerate() {
+                        let sel = ctx.list_item(false, suggestion.as_str());
+                        if sel != ListSelection::Unchanged {
+                            state.file_picker_pending_name = suggestion.as_path().into();
+                        }
+                        if sel == ListSelection::Activated {
+                            autocomplete_done = true;
+                        }
+
+                        let is_first = idx == 0;
+                        let is_last = idx == state.file_picker_autocomplete.len() - 1;
+                        if (is_first && focus_list_beg) || (is_last && focus_list_end) {
+                            ctx.list_item_steal_focus();
+                        } else if ctx.is_focused()
+                            && ((is_first && ctx.consume_shortcut(vk::UP))
+                                || (is_last && ctx.consume_shortcut(vk::DOWN)))
+                        {
+                            ctx.toss_focus_up();
+                        }
+                    }
+                }
+                ctx.list_end();
+
+                // If the user typed something, we want to put focus back into the editline.
+                // TODO: The input should be processed by the editline and not simply get swallowed.
+                if ctx.keyboard_input().is_some() {
+                    ctx.set_input_consumed();
+                    autocomplete_done = true;
+                }
+
+                if autocomplete_done {
+                    state.file_picker_autocomplete.clear();
+                }
+            }
+
             if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
                 activated = true;
             }
@@ -191,6 +255,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         state.file_picker_pending_name = Default::default();
         state.file_picker_entries = Default::default();
         state.file_picker_overwrite_warning = Default::default();
+        state.file_picker_autocomplete = Default::default();
     }
 }
 
@@ -280,4 +345,35 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     });
 
     state.file_picker_entries = Some(files);
+}
+
+fn update_autocomplete_suggestions(state: &mut State) {
+    state.file_picker_autocomplete.clear();
+
+    if state.file_picker_pending_name.as_os_str().is_empty() {
+        return;
+    }
+
+    let needle = state.file_picker_pending_name.as_os_str().as_encoded_bytes();
+    let mut matches = Vec::new();
+
+    if let Some(entries) = &state.file_picker_entries {
+        // Remove the first entry, which is always "..".
+        for entry in &entries[1.min(entries.len())..] {
+            let haystack = entry.as_bytes();
+            // We only want items that are longer than the needle,
+            // because we're looking for suggestions, not for matches.
+            if haystack.len() > needle.len()
+                && let haystack = &haystack[..needle.len()]
+                && icu::compare_strings(haystack, needle) == Ordering::Equal
+            {
+                matches.push(entry.clone());
+                if matches.len() >= 5 {
+                    break; // Limit to 5 suggestions
+                }
+            }
+        }
+    }
+
+    state.file_picker_autocomplete = matches;
 }
