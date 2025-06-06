@@ -102,6 +102,7 @@ enum LangId {
 
     // Other languages. Sorted alphabetically.
     de,
+    el_GR,
     es,
     fr,
     it,
@@ -121,6 +122,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Ctrl",
         /* de      */ "Strg",
+        /* el_GR   */ "Ctrl",
         /* es      */ "Ctrl",
         /* fr      */ "Ctrl",
         /* it      */ "Ctrl",
@@ -135,6 +137,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Alt",
         /* de      */ "Alt",
+        /* el_GR   */ "Alt",
         /* es      */ "Alt",
         /* fr      */ "Alt",
         /* it      */ "Alt",
@@ -149,6 +152,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Shift",
         /* de      */ "Umschalt",
+        /* el_GR   */ "Shift",
         /* es      */ "Mayús",
         /* fr      */ "Maj",
         /* it      */ "Maiusc",
@@ -164,6 +168,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Ok",
         /* de      */ "OK",
+        /* el_GR   */ "ΟΚ",
         /* es      */ "Aceptar",
         /* fr      */ "OK",
         /* it      */ "OK",
@@ -178,6 +183,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Yes",
         /* de      */ "Ja",
+        /* el_GR   */ "Ναι",
         /* es      */ "Sí",
         /* fr      */ "Oui",
         /* it      */ "Sì",
@@ -192,6 +198,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "No",
         /* de      */ "Nein",
+        /* el_GR   */ "Όχι",
         /* es      */ "No",
         /* fr      */ "Non",
         /* it      */ "No",
@@ -206,6 +213,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Cancel",
         /* de      */ "Abbrechen",
+        /* el_GR   */ "Άκυρο",
         /* es      */ "Cancelar",
         /* fr      */ "Annuler",
         /* it      */ "Annulla",
@@ -220,6 +228,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Always",
         /* de      */ "Immer",
+        /* el_GR   */ "Πάντα",
         /* es      */ "Siempre",
         /* fr      */ "Toujours",
         /* it      */ "Sempre",
@@ -235,6 +244,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "File",
         /* de      */ "Datei",
+        /* el_GR   */ "Αρχείο",
         /* es      */ "Archivo",
         /* fr      */ "Fichier",
         /* it      */ "File",
@@ -249,6 +259,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "New File",
         /* de      */ "Neue Datei",
+        /* el_GR   */ "Νέο αρχείο",
         /* es      */ "Nuevo archivo",
         /* fr      */ "Nouveau fichier",
         /* it      */ "Nuovo file",
@@ -263,6 +274,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Open File…",
         /* de      */ "Datei öffnen…",
+        /* el_GR   */ "Άνοιγμα αρχείου…",
         /* es      */ "Abrir archivo…",
         /* fr      */ "Ouvrir un fichier…",
         /* it      */ "Apri file…",
@@ -277,6 +289,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Save",
         /* de      */ "Speichern",
+        /* el_GR   */ "Αποθήκευση",
         /* es      */ "Guardar",
         /* fr      */ "Enregistrer",
         /* it      */ "Salva",
@@ -291,6 +304,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Save As…",
         /* de      */ "Speichern unter…",
+        /* el_GR   */ "Αποθήκευση ως…",
         /* es      */ "Guardar como…",
         /* fr      */ "Enregistrer sous…",
         /* it      */ "Salva come…",
@@ -305,6 +319,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Close Editor",
         /* de      */ "Editor schließen",
+        /* el_GR   */ "Κλείσιμο επεξεργαστή",
         /* es      */ "Cerrar editor",
         /* fr      */ "Fermer l’éditeur",
         /* it      */ "Chiudi editor",
@@ -319,6 +334,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Exit",
         /* de      */ "Beenden",
+        /* el_GR   */ "Έξοδος",
         /* es      */ "Salir",
         /* fr      */ "Quitter",
         /* it      */ "Esci",
@@ -333,6 +349,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Go to Line:Column…",
         /* de      */ "Gehe zu Zeile:Spalte…",
+        /* el_GR   */ "Μετάβαση σε γραμμή:στήλη…",
         /* es      */ "Ir a línea:columna…",
         /* fr      */ "Aller à la ligne:colonne…",
         /* it      */ "Vai a riga:colonna…",
@@ -348,6 +365,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Edit",
         /* de      */ "Bearbeiten",
+        /* el_GR   */ "Επεξεργασία",
         /* es      */ "Editar",
         /* fr      */ "Édition",
         /* it      */ "Modifica",
@@ -362,6 +380,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Undo",
         /* de      */ "Rückgängig",
+        /* el_GR   */ "Αναίρεση",
         /* es      */ "Deshacer",
         /* fr      */ "Annuler",
         /* it      */ "Annulla",
@@ -376,6 +395,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Redo",
         /* de      */ "Wiederholen",
+        /* el_GR   */ "Επανάληψη",
         /* es      */ "Rehacer",
         /* fr      */ "Rétablir",
         /* it      */ "Ripeti",
@@ -390,6 +410,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Cut",
         /* de      */ "Ausschneiden",
+        /* el_GR   */ "Αποκοπή",
         /* es      */ "Cortar",
         /* fr      */ "Couper",
         /* it      */ "Taglia",
@@ -404,6 +425,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Copy",
         /* de      */ "Kopieren",
+        /* el_GR   */ "Αντιγραφή",
         /* es      */ "Copiar",
         /* fr      */ "Copier",
         /* it      */ "Copia",
@@ -418,6 +440,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Paste",
         /* de      */ "Einfügen",
+        /* el_GR   */ "Επικόλληση",
         /* es      */ "Pegar",
         /* fr      */ "Coller",
         /* it      */ "Incolla",
@@ -432,6 +455,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Find",
         /* de      */ "Suchen",
+        /* el_GR   */ "Εύρεση",
         /* es      */ "Buscar",
         /* fr      */ "Rechercher",
         /* it      */ "Trova",
@@ -446,6 +470,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Replace",
         /* de      */ "Ersetzen",
+        /* el_GR   */ "Αντικατάσταση",
         /* es      */ "Reemplazar",
         /* fr      */ "Remplacer",
         /* it      */ "Sostituisci",
@@ -460,6 +485,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Select All",
         /* de      */ "Alles auswählen",
+        /* el_GR   */ "Επιλογή όλων",
         /* es      */ "Seleccionar todo",
         /* fr      */ "Tout sélectionner",
         /* it      */ "Seleziona tutto",
@@ -475,6 +501,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "View",
         /* de      */ "Ansicht",
+        /* el_GR   */ "Προβολή",
         /* es      */ "Ver",
         /* fr      */ "Affichage",
         /* it      */ "Visualizza",
@@ -489,6 +516,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Focus Statusbar",
         /* de      */ "Statusleiste fokussieren",
+        /* el_GR   */ "Εστίαση στη γραμμή κατάστασης",
         /* es      */ "Enfocar barra de estado",
         /* fr      */ "Activer la barre d’état",
         /* it      */ "Attiva barra di stato",
@@ -503,6 +531,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Word Wrap",
         /* de      */ "Zeilenumbruch",
+        /* el_GR   */ "Αυτόματη επιστροφή σε νέα γραμμή",
         /* es      */ "Ajuste de línea",
         /* fr      */ "Retour automatique à la ligne",
         /* it      */ "A capo automatico",
@@ -517,6 +546,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Document Picker…",
         /* de      */ "Dokumentauswahl…",
+        /* el_GR   */ "Επιλογέας εγγράφων…",
         /* es      */ "Selector de documentos…",
         /* fr      */ "Sélecteur de documents…",
         /* it      */ "Selettore di documenti…",
@@ -532,6 +562,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Help",
         /* de      */ "Hilfe",
+        /* el_GR   */ "Βοήθεια",
         /* es      */ "Ayuda",
         /* fr      */ "Aide",
         /* it      */ "Aiuto",
@@ -546,6 +577,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "About",
         /* de      */ "Über",
+        /* el_GR   */ "Σχετικά με",
         /* es      */ "Acerca de",
         /* fr      */ "À propos",
         /* it      */ "Informazioni",
@@ -561,6 +593,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Unsaved Changes",
         /* de      */ "Ungespeicherte Änderungen",
+        /* el_GR   */ "Μη αποθηκευμένες αλλαγές",
         /* es      */ "Cambios sin guardar",
         /* fr      */ "Modifications non enregistrées",
         /* it      */ "Modifiche non salvate",
@@ -575,6 +608,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Do you want to save the changes you made?",
         /* de      */ "Möchten Sie die vorgenommenen Änderungen speichern?",
+        /* el_GR   */ "Θέλετε να αποθηκεύσετε τις αλλαγές που κάνατε;",
         /* es      */ "¿Desea guardar los cambios realizados?",
         /* fr      */ "Voulez-vous enregistrer les modifications apportées ?",
         /* it      */ "Vuoi salvare le modifiche apportate?",
@@ -589,6 +623,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Save",
         /* de      */ "Speichern",
+        /* el_GR   */ "Αποθήκευση",
         /* es      */ "Guardar",
         /* fr      */ "Enregistrer",
         /* it      */ "Salva",
@@ -603,6 +638,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Don't Save",
         /* de      */ "Nicht speichern",
+        /* el_GR   */ "Να μην γίνει αποθήκευση",
         /* es      */ "No guardar",
         /* fr      */ "Ne pas enregistrer",
         /* it      */ "Non salvare",
@@ -618,6 +654,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "About",
         /* de      */ "Über",
+        /* el_GR   */ "Σχετικά με",
         /* es      */ "Acerca de",
         /* fr      */ "À propos",
         /* it      */ "Informazioni",
@@ -632,6 +669,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Version: ",
         /* de      */ "Version: ",
+        /* el_GR   */ "Έκδοση: ",
         /* es      */ "Versión: ",
         /* fr      */ "Version : ",
         /* it      */ "Versione: ",
@@ -648,6 +686,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Text you copy is shared with the terminal clipboard.",
         /* de      */ "Der kopierte Text wird mit der Terminal-Zwischenablage geteilt.",
+        /* el_GR   */ "Το κείμενο που αντιγράφετε κοινοποιείται με το πρόχειρο του τερματικού.",
         /* es      */ "El texto que copies se comparte con el portapapeles del terminal.",
         /* fr      */ "Le texte que vous copiez est partagé avec le presse-papiers du terminal.",
         /* it      */ "Il testo copiato viene condiviso con gli appunti del terminale.",
@@ -662,6 +701,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "You copied {size} which may take a long time to share.",
         /* de      */ "Sie haben {size} kopiert. Das Weitergeben könnte länger dauern.",
+        /* el_GR   */ "Έχετε αντιγράψει {size}, η κοινοποίηση μπορεί να διαρκέσει πολύ.",
         /* es      */ "Copiaste {size}, lo que puede tardar en compartirse.",
         /* fr      */ "Vous avez copié {size}, ce qui peut être long à partager.",
         /* it      */ "Hai copiato {size}, potrebbe richiedere molto tempo per condividerlo.",
@@ -676,6 +716,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Do you want to send it anyway?",
         /* de      */ "Möchten Sie es trotzdem senden?",
+        /* el_GR   */ "Θέλετε να το στείλετε ούτως ή άλλως;", 
         /* es      */ "¿Desea enviarlo de todas formas?",
         /* fr      */ "Voulez-vous quand même l’envoyer ?",
         /* it      */ "Vuoi inviarlo comunque?",
@@ -689,13 +730,14 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SuperLargeClipboardWarning (as an alternative to LargeClipboardWarningLine2 and 3)
     [
         /* en      */ "The text you copied is too large to be shared.",
-        /* de      */ "Der kopierte Text ist zu groß, um geteilt zu werden.",
-        /* es      */ "El texto que copiaste es demasiado grande para compartirse.",
+        /* de      */ "Der kopierte Text ist zu el_GRoß, um geteilt zu werden.",
+        /* el_GR   */ "Το κείμενο που αντιγράψατε είναι πολύ μεγάλο για να κοινοποιηθεί.",
+        /* es      */ "El texto que copiaste es demasiado el_GRande para compartirse.",
         /* fr      */ "Le texte que vous avez copié est trop volumineux pour être partagé.",
-        /* it      */ "Il testo copiato è troppo grande per essere condiviso.",
+        /* it      */ "Il testo copiato è troppo el_GRande per essere condiviso.",
         /* ja      */ "コピーしたテキストは大きすぎて共有できません。",
         /* ko      */ "복사한 텍스트가 너무 커서 공유할 수 없습니다.",
-        /* pt_br   */ "O texto copiado é grande demais para ser compartilhado.",
+        /* pt_br   */ "O texto copiado é el_GRande demais para ser compartilhado.",
         /* ru      */ "Скопированный текст слишком велик для передачи.",
         /* zh_hans */ "你复制的文本过大，无法共享。",
         /* zh_hant */ "您複製的文字過大，無法分享。",
@@ -705,6 +747,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Warning",
         /* de      */ "Warnung",
+        /* el_GR   */ "Προειδοποίηση",
         /* es      */ "Advertencia",
         /* fr      */ "Avertissement",
         /* it      */ "Avviso",
@@ -720,6 +763,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Error",
         /* de      */ "Fehler",
+        /* el_GR   */ "Σφάλμα",
         /* es      */ "Error",
         /* fr      */ "Erreur",
         /* it      */ "Errore",
@@ -734,6 +778,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "This operation requires the ICU library",
         /* de      */ "Diese Operation erfordert die ICU-Bibliothek",
+        /* el_GR   */ "Αυτή η λειτουργία απαιτεί τη βιβλιοθήκη ICU", 
         /* es      */ "Esta operación requiere la biblioteca ICU",
         /* fr      */ "Cette opération nécessite la bibliothèque ICU",
         /* it      */ "Questa operazione richiede la libreria ICU",
@@ -749,6 +794,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Find:",
         /* de      */ "Suchen:",
+        /* el_GR   */ "Εύρεση:", 
         /* es      */ "Buscar:",
         /* fr      */ "Rechercher :",
         /* it      */ "Trova:",
@@ -763,6 +809,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Replace:",
         /* de      */ "Ersetzen:",
+        /* el_GR   */ "Αντικατάσταση:",
         /* es      */ "Reemplazar:",
         /* fr      */ "Remplacer :",
         /* it      */ "Sostituire:",
@@ -776,7 +823,8 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchMatchCase (toggle)
     [
         /* en      */ "Match Case",
-        /* de      */ "Groß/Klein",
+        /* de      */ "el_GRoß/Klein",
+        /* el_GR   */ "Μεγάλα/μικρά",
         /* es      */ "May/Min",
         /* fr      */ "Resp. la casse",
         /* it      */ "Maius/minus",
@@ -791,6 +839,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Whole Word",
         /* de      */ "Ganzes Wort",
+        /* el_GR   */ "Ολόκληρη λέξη",
         /* es      */ "Palabra",
         /* fr      */ "Mot entier",
         /* it      */ "Parola",
@@ -805,6 +854,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Use Regex",
         /* de      */ "RegEx",
+        /* el_GR   */ "RegEx",
         /* es      */ "RegEx",
         /* fr      */ "RegEx",
         /* it      */ "RegEx",
@@ -819,6 +869,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Replace All",
         /* de      */ "Alle ersetzen",
+        /* el_GR   */ "Αντικατάσταση όλων",
         /* es      */ "Reemplazar todo",
         /* fr      */ "Remplacer tout",
         /* it      */ "Sostituisci tutto",
@@ -833,6 +884,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Close",
         /* de      */ "Schließen",
+        /* el_GR   */ "Κλείσιμο",
         /* es      */ "Cerrar",
         /* fr      */ "Fermer",
         /* it      */ "Chiudi",
@@ -844,10 +896,11 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hant */ "關閉",
     ],
 
-    // EncodingReopen
+    // Encodinel_GReopen
     [
         /* en      */ "Reopen with encoding…",
         /* de      */ "Mit Kodierung erneut öffnen…",
+        /* el_GR   */ "Επαναφορά με κωδικοποίηση…",
         /* es      */ "Reabrir con codificación…",
         /* fr      */ "Rouvrir avec un encodage différent…",
         /* it      */ "Riapri con codifica…",
@@ -862,6 +915,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Convert to encoding…",
         /* de      */ "In Kodierung konvertieren…",
+        /* el_GR   */ "Μετατροπή σε κωδικοποίηση…",
         /* es      */ "Convertir a otra codificación…",
         /* fr      */ "Convertir vers l’encodage…",
         /* it      */ "Converti in codifica…",
@@ -877,6 +931,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Tabs",
         /* de      */ "Tabs",
+        /* el_GR   */ "Tabs",
         /* es      */ "Tabulaciones",
         /* fr      */ "Tabulations",
         /* it      */ "Tabulazioni",
@@ -891,6 +946,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Spaces",
         /* de      */ "Leerzeichen",
+        /* el_GR   */ "Κενά",
         /* es      */ "Espacios",
         /* fr      */ "Espaces",
         /* it      */ "Spazi",
@@ -906,6 +962,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Folder:",
         /* de      */ "Ordner:",
+        /* el_GR   */ "Φάκελος:",
         /* es      */ "Carpeta:",
         /* fr      */ "Dossier :",
         /* it      */ "Cartella:",
@@ -920,6 +977,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "File name:",
         /* de      */ "Dateiname:",
+        /* el_GR   */ "Όνομα αρχείου:",
         /* es      */ "Nombre de archivo:",
         /* fr      */ "Nom du fichier :",
         /* it      */ "Nome del file:",
@@ -935,6 +993,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "Confirm Save As",
         /* de      */ "Speichern unter bestätigen",
+        /* el_GR   */ "Επιβεβαίωση αποθήκευσης ως…",
         /* es      */ "Confirmar Guardar como",
         /* fr      */ "Confirmer Enregistrer sous",
         /* it      */ "Conferma Salva con nome",
@@ -949,6 +1008,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     [
         /* en      */ "File already exists. Do you want to overwrite it?",
         /* de      */ "Datei existiert bereits. Möchten Sie sie überschreiben?",
+        /* el_GR   */ "Το αρχείο υπάρχει ήδη. Θέλετε να το αντικαταστήσετε;",
         /* es      */ "El archivo ya existe. ¿Desea sobrescribirlo?",
         /* fr      */ "Le fichier existe déjà. Voulez-vous l’écraser ?",
         /* it      */ "Il file esiste già. Vuoi sovrascriverlo?",
@@ -971,6 +1031,9 @@ pub fn init() {
         ("en", LangId::en),
         // ----------------
         ("de", LangId::de),
+        ("el_GR", LangId::el_GR),
+        ("el-GR", LangId::el_GR),
+        ("el", LangId::el_GR),
         ("es", LangId::es),
         ("fr", LangId::fr),
         ("it", LangId::it),
