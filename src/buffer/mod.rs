@@ -2312,7 +2312,7 @@ impl TextBuffer {
         }
 
         self.search = None;
-        self.cursor_for_rendering = None;
+        self.reflow();
     }
 
     /// Undo the last edit operation.
@@ -2426,7 +2426,7 @@ impl TextBuffer {
             }
         }
 
-        self.cursor_for_rendering = None;
+        self.reflow();
     }
 
     /// For interfacing with ICU.
