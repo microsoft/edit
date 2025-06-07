@@ -93,7 +93,10 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                     ListSelection::Selected => {
                         state.file_picker_pending_name = entry.as_path().into()
                     }
-                    ListSelection::Activated => activated = true,
+                    ListSelection::Activated => {
+                        state.file_picker_pending_name = entry.as_path().into();
+                        activated = true
+                    },
                 }
                 ctx.attr_overflow(Overflow::TruncateMiddle);
             }
