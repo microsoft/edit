@@ -278,13 +278,20 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
 
     match action {
         Action::None => return,
-        Action::Save => state.wants_save = true,
-        Action::Discard => state.documents.remove_active(),
-        Action::Cancel => state.wants_exit = false,
+        Action::Save => {
+            state.wants_save = true;
+        }
+        Action::Discard => {
+            state.documents.remove_active();
+            state.wants_close = false;
+        }
+        Action::Cancel => {
+            state.wants_exit = false;
+            state.wants_close = false;
+        }
     }
 
-    state.wants_close = false;
-    ctx.toss_focus_up();
+    ctx.needs_rerender();
 }
 
 pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {

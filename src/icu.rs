@@ -15,16 +15,32 @@ use crate::buffer::TextBuffer;
 use crate::unicode::Utf8Chars;
 use crate::{apperr, arena_format, sys};
 
-static mut ENCODINGS: Vec<&'static str> = Vec::new();
+#[derive(Clone, Copy)]
+pub struct Encoding {
+    pub label: &'static str,
+    pub canonical: &'static str,
+}
+
+pub struct Encodings {
+    pub preferred: &'static [Encoding],
+    pub all: &'static [Encoding],
+}
+
+static mut ENCODINGS: Encodings = Encodings { preferred: &[], all: &[] };
 
 /// Returns a list of encodings ICU supports.
-pub fn get_available_encodings() -> &'static [&'static str] {
+pub fn get_available_encodings() -> &'static Encodings {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     unsafe {
-        if ENCODINGS.is_empty() {
-            ENCODINGS.push("UTF-8");
-            ENCODINGS.push("UTF-8 BOM");
+        if ENCODINGS.all.is_empty() {
+            let scratch = scratch_arena(None);
+            let mut preferred = Vec::new_in(&*scratch);
+            let mut alternative = Vec::new_in(&*scratch);
+
+            // These encodings are always available.
+            preferred.push(Encoding { label: "UTF-8", canonical: "UTF-8" });
+            preferred.push(Encoding { label: "UTF-8 BOM", canonical: "UTF-8 BOM" });
 
             if let Ok(f) = init_if_needed() {
                 let mut n = 0;
@@ -34,17 +50,43 @@ pub fn get_available_encodings() -> &'static [&'static str] {
                         break;
                     }
 
+                    n += 1;
+
                     let name = CStr::from_ptr(name).to_str().unwrap_unchecked();
-                    // We have already pushed UTF-8 above.
-                    // There is no need to filter UTF-8 BOM here, since ICU does not distinguish it from UTF-8.
-                    if name != "UTF-8" {
-                        ENCODINGS.push(name);
+                    // We have already pushed UTF-8 above and can skip it.
+                    // There is no need to filter UTF-8 BOM here,
+                    // since ICU does not distinguish it from UTF-8.
+                    if name.is_empty() || name == "UTF-8" {
+                        continue;
                     }
 
-                    n += 1;
+                    let mut status = icu_ffi::U_ZERO_ERROR;
+                    let mime = (f.ucnv_getStandardName)(
+                        name.as_ptr(),
+                        c"MIME".as_ptr() as *const _,
+                        &mut status,
+                    );
+                    if !mime.is_null() && status.is_success() {
+                        let mime = CStr::from_ptr(mime).to_str().unwrap_unchecked();
+                        preferred.push(Encoding { label: mime, canonical: name });
+                    } else {
+                        alternative.push(Encoding { label: name, canonical: name });
+                    }
                 }
             }
+
+            let preferred_len = preferred.len();
+
+            // Combine the preferred and alternative encodings into a single list.
+            let mut all = Vec::with_capacity(preferred.len() + alternative.len());
+            all.extend(preferred);
+            all.extend(alternative);
+
+            let all = all.leak();
+            ENCODINGS.preferred = &all[..preferred_len];
+            ENCODINGS.all = &all[..];
         }
+
         &ENCODINGS
     }
 }
@@ -827,6 +869,15 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
     result
 }
 
+// NOTE:
+// To keep this neat, fields are ordered by prefix (= `ucol_` before `uregex_`),
+// followed by functions in this order:
+// * Static methods (e.g. `ucnv_getAvailableName`)
+// * Constructors (e.g. `ucnv_open`)
+// * Destructors (e.g. `ucnv_close`)
+// * Methods, grouped by relationship
+//   (e.g. `uregex_start64` and `uregex_end64` are near each other)
+//
 // WARNING:
 // The order of the fields MUST match the order of strings in the following two arrays.
 #[allow(non_snake_case)]
@@ -834,16 +885,19 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
 struct LibraryFunctions {
     // LIBICUUC_PROC_NAMES
     u_errorName: icu_ffi::u_errorName,
+    ucasemap_open: icu_ffi::ucasemap_open,
+    ucasemap_utf8FoldCase: icu_ffi::ucasemap_utf8FoldCase,
     ucnv_getAvailableName: icu_ffi::ucnv_getAvailableName,
+    ucnv_getStandardName: icu_ffi::ucnv_getStandardName,
     ucnv_open: icu_ffi::ucnv_open,
     ucnv_close: icu_ffi::ucnv_close,
     ucnv_convertEx: icu_ffi::ucnv_convertEx,
-    ucasemap_open: icu_ffi::ucasemap_open,
-    ucasemap_utf8FoldCase: icu_ffi::ucasemap_utf8FoldCase,
     utext_setup: icu_ffi::utext_setup,
     utext_close: icu_ffi::utext_close,
 
     // LIBICUI18N_PROC_NAMES
+    ucol_open: icu_ffi::ucol_open,
+    ucol_strcollUTF8: icu_ffi::ucol_strcollUTF8,
     uregex_open: icu_ffi::uregex_open,
     uregex_close: icu_ffi::uregex_close,
     uregex_setTimeLimit: icu_ffi::uregex_setTimeLimit,
@@ -852,25 +906,26 @@ struct LibraryFunctions {
     uregex_findNext: icu_ffi::uregex_findNext,
     uregex_start64: icu_ffi::uregex_start64,
     uregex_end64: icu_ffi::uregex_end64,
-    ucol_open: icu_ffi::ucol_open,
-    ucol_strcollUTF8: icu_ffi::ucol_strcollUTF8,
 }
 
-const LIBICUUC_PROC_NAMES: [&CStr; 9] = [
-    // Found in libicuuc.so on UNIX, icuuc.dll/icu.dll on Windows.
+// Found in libicuuc.so on UNIX, icuuc.dll/icu.dll on Windows.
+const LIBICUUC_PROC_NAMES: [&CStr; 10] = [
     c"u_errorName",
+    c"ucasemap_open",
+    c"ucasemap_utf8FoldCase",
     c"ucnv_getAvailableName",
+    c"ucnv_getStandardName",
     c"ucnv_open",
     c"ucnv_close",
     c"ucnv_convertEx",
-    c"ucasemap_open",
-    c"ucasemap_utf8FoldCase",
     c"utext_setup",
     c"utext_close",
 ];
 
+// Found in libicui18n.so on UNIX, icuin.dll/icu.dll on Windows.
 const LIBICUI18N_PROC_NAMES: [&CStr; 10] = [
-    // Found in libicui18n.so on UNIX, icuin.dll/icu.dll on Windows.
+    c"ucol_open",
+    c"ucol_strcollUTF8",
     c"uregex_open",
     c"uregex_close",
     c"uregex_setTimeLimit",
@@ -879,8 +934,6 @@ const LIBICUI18N_PROC_NAMES: [&CStr; 10] = [
     c"uregex_findNext",
     c"uregex_start64",
     c"uregex_end64",
-    c"ucol_open",
-    c"ucol_strcollUTF8",
 ];
 
 enum LibraryFunctionsState {
@@ -1020,7 +1073,13 @@ mod icu_ffi {
 
     pub struct UConverter;
 
-    pub type ucnv_getAvailableName = unsafe extern "C" fn(n: i32) -> *mut c_char;
+    pub type ucnv_getAvailableName = unsafe extern "C" fn(n: i32) -> *const c_char;
+
+    pub type ucnv_getStandardName = unsafe extern "C" fn(
+        name: *const u8,
+        standard: *const u8,
+        status: &mut UErrorCode,
+    ) -> *const c_char;
 
     pub type ucnv_open =
         unsafe extern "C" fn(converter_name: *const u8, status: &mut UErrorCode) -> *mut UConverter;

@@ -3,7 +3,7 @@
 
 use std::hint::black_box;
 use std::io::Cursor;
-use std::mem;
+use std::{mem, vec};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
@@ -133,18 +133,36 @@ fn bench_oklab(c: &mut Criterion) {
         });
 }
 
+fn bench_simd_lines_fwd(c: &mut Criterion) {
+    let mut group = c.benchmark_group("simd");
+    let buf = vec![b'\n'; 128 * MEBI];
+
+    for &lines in &[1, 8, 128, KIBI, 128 * KIBI, 128 * MEBI] {
+        group.throughput(Throughput::Bytes(lines as u64)).bench_with_input(
+            BenchmarkId::new("lines_fwd", lines),
+            &lines,
+            |b, &lines| {
+                b.iter(|| simd::lines_fwd(black_box(&buf), 0, 0, lines as CoordType));
+            },
+        );
+    }
+}
+
 fn bench_simd_memchr2(c: &mut Criterion) {
     let mut group = c.benchmark_group("simd");
-    let mut buffer_u8 = [0u8; 2048];
+    let mut buf = vec![0u8; 128 * MEBI + KIBI];
 
-    for &bytes in &[8usize, 32 + 8, 64 + 8, KIBI + 8] {
+    // For small sizes we add a small offset of +8,
+    // to ensure we also benchmark the non-SIMD tail handling.
+    // For large sizes, its relative impact is negligible.
+    for &bytes in &[8usize, 128 + 8, KIBI, 128 * KIBI, 128 * MEBI] {
         group.throughput(Throughput::Bytes(bytes as u64 + 1)).bench_with_input(
             BenchmarkId::new("memchr2", bytes),
             &bytes,
             |b, &size| {
-                buffer_u8.fill(b'a');
-                buffer_u8[size] = b'\n';
-                b.iter(|| simd::memchr2(b'\n', b'\r', black_box(&buffer_u8), 0));
+                buf.fill(b'a');
+                buf[size] = b'\n';
+                b.iter(|| simd::memchr2(b'\n', b'\r', black_box(&buf), 0));
             },
         );
     }
@@ -154,9 +172,12 @@ fn bench_simd_memset<T: MemsetSafe + Copy + Default>(c: &mut Criterion) {
     let mut group = c.benchmark_group("simd");
     let name = format!("memset<{}>", std::any::type_name::<T>());
     let size = mem::size_of::<T>();
-    let mut buf: Vec<T> = vec![Default::default(); 2048 / size];
+    let mut buf: Vec<T> = vec![Default::default(); 128 * MEBI / size];
 
-    for &bytes in &[8usize, 32 + 8, 64 + 8, KIBI + 8] {
+    // For small sizes we add a small offset of +8,
+    // to ensure we also benchmark the non-SIMD tail handling.
+    // For large sizes, its relative impact is negligible.
+    for &bytes in &[8usize, 128 + 8, KIBI, 128 * KIBI, 128 * MEBI] {
         group.throughput(Throughput::Bytes(bytes as u64)).bench_with_input(
             BenchmarkId::new(&name, bytes),
             &bytes,
@@ -206,6 +227,7 @@ fn bench(c: &mut Criterion) {
     bench_buffer(c);
     bench_hash(c);
     bench_oklab(c);
+    bench_simd_lines_fwd(c);
     bench_simd_memchr2(c);
     bench_simd_memset::<u32>(c);
     bench_simd_memset::<u8>(c);
