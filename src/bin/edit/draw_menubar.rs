@@ -99,7 +99,7 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
 }
 
 fn draw_menu_view(ctx: &mut Context, state: &mut State) {
-    if ctx.menubar_menu_button(loc(LocId::ViewFocusStatusbar), 'S', vk::NULL) {
+    if ctx.menubar_menu_button(loc(LocId::ViewFocusStatusbar), 'S', kbmod::CTRL | vk::B) {
         state.wants_statusbar_focus = true;
     }
 
