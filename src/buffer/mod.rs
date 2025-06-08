@@ -1071,7 +1071,11 @@ impl TextBuffer {
         if let (Some(search), Some(..)) = (&mut self.search, &self.selection) {
             let search = search.get_mut();
             if search.selection_generation == self.selection_generation {
-                self.write(replacement.as_bytes(), true);
+                if replacement.is_empty() {
+                    self.extract_selection(true);
+                } else {
+                    self.write(replacement.as_bytes(), true);
+                }
             }
         }
 
@@ -1094,7 +1098,11 @@ impl TextBuffer {
             if !self.has_selection() {
                 break;
             }
-            self.write(replacement, true);
+            if replacement.is_empty() {
+                self.extract_selection(true);
+            } else {
+                self.write(replacement, true);
+            }
             offset = self.cursor.offset;
         }
 
