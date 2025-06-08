@@ -302,7 +302,9 @@ fn encoding_picker_update_list(state: &mut State) {
 }
 
 pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {
-    ctx.modal_begin("document-picker", "");
+    ctx.modal_begin(
+        "document-picker",
+        loc(LocId::ViewDocumentPicker));
     {
         let width = (ctx.size().width - 20).max(10);
         let height = (ctx.size().height - 10).max(10);
