@@ -25,7 +25,7 @@ pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
         if state.documents.active().is_some() && ctx.menubar_menu_begin(loc(LocId::Edit), 'E') {
             draw_menu_edit(ctx, state);
         }
-        if ctx.menubar_menu_begin(loc(LocId::View), 'V') {
+        if state.documents.active().is_some() && ctx.menubar_menu_begin(loc(LocId::View), 'V') {
             draw_menu_view(ctx, state);
         }
         if ctx.menubar_menu_begin(loc(LocId::Help), 'H') {
@@ -99,14 +99,14 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
 }
 
 fn draw_menu_view(ctx: &mut Context, state: &mut State) {
-    if ctx.menubar_menu_button(loc(LocId::ViewFocusStatusbar), 'S', vk::NULL) {
-        state.wants_statusbar_focus = true;
-    }
-
     if let Some(doc) = state.documents.active() {
         let mut tb = doc.buffer.borrow_mut();
         let word_wrap = tb.is_word_wrap_enabled();
 
+        // All values on the statusbar are currently document specific.
+        if ctx.menubar_menu_button(loc(LocId::ViewFocusStatusbar), 'S', vk::NULL) {
+            state.wants_statusbar_focus = true;
+        }
         if ctx.menubar_menu_button(loc(LocId::ViewDocumentPicker), 'P', kbmod::CTRL | vk::P) {
             state.wants_document_picker = true;
         }
