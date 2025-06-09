@@ -31,7 +31,6 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             tb.normalize_newlines(!is_crlf);
         }
         if state.wants_statusbar_focus {
-            state.wants_statusbar_focus = false;
             ctx.steal_focus();
         }
 
@@ -192,6 +191,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
         ctx.block_end();
     }
 
+    state.wants_statusbar_focus = false;
     ctx.table_end();
 }
 
