@@ -1,7 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use edit::arena::scratch_arena;
 use edit::framebuffer::{Attributes, IndexedColor};
+use edit::fuzzy::score_fuzzy;
 use edit::helpers::*;
 use edit::input::vk;
 use edit::tui::*;
@@ -188,48 +190,72 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             ctx.attr_position(Position::Right);
         }
         ctx.block_end();
+    } else {
+        state.wants_statusbar_focus = false;
+        state.wants_encoding_picker = false;
+        state.wants_indentation_picker = false;
     }
 
     ctx.table_end();
 }
 
 pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
-    let doc = state.documents.active_mut().unwrap();
+    let encoding = state.documents.active_mut().map_or("", |doc| doc.buffer.borrow().encoding());
     let reopen = state.wants_encoding_change == StateEncodingChange::Reopen;
     let width = (ctx.size().width - 20).max(10);
     let height = (ctx.size().height - 10).max(10);
     let mut change = None;
+    let mut done = encoding.is_empty();
 
     ctx.modal_begin(
         "encode",
         if reopen { loc(LocId::EncodingReopen) } else { loc(LocId::EncodingConvert) },
     );
     {
-        ctx.scrollarea_begin("scrollarea", Size { width, height });
-        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
+        ctx.table_begin("encoding-search");
+        ctx.table_set_columns(&[0, COORD_TYPE_SAFE_MAX]);
+        ctx.table_set_cell_gap(Size { width: 1, height: 0 });
         ctx.inherit_focus();
         {
-            let encodings = icu::get_available_encodings();
+            ctx.table_next_row();
+            ctx.inherit_focus();
 
+            ctx.label("needle-label", loc(LocId::SearchNeedleLabel));
+
+            if ctx.editline("needle", &mut state.encoding_picker_needle) {
+                encoding_picker_update_list(state);
+            }
+            ctx.inherit_focus();
+        }
+        ctx.table_end();
+
+        ctx.scrollarea_begin("scrollarea", Size { width, height });
+        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
+        {
             ctx.list_begin("encodings");
             ctx.inherit_focus();
-            for &encoding in encodings {
-                if ctx.list_item(encoding == doc.buffer.borrow().encoding(), encoding)
-                    == ListSelection::Activated
-                {
-                    change = Some(encoding);
+
+            for enc in state
+                .encoding_picker_results
+                .as_deref()
+                .unwrap_or_else(|| icu::get_available_encodings().preferred)
+            {
+                if ctx.list_item(enc.canonical == encoding, enc.label) == ListSelection::Activated {
+                    change = Some(enc.canonical);
                     break;
                 }
+                ctx.attr_overflow(Overflow::TruncateTail);
             }
             ctx.list_end();
         }
         ctx.scrollarea_end();
     }
-    if ctx.modal_end() {
-        state.wants_encoding_change = StateEncodingChange::None;
-    }
+    done |= ctx.modal_end();
+    done |= change.is_some();
 
-    if let Some(encoding) = change {
+    if let Some(encoding) = change
+        && let Some(doc) = state.documents.active_mut()
+    {
         if reopen && doc.path.is_some() {
             let mut res = Ok(());
             if doc.buffer.borrow().is_dirty() {
@@ -244,10 +270,39 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
         } else {
             doc.buffer.borrow_mut().set_encoding(encoding);
         }
+    }
 
+    if done {
         state.wants_encoding_change = StateEncodingChange::None;
+        state.encoding_picker_needle.clear();
+        state.encoding_picker_results = None;
         ctx.needs_rerender();
     }
+}
+
+fn encoding_picker_update_list(state: &mut State) {
+    state.encoding_picker_results = None;
+
+    let needle = state.encoding_picker_needle.trim_ascii();
+    if needle.is_empty() {
+        return;
+    }
+
+    let encodings = icu::get_available_encodings();
+    let scratch = scratch_arena(None);
+    let mut matches = Vec::new_in(&*scratch);
+
+    for enc in encodings.all {
+        let local_scratch = scratch_arena(Some(&scratch));
+        let (score, _) = score_fuzzy(&local_scratch, enc.label, needle, true);
+
+        if score > 0 {
+            matches.push((score, *enc));
+        }
+    }
+
+    matches.sort_by(|a, b| b.0.cmp(&a.0));
+    state.encoding_picker_results = Some(Vec::from_iter(matches.iter().map(|(_, enc)| *enc)));
 }
 
 pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {

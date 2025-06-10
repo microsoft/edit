@@ -247,12 +247,15 @@ Usage: grapheme-table-gen [options...] <ucd.nounihan.grouped.xml>
                         Expose tab and linefeed as grapheme cluster properties
   --no-ambiguous        Treat all ambiguous characters as narrow
   --line-breaks         Store and expose line break information
+
+Download ucd.nounihan.grouped.xml at:
+  https://www.unicode.org/Public/UCD/latest/ucdxml/ucd.nounihan.grouped.zip
 ";
 
 fn main() -> anyhow::Result<()> {
     let mut args = pico_args::Arguments::from_env();
     if args.contains(["-h", "--help"]) {
-        eprint!("{}", HELP);
+        eprint!("{HELP}");
         return Ok(());
     }
 
@@ -310,7 +313,7 @@ fn main() -> anyhow::Result<()> {
         for s in &out.trie.stages {
             actual = s.values[actual as usize + ((cp >> s.shift) & s.mask)];
         }
-        assert_eq!(expected.value(), actual, "trie sanity check failed for U+{:04X}", cp);
+        assert_eq!(expected.value(), actual, "trie sanity check failed for U+{cp:04X}");
     }
     for (cp, &expected) in out.ucd.values[..0x80].iter().enumerate() {
         let last = out.trie.stages.last().unwrap();
@@ -318,8 +321,7 @@ fn main() -> anyhow::Result<()> {
         assert_eq!(
             expected.value(),
             actual,
-            "trie sanity check failed for direct ASCII mapping of U+{:04X}",
-            cp
+            "trie sanity check failed for direct ASCII mapping of U+{cp:04X}"
         );
     }
 
@@ -372,7 +374,7 @@ fn generate_c(out: Output) -> String {
     for table in &out.rules_gc {
         buf.push_str("    {\n");
         for &r in table {
-            _ = writeln!(buf, "        0b{:032b},", r);
+            _ = writeln!(buf, "        0b{r:032b},");
         }
         buf.push_str("    },\n");
     }
@@ -443,14 +445,37 @@ fn generate_c(out: Output) -> String {
         {{
             return state == 3;
         }}
-        inline int ucd_grapheme_cluster_character_width(const int val)
-        {{
-            return val >> {1};
-        }}
         ",
         out.ucd.packing.mask_cluster_break,
-        out.ucd.packing.shift_character_width,
     );
+
+    if out.arg_no_ambiguous {
+        _ = writedoc!(
+            buf,
+            "
+            inline int ucd_grapheme_cluster_character_width(const int val)
+            {{
+                return val >> {};
+            }}
+            ",
+            out.ucd.packing.shift_character_width,
+        );
+    } else {
+        _ = writedoc!(
+            buf,
+            "
+            inline int ucd_grapheme_cluster_character_width(const int val, int ambiguous_width)
+            {{
+                int w = val >> {};
+                if (w == 3) {{
+                    w = ambiguous_width;
+                }}
+                return w;
+            }}
+            ",
+            out.ucd.packing.shift_character_width,
+        );
+    }
 
     if out.arg_line_breaks {
         _ = writedoc!(
@@ -546,7 +571,7 @@ fn generate_rust(out: Output) -> String {
     for table in &out.rules_gc {
         buf.push_str("    [\n");
         for &r in table {
-            _ = writeln!(buf, "        0b{:032b},", r);
+            _ = writeln!(buf, "        0b{r:032b},");
         }
         buf.push_str("    ],\n");
     }
@@ -622,14 +647,42 @@ fn generate_rust(out: Output) -> String {
         pub fn ucd_grapheme_cluster_joins_done(state: u32) -> bool {{
             state == 3
         }}
-        #[inline(always)]
-        pub fn ucd_grapheme_cluster_character_width(val: usize) -> usize {{
-            val >> {1}
-        }}
         ",
         out.ucd.packing.mask_cluster_break,
-        out.ucd.packing.shift_character_width,
     );
+
+    if out.arg_no_ambiguous {
+        _ = writedoc!(
+            buf,
+            "
+            #[inline(always)]
+            pub fn ucd_grapheme_cluster_character_width(val: usize) -> usize {{
+                val >> {}
+            }}
+            ",
+            out.ucd.packing.shift_character_width,
+        );
+    } else {
+        // `cold_path()` ensures that LLVM emits a branch instead of a conditional move.
+        // This improves performance, as ambiguous characters are rare.
+        // `> 2` is used instead of `== 3`, because this way the compiler can immediately
+        // test whether `val > (2 << shift_character_width)` before shifting.
+        _ = writedoc!(
+            buf,
+            "
+            #[inline(always)]
+            pub fn ucd_grapheme_cluster_character_width(val: usize, ambiguous_width: usize) -> usize {{
+                let mut w = val >> {};
+                if w > 2 {{
+                    cold_path();
+                    w = ambiguous_width;
+                }}
+                w
+            }}
+            ",
+            out.ucd.packing.shift_character_width,
+        );
+    }
 
     if out.arg_line_breaks {
         _ = writedoc!(
@@ -678,6 +731,17 @@ fn generate_rust(out: Output) -> String {
             .value(),
             out.ucd.values['\t' as usize].value(),
             out.ucd.values['\n' as usize].value(),
+        );
+    }
+
+    if !out.arg_no_ambiguous {
+        _ = writedoc!(
+            buf,
+            "
+            #[cold]
+            #[inline(always)]
+            fn cold_path() {{}}
+            "
         );
     }
 

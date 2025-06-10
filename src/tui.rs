@@ -158,7 +158,7 @@ use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedC
 use crate::hash::*;
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
-use crate::{apperr, arena_format, input, unicode};
+use crate::{apperr, arena_format, input, simd, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
@@ -576,7 +576,10 @@ impl Tui {
                 let mut hovered_node = None; // Needed for `mouse_down`
                 let mut focused_node = None; // Needed for `mouse_down` and `is_click`
                 if mouse_down || mouse_up {
-                    for root in self.prev_tree.iterate_roots() {
+                    // Roots (aka windows) are ordered in Z order, so we iterate
+                    // them in reverse order, from topmost to bottommost.
+                    for root in self.prev_tree.iterate_roots_rev() {
+                        // Find the node that contains the cursor.
                         Tree::visit_all(root, root, true, |node| {
                             let n = node.borrow();
                             if !n.outer_clipped.contains(next_position) {
@@ -589,6 +592,18 @@ impl Tui {
                             }
                             VisitControl::Continue
                         });
+
+                        // This root/window contains the cursor.
+                        // We don't care about any lower roots.
+                        if hovered_node.is_some() {
+                            break;
+                        }
+
+                        // This root is modal and swallows all clicks,
+                        // no matter whether the click was inside it or not.
+                        if matches!(root.borrow().content, NodeContent::Modal(_)) {
+                            break;
+                        }
                     }
                 }
 
@@ -892,7 +907,7 @@ impl Tui {
             }
         }
 
-        if node.attributes.float.is_some() && node.attributes.bg & 0xff000000 == 0xff000000 {
+        if node.attributes.float.is_some() {
             if !node.attributes.bordered {
                 let mut fill = ArenaString::new_in(&scratch);
                 fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left) as usize);
@@ -908,6 +923,14 @@ impl Tui {
             }
 
             self.framebuffer.replace_attr(outer_clipped, Attributes::All, Attributes::None);
+
+            if matches!(node.content, NodeContent::Modal(_)) {
+                let rect =
+                    Rect { left: 0, top: 0, right: self.size.width, bottom: self.size.height };
+                let dim = self.indexed_alpha(IndexedColor::Background, 1, 2);
+                self.framebuffer.blend_bg(rect, dim);
+                self.framebuffer.blend_fg(rect, dim);
+            }
         }
 
         self.framebuffer.blend_bg(outer_clipped, node.attributes.bg);
@@ -1692,15 +1715,8 @@ impl<'a> Context<'a, '_> {
     /// Begins a modal window. Call [`Context::modal_end()`].
     pub fn modal_begin(&mut self, classname: &'static str, title: &str) {
         self.block_begin(classname);
-        self.attr_float(FloatSpec { anchor: Anchor::Root, ..Default::default() });
-        self.attr_intrinsic_size(Size { width: self.tui.size.width, height: self.tui.size.height });
-        self.attr_background_rgba(self.indexed_alpha(IndexedColor::Background, 1, 2));
-        self.attr_foreground_rgba(self.indexed_alpha(IndexedColor::Background, 1, 2));
-        self.attr_focus_well();
-
-        self.block_begin("window");
         self.attr_float(FloatSpec {
-            anchor: Anchor::Last,
+            anchor: Anchor::Root,
             gravity_x: 0.5,
             gravity_y: 0.5,
             offset_x: self.tui.size.width as f32 * 0.5,
@@ -1709,7 +1725,7 @@ impl<'a> Context<'a, '_> {
         self.attr_border();
         self.attr_background_rgba(self.tui.modal_default_bg);
         self.attr_foreground_rgba(self.tui.modal_default_fg);
-        self.inherit_focus();
+        self.attr_focus_well();
         self.focus_on_first_present();
 
         let mut last_node = self.tree.last_node.borrow_mut();
@@ -1725,7 +1741,6 @@ impl<'a> Context<'a, '_> {
     /// Ends the current modal window block.
     /// Returns true if the user pressed Escape (a request to close).
     pub fn modal_end(&mut self) -> bool {
-        self.block_end();
         self.block_end();
 
         // Consume the input unconditionally, so that the root (the "main window")
@@ -2492,6 +2507,9 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::UP => {
+                    if single_line {
+                        return false;
+                    }
                     match modifiers {
                         kbmod::NONE => {
                             let mut x = tc.preferred_column;
@@ -2549,57 +2567,62 @@ impl<'a> Context<'a, '_> {
                         tb.cursor_move_delta(granularity, 1);
                     }
                 }
-                vk::DOWN => match modifiers {
-                    kbmod::NONE => {
-                        let mut x = tc.preferred_column;
-                        let mut y = tb.cursor_visual_pos().y + 1;
-
-                        // If there's a selection we put the cursor below it.
-                        if let Some((_, end)) = tb.selection_range() {
-                            x = end.visual_pos.x;
-                            y = end.visual_pos.y + 1;
-                            tc.preferred_column = x;
-                        }
-
-                        // If the cursor was already on the last line,
-                        // move it to the end of the buffer.
-                        if y >= tb.visual_line_count() {
-                            x = CoordType::MAX;
-                        }
-
-                        tb.cursor_move_to_visual(Point { x, y });
-
-                        // If we fell into the `if y >= tb.get_visual_line_count()` above, we wanted to
-                        // update the `preferred_column` but didn't know yet what it was. Now we know!
-                        if x == CoordType::MAX {
-                            tc.preferred_column = tb.cursor_visual_pos().x;
-                        }
+                vk::DOWN => {
+                    if single_line {
+                        return false;
                     }
-                    kbmod::CTRL => {
-                        tc.scroll_offset.y += 1;
-                        make_cursor_visible = false;
-                    }
-                    kbmod::SHIFT => {
-                        // If the cursor was already on the last line,
-                        // move it to the end of the buffer.
-                        if tb.cursor_visual_pos().y >= tb.visual_line_count() - 1 {
-                            tc.preferred_column = CoordType::MAX;
-                        }
+                    match modifiers {
+                        kbmod::NONE => {
+                            let mut x = tc.preferred_column;
+                            let mut y = tb.cursor_visual_pos().y + 1;
 
-                        tb.selection_update_visual(Point {
-                            x: tc.preferred_column,
-                            y: tb.cursor_visual_pos().y + 1,
-                        });
+                            // If there's a selection we put the cursor below it.
+                            if let Some((_, end)) = tb.selection_range() {
+                                x = end.visual_pos.x;
+                                y = end.visual_pos.y + 1;
+                                tc.preferred_column = x;
+                            }
 
-                        if tc.preferred_column == CoordType::MAX {
-                            tc.preferred_column = tb.cursor_visual_pos().x;
+                            // If the cursor was already on the last line,
+                            // move it to the end of the buffer.
+                            if y >= tb.visual_line_count() {
+                                x = CoordType::MAX;
+                            }
+
+                            tb.cursor_move_to_visual(Point { x, y });
+
+                            // If we fell into the `if y >= tb.get_visual_line_count()` above, we wanted to
+                            // update the `preferred_column` but didn't know yet what it was. Now we know!
+                            if x == CoordType::MAX {
+                                tc.preferred_column = tb.cursor_visual_pos().x;
+                            }
                         }
+                        kbmod::CTRL => {
+                            tc.scroll_offset.y += 1;
+                            make_cursor_visible = false;
+                        }
+                        kbmod::SHIFT => {
+                            // If the cursor was already on the last line,
+                            // move it to the end of the buffer.
+                            if tb.cursor_visual_pos().y >= tb.visual_line_count() - 1 {
+                                tc.preferred_column = CoordType::MAX;
+                            }
+
+                            tb.selection_update_visual(Point {
+                                x: tc.preferred_column,
+                                y: tb.cursor_visual_pos().y + 1,
+                            });
+
+                            if tc.preferred_column == CoordType::MAX {
+                                tc.preferred_column = tb.cursor_visual_pos().x;
+                            }
+                        }
+                        kbmod::CTRL_ALT => {
+                            // TODO: Add cursor above
+                        }
+                        _ => return false,
                     }
-                    kbmod::CTRL_ALT => {
-                        // TODO: Add cursor above
-                    }
-                    _ => return false,
-                },
+                }
                 vk::INSERT => match modifiers {
                     kbmod::SHIFT => tb.paste(self.clipboard_ref()),
                     kbmod::CTRL => tb.copy(self.clipboard_mut()),
@@ -2665,7 +2688,7 @@ impl<'a> Context<'a, '_> {
         }
 
         if single_line && !write.is_empty() {
-            let (end, _) = unicode::newlines_forward(write, 0, 0, 1);
+            let (end, _) = simd::lines_fwd(write, 0, 0, 1);
             write = unicode::strip_newline(&write[..end]);
         }
         if !write.is_empty() {
@@ -2941,6 +2964,23 @@ impl<'a> Context<'a, '_> {
             ListSelection::Selected
         } else {
             ListSelection::Unchanged
+        }
+    }
+
+    /// [`Context::steal_focus`], but for a list view.
+    ///
+    /// This exists, because didn't want to figure out how to get
+    /// [`Context::styled_list_item_end`] to recognize a regular,
+    /// programmatic focus steal.
+    pub fn list_item_steal_focus(&mut self) {
+        self.steal_focus();
+
+        match &mut self.tree.current_node.borrow_mut().content {
+            NodeContent::List(content) => {
+                content.selected = self.tree.last_node.borrow().id;
+                content.selected_node = Some(self.tree.last_node);
+            }
+            _ => unreachable!(),
         }
     }
 
@@ -3421,8 +3461,22 @@ impl<'a> Tree<'a> {
         })
     }
 
+    fn iterate_siblings_rev(
+        mut node: Option<&'a NodeCell<'a>>,
+    ) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
+        iter::from_fn(move || {
+            let n = node?;
+            node = n.borrow().siblings.prev;
+            Some(n)
+        })
+    }
+
     fn iterate_roots(&self) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
         Self::iterate_siblings(Some(self.root_first))
+    }
+
+    fn iterate_roots_rev(&self) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
+        Self::iterate_siblings_rev(Some(self.root_last))
     }
 
     /// Visits all nodes under and including `root` in depth order.
