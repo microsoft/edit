@@ -312,8 +312,8 @@ fn draw(ctx: &mut Context, state: &mut State) {
     if state.wants_encoding_change != StateEncodingChange::None {
         draw_dialog_encoding_change(ctx, state);
     }
-    if state.wants_document_picker {
-        draw_document_picker(ctx, state);
+    if state.wants_go_to_file {
+        draw_go_to_file(ctx, state);
     }
     if state.wants_about {
         draw_dialog_about(ctx, state);
@@ -339,7 +339,7 @@ fn draw(ctx: &mut Context, state: &mut State) {
         } else if key == kbmod::CTRL | vk::W {
             state.wants_close = true;
         } else if key == kbmod::CTRL | vk::P {
-            state.wants_document_picker = true;
+            state.wants_go_to_file = true;
         } else if key == kbmod::CTRL | vk::Q {
             state.wants_exit = true;
         } else if key == kbmod::CTRL | vk::G {

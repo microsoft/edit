@@ -107,8 +107,8 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
         let mut tb = doc.buffer.borrow_mut();
         let word_wrap = tb.is_word_wrap_enabled();
 
-        if ctx.menubar_menu_button(loc(LocId::ViewDocumentPicker), 'P', kbmod::CTRL | vk::P) {
-            state.wants_document_picker = true;
+        if ctx.menubar_menu_button(loc(LocId::ViewGoToFile), 'F', kbmod::CTRL | vk::P) {
+            state.wants_go_to_file = true;
         }
         if ctx.menubar_menu_button(loc(LocId::FileGoto), 'G', kbmod::CTRL | vk::G) {
             state.wants_goto = true;

@@ -42,7 +42,7 @@ pub enum LocId {
     View,
     ViewFocusStatusbar,
     ViewWordWrap,
-    ViewDocumentPicker,
+    ViewGoToFile,
 
     // Help menu
     Help,
@@ -303,17 +303,17 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     ],
     // FileClose
     [
-        /* en      */ "Close Editor",
-        /* de      */ "Editor schließen",
-        /* es      */ "Cerrar editor",
-        /* fr      */ "Fermer l’éditeur",
-        /* it      */ "Chiudi editor",
-        /* ja      */ "エディターを閉じる",
-        /* ko      */ "편집기 닫기",
-        /* pt_br   */ "Fechar editor",
-        /* ru      */ "Закрыть редактор",
-        /* zh_hans */ "关闭编辑器",
-        /* zh_hant */ "關閉編輯器",
+        /* en      */ "Close File",
+        /* de      */ "Datei schließen",
+        /* es      */ "Cerrar archivo",
+        /* fr      */ "Fermer le fichier",
+        /* it      */ "Chiudi file",
+        /* ja      */ "ファイルを閉じる",
+        /* ko      */ "파일 닫기",
+        /* pt_br   */ "Fechar arquivo",
+        /* ru      */ "Закрыть файл",
+        /* zh_hans */ "关闭文件",
+        /* zh_hant */ "關閉檔案",
     ],
     // FileExit
     [
@@ -513,19 +513,19 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "自动换行",
         /* zh_hant */ "自動換行",
     ],
-    // ViewDocumentPicker
+    // ViewGoToFile
     [
-        /* en      */ "Document Picker…",
-        /* de      */ "Dokumentauswahl…",
-        /* es      */ "Selector de documentos…",
-        /* fr      */ "Sélecteur de documents…",
-        /* it      */ "Selettore di documenti…",
-        /* ja      */ "ドキュメントピッカー…",
-        /* ko      */ "문서 선택기…",
-        /* pt_br   */ "Seletor de documentos…",
-        /* ru      */ "Выбор документа…",
-        /* zh_hans */ "文档选择器…",
-        /* zh_hant */ "文件選擇器…",
+        /* en      */ "Go to File…",
+        /* de      */ "Gehe zu Datei…",
+        /* es      */ "Ir a archivo…",
+        /* fr      */ "Aller au fichier…",
+        /* it      */ "Vai al file…",
+        /* ja      */ "ファイルへ移動…",
+        /* ko      */ "파일로 이동…",
+        /* pt_br   */ "Ir para arquivo…",
+        /* ru      */ "Перейти к файлу…",
+        /* zh_hans */ "转到文件…",
+        /* zh_hant */ "跳至檔案…",
     ],
 
     // Help (a menu bar item)
