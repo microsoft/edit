@@ -525,43 +525,53 @@ impl TextBuffer {
     }
 
     pub fn reflow(&mut self) {
-        self.recalc_after_content_changed();
-
-        // Recalculate the cursor position.
-        self.cursor = self.cursor_move_to_logical_internal(
-            if self.word_wrap_column > 0 {
-                Default::default()
-            } else {
-                self.goto_line_start(self.cursor, self.cursor.logical_pos.y)
-            },
-            self.cursor.logical_pos,
-        );
-
-        // Recalculate the line statistics.
-        if self.word_wrap_column > 0 {
-            let end = self.cursor_move_to_logical_internal(self.cursor, Point::MAX);
-            self.stats.visual_lines = end.visual_pos.y + 1;
-        } else {
-            self.stats.visual_lines = self.stats.logical_lines;
-        }
+        self.reflow_internal(true);
     }
 
     fn recalc_after_content_changed(&mut self) {
-        // +1 onto logical_lines, because line numbers are 1-based.
-        // +1 onto log10, because we want the digit width and not the actual log10.
-        // +3 onto log10, because we append " | " to the line numbers to form the margin.
-        self.margin_width = if self.margin_enabled {
-            self.stats.logical_lines.ilog10() as CoordType + 4
-        } else {
-            0
-        };
+        self.reflow_internal(false);
+    }
 
-        let text_width = self.text_width();
-        // 2 columns are required, because otherwise wide glyphs wouldn't ever fit.
-        self.word_wrap_column =
-            if self.word_wrap_enabled && text_width >= 2 { text_width } else { 0 };
+    fn reflow_internal(&mut self, force: bool) {
+        let word_wrap_column_before = self.word_wrap_column;
+
+        {
+            // +1 onto logical_lines, because line numbers are 1-based.
+            // +1 onto log10, because we want the digit width and not the actual log10.
+            // +3 onto log10, because we append " | " to the line numbers to form the margin.
+            self.margin_width = if self.margin_enabled {
+                self.stats.logical_lines.ilog10() as CoordType + 4
+            } else {
+                0
+            };
+
+            let text_width = self.text_width();
+            // 2 columns are required, because otherwise wide glyphs wouldn't ever fit.
+            self.word_wrap_column =
+                if self.word_wrap_enabled && text_width >= 2 { text_width } else { 0 };
+        }
 
         self.cursor_for_rendering = None;
+
+        if force || self.word_wrap_column != word_wrap_column_before {
+            // Recalculate the cursor position.
+            self.cursor = self.cursor_move_to_logical_internal(
+                if self.word_wrap_column > 0 {
+                    Default::default()
+                } else {
+                    self.goto_line_start(self.cursor, self.cursor.logical_pos.y)
+                },
+                self.cursor.logical_pos,
+            );
+
+            // Recalculate the line statistics.
+            if self.word_wrap_column > 0 {
+                let end = self.cursor_move_to_logical_internal(self.cursor, Point::MAX);
+                self.stats.visual_lines = end.visual_pos.y + 1;
+            } else {
+                self.stats.visual_lines = self.stats.logical_lines;
+            }
+        }
     }
 
     /// Replaces the entire buffer contents with the given `text`.
