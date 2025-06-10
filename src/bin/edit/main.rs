@@ -352,6 +352,14 @@ fn draw(ctx: &mut Context, state: &mut State) {
         {
             state.wants_search.kind = StateSearchKind::Replace;
             state.wants_search.focus = true;
+        } else if key == vk::F3 {
+            if let Some(doc) = state.documents.active() && !state.search_needle.is_empty() {
+                let search_success = doc.buffer.borrow_mut()
+                    .find_and_select(&state.search_needle, state.search_options)
+                    .is_ok();
+                state.search_success = search_success;
+                ctx.needs_rerender();
+            }
         } else {
             return;
         }
