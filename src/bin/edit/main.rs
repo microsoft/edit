@@ -269,7 +269,6 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     }
 
     state.file_picker_pending_dir = DisplayablePathBuf::from_path(cwd);
-    state.file_picker_pending_dir_revision = state.file_picker_pending_dir_revision.wrapping_add(1);
     Ok(false)
 }
 
@@ -352,6 +351,8 @@ fn draw(ctx: &mut Context, state: &mut State) {
         {
             state.wants_search.kind = StateSearchKind::Replace;
             state.wants_search.focus = true;
+        } else if key == vk::F3 {
+            search_execute(ctx, state, SearchAction::Search);
         } else {
             return;
         }

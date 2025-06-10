@@ -137,6 +137,7 @@ pub struct State {
     pub file_picker_pending_name: PathBuf,
     pub file_picker_entries: Option<Vec<DisplayablePathBuf>>,
     pub file_picker_overwrite_warning: Option<PathBuf>, // The path the warning is about.
+    pub file_picker_autocomplete: Vec<DisplayablePathBuf>,
 
     pub wants_search: StateSearch,
     pub search_needle: String,
@@ -145,12 +146,12 @@ pub struct State {
     pub search_success: bool,
 
     pub wants_encoding_picker: bool,
+    pub wants_encoding_change: StateEncodingChange,
     pub encoding_picker_needle: String,
     pub encoding_picker_results: Option<Vec<icu::Encoding>>,
 
     pub wants_save: bool,
     pub wants_statusbar_focus: bool,
-    pub wants_encoding_change: StateEncodingChange,
     pub wants_indentation_picker: bool,
     pub wants_go_to_file: bool,
     pub wants_about: bool,
@@ -185,6 +186,7 @@ impl State {
             file_picker_pending_name: Default::default(),
             file_picker_entries: None,
             file_picker_overwrite_warning: None,
+            file_picker_autocomplete: Vec::new(),
 
             wants_search: StateSearch { kind: StateSearchKind::Hidden, focus: false },
             search_needle: Default::default(),
