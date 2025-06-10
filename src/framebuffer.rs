@@ -795,7 +795,7 @@ impl Bitmap {
     }
 
     /// Iterates over each row in the bitmap.
-    fn iter(&self) -> ChunksExact<u32> {
+    fn iter(&self) -> ChunksExact<'_, u32> {
         self.data.chunks_exact(self.size.width as usize)
     }
 }
@@ -881,7 +881,7 @@ impl AttributeBuffer {
     }
 
     /// Iterates over each row in the bitmap.
-    fn iter(&self) -> ChunksExact<Attributes> {
+    fn iter(&self) -> ChunksExact<'_, Attributes> {
         self.data.chunks_exact(self.size.width as usize)
     }
 }
