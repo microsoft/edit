@@ -184,12 +184,16 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 filename = &filename_buf;
             }
 
-            state.wants_document_picker |= ctx.button("filename", filename, ButtonStyle::default());
+            state.wants_go_to_file |= ctx.button("filename", filename, ButtonStyle::default());
             ctx.inherit_focus();
             ctx.attr_overflow(Overflow::TruncateMiddle);
             ctx.attr_position(Position::Right);
         }
         ctx.block_end();
+    } else {
+        state.wants_statusbar_focus = false;
+        state.wants_encoding_picker = false;
+        state.wants_indentation_picker = false;
     }
 
     ctx.table_end();
@@ -301,8 +305,8 @@ fn encoding_picker_update_list(state: &mut State) {
     state.encoding_picker_results = Some(Vec::from_iter(matches.iter().map(|(_, enc)| *enc)));
 }
 
-pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {
-    ctx.modal_begin("document-picker", "");
+pub fn draw_go_to_file(ctx: &mut Context, state: &mut State) {
+    ctx.modal_begin("go-to-file", loc(LocId::ViewGoToFile));
     {
         let width = (ctx.size().width - 20).max(10);
         let height = (ctx.size().height - 10).max(10);
@@ -330,7 +334,7 @@ pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {
 
                 ctx.styled_list_item_end(false) == ListSelection::Activated
             }) {
-                state.wants_document_picker = false;
+                state.wants_go_to_file = false;
                 ctx.needs_rerender();
             }
 
@@ -339,6 +343,6 @@ pub fn draw_document_picker(ctx: &mut Context, state: &mut State) {
         ctx.scrollarea_end();
     }
     if ctx.modal_end() {
-        state.wants_document_picker = false;
+        state.wants_go_to_file = false;
     }
 }

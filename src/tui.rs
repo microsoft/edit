@@ -152,6 +152,7 @@ use std::{iter, mem, ptr, time};
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::{CursorMovement, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
+use crate::clipboard::Clipboard;
 use crate::document::WriteableDocument;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::hash::*;
@@ -167,7 +168,6 @@ const KBMOD_FOR_WORD_NAV: InputKeyMod =
 type Input<'input> = input::Input<'input>;
 type InputKey = input::InputKey;
 type InputMouseState = input::InputMouseState;
-type InputText<'input> = input::InputText<'input>;
 
 /// Since [`TextBuffer`] creation and management is expensive,
 /// we cache instances of them for reuse between frames.
@@ -363,10 +363,7 @@ pub struct Tui {
     cached_text_buffers: Vec<CachedTextBuffer>,
 
     /// The clipboard contents.
-    clipboard: Vec<u8>,
-    /// A counter that is incremented every time the clipboard changes.
-    /// Allows for tracking clipboard changes without comparing contents.
-    clipboard_generation: u32,
+    clipboard: Clipboard,
 
     settling_have: i32,
     settling_want: i32,
@@ -416,8 +413,7 @@ impl Tui {
 
             cached_text_buffers: Vec::with_capacity(16),
 
-            clipboard: Vec::new(),
-            clipboard_generation: 0,
+            clipboard: Default::default(),
 
             settling_have: 0,
             settling_want: 0,
@@ -490,16 +486,14 @@ impl Tui {
         self.framebuffer.contrasted(color)
     }
 
-    /// Returns the current clipboard contents.
-    pub fn clipboard(&self) -> &[u8] {
+    /// Returns the clipboard.
+    pub fn clipboard_ref(&self) -> &Clipboard {
         &self.clipboard
     }
 
-    /// Returns the current clipboard generation.
-    /// The generation changes every time the clipboard contents change.
-    /// This allows you to track clipboard changes.
-    pub fn clipboard_generation(&self) -> u32 {
-        self.clipboard_generation
+    /// Returns the clipboard (mutable).
+    pub fn clipboard_mut(&mut self) -> &mut Clipboard {
+        &mut self.clipboard
     }
 
     /// Starts a new frame and returns a [`Context`] for it.
@@ -553,10 +547,16 @@ impl Tui {
                 // This causes us to ignore the keyboard input here. We need a way to inform the caller over
                 // how much of the input text we actually processed in a single frame. Or perhaps we could use
                 // the needs_settling logic?
-                if !text.bracketed && text.text.len() == 1 {
-                    let ch = text.text.as_bytes()[0];
+                if text.len() == 1 {
+                    let ch = text.as_bytes()[0];
                     input_keyboard = InputKey::from_ascii(ch as char)
                 }
+            }
+            Some(Input::Paste(paste)) => {
+                let clipboard = self.clipboard_mut();
+                clipboard.write(paste);
+                clipboard.mark_as_synchronized();
+                input_keyboard = Some(kbmod::CTRL | vk::V);
             }
             Some(Input::Keyboard(keyboard)) => {
                 input_keyboard = Some(keyboard);
@@ -576,7 +576,10 @@ impl Tui {
                 let mut hovered_node = None; // Needed for `mouse_down`
                 let mut focused_node = None; // Needed for `mouse_down` and `is_click`
                 if mouse_down || mouse_up {
-                    for root in self.prev_tree.iterate_roots() {
+                    // Roots (aka windows) are ordered in Z order, so we iterate
+                    // them in reverse order, from topmost to bottommost.
+                    for root in self.prev_tree.iterate_roots_rev() {
+                        // Find the node that contains the cursor.
                         Tree::visit_all(root, root, true, |node| {
                             let n = node.borrow();
                             if !n.outer_clipped.contains(next_position) {
@@ -589,6 +592,18 @@ impl Tui {
                             }
                             VisitControl::Continue
                         });
+
+                        // This root/window contains the cursor.
+                        // We don't care about any lower roots.
+                        if hovered_node.is_some() {
+                            break;
+                        }
+
+                        // This root is modal and swallows all clicks,
+                        // no matter whether the click was inside it or not.
+                        if matches!(root.borrow().content, NodeContent::Modal(_)) {
+                            break;
+                        }
                     }
                 }
 
@@ -892,7 +907,7 @@ impl Tui {
             }
         }
 
-        if node.attributes.float.is_some() && node.attributes.bg & 0xff000000 == 0xff000000 {
+        if node.attributes.float.is_some() {
             if !node.attributes.bordered {
                 let mut fill = ArenaString::new_in(&scratch);
                 fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left) as usize);
@@ -908,6 +923,14 @@ impl Tui {
             }
 
             self.framebuffer.replace_attr(outer_clipped, Attributes::All, Attributes::None);
+
+            if matches!(node.content, NodeContent::Modal(_)) {
+                let rect =
+                    Rect { left: 0, top: 0, right: self.size.width, bottom: self.size.height };
+                let dim = self.indexed_alpha(IndexedColor::Background, 1, 2);
+                self.framebuffer.blend_bg(rect, dim);
+                self.framebuffer.blend_fg(rect, dim);
+            }
         }
 
         self.framebuffer.blend_bg(outer_clipped, node.attributes.bg);
@@ -1291,7 +1314,7 @@ pub struct Context<'a, 'input> {
     tui: &'a mut Tui,
 
     /// Current text input, if any.
-    input_text: Option<InputText<'input>>,
+    input_text: Option<&'input str>,
     /// Current keyboard input, if any.
     input_keyboard: Option<InputKey>,
     input_mouse_modifiers: InputKeyMod,
@@ -1353,25 +1376,14 @@ impl<'a> Context<'a, '_> {
         self.tui.framebuffer.contrasted(color)
     }
 
-    /// Returns the current clipboard contents.
-    pub fn clipboard(&self) -> &[u8] {
-        self.tui.clipboard()
+    /// Returns the clipboard.
+    pub fn clipboard_ref(&self) -> &Clipboard {
+        &self.tui.clipboard
     }
 
-    /// Returns the current clipboard generation.
-    /// The generation changes every time the clipboard contents change.
-    /// This allows you to track clipboard changes.
-    pub fn clipboard_generation(&self) -> u32 {
-        self.tui.clipboard_generation()
-    }
-
-    /// Sets the clipboard contents.
-    pub fn set_clipboard(&mut self, data: Vec<u8>) {
-        if !data.is_empty() {
-            self.tui.clipboard = data;
-            self.tui.clipboard_generation = self.tui.clipboard_generation.wrapping_add(1);
-            self.needs_rerender();
-        }
+    /// Returns the clipboard (mutable).
+    pub fn clipboard_mut(&mut self) -> &mut Clipboard {
+        &mut self.tui.clipboard
     }
 
     /// Tell the UI framework that your state changed and you need another layout pass.
@@ -1703,15 +1715,8 @@ impl<'a> Context<'a, '_> {
     /// Begins a modal window. Call [`Context::modal_end()`].
     pub fn modal_begin(&mut self, classname: &'static str, title: &str) {
         self.block_begin(classname);
-        self.attr_float(FloatSpec { anchor: Anchor::Root, ..Default::default() });
-        self.attr_intrinsic_size(Size { width: self.tui.size.width, height: self.tui.size.height });
-        self.attr_background_rgba(self.indexed_alpha(IndexedColor::Background, 1, 2));
-        self.attr_foreground_rgba(self.indexed_alpha(IndexedColor::Background, 1, 2));
-        self.attr_focus_well();
-
-        self.block_begin("window");
         self.attr_float(FloatSpec {
-            anchor: Anchor::Last,
+            anchor: Anchor::Root,
             gravity_x: 0.5,
             gravity_y: 0.5,
             offset_x: self.tui.size.width as f32 * 0.5,
@@ -1720,7 +1725,7 @@ impl<'a> Context<'a, '_> {
         self.attr_border();
         self.attr_background_rgba(self.tui.modal_default_bg);
         self.attr_foreground_rgba(self.tui.modal_default_fg);
-        self.inherit_focus();
+        self.attr_focus_well();
         self.focus_on_first_present();
 
         let mut last_node = self.tree.last_node.borrow_mut();
@@ -1736,7 +1741,6 @@ impl<'a> Context<'a, '_> {
     /// Ends the current modal window block.
     /// Returns true if the user pressed Escape (a request to close).
     pub fn modal_end(&mut self) -> bool {
-        self.block_end();
         self.block_end();
 
         // Consume the input unconditionally, so that the root (the "main window")
@@ -2037,11 +2041,7 @@ impl<'a> Context<'a, '_> {
 
     /// Creates a text input field.
     /// Returns true if the text contents changed.
-    pub fn editline<'s, 'b: 's>(
-        &'s mut self,
-        classname: &'static str,
-        text: &'b mut dyn WriteableDocument,
-    ) -> bool {
+    pub fn editline(&mut self, classname: &'static str, text: &mut dyn WriteableDocument) -> bool {
         self.textarea_internal(classname, TextBufferPayload::Editline(text))
     }
 
@@ -2307,14 +2307,10 @@ impl<'a> Context<'a, '_> {
             return false;
         }
 
-        let mut write: &[u8] = b"";
-        let mut write_raw = false;
+        let mut write: &[u8] = &[];
 
         if let Some(input) = &self.input_text {
-            write = input.text.as_bytes();
-            write_raw = input.bracketed;
-            tc.preferred_column = tb.cursor_visual_pos().x;
-            make_cursor_visible = true;
+            write = input.as_bytes();
         } else if let Some(input) = &self.input_keyboard {
             let key = input.key();
             let modifiers = input.modifiers();
@@ -2511,6 +2507,9 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::UP => {
+                    if single_line {
+                        return false;
+                    }
                     match modifiers {
                         kbmod::NONE => {
                             let mut x = tc.preferred_column;
@@ -2568,67 +2567,69 @@ impl<'a> Context<'a, '_> {
                         tb.cursor_move_delta(granularity, 1);
                     }
                 }
-                vk::DOWN => match modifiers {
-                    kbmod::NONE => {
-                        let mut x = tc.preferred_column;
-                        let mut y = tb.cursor_visual_pos().y + 1;
-
-                        // If there's a selection we put the cursor below it.
-                        if let Some((_, end)) = tb.selection_range() {
-                            x = end.visual_pos.x;
-                            y = end.visual_pos.y + 1;
-                            tc.preferred_column = x;
-                        }
-
-                        // If the cursor was already on the last line,
-                        // move it to the end of the buffer.
-                        if y >= tb.visual_line_count() {
-                            x = CoordType::MAX;
-                        }
-
-                        tb.cursor_move_to_visual(Point { x, y });
-
-                        // If we fell into the `if y >= tb.get_visual_line_count()` above, we wanted to
-                        // update the `preferred_column` but didn't know yet what it was. Now we know!
-                        if x == CoordType::MAX {
-                            tc.preferred_column = tb.cursor_visual_pos().x;
-                        }
+                vk::DOWN => {
+                    if single_line {
+                        return false;
                     }
-                    kbmod::CTRL => {
-                        tc.scroll_offset.y += 1;
-                        make_cursor_visible = false;
-                    }
-                    kbmod::SHIFT => {
-                        // If the cursor was already on the last line,
-                        // move it to the end of the buffer.
-                        if tb.cursor_visual_pos().y >= tb.visual_line_count() - 1 {
-                            tc.preferred_column = CoordType::MAX;
-                        }
+                    match modifiers {
+                        kbmod::NONE => {
+                            let mut x = tc.preferred_column;
+                            let mut y = tb.cursor_visual_pos().y + 1;
 
-                        tb.selection_update_visual(Point {
-                            x: tc.preferred_column,
-                            y: tb.cursor_visual_pos().y + 1,
-                        });
+                            // If there's a selection we put the cursor below it.
+                            if let Some((_, end)) = tb.selection_range() {
+                                x = end.visual_pos.x;
+                                y = end.visual_pos.y + 1;
+                                tc.preferred_column = x;
+                            }
 
-                        if tc.preferred_column == CoordType::MAX {
-                            tc.preferred_column = tb.cursor_visual_pos().x;
+                            // If the cursor was already on the last line,
+                            // move it to the end of the buffer.
+                            if y >= tb.visual_line_count() {
+                                x = CoordType::MAX;
+                            }
+
+                            tb.cursor_move_to_visual(Point { x, y });
+
+                            // If we fell into the `if y >= tb.get_visual_line_count()` above, we wanted to
+                            // update the `preferred_column` but didn't know yet what it was. Now we know!
+                            if x == CoordType::MAX {
+                                tc.preferred_column = tb.cursor_visual_pos().x;
+                            }
                         }
+                        kbmod::CTRL => {
+                            tc.scroll_offset.y += 1;
+                            make_cursor_visible = false;
+                        }
+                        kbmod::SHIFT => {
+                            // If the cursor was already on the last line,
+                            // move it to the end of the buffer.
+                            if tb.cursor_visual_pos().y >= tb.visual_line_count() - 1 {
+                                tc.preferred_column = CoordType::MAX;
+                            }
+
+                            tb.selection_update_visual(Point {
+                                x: tc.preferred_column,
+                                y: tb.cursor_visual_pos().y + 1,
+                            });
+
+                            if tc.preferred_column == CoordType::MAX {
+                                tc.preferred_column = tb.cursor_visual_pos().x;
+                            }
+                        }
+                        kbmod::CTRL_ALT => {
+                            // TODO: Add cursor above
+                        }
+                        _ => return false,
                     }
-                    kbmod::CTRL_ALT => {
-                        // TODO: Add cursor above
-                    }
-                    _ => return false,
-                },
+                }
                 vk::INSERT => match modifiers {
-                    kbmod::SHIFT => {
-                        write = &self.tui.clipboard;
-                        write_raw = true;
-                    }
-                    kbmod::CTRL => self.set_clipboard(tb.extract_selection(false)),
+                    kbmod::SHIFT => tb.paste(self.clipboard_ref()),
+                    kbmod::CTRL => tb.copy(self.clipboard_mut()),
                     _ => tb.set_overtype(!tb.is_overtype()),
                 },
                 vk::DELETE => match modifiers {
-                    kbmod::SHIFT => self.set_clipboard(tb.extract_selection(true)),
+                    kbmod::SHIFT => tb.cut(self.clipboard_mut()),
                     kbmod::CTRL => tb.delete(CursorMovement::Word, 1),
                     _ => tb.delete(CursorMovement::Grapheme, 1),
                 },
@@ -2657,18 +2658,15 @@ impl<'a> Context<'a, '_> {
                     _ => return false,
                 },
                 vk::X => match modifiers {
-                    kbmod::CTRL => self.set_clipboard(tb.extract_selection(true)),
+                    kbmod::CTRL => tb.cut(self.clipboard_mut()),
                     _ => return false,
                 },
                 vk::C => match modifiers {
-                    kbmod::CTRL => self.set_clipboard(tb.extract_selection(false)),
+                    kbmod::CTRL => tb.copy(self.clipboard_mut()),
                     _ => return false,
                 },
                 vk::V => match modifiers {
-                    kbmod::CTRL => {
-                        write = &self.tui.clipboard;
-                        write_raw = true;
-                    }
+                    kbmod::CTRL => tb.paste(self.clipboard_ref()),
                     _ => return false,
                 },
                 vk::Y => match modifiers {
@@ -2694,8 +2692,9 @@ impl<'a> Context<'a, '_> {
             write = unicode::strip_newline(&write[..end]);
         }
         if !write.is_empty() {
-            tb.write(write, write_raw);
+            tb.write_canon(write);
             change_preferred_column = true;
+            make_cursor_visible = true;
         }
 
         if change_preferred_column {
@@ -2965,6 +2964,23 @@ impl<'a> Context<'a, '_> {
             ListSelection::Selected
         } else {
             ListSelection::Unchanged
+        }
+    }
+
+    /// [`Context::steal_focus`], but for a list view.
+    ///
+    /// This exists, because didn't want to figure out how to get
+    /// [`Context::styled_list_item_end`] to recognize a regular,
+    /// programmatic focus steal.
+    pub fn list_item_steal_focus(&mut self) {
+        self.steal_focus();
+
+        match &mut self.tree.current_node.borrow_mut().content {
+            NodeContent::List(content) => {
+                content.selected = self.tree.last_node.borrow().id;
+                content.selected_node = Some(self.tree.last_node);
+            }
+            _ => unreachable!(),
         }
     }
 
@@ -3445,8 +3461,22 @@ impl<'a> Tree<'a> {
         })
     }
 
+    fn iterate_siblings_rev(
+        mut node: Option<&'a NodeCell<'a>>,
+    ) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
+        iter::from_fn(move || {
+            let n = node?;
+            node = n.borrow().siblings.prev;
+            Some(n)
+        })
+    }
+
     fn iterate_roots(&self) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
         Self::iterate_siblings(Some(self.root_first))
+    }
+
+    fn iterate_roots_rev(&self) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
+        Self::iterate_siblings_rev(Some(self.root_last))
     }
 
     /// Visits all nodes under and including `root` in depth order.

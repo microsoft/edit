@@ -246,6 +246,7 @@ impl<'pivot> Converter<'pivot> {
 const CACHE_SIZE: usize = 64;
 
 /// Caches a chunk of TextBuffer contents (UTF-8) in UTF-16 format.
+#[repr(C)]
 struct Cache {
     /// The translated text. Contains [`Cache::utf16_len`]-many valid items.
     utf16: [u16; CACHE_SIZE],
@@ -268,6 +269,7 @@ struct Cache {
     utf8_range: Range<usize>,
 }
 
+#[repr(C)]
 struct DoubleCache {
     cache: [Cache; 2],
     /// You can consider this a 1 bit index into `cache`.
@@ -331,10 +333,7 @@ impl Text {
         let ut = unsafe { &mut *ptr };
         ut.p_funcs = &FUNCS;
         ut.context = tb as *const TextBuffer as *mut _;
-        ut.a = tb.generation() as i64;
-
-        // ICU unfortunately expects a `UText` instance to have valid contents after construction.
-        utext_access(ut, 0, true);
+        ut.a = -1;
 
         Ok(Self(ut))
     }
@@ -369,26 +368,14 @@ extern "C" fn utext_clone(
         return null_mut();
     }
 
+    // TODO: I'm somewhat unsure whether we have to preserve the `chunk_offset`.
+    // We can't blindly copy chunk contents and the `Cache` in `ut.p_extra`,
+    // because they may contain dirty contents (different `TextBuffer` generation).
     unsafe {
         let ut = &mut *ut_ptr;
-        let src_double_cache = double_cache_from_utext(src);
-        let dst_double_cache = double_cache_from_utext(ut);
-        let src_cache = &src_double_cache.cache[src_double_cache.mru as usize];
-        let dst_cache = &mut dst_double_cache.cache[dst_double_cache.mru as usize];
-
-        ut.provider_properties = src.provider_properties;
-        ut.chunk_native_limit = src.chunk_native_limit;
-        ut.native_indexing_limit = src.native_indexing_limit;
-        ut.chunk_native_start = src.chunk_native_start;
-        ut.chunk_offset = src.chunk_offset;
-        ut.chunk_length = src.chunk_length;
-        ut.chunk_contents = dst_cache.utf16.as_ptr();
         ut.p_funcs = src.p_funcs;
         ut.context = src.context;
-        ut.a = src.a;
-
-        // I wonder if it would make sense to use a Cow here. But probably not.
-        std::ptr::copy_nonoverlapping(src_cache, dst_cache, 1);
+        ut.a = -1;
     }
 
     ut_ptr

@@ -34,10 +34,12 @@ const ALLOC_CHUNK_SIZE: usize = 64 * KIBI;
 /// to do in Rust, but not so when you got an arena allocator:
 /// All nodes have the same lifetime, so you can just use references.
 ///
-/// # Safety
+/// <div class="warning">
 ///
 /// **Do not** push objects into the arena that require destructors.
 /// Destructors are not executed. Use a pool allocator for that.
+///
+/// </div>
 pub struct Arena {
     base: NonNull<u8>,
     capacity: usize,

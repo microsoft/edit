@@ -137,6 +137,7 @@ pub struct State {
     pub file_picker_pending_name: PathBuf,
     pub file_picker_entries: Option<Vec<DisplayablePathBuf>>,
     pub file_picker_overwrite_warning: Option<PathBuf>, // The path the warning is about.
+    pub file_picker_autocomplete: Vec<DisplayablePathBuf>,
 
     pub wants_search: StateSearch,
     pub search_needle: String,
@@ -145,14 +146,14 @@ pub struct State {
     pub search_success: bool,
 
     pub wants_encoding_picker: bool,
+    pub wants_encoding_change: StateEncodingChange,
     pub encoding_picker_needle: String,
     pub encoding_picker_results: Option<Vec<icu::Encoding>>,
 
     pub wants_save: bool,
     pub wants_statusbar_focus: bool,
-    pub wants_encoding_change: StateEncodingChange,
     pub wants_indentation_picker: bool,
-    pub wants_document_picker: bool,
+    pub wants_go_to_file: bool,
     pub wants_about: bool,
     pub wants_close: bool,
     pub wants_exit: bool,
@@ -161,8 +162,7 @@ pub struct State {
     pub goto_invalid: bool,
 
     pub osc_title_filename: String,
-    pub osc_clipboard_seen_generation: u32,
-    pub osc_clipboard_send_generation: u32,
+    pub osc_clipboard_sync: bool,
     pub osc_clipboard_always_send: bool,
     pub exit: bool,
 }
@@ -185,6 +185,7 @@ impl State {
             file_picker_pending_name: Default::default(),
             file_picker_entries: None,
             file_picker_overwrite_warning: None,
+            file_picker_autocomplete: Vec::new(),
 
             wants_search: StateSearch { kind: StateSearchKind::Hidden, focus: false },
             search_needle: Default::default(),
@@ -200,7 +201,7 @@ impl State {
             wants_statusbar_focus: false,
             wants_encoding_change: StateEncodingChange::None,
             wants_indentation_picker: false,
-            wants_document_picker: false,
+            wants_go_to_file: false,
             wants_about: false,
             wants_close: false,
             wants_exit: false,
@@ -209,8 +210,7 @@ impl State {
             goto_invalid: false,
 
             osc_title_filename: Default::default(),
-            osc_clipboard_seen_generation: 0,
-            osc_clipboard_send_generation: 0,
+            osc_clipboard_sync: false,
             osc_clipboard_always_send: false,
             exit: false,
         })

@@ -37,7 +37,7 @@ impl Drop for BackingBuffer {
     }
 }
 
-/// Most people know how Vec<T> works: It has some spare capacity at the end,
+/// Most people know how `Vec<T>` works: It has some spare capacity at the end,
 /// so that pushing into it doesn't reallocate every single time. A gap buffer
 /// is the same thing, but the spare capacity can be anywhere in the buffer.
 /// This variant is optimized for large buffers and uses virtual memory.
