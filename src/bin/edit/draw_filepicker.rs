@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
-use edit::input::vk;
+use edit::input::{kbmod, vk};
 use edit::tui::*;
 use edit::{icu, path};
 
@@ -40,6 +40,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     );
     ctx.attr_intrinsic_size(Size { width, height });
     {
+        let contains_focus = ctx.contains_focus();
         let mut activated = false;
 
         ctx.table_begin("path");
@@ -98,13 +99,15 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 ctx.attr_overflow(Overflow::TruncateMiddle);
             }
             ctx.list_end();
-
-            if ctx.contains_focus() && ctx.consume_shortcut(vk::BACK) {
-                state.file_picker_pending_name = "..".into();
-                activated = true;
-            }
         }
         ctx.scrollarea_end();
+
+        if contains_focus
+            && (ctx.consume_shortcut(vk::BACK) || ctx.consume_shortcut(kbmod::ALT | vk::UP))
+        {
+            state.file_picker_pending_name = "..".into();
+            activated = true;
+        }
 
         if activated {
             doit = draw_file_picker_update_path(state);
