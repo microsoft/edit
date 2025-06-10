@@ -2548,6 +2548,10 @@ impl<'a> Context<'a, '_> {
                                 y: tb.cursor_visual_pos().y - 1,
                             });
                         }
+                        kbmod::ALT => {
+                            // Shift line up
+                            self.textarea_shift_line(tb, -1);
+                        }
                         kbmod::CTRL_ALT => {
                             // TODO: Add cursor above
                         }
@@ -2614,6 +2618,11 @@ impl<'a> Context<'a, '_> {
                             tc.preferred_column = tb.cursor_visual_pos().x;
                         }
                     }
+                    kbmod::ALT => {
+                        // Shift line down
+                        self.textarea_shift_line(tb, 1);
+                    }
+
                     kbmod::CTRL_ALT => {
                         // TODO: Add cursor above
                     }
@@ -2704,6 +2713,36 @@ impl<'a> Context<'a, '_> {
 
         self.set_input_consumed();
         make_cursor_visible
+    }
+
+    /// Shifts current line up or down
+    /// 
+    /// * `tb` - TextBuffer reference
+    /// * `direction` - Negative to shift up, positive to shift down
+    fn textarea_shift_line(&mut self, tb: &mut TextBuffer, direction: i32) {
+        let line_count = tb.visual_line_count() as i32;
+        let current_line = tb.cursor_visual_pos().y;
+        let target_line = current_line + direction;
+
+        if target_line < 0 || target_line >= line_count {
+            return;
+        }
+
+        let original_cursor = tb.cursor_visual_pos();
+        let first_line = current_line.min(target_line);
+        let second_line = current_line.max(target_line);
+
+        tb.cursor_move_to_logical(Point { x: 0, y: first_line });
+        let mut content = tb.extract_selection(true);
+        tb.cursor_move_to_logical(Point { x: 0, y: second_line });
+        if second_line == line_count - 1 {
+            tb.write(b"\n", true);
+            tb.cursor_move_to_logical(Point { x: 0, y: second_line });
+            content.pop();
+        }
+        tb.write(&content, true);
+
+        tb.cursor_move_to_logical(Point { x: original_cursor.x, y: target_line });
     }
 
     fn textarea_make_cursor_visible(&self, tc: &mut TextareaContent, node_prev: &Node) {
