@@ -83,8 +83,8 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             },
         );
         ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
-        ctx.next_block_id_mixin(state.file_picker_pending_dir_revision);
         {
+            ctx.next_block_id_mixin(state.file_picker_pending_dir_revision);
             ctx.list_begin("files");
             ctx.inherit_focus();
             for entry in files {
@@ -221,6 +221,8 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     };
     if dir != state.file_picker_pending_dir.as_path() {
         state.file_picker_pending_dir = DisplayablePathBuf::from_path(dir.to_path_buf());
+        state.file_picker_pending_dir_revision =
+            state.file_picker_pending_dir_revision.wrapping_add(1);
         state.file_picker_entries = None;
     }
 
