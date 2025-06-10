@@ -482,6 +482,10 @@ pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
 /// To commit the memory, use [`virtual_commit`].
 /// To release the memory, use [`virtual_release`].
 ///
+/// # Warning
+/// The pointer returned by this function must be committed before use. Attempting to access [uncommited](https://learn.microsoft.com/en-us/windows/win32/Memory/page-state) memory is a status access violation.
+///
+///
 /// # Safety
 ///
 /// This function is unsafe because it uses raw pointers.
