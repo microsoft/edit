@@ -576,7 +576,10 @@ impl Tui {
                 let mut hovered_node = None; // Needed for `mouse_down`
                 let mut focused_node = None; // Needed for `mouse_down` and `is_click`
                 if mouse_down || mouse_up {
-                    for root in self.prev_tree.iterate_roots() {
+                    // Roots (aka windows) are ordered in Z order, so we iterate
+                    // them in reverse order, from topmost to bottommost.
+                    for root in self.prev_tree.iterate_roots_rev() {
+                        // Find the node that contains the cursor.
                         Tree::visit_all(root, root, true, |node| {
                             let n = node.borrow();
                             if !n.outer_clipped.contains(next_position) {
@@ -589,6 +592,18 @@ impl Tui {
                             }
                             VisitControl::Continue
                         });
+
+                        // This root/window contains the cursor.
+                        // We don't care about any lower roots.
+                        if hovered_node.is_some() {
+                            break;
+                        }
+
+                        // This root is modal and swallows all clicks,
+                        // no matter whether the click was inside it or not.
+                        if matches!(root.borrow().content, NodeContent::Modal(_)) {
+                            break;
+                        }
                     }
                 }
 
@@ -892,7 +907,7 @@ impl Tui {
             }
         }
 
-        if node.attributes.float.is_some() && node.attributes.bg & 0xff000000 == 0xff000000 {
+        if node.attributes.float.is_some() {
             if !node.attributes.bordered {
                 let mut fill = ArenaString::new_in(&scratch);
                 fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left) as usize);
@@ -908,6 +923,14 @@ impl Tui {
             }
 
             self.framebuffer.replace_attr(outer_clipped, Attributes::All, Attributes::None);
+
+            if matches!(node.content, NodeContent::Modal(_)) {
+                let rect =
+                    Rect { left: 0, top: 0, right: self.size.width, bottom: self.size.height };
+                let dim = self.indexed_alpha(IndexedColor::Background, 1, 2);
+                self.framebuffer.blend_bg(rect, dim);
+                self.framebuffer.blend_fg(rect, dim);
+            }
         }
 
         self.framebuffer.blend_bg(outer_clipped, node.attributes.bg);
@@ -1703,15 +1726,8 @@ impl<'a> Context<'a, '_> {
     /// Begins a modal window. Call [`Context::modal_end()`].
     pub fn modal_begin(&mut self, classname: &'static str, title: &str) {
         self.block_begin(classname);
-        self.attr_float(FloatSpec { anchor: Anchor::Root, ..Default::default() });
-        self.attr_intrinsic_size(Size { width: self.tui.size.width, height: self.tui.size.height });
-        self.attr_background_rgba(self.indexed_alpha(IndexedColor::Background, 1, 2));
-        self.attr_foreground_rgba(self.indexed_alpha(IndexedColor::Background, 1, 2));
-        self.attr_focus_well();
-
-        self.block_begin("window");
         self.attr_float(FloatSpec {
-            anchor: Anchor::Last,
+            anchor: Anchor::Root,
             gravity_x: 0.5,
             gravity_y: 0.5,
             offset_x: self.tui.size.width as f32 * 0.5,
@@ -1720,7 +1736,7 @@ impl<'a> Context<'a, '_> {
         self.attr_border();
         self.attr_background_rgba(self.tui.modal_default_bg);
         self.attr_foreground_rgba(self.tui.modal_default_fg);
-        self.inherit_focus();
+        self.attr_focus_well();
         self.focus_on_first_present();
 
         let mut last_node = self.tree.last_node.borrow_mut();
@@ -1736,7 +1752,6 @@ impl<'a> Context<'a, '_> {
     /// Ends the current modal window block.
     /// Returns true if the user pressed Escape (a request to close).
     pub fn modal_end(&mut self) -> bool {
-        self.block_end();
         self.block_end();
 
         // Consume the input unconditionally, so that the root (the "main window")
@@ -3445,8 +3460,22 @@ impl<'a> Tree<'a> {
         })
     }
 
+    fn iterate_siblings_rev(
+        mut node: Option<&'a NodeCell<'a>>,
+    ) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
+        iter::from_fn(move || {
+            let n = node?;
+            node = n.borrow().siblings.prev;
+            Some(n)
+        })
+    }
+
     fn iterate_roots(&self) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
         Self::iterate_siblings(Some(self.root_first))
+    }
+
+    fn iterate_roots_rev(&self) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
+        Self::iterate_siblings_rev(Some(self.root_last))
     }
 
     /// Visits all nodes under and including `root` in depth order.
