@@ -145,12 +145,12 @@ pub struct State {
     pub search_success: bool,
 
     pub wants_encoding_picker: bool,
+    pub wants_encoding_change: StateEncodingChange,
     pub encoding_picker_needle: String,
     pub encoding_picker_results: Option<Vec<icu::Encoding>>,
 
     pub wants_save: bool,
     pub wants_statusbar_focus: bool,
-    pub wants_encoding_change: StateEncodingChange,
     pub wants_indentation_picker: bool,
     pub wants_document_picker: bool,
     pub wants_about: bool,

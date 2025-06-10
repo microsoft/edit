@@ -22,11 +22,13 @@ pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
         if !contains_focus && ctx.consume_shortcut(vk::F10) {
             ctx.steal_focus();
         }
-        if state.documents.active().is_some() && ctx.menubar_menu_begin(loc(LocId::Edit), 'E') {
-            draw_menu_edit(ctx, state);
-        }
-        if state.documents.active().is_some() && ctx.menubar_menu_begin(loc(LocId::View), 'V') {
-            draw_menu_view(ctx, state);
+        if state.documents.active().is_some() {
+            if ctx.menubar_menu_begin(loc(LocId::Edit), 'E') {
+                draw_menu_edit(ctx, state);
+            }
+            if ctx.menubar_menu_begin(loc(LocId::View), 'V') {
+                draw_menu_view(ctx, state);
+            }
         }
         if ctx.menubar_menu_begin(loc(LocId::Help), 'H') {
             draw_menu_help(ctx, state);
