@@ -582,7 +582,7 @@ pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
 }
 
 /// Returns a list of preferred languages for the current user.
-pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString, &Arena> {
+pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
     // If the GetUserPreferredUILanguages() don't fit into 512 characters,
     // honestly, just give up. How many languages do you realistically need?
     const LEN: usize = 512;
