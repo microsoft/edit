@@ -1202,7 +1202,7 @@ impl TextBuffer {
         };
     }
 
-    fn measurement_config(&self) -> MeasurementConfig {
+    fn measurement_config(&self) -> MeasurementConfig<'_> {
         MeasurementConfig::new(&self.buffer)
             .with_word_wrap_column(self.word_wrap_column)
             .with_tab_size(self.tab_size)

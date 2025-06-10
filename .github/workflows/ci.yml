@@ -45,4 +45,4 @@ jobs:
       - name: Run tests
         run: cargo test --all-features --all-targets
       - name: Run clippy
-        run: cargo clippy --all-features --all-targets -- --deny warnings
+        run: cargo clippy --all-features --all-targets -- --no-deps --deny warnings
