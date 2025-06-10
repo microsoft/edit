@@ -1815,15 +1815,24 @@ impl TextBuffer {
     /// If there's a current selection, it will be replaced.
     /// The selection is cleared after the call.
     pub fn write(&mut self, text: &[u8], raw: bool) {
-        if text.is_empty() {
-            return;
-        }
-
+        // If we have an active selection, writing an empty `text`
+        // will still delete the selection. As such, we check this first.
         if let Some((beg, end)) = self.selection_range_internal(false) {
             self.edit_begin(HistoryType::Write, beg);
             self.edit_delete(end);
             self.set_selection(None);
         }
+
+        // If the text is empty the remaining code won't do anything,
+        // allowing us to exit early.
+        if text.is_empty() {
+            // ...we still need to end any active edit session though.
+            if self.active_edit_depth > 0 {
+                self.edit_end();
+            }
+            return;
+        }
+
         if self.active_edit_depth <= 0 {
             self.edit_begin(HistoryType::Write, self.cursor);
         }
