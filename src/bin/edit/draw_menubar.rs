@@ -125,6 +125,9 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
 }
 
 fn draw_menu_help(ctx: &mut Context, state: &mut State) {
+    if ctx.menubar_menu_button(loc(LocId::HelpSettings), 'S', vk::NULL) {
+        state.wants_settings = true;
+    }
     if ctx.menubar_menu_button(loc(LocId::HelpAbout), 'A', vk::NULL) {
         state.wants_about = true;
     }
@@ -174,5 +177,53 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
     }
     if ctx.modal_end() {
         state.wants_about = false;
+    }
+}
+
+pub fn draw_dialog_settings(ctx: &mut Context, state: &mut State) {
+    let button_style = ButtonStyle::default().bracketed(true);
+    let doc = state.documents.active().unwrap();
+    let mut tb = doc.buffer.borrow_mut();
+    let word_wrap = tb.is_word_wrap_enabled();
+
+    ctx.modal_begin("settings", loc(LocId::SettingsDialogTitle));
+    {
+        ctx.block_begin("content");
+        ctx.inherit_focus();
+        ctx.attr_padding(Rect::three(1, 1, 1));
+        {
+            ctx.label("description1", loc(LocId::SettingsDialogDescription1));
+            ctx.attr_overflow(Overflow::TruncateTail);
+            ctx.attr_position(Position::Center);
+
+            ctx.label("description2", loc(LocId::SettingsDialogDescription2));
+            ctx.attr_background_rgba(0xFF00FFFF);
+            ctx.attr_overflow(Overflow::TruncateTail);
+            ctx.attr_position(Position::Center);
+
+            if ctx.button("word-wrap", loc(LocId::ViewWordWrap), button_style.accelerator('W')) {
+                tb.set_word_wrap(!word_wrap);
+                ctx.needs_rerender();
+            }
+            ctx.attr_padding(Rect::three(1, 0, 0));
+            ctx.attr_overflow(Overflow::TruncateTail);
+            ctx.attr_position(Position::Center);
+
+            ctx.block_begin("choices");
+            ctx.inherit_focus();
+            ctx.attr_padding(Rect::three(1, 2, 0));
+            ctx.attr_position(Position::Center);
+            {
+                if ctx.button("ok", loc(LocId::Ok), ButtonStyle::default()) {
+                    state.wants_settings = false;
+                }
+                ctx.inherit_focus();
+            }
+            ctx.block_end();
+        }
+        ctx.block_end();
+    }
+    if ctx.modal_end() {
+        state.wants_settings = false;
     }
 }

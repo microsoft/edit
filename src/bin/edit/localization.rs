@@ -46,6 +46,7 @@ pub enum LocId {
 
     // Help menu
     Help,
+    HelpSettings,
     HelpAbout,
 
     // Exit dialog
@@ -57,6 +58,11 @@ pub enum LocId {
     // About dialog
     AboutDialogTitle,
     AboutDialogVersion,
+
+    // Settings dialog
+    SettingsDialogTitle,
+    SettingsDialogDescription1,
+    SettingsDialogDescription2,
 
     // Shown when the clipboard size exceeds the limit for OSC 52
     LargeClipboardWarningLine1,
@@ -542,6 +548,20 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* zh_hans */ "帮助",
         /* zh_hant */ "幫助",
     ],
+    // HelpSettings
+    [
+        /* en      */ "Settings…",
+        /* de      */ "Einstellungen…",
+        /* es      */ "Configuración…",
+        /* fr      */ "Paramètres…",
+        /* it      */ "Impostazioni…",
+        /* ja      */ "設定…",
+        /* ko      */ "설정…",
+        /* pt_br   */ "Configurações…",
+        /* ru      */ "Настройки…",
+        /* zh_hans */ "设置…",
+        /* zh_hant */ "設定…",
+    ],
     // HelpAbout
     [
         /* en      */ "About",
@@ -641,6 +661,49 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Версия: ",
         /* zh_hans */ "版本: ",
         /* zh_hant */ "版本: ",
+    ],
+
+    // SettingsDialogTitle
+    [
+        /* en      */ "Settings",
+        /* de      */ "Einstellungen",
+        /* es      */ "Configuración",
+        /* fr      */ "Paramètres",
+        /* it      */ "Impostazioni",
+        /* ja      */ "設定",
+        /* ko      */ "설정",
+        /* pt_br   */ "Configurações",
+        /* ru      */ "Настройки",
+        /* zh_hans */ "设置",
+        /* zh_hant */ "設定",
+    ],
+    // SettingsDialogDescription1
+    [
+        /* en      */ "Global configuration of Microsoft Edit.",
+        /* de      */ "Globale Konfiguration des Programms Microsoft Edit.",
+        /* es      */ "Configuración global del programa Microsoft Edit.",
+        /* fr      */ "Configuration globale du programme Microsoft Edit.",
+        /* it      */ "Configurazione globale del programma Microsoft Edit.",
+        /* ja      */ "Microsoft Edit のグローバル設定。",
+        /* ko      */ "Microsoft Edit 프로그램의 글로벌 설정.",
+        /* pt_br   */ "Configuração global do programa Microsoft Edit.",
+        /* ru      */ "Глобальная конфигурация программы Microsoft Edit.",
+        /* zh_hans */ "Microsoft Edit 程序的全球配置。",
+        /* zh_hant */ "Microsoft Edit 的全球配置。",
+    ],
+    // SettingsDialogDescription2
+    [
+        /* en      */ "This editor is not yet able to remember user settings.",
+        /* de      */ "Dieser Editor kann die Benutzereinstellungen noch nicht speichern.",
+        /* es      */ "Este editor aún no es capaz de recordar la configuración del usuario.",
+        /* fr      */ "Cet éditeur n'est pas encore capable de mémoriser les paramètres utilisateur.",
+        /* it      */ "Questo editor non è ancora in grado di memorizzare le impostazioni dell'utente.",
+        /* ja      */ "このエディターは、まだユーザーの設定を記憶する機能を備えていません。",
+        /* ko      */ "이 편집기는 아직 사용자의 설정을 저장할 수 없습니다.",
+        /* pt_br   */ "Este editor ainda não é capaz de memorizar as configurações do usuário.",
+        /* ru      */ "Этот редактор еще не может запоминать настройки пользователя.",
+        /* zh_hans */ "该编辑器目前尚不支持保存用户设置。",
+        /* zh_hant */ "该编辑器尚无法记住用户设置。",
     ],
 
     // Shown when the clipboard size exceeds the limit for OSC 52
