@@ -338,6 +338,8 @@ fn draw(ctx: &mut Context, state: &mut State) {
             state.wants_file_picker = StateFilePicker::SaveAs;
         } else if key == kbmod::CTRL | vk::W {
             state.wants_close = true;
+        } else if key == kbmod::CTRL | vk::B {
+            state.wants_statusbar_focus = true;
         } else if key == kbmod::CTRL | vk::P {
             state.wants_document_picker = true;
         } else if key == kbmod::CTRL | vk::Q {
