@@ -26,6 +26,13 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
     };
 
     if let Some(doc) = state.documents.active() {
+        // Match the application state
+        {
+            let mut buffer = doc.buffer.borrow_mut();
+            let cursor_style = state.cursor_style.to_decscusr_code(buffer.is_overtype());
+            buffer.set_cursor_style(cursor_style);
+        }
+        
         ctx.textarea("textarea", doc.buffer.clone());
         ctx.inherit_focus();
     } else {

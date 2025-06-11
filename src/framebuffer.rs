@@ -396,10 +396,11 @@ impl Framebuffer {
     /// Sets the current visible cursor position and type.
     ///
     /// Call this when focus is inside an editable area and you want to show the cursor.
-    pub fn set_cursor(&mut self, pos: Point, overtype: bool) {
+    pub fn set_cursor(&mut self, pos: Point, overtype: bool, style: u8) {
         let back = &mut self.buffers[self.frame_counter & 1];
         back.cursor.pos = pos;
         back.cursor.overtype = overtype;
+        back.cursor.style = style;
     }
 
     /// Renders the framebuffer contents accumulated since the
@@ -526,7 +527,7 @@ impl Framebuffer {
                     "\x1b[{};{}H\x1b[{} q\x1b[?25h",
                     back.cursor.pos.y + 1,
                     back.cursor.pos.x + 1,
-                    if back.cursor.overtype { 1 } else { 5 }
+                    back.cursor.style
                 );
             } else {
                 // DECTCEM to hide the cursor.
@@ -891,14 +892,15 @@ impl AttributeBuffer {
 struct Cursor {
     pos: Point,
     overtype: bool,
+    style: u8, // DECSCUSR cursor style code
 }
 
 impl Cursor {
     const fn new_invalid() -> Self {
-        Self { pos: Point::MIN, overtype: false }
+        Self { pos: Point::MIN, overtype: false, style: 5 }
     }
 
     const fn new_disabled() -> Self {
-        Self { pos: Point { x: -1, y: -1 }, overtype: false }
+        Self { pos: Point { x: -1, y: -1 }, overtype: false, style: 5 }
     }
 }

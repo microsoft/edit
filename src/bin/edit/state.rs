@@ -120,6 +120,29 @@ pub enum StateEncodingChange {
     Reopen,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CursorStyle {
+    Block = 1,     // DECSCUSR 1/2 (block)
+    Underline = 3, // DECSCUSR 3/4 (underline)
+    IBeam = 5,     // DECSCUSR 5/6 (bar)
+}
+
+impl Default for CursorStyle {
+    fn default() -> Self {
+        Self::IBeam
+    }
+}
+
+impl CursorStyle {
+    pub fn to_decscusr_code(self, overtype: bool) -> u8 {
+        match self {
+            CursorStyle::Block => if overtype { 1 } else { 2 },
+            CursorStyle::Underline => if overtype { 3 } else { 4 },
+            CursorStyle::IBeam => if overtype { 5 } else { 6 },
+        }
+    }
+}
+
 pub struct State {
     pub menubar_color_bg: u32,
     pub menubar_color_fg: u32,
@@ -160,6 +183,9 @@ pub struct State {
     pub wants_goto: bool,
     pub goto_target: String,
     pub goto_invalid: bool,
+
+    pub cursor_style: CursorStyle,
+    pub wants_cursor_style_picker: bool,
 
     pub osc_title_filename: String,
     pub osc_clipboard_sync: bool,
@@ -209,6 +235,9 @@ impl State {
             goto_target: Default::default(),
             goto_invalid: false,
 
+            cursor_style: CursorStyle::default(),
+            wants_cursor_style_picker: false,
+
             osc_title_filename: Default::default(),
             osc_clipboard_sync: false,
             osc_clipboard_always_send: false,
@@ -218,7 +247,7 @@ impl State {
 }
 
 pub fn draw_add_untitled_document(ctx: &mut Context, state: &mut State) {
-    if let Err(err) = state.documents.add_untitled() {
+    if let Err(err) = state.documents.add_untitled_with_cursor_style(state.cursor_style.to_decscusr_code(false)) {
         error_log_add(ctx, state, err);
     }
 }
@@ -264,5 +293,41 @@ pub fn draw_error_log(ctx: &mut Context, state: &mut State) {
     }
     if ctx.modal_end() {
         state.error_log_count = 0;
+    }
+}
+
+pub fn draw_cursor_style_picker(ctx: &mut Context, state: &mut State) {
+    ctx.modal_begin("cursor-style", "Cursor Style");
+    {
+        ctx.list_begin("styles");
+        ctx.inherit_focus();
+        ctx.attr_padding(Rect::two(1, 2));
+        {
+            if ctx.list_item(state.cursor_style == CursorStyle::Block, "Block")
+                == ListSelection::Activated
+            {
+                state.cursor_style = CursorStyle::Block;
+                state.wants_cursor_style_picker = false;
+                ctx.needs_rerender();
+            }
+            if ctx.list_item(state.cursor_style == CursorStyle::Underline, "Underline")
+                == ListSelection::Activated
+            {
+                state.cursor_style = CursorStyle::Underline;
+                state.wants_cursor_style_picker = false;
+                ctx.needs_rerender();
+            }
+            if ctx.list_item(state.cursor_style == CursorStyle::IBeam, "Bar")
+                == ListSelection::Activated
+            {
+                state.cursor_style = CursorStyle::IBeam;
+                state.wants_cursor_style_picker = false;
+                ctx.needs_rerender();
+            }
+        }
+        ctx.list_end();
+    }
+    if ctx.modal_end() {
+        state.wants_cursor_style_picker = false;
     }
 }
