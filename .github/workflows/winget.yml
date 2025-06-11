@@ -11,6 +11,11 @@ jobs:
     # winget-create is only supported on Windows
     runs-on: windows-latest
 
+    # winget-create will read the following environment variable to access the GitHub token needed for submitting a PR
+    # See https://aka.ms/winget-create-token
+    env:
+      WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+
     # Only submit stable releases
     if: ${{ !github.event.release.prerelease }}
     steps:
@@ -27,5 +32,4 @@ jobs:
           .\wingetcreate.exe update Microsoft.Edit `
             --version $packageVersion `
             --urls $x64InstallerUrl $arm64InstallerUrl `
-            --token "${{ secrets.WINGET_TOKEN }}" `
             --submit
