@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use edit::arena::scratch_arena;
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::input::{kbmod, vk};
@@ -135,8 +136,6 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             draw_dialog_saveas_refresh_files(state);
         }
 
-        let files = state.file_picker_entries.as_ref().unwrap();
-
         ctx.scrollarea_begin(
             "directory",
             Size {
@@ -152,16 +151,20 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.next_block_id_mixin(state.file_picker_pending_dir_revision);
             ctx.list_begin("files");
             ctx.inherit_focus();
-            for entry in files {
-                match ctx.list_item(false, entry.as_str()) {
-                    ListSelection::Unchanged => {}
-                    ListSelection::Selected => {
-                        state.file_picker_pending_name = entry.as_path().into()
+
+            for entries in state.file_picker_entries.as_ref().unwrap() {
+                for entry in entries {
+                    match ctx.list_item(false, entry.as_str()) {
+                        ListSelection::Unchanged => {}
+                        ListSelection::Selected => {
+                            state.file_picker_pending_name = entry.as_path().into()
+                        }
+                        ListSelection::Activated => activated = true,
                     }
-                    ListSelection::Activated => activated = true,
+                    ctx.attr_overflow(Overflow::TruncateMiddle);
                 }
-                ctx.attr_overflow(Overflow::TruncateMiddle);
             }
+
             ctx.list_end();
         }
         ctx.scrollarea_end();
@@ -300,58 +303,64 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
 
 fn draw_dialog_saveas_refresh_files(state: &mut State) {
     let dir = state.file_picker_pending_dir.as_path();
-    let mut files = Vec::new();
-    let mut off = 0;
+    let mut dirs_files = [Vec::new(), Vec::new()];
+
+    // This variable ensures that the first entry in dirs_files[0] (directories)
+    // ".." is always sorted to the top, no matter the other filenames.
+    let mut dirs_sort_off = 0;
 
     #[cfg(windows)]
     if dir.as_os_str().is_empty() {
         // If the path is empty, we are at the drive picker.
         // Add all drives as entries.
         for drive in edit::sys::drives() {
-            files.push(DisplayablePathBuf::from_string(format!("{drive}:\\")));
+            dirs_files[0].push(DisplayablePathBuf::from_string(format!("{drive}:\\")));
         }
 
-        state.file_picker_entries = Some(files);
+        state.file_picker_entries = Some(dirs_files);
         return;
     }
 
     if cfg!(windows) || dir.parent().is_some() {
-        files.push(DisplayablePathBuf::from(".."));
-        off = 1;
+        dirs_files[0].push(DisplayablePathBuf::from(".."));
+        dirs_sort_off = 1;
     }
 
     if let Ok(iter) = fs::read_dir(dir) {
         for entry in iter.flatten() {
             if let Ok(metadata) = entry.metadata() {
                 let mut name = entry.file_name();
-                if metadata.is_dir()
+                let dir = metadata.is_dir()
                     || (metadata.is_symlink()
-                        && fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()))
-                {
+                        && fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()));
+                if dir {
                     name.push("/");
                 }
-                files.push(DisplayablePathBuf::from(name));
+                dirs_files[!dir as usize].push(DisplayablePathBuf::from(name));
             }
         }
     }
 
-    // Sort directories first, then by name, case-insensitive.
-    files[off..].sort_by(|a, b| {
-        let a = a.as_bytes();
-        let b = b.as_bytes();
+    for entries in &mut dirs_files {
+        entries[dirs_sort_off..].sort_by(|a, b| {
+            let a = a.as_bytes();
+            let b = b.as_bytes();
 
-        let a_is_dir = a.last() == Some(&b'/');
-        let b_is_dir = b.last() == Some(&b'/');
+            let a_is_dir = a.last() == Some(&b'/');
+            let b_is_dir = b.last() == Some(&b'/');
 
-        match b_is_dir.cmp(&a_is_dir) {
-            Ordering::Equal => icu::compare_strings(a, b),
-            other => other,
-        }
-    });
+            match b_is_dir.cmp(&a_is_dir) {
+                Ordering::Equal => icu::compare_strings(a, b),
+                other => other,
+            }
+        });
+        dirs_sort_off = 0;
+    }
 
-    state.file_picker_entries = Some(files);
+    state.file_picker_entries = Some(dirs_files);
 }
 
+#[inline(never)]
 fn update_autocomplete_suggestions(state: &mut State) {
     state.file_picker_autocomplete.clear();
 
@@ -359,22 +368,39 @@ fn update_autocomplete_suggestions(state: &mut State) {
         return;
     }
 
+    let scratch = scratch_arena(None);
     let needle = state.file_picker_pending_name.as_os_str().as_encoded_bytes();
     let mut matches = Vec::new();
 
-    if let Some(entries) = &state.file_picker_entries {
-        // Remove the first entry, which is always "..".
-        for entry in &entries[1.min(entries.len())..] {
-            let haystack = entry.as_bytes();
-            // We only want items that are longer than the needle,
-            // because we're looking for suggestions, not for matches.
-            if haystack.len() > needle.len()
-                && let haystack = &haystack[..needle.len()]
-                && icu::compare_strings(haystack, needle) == Ordering::Equal
-            {
-                matches.push(entry.clone());
-                if matches.len() >= 5 {
-                    break; // Limit to 5 suggestions
+    // Using binary search below we'll quickly find the lower bound
+    // of items that match the needle (= share a common prefix).
+    //
+    // The problem is finding the upper bound. Here I'm using a trick:
+    // By appending U+10FFFF (the highest possible Unicode code point)
+    // we create a needle that naturally yields an upper bound.
+    let mut needle_upper_bound = Vec::with_capacity_in(needle.len() + 4, &*scratch);
+    needle_upper_bound.extend_from_slice(needle);
+    needle_upper_bound.extend_from_slice(b"\xf4\x8f\xbf\xbf");
+
+    if let Some(dirs_files) = &state.file_picker_entries {
+        'outer: for entries in dirs_files {
+            let lower = entries
+                .binary_search_by(|entry| icu::compare_strings(entry.as_bytes(), needle))
+                .unwrap_or_else(|i| i);
+
+            for entry in &entries[lower..] {
+                let haystack = entry.as_bytes();
+                match icu::compare_strings(haystack, &needle_upper_bound) {
+                    Ordering::Less => {
+                        matches.push(entry.clone());
+                        if matches.len() >= 5 {
+                            break 'outer; // Limit to 5 suggestions
+                        }
+                    }
+                    // We're looking for suggestions, not for matches.
+                    Ordering::Equal => {}
+                    // No more matches possible.
+                    Ordering::Greater => break,
                 }
             }
         }
