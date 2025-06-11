@@ -15,7 +15,6 @@ use rayon::prelude::*;
 
 use crate::rules::{JOIN_RULES_GRAPHEME_CLUSTER, JOIN_RULES_LINE_BREAK};
 
-// `CharacterWidth` is 2 bits.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CharacterWidth {
     ZeroWidth,
@@ -24,8 +23,11 @@ enum CharacterWidth {
     Ambiguous,
 }
 
-// `ClusterBreak` is 4 bits without `StartOfText`, 5 bits with it.
-// NOTE: The order of these items must match JOIN_RULES_GRAPHEME_CLUSTER.
+impl CharacterWidth {
+    const BITS: usize = 3;
+}
+
+/// NOTE: The order of these items must match [`JOIN_RULES_GRAPHEME_CLUSTER`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::upper_case_acronyms)]
 enum ClusterBreak {
@@ -33,30 +35,54 @@ enum ClusterBreak {
     CR,            // GB3, GB4, GB5
     LF,            // GB3, GB4, GB5
     Control,       // GB4, GB5
-    Extend,        // GB9, GB9a -- includes SpacingMark
-    RI,            // GB12, GB13
-    Prepend,       // GB9b
     HangulL,       // GB6, GB7, GB8
     HangulV,       // GB6, GB7, GB8
     HangulT,       // GB6, GB7, GB8
     HangulLV,      // GB6, GB7, GB8
     HangulLVT,     // GB6, GB7, GB8
+    Extend,        // GB9, GB9a -- includes SpacingMark
+    ZWJ,           // GB9, GB11
+    Prepend,       // GB9b
     InCBLinker,    // GB9c
     InCBConsonant, // GB9c
     ExtPic,        // GB11
-    ZWJ,           // GB9, GB11
+    RI,            // GB12, GB13
 }
 
-// Extended information for each `ClusterBreak` via --extended.
-// Currently only used for storing the subtype "tab" for `ClusterBreak::Control`.
-// As such, this is 1 bit.
+impl ClusterBreak {
+    const BITS: usize = 4;
+}
+
+/// Extended information _per_ [`ClusterBreak`] type.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ClusterBreakExt {
-    ControlTab = 1,
+    None = 0,
+
+    __One = 1,
+    __Two = 2,
 }
 
-// `LineBreak` is 5 bits.
-// NOTE: The order of these items must match JOIN_RULES_LINE_BREAK.
+impl ClusterBreakExt {
+    const BITS: usize = 2;
+}
+
+#[allow(non_upper_case_globals)]
+impl ClusterBreakExt {
+    /// Informs you that this specific [`ClusterBreak::Control`] is a tab.
+    /// This allows you to assign it a dynamic width.
+    const ControlTab: ClusterBreakExt = ClusterBreakExt::__One;
+
+    /// Informs you that this specific [`ClusterBreak::Other`]
+    /// has a Joining Group of "Lam".
+    /// Lam-Alef sequences are common in Arabic and Hebrew scripts,
+    /// and are assigned a width of 1, unlike what the sum of widths implies.
+    const OtherJoiningGroupLam: ClusterBreakExt = ClusterBreakExt::__One;
+    /// Informs you that this specific [`ClusterBreak::Other`]
+    /// has a Joining Group of "Alef".
+    const OtherJoiningGroupAlef: ClusterBreakExt = ClusterBreakExt::__Two;
+}
+
+/// NOTE: The order of these items must match [`JOIN_RULES_LINE_BREAK`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 enum LineBreak {
@@ -95,7 +121,11 @@ enum LineBreak {
     Alphabetic,  // AL & HL
     Ideographic, // ID & EB & EM
 
-    StartOfText, // LB2 (optional via --extended)
+    StartOfText, // Specific to LB2
+}
+
+impl LineBreak {
+    const BITS: usize = 5;
 }
 
 #[repr(transparent)]
@@ -103,18 +133,27 @@ enum LineBreak {
 struct TrieType(u32);
 
 impl TrieType {
-    fn new(packing: &BitPacking, cb: ClusterBreak, lb: LineBreak, cw: CharacterWidth) -> Self {
+    fn new(
+        packing: &BitPacking,
+        cb: ClusterBreak,
+        cbe: ClusterBreakExt,
+        lb: LineBreak,
+        cw: CharacterWidth,
+    ) -> Self {
         let cb = cb as u32;
+        let cbe = cbe as u32;
         let lb = lb as u32;
         let cw = cw as u32;
         assert!(cb <= packing.mask_cluster_break);
+        assert!(cbe <= packing.mask_cluster_break_ext);
         assert!(lb <= packing.mask_line_break);
         assert!(cw <= packing.mask_character_width);
 
         let cb = cb << packing.shift_cluster_break;
+        let cbe = cbe << packing.shift_cluster_break_ext;
         let lb = lb << packing.shift_line_break;
         let cw = cw << packing.shift_character_width;
-        Self(cb | lb | cw)
+        Self(cb | cbe | lb | cw)
     }
 
     fn change_cluster_break_ext(&mut self, packing: &BitPacking, cbe: ClusterBreakExt) {
@@ -148,6 +187,8 @@ struct BitPacking {
     mask_cluster_break_ext: u32,
     mask_line_break: u32,
     mask_character_width: u32,
+    // A mask to extract cluster_break and cluster_break_ext as a single value.
+    mask_cluster_break_with_ext: u32,
 
     shift_cluster_break: u32,
     shift_cluster_break_ext: u32,
@@ -156,17 +197,25 @@ struct BitPacking {
 }
 
 impl BitPacking {
-    fn new(line_breaks: bool, extended: bool) -> Self {
-        let cb_width: u32 = if extended { 5 } else { 4 };
-        let cb_ext_width: u32 = if extended { 1 } else { 0 };
-        let lb_width: u32 = if line_breaks { 5 } else { 0 };
-        let cw_width: u32 = 3;
+    fn new(line_breaks: bool) -> Self {
+        // !NOTE! The following is expected by the generated C/Rust code:
+        //  * ClusterBreak is the "lowest" field, because it allows us to
+        //    use a single AND to extract it.
+        //  * ClusterBreakExt is the "next" field, because it allows us to
+        //    use a single AND to extract both ClusterBreak and ClusterBreakExt.
+        //  * ClusterWidth is the "highest" field, because it allows us to
+        //    use a single shift to extract it.
+        let cb_width: u32 = ClusterBreak::BITS as u32;
+        let cb_ext_width: u32 = ClusterBreakExt::BITS as u32;
+        let lb_width: u32 = if line_breaks { LineBreak::BITS as u32 } else { 0 };
+        let cw_width: u32 = CharacterWidth::BITS as u32;
 
         Self {
             mask_cluster_break: (1 << cb_width) - 1,
             mask_cluster_break_ext: (1 << cb_ext_width) - 1,
             mask_line_break: (1 << lb_width) - 1,
             mask_character_width: (1 << cw_width) - 1,
+            mask_cluster_break_with_ext: (1 << (cb_width + cb_ext_width)) - 1,
 
             shift_cluster_break: 0,
             shift_cluster_break_ext: cb_width,
@@ -208,7 +257,6 @@ enum Language {
 #[derive(Default)]
 struct Output {
     arg_lang: Language,
-    arg_extended: bool,
     arg_no_ambiguous: bool,
     arg_line_breaks: bool,
 
@@ -225,9 +273,6 @@ impl Output {
         match self.arg_lang {
             Language::C => buf.push_str("--lang=c"),
             Language::Rust => buf.push_str("--lang=rust"),
-        }
-        if self.arg_extended {
-            buf.push_str(" --extended")
         }
         if self.arg_no_ambiguous {
             buf.push_str(" --no-ambiguous")
@@ -265,7 +310,6 @@ fn main() -> anyhow::Result<()> {
             "rust" => Ok(Language::Rust),
             l => bail!("invalid language: \"{}\"", l),
         })?,
-        arg_extended: args.contains("--extended"),
         arg_no_ambiguous: args.contains("--no-ambiguous"),
         arg_line_breaks: args.contains("--line-breaks"),
         ..Default::default()
@@ -288,18 +332,11 @@ fn main() -> anyhow::Result<()> {
     // The joinRules above has 2 bits per value. This packs it into 32-bit integers to save space.
     out.rules_gc = JOIN_RULES_GRAPHEME_CLUSTER
         .iter()
-        .map(|t| {
-            let rules_gc_len = if out.arg_extended { t.len() } else { 16 };
-            t[..rules_gc_len].iter().map(|row| prepare_rules_row(row, 2, 3)).collect()
-        })
+        .map(|t| t.iter().map(|row| prepare_rules_row(row, 2, 3)).collect())
         .collect();
 
     // Same for line breaks, but in 2D.
-    let rules_lb_len = if out.arg_extended { JOIN_RULES_LINE_BREAK.len() } else { 24 };
-    out.rules_lb = JOIN_RULES_LINE_BREAK[..rules_lb_len]
-        .iter()
-        .map(|row| prepare_rules_row(row, 1, 0))
-        .collect();
+    out.rules_lb = JOIN_RULES_LINE_BREAK.iter().map(|row| prepare_rules_row(row, 1, 0)).collect();
 
     // Each rules item has the same length. Each item is 32 bits = 4 bytes.
     out.total_size = out.trie.total_size + out.rules_gc.len() * out.rules_gc[0].len() * 4;
@@ -493,36 +530,63 @@ fn generate_c(out: Output) -> String {
         );
     }
 
-    if out.arg_extended {
-        _ = writedoc!(
-            buf,
-            "
-            inline int ucd_start_of_text_properties()
-            {{
-                return {:#x};
-            }}
-            inline int ucd_tab_properties()
-            {{
-                return {:#x};
-            }}
-            inline int ucd_linefeed_properties()
-            {{
-                return {:#x};
-            }}
-            ",
-            TrieType::new(
-                &out.ucd.packing,
-                // Control behaves identical to SOT (start of text) in a way,
-                // as it doesn't join with any surrounding character.
-                ClusterBreak::Control,
-                LineBreak::StartOfText,
-                CharacterWidth::ZeroWidth,
-            )
-            .value(),
-            out.ucd.values['\t' as usize].value(),
-            out.ucd.values['\n' as usize].value(),
-        );
-    }
+    _ = writedoc!(
+        buf,
+        "
+        inline int ucd_start_of_text_properties()
+        {{
+            return {:#x};
+        }}
+        inline bool ucd_is_tab(const int val)
+        {{
+            return val == {:#x};
+        }}
+        inline bool ucd_is_linefeed(const int val)
+        {{
+            return val == {:#x};
+        }}
+        inline bool ucd_is_joining_type_lam(const int val)
+        {{
+            return (val & {:#x}) == {:#x};
+        }}
+        inline bool ucd_is_joining_type_alef(const int val)
+        {{
+            return (val & {:#x}) == {:#x};
+        }}
+        ",
+        TrieType::new(
+            &out.ucd.packing,
+            // Control behaves identical to SOT (start of text) in a way,
+            // as it doesn't join with any surrounding character.
+            ClusterBreak::Control,
+            ClusterBreakExt::None,
+            LineBreak::StartOfText,
+            CharacterWidth::ZeroWidth,
+        )
+        .value(),
+        out.ucd.values['\t' as usize].value(),
+        out.ucd.values['\n' as usize].value(),
+        out.ucd.packing.mask_cluster_break_with_ext,
+        TrieType::new(
+            &out.ucd.packing,
+            ClusterBreak::Other,
+            ClusterBreakExt::OtherJoiningGroupLam,
+            LineBreak::Other,
+            CharacterWidth::ZeroWidth,
+        )
+        .value()
+            & out.ucd.packing.mask_cluster_break_with_ext,
+        out.ucd.packing.mask_cluster_break_with_ext,
+        TrieType::new(
+            &out.ucd.packing,
+            ClusterBreak::Other,
+            ClusterBreakExt::OtherJoiningGroupAlef,
+            LineBreak::Other,
+            CharacterWidth::ZeroWidth,
+        )
+        .value()
+            & out.ucd.packing.mask_cluster_break_with_ext,
+    );
 
     buf.push_str("// clang-format on\n// END: Generated by grapheme-table-gen\n");
     buf
@@ -703,36 +767,63 @@ fn generate_rust(out: Output) -> String {
         );
     }
 
-    if out.arg_extended {
-        _ = writedoc!(
-            buf,
-            "
-            #[inline(always)]
-            pub fn ucd_start_of_text_properties() -> usize {{
-                {:#x}
-            }}
-            #[inline(always)]
-            pub fn ucd_tab_properties() -> usize {{
-                {:#x}
-            }}
-            #[inline(always)]
-            pub fn ucd_linefeed_properties() -> usize {{
-                {:#x}
-            }}
-            ",
-            TrieType::new(
-                &out.ucd.packing,
-                // Control behaves identical to SOT (start of text) in a way,
-                // as it doesn't join with any surrounding character.
-                ClusterBreak::Control,
-                LineBreak::StartOfText,
-                CharacterWidth::ZeroWidth,
-            )
-            .value(),
-            out.ucd.values['\t' as usize].value(),
-            out.ucd.values['\n' as usize].value(),
-        );
-    }
+    _ = writedoc!(
+        buf,
+        "
+        #[inline(always)]
+        pub fn ucd_start_of_text_properties() -> usize {{
+            {:#x}
+        }}
+        #[inline(always)]
+        pub fn ucd_is_tab(val: usize) -> bool {{
+            val == {:#x}
+        }}
+        #[inline(always)]
+        pub fn ucd_is_linefeed(val: usize) -> bool {{
+            val == {:#x}
+        }}
+        #[inline(always)]
+        pub fn ucd_is_joining_type_lam(val: usize) -> bool {{
+            (val & {:#x}) == {:#x}
+        }}
+        #[inline(always)]
+        pub fn ucd_is_joining_type_alef(val: usize) -> bool {{
+            (val & {:#x}) == {:#x}
+        }}
+        ",
+        TrieType::new(
+            &out.ucd.packing,
+            // Control behaves identical to SOT (start of text) in a way,
+            // as it doesn't join with any surrounding character.
+            ClusterBreak::Control,
+            ClusterBreakExt::None,
+            LineBreak::StartOfText,
+            CharacterWidth::ZeroWidth,
+        )
+        .value(),
+        out.ucd.values['\t' as usize].value(),
+        out.ucd.values['\n' as usize].value(),
+        out.ucd.packing.mask_cluster_break_with_ext,
+        TrieType::new(
+            &out.ucd.packing,
+            ClusterBreak::Other,
+            ClusterBreakExt::OtherJoiningGroupLam,
+            LineBreak::Other,
+            CharacterWidth::ZeroWidth,
+        )
+        .value()
+            & out.ucd.packing.mask_cluster_break_with_ext,
+        out.ucd.packing.mask_cluster_break_with_ext,
+        TrieType::new(
+            &out.ucd.packing,
+            ClusterBreak::Other,
+            ClusterBreakExt::OtherJoiningGroupAlef,
+            LineBreak::Other,
+            CharacterWidth::ZeroWidth,
+        )
+        .value()
+            & out.ucd.packing.mask_cluster_break_with_ext,
+    );
 
     if !out.arg_no_ambiguous {
         _ = writedoc!(
@@ -750,15 +841,20 @@ fn generate_rust(out: Output) -> String {
 }
 
 fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::Result<Ucd> {
-    let packing = BitPacking::new(out.arg_line_breaks, out.arg_extended);
+    let packing = BitPacking::new(out.arg_line_breaks);
     let ambiguous_value =
         if out.arg_no_ambiguous { CharacterWidth::Narrow } else { CharacterWidth::Ambiguous };
 
-    let mut values =
-        vec![
-            TrieType::new(&packing, ClusterBreak::Other, LineBreak::Other, CharacterWidth::Narrow,);
-            1114112
-        ];
+    let mut values = vec![
+        TrieType::new(
+            &packing,
+            ClusterBreak::Other,
+            ClusterBreakExt::None,
+            LineBreak::Other,
+            CharacterWidth::Narrow
+        );
+        1114112
+    ];
 
     let ns = "http://www.unicode.org/ns/2003/ucd/1.0";
     let root = doc.root_element();
@@ -773,14 +869,7 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
     let description = description.text().unwrap_or_default().to_string();
 
     for group in repertoire.children().filter(|n| n.is_element()) {
-        const DEFAULT_ATTRIBUTES: UcdAttributes = UcdAttributes {
-            general_category: "",
-            line_break: "",
-            grapheme_cluster_break: "",
-            indic_conjunct_break: "",
-            extended_pictographic: "",
-            east_asian: "",
-        };
+        const DEFAULT_ATTRIBUTES: UcdAttributes = UcdAttributes::empty();
         let group_attributes = extract_attributes(&group, &DEFAULT_ATTRIBUTES);
 
         for char in group.children().filter(|n| n.is_element()) {
@@ -908,13 +997,18 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
                 LineBreak::Other
             };
 
-            values[range].fill(TrieType::new(&packing, cb, lb, cw));
+            // All characters with jt=Lam/Alef are gcb=XX.
+            let cbe = match char_attributes.joining_group {
+                "Lam" => ClusterBreakExt::OtherJoiningGroupLam,
+                "Alef" => ClusterBreakExt::OtherJoiningGroupAlef,
+                _ => ClusterBreakExt::None,
+            };
+
+            values[range].fill(TrieType::new(&packing, cb, cbe, lb, cw));
         }
     }
 
-    if out.arg_extended {
-        values['\t' as usize].change_cluster_break_ext(&packing, ClusterBreakExt::ControlTab);
-    }
+    values['\t' as usize].change_cluster_break_ext(&packing, ClusterBreakExt::ControlTab);
 
     // U+00AD: Soft Hyphen
     // A soft hyphen is a hint that a word break is allowed at that position.
@@ -934,6 +1028,7 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
     values[0x2500..=0x259F].fill(TrieType::new(
         &packing,
         ClusterBreak::Other,
+        ClusterBreakExt::None,
         LineBreak::Other,
         CharacterWidth::Narrow,
     ));
@@ -956,7 +1051,22 @@ struct UcdAttributes<'a> {
     grapheme_cluster_break: &'a str,
     indic_conjunct_break: &'a str,
     extended_pictographic: &'a str,
+    joining_group: &'a str,
     east_asian: &'a str,
+}
+
+impl UcdAttributes<'static> {
+    const fn empty() -> Self {
+        UcdAttributes {
+            general_category: "",
+            line_break: "",
+            grapheme_cluster_break: "",
+            indic_conjunct_break: "",
+            extended_pictographic: "",
+            joining_group: "",
+            east_asian: "",
+        }
+    }
 }
 
 fn extract_attributes<'a>(
@@ -969,6 +1079,7 @@ fn extract_attributes<'a>(
         grapheme_cluster_break: node.attribute("GCB").unwrap_or(default.grapheme_cluster_break),
         indic_conjunct_break: node.attribute("InCB").unwrap_or(default.indic_conjunct_break),
         extended_pictographic: node.attribute("ExtPict").unwrap_or(default.extended_pictographic),
+        joining_group: node.attribute("jg").unwrap_or(default.joining_group),
         east_asian: node.attribute("ea").unwrap_or(default.east_asian),
     }
 }

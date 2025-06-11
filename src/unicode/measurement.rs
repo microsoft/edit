@@ -236,19 +236,8 @@ impl<'doc> MeasurementConfig<'doc> {
                 continue;
             }
 
-            // The max. width of a terminal cell is 2.
-            width = width.min(2);
-
-            // Tabs require special handling because they can have a variable width.
-            if props_last_char == ucd_tab_properties() {
-                // SAFETY: `self.tab_size` is clamped to >= 1 in `with_tab_size`.
-                // This assert ensures that Rust doesn't insert panicking null checks.
-                unsafe { std::hint::assert_unchecked(self.tab_size >= 1) };
-                width = self.tab_size - (column % self.tab_size);
-            }
-
             // Hard wrap: Both the logical and visual position advance by one line.
-            if props_last_char == ucd_linefeed_properties() {
+            if ucd_is_linefeed(props_last_char) {
                 cold_path();
 
                 wrap_opp = false;
@@ -270,6 +259,21 @@ impl<'doc> MeasurementConfig<'doc> {
                 logical_target_x = Self::calc_target_x(logical_target, logical_pos_y);
                 visual_target_x = Self::calc_target_x(visual_target, visual_pos_y);
                 continue;
+            }
+
+            // The max. width of a terminal cell is 2.
+            width = width.min(2);
+
+            // Tabs require special handling because they can have a variable width.
+            if ucd_is_tab(props_current_cluster) {
+                // SAFETY: `self.tab_size` is clamped to >= 1 in `with_tab_size`.
+                // This assert ensures that Rust doesn't insert panicking null checks.
+                unsafe { std::hint::assert_unchecked(self.tab_size >= 1) };
+                width = self.tab_size - (column % self.tab_size);
+            } else if ucd_is_joining_type_lam(props_current_cluster)
+                && ucd_is_joining_type_alef(props_last_char)
+            {
+                width = 1;
             }
 
             // Avoid advancing past the visual target, because `width` can be greater than 1.
@@ -422,7 +426,7 @@ impl<'doc> MeasurementConfig<'doc> {
                     width = width.min(2);
 
                     // Tabs require special handling because they can have a variable width.
-                    if props_last_char == ucd_tab_properties() {
+                    if ucd_is_tab(props_last_char) {
                         // SAFETY: `self.tab_size` is clamped to >= 1 in `with_tab_size`.
                         // This assert ensures that Rust doesn't insert panicking null checks.
                         unsafe { std::hint::assert_unchecked(self.tab_size >= 1) };
@@ -430,7 +434,7 @@ impl<'doc> MeasurementConfig<'doc> {
                     }
 
                     // Hard wrap: Both the logical and visual position advance by one line.
-                    if props_last_char == ucd_linefeed_properties() {
+                    if ucd_is_linefeed(props_last_char) {
                         break;
                     }
 
@@ -1048,6 +1052,22 @@ mod test {
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 2, y: 1 },
                 column: 8,
+                wrap_opp: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_arabic_lam_alef() {
+        let text = "لآ".as_bytes();
+        let cursor = MeasurementConfig::new(&text).goto_visual(Point::MAX);
+        assert_eq!(
+            cursor,
+            Cursor {
+                offset: text.len(),
+                logical_pos: Point { x: 1, y: 0 },
+                visual_pos: Point { x: 1, y: 0 },
+                column: 1,
                 wrap_opp: false,
             }
         );
