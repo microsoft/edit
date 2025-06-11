@@ -303,18 +303,15 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
 
 fn draw_dialog_saveas_refresh_files(state: &mut State) {
     let dir = state.file_picker_pending_dir.as_path();
-    let mut dirs_files = [Vec::new(), Vec::new()];
-
-    // This variable ensures that the first entry in dirs_files[0] (directories)
-    // ".." is always sorted to the top, no matter the other filenames.
-    let mut dirs_sort_off = 0;
+    // ["..", directories, files]
+    let mut dirs_files = [Vec::new(), Vec::new(), Vec::new()];
 
     #[cfg(windows)]
     if dir.as_os_str().is_empty() {
         // If the path is empty, we are at the drive picker.
         // Add all drives as entries.
         for drive in edit::sys::drives() {
-            dirs_files[0].push(DisplayablePathBuf::from_string(format!("{drive}:\\")));
+            dirs_files[1].push(DisplayablePathBuf::from_string(format!("{drive}:\\")));
         }
 
         state.file_picker_entries = Some(dirs_files);
@@ -323,7 +320,6 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
 
     if cfg!(windows) || dir.parent().is_some() {
         dirs_files[0].push(DisplayablePathBuf::from(".."));
-        dirs_sort_off = 1;
     }
 
     if let Ok(iter) = fs::read_dir(dir) {
@@ -333,16 +329,19 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
                 let dir = metadata.is_dir()
                     || (metadata.is_symlink()
                         && fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()));
+                let idx = if dir { 1 } else { 2 };
+
                 if dir {
                     name.push("/");
                 }
-                dirs_files[!dir as usize].push(DisplayablePathBuf::from(name));
+
+                dirs_files[idx].push(DisplayablePathBuf::from(name));
             }
         }
     }
 
-    for entries in &mut dirs_files {
-        entries[dirs_sort_off..].sort_by(|a, b| {
+    for entries in &mut dirs_files[1..] {
+        entries.sort_by(|a, b| {
             let a = a.as_bytes();
             let b = b.as_bytes();
 
@@ -354,7 +353,6 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
                 other => other,
             }
         });
-        dirs_sort_off = 0;
     }
 
     state.file_picker_entries = Some(dirs_files);
@@ -383,7 +381,7 @@ fn update_autocomplete_suggestions(state: &mut State) {
     needle_upper_bound.extend_from_slice(b"\xf4\x8f\xbf\xbf");
 
     if let Some(dirs_files) = &state.file_picker_entries {
-        'outer: for entries in dirs_files {
+        'outer: for entries in &dirs_files[1..] {
             let lower = entries
                 .binary_search_by(|entry| icu::compare_strings(entry.as_bytes(), needle))
                 .unwrap_or_else(|i| i);
