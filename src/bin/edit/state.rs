@@ -301,7 +301,7 @@ pub fn draw_cursor_style_picker(ctx: &mut Context, state: &mut State) {
     {
         ctx.list_begin("styles");
         ctx.inherit_focus();
-        ctx.attr_padding(Rect::two(1, 1));
+        ctx.attr_padding(Rect::two(1, 2));
         {
             if ctx.list_item(state.cursor_style == CursorStyle::Block, "Block")
                 == ListSelection::Activated
@@ -317,7 +317,7 @@ pub fn draw_cursor_style_picker(ctx: &mut Context, state: &mut State) {
                 state.wants_cursor_style_picker = false;
                 ctx.needs_rerender();
             }
-            if ctx.list_item(state.cursor_style == CursorStyle::IBeam, "I-Beam")
+            if ctx.list_item(state.cursor_style == CursorStyle::IBeam, "Bar")
                 == ListSelection::Activated
             {
                 state.cursor_style = CursorStyle::IBeam;
