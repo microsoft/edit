@@ -1,3 +1,4 @@
 [toolchain]
-# Doesn't have to be this toolchain but I pinned it down to a concrete one because not all features required to build this crate are availible on all versions of nightly
-channel = "nightly-2025-04-15"
+# channel = "nightly-2025-04-15"
+# components = ["miri", "rust-analyzer", "rustfmt"]
+channel = "nightly"
