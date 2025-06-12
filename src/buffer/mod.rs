@@ -21,6 +21,7 @@
 //! There's no solution for the latter. However, there's a chance that the performance will still be sufficient.
 
 mod gap_buffer;
+mod highlighter;
 mod navigation;
 
 use std::borrow::Cow;
@@ -1714,14 +1715,13 @@ impl TextBuffer {
             return None;
         }
 
-        let scratch = scratch_arena(None);
         let width = destination.width();
         let height = destination.height();
         let line_number_width = self.margin_width.max(3) as usize - 3;
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
-        let mut line = ArenaString::new_in(&scratch);
         let mut visual_pos_x_max = 0;
+        //let mut highlighter = Parser::new(&self.buffer, Default::default());
 
         // Pick the cursor closer to the `origin.y`.
         let mut cursor = {
@@ -1737,10 +1737,10 @@ impl TextBuffer {
             Some(TextBufferSelection { beg, end }) => minmax(beg, end),
         };
 
-        line.reserve(width as usize * 2);
-
         for y in 0..height {
-            line.clear();
+            let scratch = scratch_arena(None);
+            let mut line = ArenaString::new_in(&scratch);
+            line.reserve(width as usize * 2);
 
             let visual_line = origin.y + y;
             let mut cursor_beg =
@@ -1959,6 +1959,45 @@ impl TextBuffer {
 
                     global_off += chunk.len();
                 }
+
+                /*while highlighter.logical_pos_y() < cursor.logical_pos.y {
+                    let scratch_alt = scratch_arena(Some(&scratch));
+                    _ = highlighter.parse_next_line(&scratch_alt);
+                }
+
+                let highlights = highlighter.parse_next_line(&scratch);
+                let mut highlight_cursor = cursor_beg;
+                for t in highlights {
+                    let color = match t.kind {
+                        TokenKind::Other => IndexedColor::Foreground,
+                        TokenKind::Comment => IndexedColor::Green,
+                        TokenKind::Keyword => IndexedColor::Magenta,
+                        TokenKind::Operator => IndexedColor::White,
+                        TokenKind::Number => IndexedColor::BrightGreen,
+                        TokenKind::String => IndexedColor::BrightRed,
+                        TokenKind::Variable => IndexedColor::BrightCyan,
+                    };
+
+                    let highlight_beg =
+                        self.cursor_move_to_offset_internal(highlight_cursor, t.range.start);
+                    let highlight_end =
+                        self.cursor_move_to_offset_internal(highlight_beg, t.range.end);
+                    highlight_cursor = highlight_end;
+
+                    fb.blend_fg(
+                        Rect {
+                            left: destination.left + self.margin_width + highlight_beg.visual_pos.x
+                                - origin.x,
+                            top: destination.top + y,
+                            right: destination.left
+                                + self.margin_width
+                                + highlight_end.visual_pos.x
+                                - origin.x,
+                            bottom: destination.top + y + 1,
+                        },
+                        fb.indexed(color),
+                    );
+                }*/
 
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
