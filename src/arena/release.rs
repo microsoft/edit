@@ -79,6 +79,10 @@ impl Arena {
         })
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.base == NonNull::dangling()
+    }
+
     pub fn offset(&self) -> usize {
         self.offset.get()
     }
@@ -171,7 +175,7 @@ impl Arena {
 
 impl Drop for Arena {
     fn drop(&mut self) {
-        if self.base != NonNull::dangling() {
+        if !self.is_empty() {
             unsafe { sys::virtual_release(self.base, self.capacity) };
         }
     }
