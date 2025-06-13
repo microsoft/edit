@@ -1758,9 +1758,14 @@ impl TextBuffer {
 
                 // Overwrite line in selection with rendered whitespaces
                 let mut cursor_wh = cursor_beg;
+                let mut cursor_wh_end = cursor_end;
 
                 if selection_beg >= cursor_wh.logical_pos {
                     cursor_wh = self.cursor_move_to_logical_internal(cursor_wh, selection_beg);
+                }
+
+                if selection_end <= cursor_wh_end.logical_pos {
+                    cursor_wh_end = self.cursor_move_to_logical_internal(cursor_wh_end, selection_end);
                 }
 
                 if cursor_wh.visual_pos.x > origin.x {
@@ -1793,7 +1798,7 @@ impl TextBuffer {
                     }
                 }
 
-                while cursor_wh.visual_pos.x < cursor_end.visual_pos.x.min(end) {
+                while cursor_wh.offset < cursor_wh_end.offset {
                     let chunk = self.read_forward(cursor_wh.offset);
                     let chunk = &chunk[..1];
                     let ch = chunk[0] as char;
