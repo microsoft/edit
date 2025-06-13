@@ -1757,13 +1757,23 @@ impl TextBuffer {
                 fb.blend_fg(rect, fg);
 
                 // Overwrite line in selection with rendered whitespaces
-                if cursor_beg.visual_pos.x > origin.x {
+                let mut cursor_wh = cursor_beg;
+
+                if selection_beg >= cursor_beg.logical_pos {
+                    cursor_wh = self.cursor_move_to_logical_internal(cursor_wh, selection_beg);
+                }
+
+                if cursor_wh.visual_pos.x > origin.x {
                     let cursor_prev = self.cursor_move_to_logical_internal(
-                        cursor_beg,
-                        Point { x: cursor_beg.logical_pos.x - 1, y: cursor_beg.logical_pos.y },
+                        cursor_wh,
+                        Point { x: cursor_wh.logical_pos.x - 1, y: cursor_wh.logical_pos.y },
                     );
 
-                    if cursor_prev.visual_pos.x < origin.x {
+                    let chunk = self.read_forward(cursor_prev.offset);
+                    let chunk = &chunk[..1];
+                    let ch = chunk[0] as char;
+
+                    if ch == '\t' && cursor_prev.visual_pos.x < origin.x {
                         let missing = origin.x - cursor_prev.visual_pos.x;
 
                         let tab_size = self.tab_size - missing;
@@ -1777,18 +1787,12 @@ impl TextBuffer {
                         fb.replace_text(
                             destination.top + y,
                             left,
-                            left + tab_size + 2,
+                            left + 1,
                             &RENDERED_TAB_WHITESPACE[..(tab_size + 2) as usize],
                         );
 
                         fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
                     }
-                }
-
-                let mut cursor_wh = cursor_beg;
-
-                if selection_beg >= cursor_beg.logical_pos {
-                    cursor_wh = self.cursor_move_to_logical_internal(cursor_wh, selection_beg);
                 }
 
                 while cursor_wh.visual_pos.x < cursor_end.visual_pos.x.min(end) {
@@ -1816,7 +1820,7 @@ impl TextBuffer {
                         fb.replace_text(
                             destination.top + y,
                             left,
-                            left + tab_size + 2,
+                            left + 1,
                             &RENDERED_TAB_WHITESPACE[..(tab_size + 2) as usize],
                         );
 
