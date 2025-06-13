@@ -1781,7 +1781,7 @@ impl TextBuffer {
                             &RENDERED_TAB_WHITESPACE[..(tab_size + 2) as usize],
                         );
 
-                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Red, 3, 1));
+                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
                     }
                 }
 
@@ -1820,7 +1820,7 @@ impl TextBuffer {
                             &RENDERED_TAB_WHITESPACE[..(tab_size + 2) as usize],
                         );
 
-                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Red, 3, 1));
+                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
                     }
 
                     cursor_wh =
