@@ -148,7 +148,6 @@ extends:
                         targetFolder: "$(ob_createvpack_vpackdirectory)/arm64"
                       contents: |
                         *.exe
-                        *.pdb
               # Extract the version for `ob_createvpack_version`.
               - script: |-
                   @echo off
@@ -171,7 +170,7 @@ extends:
                 - pwsh: |-
                     $Dest = New-Item -Type Directory "_staging/${env:RELEASE_NAME}"
                     Write-Host "Staging files from ${env:VPACK_ROOT} at $Dest"
-                    Get-ChildItem "${env:VPACK_ROOT}\*" -Include *.exe, *.pdb | Copy-Item -Destination $Dest -Verbose
+                    Get-ChildItem "${env:VPACK_ROOT}\*" -Include *.exe | Copy-Item -Destination $Dest -Verbose
                     tar.exe -c -v --format=zip -f "$(ob_outputDirectory)\${env:RELEASE_NAME}.zip" -C _staging $env:RELEASE_NAME
                   env:
                     RELEASE_NAME: edit-$(EditVersion)-${{ replace(platform, 'pc-windows-msvc', 'windows') }}
