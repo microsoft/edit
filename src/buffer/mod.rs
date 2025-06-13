@@ -54,6 +54,8 @@ const MARGIN_TEMPLATE: &str = "                    │ ";
 /// Just a bunch of whitespace you can use for turning tabs into spaces.
 /// Happens to reuse MARGIN_TEMPLATE, because it has sufficient whitespace.
 const TAB_WHITESPACE: &str = MARGIN_TEMPLATE;
+const RENDERED_TAB_WHITESPACE: &str = "→";
+const RENDERED_WHITESPACE: &str = "⸱";
 
 /// Stores statistics about the whole document.
 #[derive(Copy, Clone)]
@@ -1753,6 +1755,82 @@ impl TextBuffer {
                 let fg = fb.contrasted(bg);
                 fb.blend_bg(rect, bg);
                 fb.blend_fg(rect, fg);
+
+                // Overwrite line in selection with rendered whitespaces
+                let mut cursor_wh = cursor_beg;
+                let mut cursor_wh_end = cursor_end;
+
+                if selection_beg >= cursor_wh.logical_pos {
+                    cursor_wh = self.cursor_move_to_logical_internal(cursor_wh, selection_beg);
+                }
+
+                if selection_end <= cursor_wh_end.logical_pos {
+                    cursor_wh_end = self.cursor_move_to_logical_internal(cursor_wh_end, selection_end);
+                }
+
+                if cursor_wh.visual_pos.x > origin.x {
+                    let cursor_prev = self.cursor_move_to_logical_internal(
+                        cursor_wh,
+                        Point { x: cursor_wh.logical_pos.x - 1, y: cursor_wh.logical_pos.y },
+                    );
+
+                    let chunk = self.read_forward(cursor_prev.offset);
+                    let chunk = &chunk[..1];
+                    let ch = chunk[0] as char;
+
+                    if ch == '\t' && cursor_prev.visual_pos.x < origin.x {
+                        let missing = origin.x - cursor_prev.visual_pos.x;
+
+                        let left = destination.left + self.margin_width - origin.x
+                            + cursor_prev.visual_pos.x
+                            + missing;
+                        let top = destination.top + y;
+                        let rect = Rect { left, top, right: left + 1, bottom: top + 1 };
+
+                        fb.replace_text(
+                            destination.top + y,
+                            left,
+                            left + 1,
+                            &RENDERED_TAB_WHITESPACE,
+                        );
+
+                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
+                    }
+                }
+
+                while cursor_wh.offset < cursor_wh_end.offset {
+                    let chunk = self.read_forward(cursor_wh.offset);
+                    let chunk = &chunk[..1];
+                    let ch = chunk[0] as char;
+
+                    if ch == ' ' {
+                        let left = destination.left + self.margin_width - origin.x
+                            + cursor_wh.visual_pos.x;
+                        let top = destination.top + cursor_wh.visual_pos.y - origin.y;
+                        let rect = Rect { left, top, right: left + 1, bottom: top + 1 };
+
+                        fb.replace_text(destination.top + y, left, left + 1, &RENDERED_WHITESPACE);
+
+                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
+                    } else if ch == '\t' {
+                        let left = destination.left + self.margin_width - origin.x
+                            + cursor_wh.visual_pos.x;
+                        let top = destination.top + y;
+                        let rect = Rect { left, top, right: left + 1, bottom: top + 1 };
+
+                        fb.replace_text(
+                            destination.top + y,
+                            left,
+                            left + 1,
+                            &RENDERED_TAB_WHITESPACE,
+                        );
+
+                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
+                    }
+
+                    cursor_wh =
+                        self.cursor_move_to_offset_internal(cursor_wh, cursor_wh.offset + 1);
+                }
             }
 
             cursor = cursor_end;
