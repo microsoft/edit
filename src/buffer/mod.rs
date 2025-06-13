@@ -54,7 +54,7 @@ const MARGIN_TEMPLATE: &str = "                    │ ";
 /// Just a bunch of whitespace you can use for turning tabs into spaces.
 /// Happens to reuse MARGIN_TEMPLATE, because it has sufficient whitespace.
 const TAB_WHITESPACE: &str = MARGIN_TEMPLATE;
-const RENDERED_TAB_WHITESPACE: &str = "→       ";
+const RENDERED_TAB_WHITESPACE: &str = "→";
 const RENDERED_WHITESPACE: &str = "⸱";
 
 /// Stores statistics about the whole document.
@@ -1776,19 +1776,17 @@ impl TextBuffer {
                     if ch == '\t' && cursor_prev.visual_pos.x < origin.x {
                         let missing = origin.x - cursor_prev.visual_pos.x;
 
-                        let tab_size = self.tab_size - missing;
-
                         let left = destination.left + self.margin_width - origin.x
                             + cursor_prev.visual_pos.x
                             + missing;
                         let top = destination.top + y;
-                        let rect = Rect { left, top, right: left + tab_size, bottom: top + 1 };
+                        let rect = Rect { left, top, right: left + 1, bottom: top + 1 };
 
                         fb.replace_text(
                             destination.top + y,
                             left,
                             left + 1,
-                            &RENDERED_TAB_WHITESPACE[..(tab_size + 2) as usize],
+                            &RENDERED_TAB_WHITESPACE,
                         );
 
                         fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
@@ -1810,18 +1808,16 @@ impl TextBuffer {
 
                         fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
                     } else if ch == '\t' {
-                        let tab_size = self.tab_size - (cursor_wh.column % self.tab_size);
-
                         let left = destination.left + self.margin_width - origin.x
                             + cursor_wh.visual_pos.x;
                         let top = destination.top + y;
-                        let rect = Rect { left, top, right: left + tab_size, bottom: top + 1 };
+                        let rect = Rect { left, top, right: left + 1, bottom: top + 1 };
 
                         fb.replace_text(
                             destination.top + y,
                             left,
                             left + 1,
-                            &RENDERED_TAB_WHITESPACE[..(tab_size + 2) as usize],
+                            &RENDERED_TAB_WHITESPACE,
                         );
 
                         fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
