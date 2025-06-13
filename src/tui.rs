@@ -978,8 +978,9 @@ impl Tui {
                     destination.right -= 1;
                 }
 
+                let cursor_style = tb.cursor_style();
                 if let Some(res) =
-                    tb.render(tc.scroll_offset, destination, tc.has_focus, &mut self.framebuffer)
+                    tb.render(tc.scroll_offset, destination, tc.has_focus, cursor_style, &mut self.framebuffer)
                 {
                     tc.scroll_offset_x_max = res.visual_pos_x_max;
                 }

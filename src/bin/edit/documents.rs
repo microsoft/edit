@@ -112,8 +112,8 @@ impl DocumentManager {
         self.list.pop_front();
     }
 
-    pub fn add_untitled(&mut self) -> apperr::Result<&mut Document> {
-        let buffer = Self::create_buffer()?;
+    pub fn add_untitled_with_cursor_style(&mut self, cursor_style: u8) -> apperr::Result<&mut Document> {
+        let buffer = Self::create_buffer_with_cursor_style(cursor_style)?;
         let mut doc = Document {
             buffer,
             path: None,
@@ -139,7 +139,7 @@ impl DocumentManager {
         doc.new_file_counter = new_file_counter;
     }
 
-    pub fn add_file_path(&mut self, path: &Path) -> apperr::Result<&mut Document> {
+    pub fn add_file_path_with_cursor_style(&mut self, path: &Path, cursor_style: u8) -> apperr::Result<&mut Document> {
         let (path, goto) = Self::parse_filename_goto(path);
         let path = path::normalize(path);
 
@@ -157,10 +157,12 @@ impl DocumentManager {
             if let Some(goto) = goto {
                 doc.buffer.borrow_mut().cursor_move_to_logical(goto);
             }
+            // Update cursor style for existing document
+            doc.buffer.borrow_mut().set_cursor_style(cursor_style);
             return Ok(doc);
         }
 
-        let buffer = Self::create_buffer()?;
+        let buffer = Self::create_buffer_with_cursor_style(cursor_style)?;
         {
             if let Some(file) = &mut file {
                 let mut tb = buffer.borrow_mut();
@@ -213,13 +215,14 @@ impl DocumentManager {
         File::create(path).map_err(apperr::Error::from)
     }
 
-    fn create_buffer() -> apperr::Result<RcTextBuffer> {
+    fn create_buffer_with_cursor_style(cursor_style: u8) -> apperr::Result<RcTextBuffer> {
         let buffer = TextBuffer::new_rc(false)?;
         {
             let mut tb = buffer.borrow_mut();
             tb.set_insert_final_newline(!cfg!(windows)); // As mandated by POSIX.
             tb.set_margin_enabled(true);
             tb.set_line_highlight_enabled(true);
+            tb.set_cursor_style(cursor_style);
         }
         Ok(buffer)
     }

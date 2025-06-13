@@ -252,20 +252,20 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     }
 
     for p in &paths {
-        state.documents.add_file_path(p)?;
+        state.documents.add_file_path_with_cursor_style(p, state.cursor_style.to_decscusr_code(false))?;
     }
     if let Some(parent) = paths.first().and_then(|p| p.parent()) {
         cwd = parent.to_path_buf();
     }
 
     if let Some(mut file) = sys::open_stdin_if_redirected() {
-        let doc = state.documents.add_untitled()?;
+        let doc = state.documents.add_untitled_with_cursor_style(state.cursor_style.to_decscusr_code(false))?;
         let mut tb = doc.buffer.borrow_mut();
         tb.read_file(&mut file, None)?;
         tb.mark_as_dirty();
     } else if paths.is_empty() {
         // No files were passed, and stdin is not redirected.
-        state.documents.add_untitled()?;
+        state.documents.add_untitled_with_cursor_style(state.cursor_style.to_decscusr_code(false))?;
     }
 
     state.file_picker_pending_dir = DisplayablePathBuf::from_path(cwd);
@@ -316,6 +316,9 @@ fn draw(ctx: &mut Context, state: &mut State) {
     }
     if state.wants_about {
         draw_dialog_about(ctx, state);
+    }
+    if state.wants_cursor_style_picker {
+        draw_cursor_style_picker(ctx, state);
     }
     if ctx.clipboard_ref().wants_host_sync() {
         draw_handle_clipboard_change(ctx, state);

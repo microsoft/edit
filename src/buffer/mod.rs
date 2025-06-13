@@ -207,6 +207,7 @@ pub struct TextBuffer {
     newlines_are_crlf: bool,
     insert_final_newline: bool,
     overtype: bool,
+    cursor_style: u8,
 
     wants_cursor_visibility: bool,
 }
@@ -254,6 +255,7 @@ impl TextBuffer {
             newlines_are_crlf: cfg!(windows), // Windows users want CRLF
             insert_final_newline: false,
             overtype: false,
+            cursor_style: 5, // Default to bar
 
             wants_cursor_visibility: false,
         })
@@ -403,6 +405,16 @@ impl TextBuffer {
     /// Set the overtype mode.
     pub fn set_overtype(&mut self, overtype: bool) {
         self.overtype = overtype;
+    }
+
+    /// Set the cursor style using DECSCUSR codes.
+    pub fn set_cursor_style(&mut self, style: u8) {
+        self.cursor_style = style;
+    }
+
+    /// Get the current cursor style.
+    pub fn cursor_style(&self) -> u8 {
+        self.cursor_style
     }
 
     /// Gets the logical cursor position, that is,
@@ -1516,6 +1528,7 @@ impl TextBuffer {
         origin: Point,
         destination: Rect,
         focused: bool,
+        cursor_style: u8,
         fb: &mut Framebuffer,
     ) -> Option<RenderResult> {
         if destination.is_empty() {
@@ -1804,7 +1817,7 @@ impl TextBuffer {
             };
 
             if text.contains(cursor) {
-                fb.set_cursor(cursor, self.overtype);
+                fb.set_cursor(cursor, self.overtype, cursor_style);
 
                 if self.line_highlight_enabled && selection_beg >= selection_end {
                     fb.blend_bg(
