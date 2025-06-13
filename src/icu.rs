@@ -707,16 +707,25 @@ static mut ROOT_COLLATOR: Option<*mut icu_ffi::UCollator> = None;
 
 /// Compares two UTF-8 strings for sorting using ICU's collation algorithm.
 pub fn compare_strings(a: &[u8], b: &[u8]) -> Ordering {
+    #[cold]
+    fn init() {
+        unsafe {
+            let mut coll = null_mut();
+
+            if let Ok(f) = init_if_needed() {
+                let mut status = icu_ffi::U_ZERO_ERROR;
+                coll = (f.ucol_open)(c"".as_ptr(), &mut status);
+            }
+
+            ROOT_COLLATOR = Some(coll);
+        }
+    }
+
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     let coll = unsafe {
         if ROOT_COLLATOR.is_none() {
-            ROOT_COLLATOR = Some(if let Ok(f) = init_if_needed() {
-                let mut status = icu_ffi::U_ZERO_ERROR;
-                (f.ucol_open)(c"".as_ptr(), &mut status)
-            } else {
-                null_mut()
-            });
+            init();
         }
         ROOT_COLLATOR.unwrap_unchecked()
     };
