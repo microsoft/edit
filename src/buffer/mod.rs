@@ -1759,7 +1759,7 @@ impl TextBuffer {
                 // Overwrite line in selection with rendered whitespaces
                 let mut cursor_wh = cursor_beg;
 
-                if selection_beg >= cursor_beg.logical_pos {
+                if selection_beg >= cursor_wh.logical_pos {
                     cursor_wh = self.cursor_move_to_logical_internal(cursor_wh, selection_beg);
                 }
 
