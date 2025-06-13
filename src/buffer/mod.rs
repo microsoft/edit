@@ -1531,7 +1531,6 @@ impl TextBuffer {
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut line = ArenaString::new_in(&scratch);
-        let mut line_whitespace_rendered = ArenaString::new_in(&scratch);
         let mut visual_pos_x_max = 0;
 
         // Pick the cursor closer to the `origin.y`.
@@ -1549,11 +1548,9 @@ impl TextBuffer {
         };
 
         line.reserve(width as usize * 2);
-        line_whitespace_rendered.reserve(width as usize * 2);
 
         for y in 0..height {
             line.clear();
-            line_whitespace_rendered.clear();
 
             let visual_line = origin.y + y;
             let mut cursor_beg =
@@ -1620,8 +1617,6 @@ impl TextBuffer {
                         let overlap = cursor_next.visual_pos.x - origin.x;
                         debug_assert!((1..=7).contains(&overlap));
                         line.push_str(&TAB_WHITESPACE[..overlap as usize]);
-                        line_whitespace_rendered
-                            .push_str(&RENDERED_TAB_WHITESPACE[..(overlap + 2) as usize]);
                         cursor_beg = cursor_next;
                     }
                 }
@@ -1649,12 +1644,9 @@ impl TextBuffer {
                         for chunk in chunk[beg..chunk_off].utf8_chunks() {
                             if !chunk.valid().is_empty() {
                                 line.push_str(chunk.valid());
-                                line_whitespace_rendered
-                                    .push_str(&chunk.valid().replace(' ', &RENDERED_WHITESPACE));
                             }
                             if !chunk.invalid().is_empty() {
                                 line.push('\u{FFFD}');
-                                line_whitespace_rendered.push('\u{FFFD}');
                             }
                         }
 
@@ -1671,16 +1663,11 @@ impl TextBuffer {
                                 );
                                 let tab_size = self.tab_size - (cursor_tab.column % self.tab_size);
                                 line.push_str(&TAB_WHITESPACE[..tab_size as usize]);
-                                line_whitespace_rendered
-                                    .push_str(&RENDERED_TAB_WHITESPACE[..(tab_size + 2) as usize]);
 
                                 // Since we know that we just aligned ourselves to the next tab stop,
                                 // we can trivially process any successive tabs.
                                 while chunk_off < chunk.len() && chunk[chunk_off] == b'\t' {
                                     line.push_str(&TAB_WHITESPACE[..self.tab_size as usize]);
-                                    line_whitespace_rendered.push_str(
-                                        &RENDERED_TAB_WHITESPACE[..(self.tab_size + 2) as usize],
-                                    );
                                     chunk_off += 1;
                                 }
                                 continue;
@@ -1693,8 +1680,6 @@ impl TextBuffer {
                             };
                             // Our manually constructed UTF8 is never going to be invalid. Trust.
                             line.push_str(unsafe { str::from_utf8_unchecked(&visualizer_buf) });
-                            line_whitespace_rendered
-                                .push_str(unsafe { str::from_utf8_unchecked(&visualizer_buf) });
 
                             cursor_visualizer = self.cursor_move_to_offset_internal(
                                 cursor_visualizer,
@@ -1771,47 +1756,75 @@ impl TextBuffer {
                 fb.blend_bg(rect, bg);
                 fb.blend_fg(rect, fg);
 
-                // Overwrite line in selection with whitespace rendered line's content
-                let beg_logical = beg - origin.x;
-                let end_logical = end - origin.x;
-                let beg_byte = line_whitespace_rendered
-                    .char_indices()
-                    .nth(beg_logical as usize)
-                    .map(|(i, _)| i)
-                    .unwrap_or(line_whitespace_rendered.len());
-                let end_byte = line_whitespace_rendered
-                    .char_indices()
-                    .nth(end_logical as usize)
-                    .map(|(i, _)| i)
-                    .unwrap_or(line_whitespace_rendered.len());
-                fb.replace_text(
-                    destination.top + y,
-                    destination.left + self.margin_width + beg_logical,
-                    destination.left + self.margin_width + end_logical,
-                    &line_whitespace_rendered[beg_byte..end_byte],
-                );
+                // Overwrite line in selection with rendered whitespaces
+                if cursor_beg.visual_pos.x > origin.x {
+                    let cursor_prev = self.cursor_move_to_logical_internal(
+                        cursor_beg,
+                        Point { x: cursor_beg.logical_pos.x - 1, y: cursor_beg.logical_pos.y },
+                    );
 
-                // Color rendered whitespaces
-                let mut cursor_whitespace_renderer = cursor_beg;
-                let mut whitespace_renderer_offset = beg;
-                while whitespace_renderer_offset < end {
-                    let ch_index =
-                        destination.left + whitespace_renderer_offset + self.margin_width
-                            - origin.x;
-                    let ch = line.chars().nth(ch_index as usize);
+                    if cursor_prev.visual_pos.x < origin.x {
+                        let missing = origin.x - cursor_prev.visual_pos.x;
 
-                    if ch == Some(' ') || ch == Some('\t') {
-                        cursor_whitespace_renderer = self.cursor_move_to_offset_internal(
-                            cursor_whitespace_renderer,
-                            cursor_beg.offset + whitespace_renderer_offset as usize,
-                        );
-                        let left = ch_index;
+                        let tab_size = self.tab_size - missing;
+
+                        let left = destination.left + self.margin_width - origin.x
+                            + cursor_prev.visual_pos.x
+                            + missing;
                         let top = destination.top + y;
+                        let rect = Rect { left, top, right: left + tab_size, bottom: top + 1 };
+
+                        fb.replace_text(
+                            destination.top + y,
+                            left,
+                            left + tab_size + 2,
+                            &RENDERED_TAB_WHITESPACE[..(tab_size + 2) as usize],
+                        );
+
+                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Red, 3, 1));
+                    }
+                }
+
+                let mut cursor_wh = cursor_beg;
+
+                if selection_beg >= cursor_beg.logical_pos {
+                    cursor_wh = self.cursor_move_to_logical_internal(cursor_wh, selection_beg);
+                }
+
+                while cursor_wh.visual_pos.x < cursor_end.visual_pos.x.min(end) {
+                    let chunk = self.read_forward(cursor_wh.offset);
+                    let chunk = &chunk[..1];
+                    let ch = chunk[0] as char;
+
+                    if ch == ' ' {
+                        let left = destination.left + self.margin_width - origin.x
+                            + cursor_wh.visual_pos.x;
+                        let top = destination.top + cursor_wh.visual_pos.y - origin.y;
                         let rect = Rect { left, top, right: left + 1, bottom: top + 1 };
+
+                        fb.replace_text(destination.top + y, left, left + 1, &RENDERED_WHITESPACE);
+
                         fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
+                    } else if ch == '\t' {
+                        let tab_size = self.tab_size - (cursor_wh.column % self.tab_size);
+
+                        let left = destination.left + self.margin_width - origin.x
+                            + cursor_wh.visual_pos.x;
+                        let top = destination.top + y;
+                        let rect = Rect { left, top, right: left + tab_size, bottom: top + 1 };
+
+                        fb.replace_text(
+                            destination.top + y,
+                            left,
+                            left + tab_size + 2,
+                            &RENDERED_TAB_WHITESPACE[..(tab_size + 2) as usize],
+                        );
+
+                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Red, 3, 1));
                     }
 
-                    whitespace_renderer_offset += 1;
+                    cursor_wh =
+                        self.cursor_move_to_offset_internal(cursor_wh, cursor_wh.offset + 1);
                 }
             }
 
