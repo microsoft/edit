@@ -2092,81 +2092,114 @@ impl TextBuffer {
         Point { x: chars, y: cursor.logical_pos.y }
     }
 
-    /// Unindents the current selection or line.
-    ///
-    /// TODO: This function is ripe for some optimizations:
-    /// * Instead of replacing the entire selection,
-    ///   it should unindent each line directly (as if multiple cursors had been used).
-    /// * The cursor movement at the end is rather costly, but at least without word wrap
-    ///   it should be possible to calculate it directly from the removed amount.
-    pub fn unindent(&mut self) {
-        let mut selection_beg = self.cursor.logical_pos;
-        let mut selection_end = selection_beg;
+    fn get_indent_type_preference(&self, delta: isize) -> Vec<u8> {
+        if self.indent_with_tabs { vec![b'\t'; delta as usize] } 
+        else { vec![b' '; delta as usize * self.tab_size as usize] }
+    }
 
-        if let Some(TextBufferSelection { beg, end }) = self.selection {
-            selection_beg = beg;
-            selection_end = end;
-        }
-
-        let [beg, end] = minmax(selection_beg, selection_end);
-        let beg = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: beg.y });
-        let end = self.cursor_move_to_logical_internal(beg, Point { x: CoordType::MAX, y: end.y });
-
-        let mut replacement = Vec::new();
-        self.buffer.extract_raw(beg.offset..end.offset, &mut replacement, 0);
-
-        let initial_len = replacement.len();
-        let mut offset = 0;
-        let mut y = beg.logical_pos.y;
-
-        loop {
-            if offset >= replacement.len() {
-                break;
+    fn get_bytes_to_unindent_by(line: &[u8], cursor_pos: usize, tab_size: usize) -> (isize, usize) {
+        let mut start = cursor_pos;
+        let mut width = 0;
+        let mut pos = cursor_pos;
+        while pos > 0 && width < tab_size {
+            pos -= 1;
+            match line[pos] {
+                b' ' => { width += 1; start = pos; }
+                b'\t' => { width += tab_size; start = pos; }
+                _ => break,
             }
+        }
+        (line[start..cursor_pos].iter().filter(|&&b| b == b' ' || b == b'\t').count() as isize, start)
+    }
+    
+    fn update_cursor_after_indent(&mut self, change_x: isize, selection_range: Option<(Point, Point)>, cursor_pos: Point) {
+        match selection_range {
+            Some((beg, end)) => {
+                self.selection = Some(TextBufferSelection {
+                    beg: Point { x: (beg.x + change_x).max(0), y: beg.y },
+                    end: Point { x: (end.x + change_x).max(0), y: end.y },
+                });
+                self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, self.selection.unwrap().beg));
+            }
+            None => {
+                let new_pos = Point { x: (cursor_pos.x + change_x).max(0), y: cursor_pos.y };
+                self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, new_pos));
+            }
+        }
+    }
+    
+    fn apply_indent_to_line(&mut self, delta: isize, start_point: Point, selection_range: Option<(Point, Point)>, cursor_pos: Point) {
+        if delta > 0 {
+            let insert_offset = self.cursor_move_to_logical_internal(self.cursor, start_point).offset;
+            self.edit_begin(HistoryType::Other, self.cursor_move_to_offset_internal(self.cursor, insert_offset));
+            self.edit_write(&self.get_indent_type_preference(delta));
+            self.edit_end();
+            let width_delta: isize = if self.indent_with_tabs { delta } else { delta * self.tab_size };
+            self.update_cursor_after_indent(width_delta, selection_range, cursor_pos);
+        } else {
+            let line_start = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: start_point.y });
+            let target_offset = self.cursor_move_to_logical_internal(line_start, start_point).offset;
+            let mut line_bytes = Vec::new();
+            self.buffer.extract_raw(line_start.offset..target_offset, &mut line_bytes, 0);
+            let cursor_byte_offset = target_offset - line_start.offset;
+            let (removed_count, del_start) = Self::get_bytes_to_unindent_by(&line_bytes, cursor_byte_offset, self.tab_size as usize);
+            if removed_count > 0 {
+                let del_start_offset = line_start.offset + del_start;
+                let del_end_offset = line_start.offset + cursor_byte_offset;
+                self.edit_begin(HistoryType::Other, self.cursor_move_to_offset_internal(self.cursor, del_start_offset));
+                self.edit_delete(self.cursor_move_to_offset_internal(self.cursor, del_end_offset));
+                self.edit_end();
+                self.update_cursor_after_indent(-(removed_count as isize), selection_range, cursor_pos);
+            }
+        }
+    }
 
-            let mut remove = 0;
+    fn handle_current_line_indent(&mut self, delta: isize) {
+        let cursor_pos = self.cursor.logical_pos;
+        let (start_point, selection_range) = self.selection
+            .map(|sel| { let [start, end] = minmax(sel.beg, sel.end); (start, Some((start, end))) })
+            .unwrap_or((cursor_pos, None));
+        self.apply_indent_to_line(delta, start_point, selection_range, cursor_pos);
+    }
 
-            if replacement[offset] == b'\t' {
-                remove = 1;
+    fn handle_multi_line_indent(&mut self, delta: isize) {
+        let sel = self.selection.unwrap(); // We know it's multiline, so selection exists
+        let [start, end] = minmax(sel.beg, sel.end);
+        
+        for line_y in start.y..=end.y {
+            self.selection = None; // Temporarily clear selection to treat each line individually
+            if delta > 0 {
+                self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: line_y }));
             } else {
-                while remove < self.tab_size as usize
-                    && offset + remove < replacement.len()
-                    && replacement[offset + remove] == b' '
-                {
-                    remove += 1;
-                }
+                let line_start_cursor = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: line_y });
+                let mut temp_bytes = Vec::new();
+                let sample_end = (line_start_cursor.offset + (self.tab_size as usize * 2).min(50)).min(self.buffer.len());
+                self.buffer.extract_raw(line_start_cursor.offset..sample_end, &mut temp_bytes, 0);
+                let whitespace_end = temp_bytes.iter().take_while(|&&b| matches!(b, b' ' | b'\t')).count();
+                let cursor_x = if whitespace_end > 0 { whitespace_end.min(self.tab_size as usize) } else { 0 };
+                self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, Point { x: cursor_x as isize, y: line_y }));
             }
-
-            if remove > 0 {
-                replacement.drain(offset..offset + remove);
-            }
-
-            if y == selection_beg.y {
-                selection_beg.x -= remove as CoordType;
-            }
-            if y == selection_end.y {
-                selection_end.x -= remove as CoordType;
-            }
-
-            (offset, y) = simd::lines_fwd(&replacement, offset, y, y + 1);
+            self.handle_current_line_indent(delta); 
         }
+        
+        // Re-establish the selection after modifying multiple lines
+        let width_delta = if delta > 0 { if self.indent_with_tabs { delta } else { delta * self.tab_size } } else { -1 };
+        self.selection = Some(TextBufferSelection {
+            beg: Point { x: (start.x + width_delta).max(0), y: start.y },
+            end: Point { x: (end.x + width_delta).max(0), y: end.y },
+        });
+        self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, self.selection.unwrap().beg));
+    }
 
-        if replacement.len() == initial_len {
-            // Nothing to do.
-            return;
+    // Changes the indent of the current selection or line.
+    pub fn change_indent(&mut self, delta: isize) {
+        let is_multiline = self.selection.map(|sel| { let [start, end] = minmax(sel.beg, sel.end); start.y != end.y }).unwrap_or(false);
+        
+        if is_multiline {
+            self.handle_multi_line_indent(delta);
+        } else {
+            self.handle_current_line_indent(delta);
         }
-
-        self.edit_begin(HistoryType::Other, beg);
-        self.edit_delete(end);
-        self.edit_write(&replacement);
-        self.edit_end();
-
-        if let Some(TextBufferSelection { beg, end }) = &mut self.selection {
-            *beg = selection_beg;
-            *end = selection_end;
-        }
-
-        self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, selection_end));
     }
 
     /// Extracts the contents of the current selection.
