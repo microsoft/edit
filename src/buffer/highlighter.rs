@@ -38,32 +38,21 @@ enum CharClass {
 }
 
 enum Test {
-    Prefix(&'static str),
-    Skip(usize),
-    AlphaNum,
-    NonAlphaNum,
-    LineEnd,
+    Consume(usize),
+    ConsumePrefix(&'static str),
+    ConsumeWord,
+    ConsumeToLineEnd,
 }
 
 struct Language {
-    char_classifier: [CharClass; 256],
-    transitions: &'static [&'static [Transition]],
+    word_chars: &'static [RangeInclusive<u8>],
+    states: &'static [&'static [Transition]],
 }
 
 struct Transition {
     test: Test,
     kind: TokenKind,
     state: usize,
-}
-
-const fn const_fill<T: Copy>(dst: &mut [T], range: RangeInclusive<char>, kind: T) {
-    let mut i = *range.start() as usize;
-    let end = *range.end() as usize;
-
-    while i <= end {
-        dst[i] = kind;
-        i += 1;
-    }
 }
 
 const POWERSHELL: Language = {
@@ -85,89 +74,88 @@ const POWERSHELL: Language = {
     const VARIABLE_PAREN: usize = 8;
 
     const KEYWORD: usize = 9;
+    const METHOD: usize = 10;
 
     Language {
-        char_classifier: {
-            let mut lut = [CharClass::Other; 256];
-            const_fill(&mut lut, '\0'..=' ', CharClass::Whitespace);
-            const_fill(&mut lut, '0'..='9', CharClass::Numeric);
-            const_fill(&mut lut, 'A'..='Z', CharClass::Alpha);
-            const_fill(&mut lut, 'a'..='z', CharClass::Alpha);
-            const_fill(&mut lut, '\u{0080}'..='\u{00FF}', CharClass::Alpha);
-            lut
-        },
-        transitions: &[
+        word_chars: &[b'0'..=b'9', b'A'..=b'Z', b'a'..=b'z', b'?'..=b'?', b'_'..=b'_'],
+        states: &[
             // GROUND
             &[
                 // Comments
-                T { test: Prefix("#"), kind: Comment, state: LINE_COMMENT },
-                T { test: Prefix("<#"), kind: Comment, state: BLOCK_COMMENT },
+                T { test: ConsumePrefix("#"), kind: Comment, state: LINE_COMMENT },
+                T { test: ConsumePrefix("<#"), kind: Comment, state: BLOCK_COMMENT },
                 // Numbers
                 // Strings
-                T { test: Prefix("'"), kind: String, state: STRING_SINGLE },
-                T { test: Prefix("\""), kind: String, state: STRING_DOUBLE },
+                T { test: ConsumePrefix("'"), kind: String, state: STRING_SINGLE },
+                T { test: ConsumePrefix("\""), kind: String, state: STRING_DOUBLE },
                 // Variables
-                T { test: Prefix("$"), kind: Variable, state: VARIABLE },
+                T { test: ConsumePrefix("$"), kind: Variable, state: VARIABLE },
                 // Operators
-                T { test: Prefix("++"), kind: Operator, state: GROUND },
-                T { test: Prefix("--"), kind: Operator, state: GROUND },
-                T { test: Prefix("="), kind: Operator, state: GROUND },
-                T { test: Prefix("<"), kind: Operator, state: GROUND },
-                T { test: Prefix(">"), kind: Operator, state: GROUND },
-                T { test: Prefix("+"), kind: Operator, state: GROUND },
-                T { test: Prefix("-"), kind: Operator, state: GROUND },
-                T { test: Prefix("*"), kind: Operator, state: GROUND },
-                T { test: Prefix("/"), kind: Operator, state: GROUND },
-                T { test: Prefix("%"), kind: Operator, state: GROUND },
-                T { test: Prefix("!"), kind: Operator, state: GROUND },
-                T { test: Prefix("|"), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix("++"), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix("--"), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix("="), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix("<"), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix(">"), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix("+"), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix("-"), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix("*"), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix("/"), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix("%"), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix("!"), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix("|"), kind: Operator, state: GROUND },
                 // Keywords
-                T { test: Prefix("break"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("catch"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("continue"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("do"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("else"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("finally"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("foreach"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("function"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("if"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("return"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("switch"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("throw"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("try"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("using"), kind: Keyword, state: KEYWORD },
-                T { test: Prefix("while"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("break"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("catch"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("continue"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("do"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("else"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("finally"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("foreach"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("function"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("if"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("return"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("switch"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("throw"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("try"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("using"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("while"), kind: Keyword, state: KEYWORD },
                 // Methods
-                T { test: NonAlphaNum, kind: Method, state: GROUND },
+                T { test: ConsumeWord, kind: Method, state: METHOD },
             ],
             // LINE_COMMENT: # comment
-            &[T { test: LineEnd, kind: Comment, state: GROUND }],
+            &[T { test: ConsumeToLineEnd, kind: Comment, state: GROUND }],
             // BLOCK_COMMENT: <# comment #>
-            &[T { test: Prefix("#>"), kind: Comment, state: GROUND }],
+            &[T { test: ConsumePrefix("#>"), kind: Comment, state: GROUND }],
             // STRING_SINGLE: 'string'
-            &[T { test: Prefix("'"), kind: String, state: GROUND }],
+            &[T { test: ConsumePrefix("'"), kind: String, state: GROUND }],
             // STRING_DOUBLE: "string"
             &[
-                T { test: Prefix("`"), kind: String, state: STRING_ESCAPE },
-                T { test: Prefix("$"), kind: Variable, state: VARIABLE },
-                T { test: Prefix("\""), kind: String, state: GROUND },
+                T { test: ConsumePrefix("`"), kind: String, state: STRING_ESCAPE },
+                T { test: ConsumePrefix("$"), kind: Variable, state: VARIABLE },
+                T { test: ConsumePrefix("\""), kind: String, state: GROUND },
             ],
             // STRING_ESCAPE: "`a"
-            &[T { test: Skip(1), kind: String, state: STRING_DOUBLE }],
+            &[T { test: Consume(1), kind: String, state: STRING_DOUBLE }],
             // VARIABLE: $variable
             &[
-                T { test: Prefix("{"), kind: Variable, state: VARIABLE_BRACE },
-                T { test: Prefix("("), kind: Variable, state: VARIABLE_PAREN },
-                T { test: NonAlphaNum, kind: Variable, state: GROUND },
+                T { test: ConsumePrefix("{"), kind: Variable, state: VARIABLE_BRACE },
+                T { test: ConsumePrefix("("), kind: Variable, state: VARIABLE_PAREN },
+                T { test: ConsumeWord, kind: Variable, state: GROUND },
             ],
             // VARIABLE_BRACE: ${variable}
-            &[T { test: Prefix("}"), kind: Variable, state: GROUND }],
+            &[T { test: ConsumePrefix("}"), kind: Variable, state: GROUND }],
             // VARIABLE_PAREN: $(command)
-            &[T { test: Prefix(")"), kind: Variable, state: GROUND }],
+            &[T { test: ConsumePrefix(")"), kind: Variable, state: GROUND }],
             // KEYWORD: foreach, if, etc.
             &[
-                T { test: NonAlphaNum, kind: Keyword, state: GROUND },
-                T { test: AlphaNum, kind: Method, state: GROUND },
+                T { test: ConsumeWord, kind: Method, state: METHOD },
+                T { test: Consume(0), kind: Keyword, state: GROUND },
+            ],
+            // METHOD: Foo-Bar
+            &[
+                T { test: ConsumeWord, kind: Method, state: METHOD },
+                T { test: ConsumePrefix("-"), kind: Method, state: METHOD },
+                T { test: Consume(0), kind: Method, state: GROUND },
             ],
         ],
     }
@@ -177,11 +165,40 @@ pub struct Parser<'a> {
     doc: &'a dyn ReadableDocument,
     offset: usize,
     logical_pos_y: CoordType,
+
+    language: &'static Language,
+    word_chars: [bool; 256],
+    starter: Vec<[bool; 256]>,
 }
 
 impl<'doc> Parser<'doc> {
     pub fn new(doc: &'doc dyn ReadableDocument) -> Self {
-        Self { doc, offset: 0, logical_pos_y: 0 }
+        let language = &POWERSHELL;
+
+        let mut word_chars = [false; 256];
+        Self::fill_word_chars(&mut word_chars, language.word_chars);
+
+        let starter = Vec::from_iter(language.states.iter().map(|&transitions| {
+            let mut starter = [false; 256];
+            for t in transitions {
+                match t.test {
+                    Test::Consume(n) => starter.fill(true),
+                    Test::ConsumePrefix(prefix) => starter[prefix.as_bytes()[0] as usize] = true,
+                    Test::ConsumeWord => Self::fill_word_chars(&mut starter, language.word_chars),
+                    Test::ConsumeToLineEnd => {}
+                }
+            }
+            starter
+        }));
+
+        Self { doc, offset: 0, logical_pos_y: 0, language, word_chars, starter }
+    }
+
+    fn fill_word_chars(dst: &mut [bool; 256], src: &[RangeInclusive<u8>]) {
+        for r in src {
+            dst[*r.start() as usize..=*r.end() as usize].fill(true);
+        }
+        dst[0x80..].fill(true);
     }
 
     pub fn logical_pos_y(&self) -> CoordType {
@@ -219,6 +236,12 @@ impl<'doc> Parser<'doc> {
 
                 line_buf.extend_from_slice(&chunk[..end]);
 
+                // If the line is too long, we don't highlight it.
+                // This is to prevent performance issues with very long lines.
+                if line_buf.len() >= MEBI {
+                    return res;
+                }
+
                 // Start of the next line found.
                 if line == 1 {
                     break;
@@ -232,69 +255,63 @@ impl<'doc> Parser<'doc> {
             }
         }
 
-        // If the line is too long, we don't highlight it.
-        // This is to prevent performance issues with very long lines.
-        if line_buf.len() > MEBI {
-            return res;
-        }
-
         let line_buf = unicode::strip_newline(&line_buf);
         let mut off = 0;
         let mut token_beg = 0;
-        let mut char_class = CharClass::Whitespace;
         let mut state = 0;
+        let mut kind = TokenKind::Other;
 
         loop {
-            let beg = off;
-
-            while off < line_buf.len() {
-                let c = POWERSHELL.char_classifier[line_buf[off] as usize];
-                if c != char_class {
-                    char_class = c;
-                    break;
-                }
+            while off < line_buf.len() && !self.starter[state][line_buf[off] as usize] {
                 off += 1;
             }
             if off >= line_buf.len() {
                 break;
             }
 
-            for t in POWERSHELL.transitions[state] {
-                let hit = match t.test {
-                    Test::Prefix(str) => {
-                        let hit = line_buf[off..].starts_with(str.as_bytes());
+            let mut hit = false;
+            let beg = off;
+
+            for t in self.language.states[state] {
+                match t.test {
+                    Test::Consume(n) => {
+                        off += n;
+                        hit = true;
+                    }
+                    Test::ConsumePrefix(str) => {
+                        hit = line_buf[off..].starts_with(str.as_bytes());
                         if hit {
                             off += str.len();
                         }
-                        hit
                     }
-                    Test::Skip(n) => {
-                        off += n;
-                        true
+                    Test::ConsumeWord => {
+                        while off < line_buf.len() && self.word_chars[line_buf[off] as usize] {
+                            off += 1;
+                            hit = true;
+                        }
                     }
-                    Test::AlphaNum => {
-                        matches!(char_class, CharClass::Alpha | CharClass::Numeric)
-                    }
-                    Test::NonAlphaNum => {
-                        !matches!(char_class, CharClass::Alpha | CharClass::Numeric)
-                    }
-                    Test::LineEnd => {
+                    Test::ConsumeToLineEnd => {
                         off = line_buf.len();
-                        true
+                        hit = true;
                     }
                 };
 
                 if hit {
-                    if state == 0 {
+                    if kind != t.kind {
                         token_beg = beg;
                     }
-                    if t.state == 0 {
-                        res.push(Token { range: token_beg..off, kind: t.kind });
-                    }
                     state = t.state;
+                    kind = t.kind;
+                    if state == 0 {
+                        res.push(Token { range: token_beg..off, kind });
+                    }
                     break;
                 }
             }
+        }
+
+        if state != 0 {
+            res.push(Token { range: token_beg..off, kind });
         }
 
         res
