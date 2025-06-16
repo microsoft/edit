@@ -29,6 +29,9 @@ Assigning an "edit" alias is recommended if possible.
 
 ## Build Instructions
 
+### ICU development files needed for text search
+As per [this issue](https://github.com/microsoft/edit/issues/172), the system must provide ICU development files for text search. For systems that have separated development packages, please install the ICU development package (i.e. `libicu-devel` for Fedora, `libicu-dev` for Ubuntu, etc.) from your package manager.
+
 * [Install Rust](https://www.rust-lang.org/tools/install)
 * Install the nightly toolchain: `rustup install nightly`
   * Alternatively, set the environment variable `RUSTC_BOOTSTRAP=1`
