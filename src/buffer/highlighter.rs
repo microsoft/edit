@@ -49,32 +49,39 @@ struct Language {
     states: &'static [&'static [Transition]],
 }
 
+enum StateStack {
+    Change(u8), // to
+    Push(u8),   // to
+    Pop(u8),    // count
+}
+
 struct Transition {
     test: Test,
     kind: TokenKind,
-    state: usize,
+    state: StateStack,
 }
 
 const POWERSHELL: Language = {
     type T = Transition;
+    use StateStack::*;
     use Test::*;
     use TokenKind::*;
 
-    const GROUND: usize = 0;
+    const GROUND: u8 = 0;
 
-    const LINE_COMMENT: usize = 1;
-    const BLOCK_COMMENT: usize = 2;
+    const LINE_COMMENT: u8 = 1;
+    const BLOCK_COMMENT: u8 = 2;
 
-    const STRING_SINGLE: usize = 3;
-    const STRING_DOUBLE: usize = 4;
-    const STRING_ESCAPE: usize = 5;
+    const STRING_SINGLE: u8 = 3;
+    const STRING_DOUBLE: u8 = 4;
+    const STRING_ESCAPE: u8 = 5;
 
-    const VARIABLE: usize = 6;
-    const VARIABLE_BRACE: usize = 7;
-    const VARIABLE_PAREN: usize = 8;
+    const VARIABLE: u8 = 6;
+    const VARIABLE_BRACE: u8 = 7;
+    const VARIABLE_PAREN: u8 = 8;
 
-    const KEYWORD: usize = 9;
-    const METHOD: usize = 10;
+    const KEYWORD: u8 = 9;
+    const METHOD: u8 = 10;
 
     Language {
         word_chars: &[b'0'..=b'9', b'A'..=b'Z', b'a'..=b'z', b'?'..=b'?', b'_'..=b'_'],
@@ -82,80 +89,77 @@ const POWERSHELL: Language = {
             // GROUND
             &[
                 // Comments
-                T { test: ConsumePrefix("#"), kind: Comment, state: LINE_COMMENT },
-                T { test: ConsumePrefix("<#"), kind: Comment, state: BLOCK_COMMENT },
+                T { test: ConsumePrefix("#"), kind: Comment, state: Change(LINE_COMMENT) },
+                T { test: ConsumePrefix("<#"), kind: Comment, state: Change(BLOCK_COMMENT) },
                 // Numbers
                 // Strings
-                T { test: ConsumePrefix("'"), kind: String, state: STRING_SINGLE },
-                T { test: ConsumePrefix("\""), kind: String, state: STRING_DOUBLE },
+                T { test: ConsumePrefix("'"), kind: String, state: Change(STRING_SINGLE) },
+                T { test: ConsumePrefix("\""), kind: String, state: Change(STRING_DOUBLE) },
                 // Variables
-                T { test: ConsumePrefix("$"), kind: Variable, state: VARIABLE },
+                T { test: ConsumePrefix("$"), kind: Variable, state: Change(VARIABLE) },
                 // Operators
-                T { test: ConsumePrefix("++"), kind: Operator, state: GROUND },
-                T { test: ConsumePrefix("--"), kind: Operator, state: GROUND },
-                T { test: ConsumePrefix("="), kind: Operator, state: GROUND },
-                T { test: ConsumePrefix("<"), kind: Operator, state: GROUND },
-                T { test: ConsumePrefix(">"), kind: Operator, state: GROUND },
-                T { test: ConsumePrefix("+"), kind: Operator, state: GROUND },
-                T { test: ConsumePrefix("-"), kind: Operator, state: GROUND },
-                T { test: ConsumePrefix("*"), kind: Operator, state: GROUND },
-                T { test: ConsumePrefix("/"), kind: Operator, state: GROUND },
-                T { test: ConsumePrefix("%"), kind: Operator, state: GROUND },
-                T { test: ConsumePrefix("!"), kind: Operator, state: GROUND },
-                T { test: ConsumePrefix("|"), kind: Operator, state: GROUND },
+                T { test: ConsumePrefix("-"), kind: Operator, state: Change(GROUND) },
+                T { test: ConsumePrefix("*"), kind: Operator, state: Change(GROUND) },
+                T { test: ConsumePrefix("/"), kind: Operator, state: Change(GROUND) },
+                T { test: ConsumePrefix("%"), kind: Operator, state: Change(GROUND) },
+                T { test: ConsumePrefix("+"), kind: Operator, state: Change(GROUND) },
+                T { test: ConsumePrefix("<"), kind: Operator, state: Change(GROUND) },
+                T { test: ConsumePrefix("="), kind: Operator, state: Change(GROUND) },
+                T { test: ConsumePrefix(">"), kind: Operator, state: Change(GROUND) },
+                T { test: ConsumePrefix("|"), kind: Operator, state: Change(GROUND) },
                 // Keywords
-                T { test: ConsumePrefix("break"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("catch"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("continue"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("do"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("else"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("finally"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("foreach"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("function"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("if"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("return"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("switch"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("throw"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("try"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("using"), kind: Keyword, state: KEYWORD },
-                T { test: ConsumePrefix("while"), kind: Keyword, state: KEYWORD },
+                T { test: ConsumePrefix("break"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("catch"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("continue"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("do"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("else"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("finally"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("foreach"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("function"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("if"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("return"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("switch"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("throw"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("try"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("using"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("while"), kind: Keyword, state: Change(KEYWORD) },
                 // Methods
-                T { test: ConsumeWord, kind: Method, state: METHOD },
+                T { test: ConsumeWord, kind: Method, state: Change(METHOD) },
             ],
             // LINE_COMMENT: # comment
-            &[T { test: ConsumeToLineEnd, kind: Comment, state: GROUND }],
+            &[T { test: ConsumeToLineEnd, kind: Comment, state: Pop(1) }],
             // BLOCK_COMMENT: <# comment #>
-            &[T { test: ConsumePrefix("#>"), kind: Comment, state: GROUND }],
+            &[T { test: ConsumePrefix("#>"), kind: Comment, state: Pop(1) }],
             // STRING_SINGLE: 'string'
-            &[T { test: ConsumePrefix("'"), kind: String, state: GROUND }],
+            &[T { test: ConsumePrefix("'"), kind: String, state: Pop(1) }],
             // STRING_DOUBLE: "string"
             &[
-                T { test: ConsumePrefix("`"), kind: String, state: STRING_ESCAPE },
-                T { test: ConsumePrefix("$"), kind: Variable, state: VARIABLE },
-                T { test: ConsumePrefix("\""), kind: String, state: GROUND },
+                T { test: ConsumePrefix("`"), kind: String, state: Push(STRING_ESCAPE) },
+                T { test: ConsumePrefix("$"), kind: Variable, state: Push(VARIABLE) },
+                T { test: ConsumePrefix("\""), kind: String, state: Pop(1) },
             ],
             // STRING_ESCAPE: "`a"
-            &[T { test: Consume(1), kind: String, state: STRING_DOUBLE }],
+            &[T { test: Consume(1), kind: String, state: Pop(1) }],
             // VARIABLE: $variable
             &[
-                T { test: ConsumePrefix("{"), kind: Variable, state: VARIABLE_BRACE },
-                T { test: ConsumePrefix("("), kind: Variable, state: VARIABLE_PAREN },
-                T { test: ConsumeWord, kind: Variable, state: GROUND },
+                T { test: ConsumePrefix("{"), kind: Variable, state: Change(VARIABLE_BRACE) },
+                T { test: ConsumePrefix("("), kind: Variable, state: Change(VARIABLE_PAREN) },
+                T { test: ConsumeWord, kind: Variable, state: Pop(1) },
             ],
             // VARIABLE_BRACE: ${variable}
-            &[T { test: ConsumePrefix("}"), kind: Variable, state: GROUND }],
+            &[T { test: ConsumePrefix("}"), kind: Variable, state: Pop(1) }],
             // VARIABLE_PAREN: $(command)
-            &[T { test: ConsumePrefix(")"), kind: Variable, state: GROUND }],
+            &[T { test: ConsumePrefix(")"), kind: Variable, state: Pop(1) }],
             // KEYWORD: foreach, if, etc.
             &[
-                T { test: ConsumeWord, kind: Method, state: METHOD },
-                T { test: Consume(0), kind: Keyword, state: GROUND },
+                T { test: ConsumeWord, kind: Method, state: Change(METHOD) },
+                T { test: Consume(0), kind: Keyword, state: Pop(1) },
             ],
             // METHOD: Foo-Bar
             &[
-                T { test: ConsumeWord, kind: Method, state: METHOD },
-                T { test: ConsumePrefix("-"), kind: Method, state: METHOD },
-                T { test: Consume(0), kind: Method, state: GROUND },
+                T { test: ConsumeWord, kind: Method, state: Change(METHOD) },
+                T { test: ConsumePrefix("-"), kind: Method, state: Change(METHOD) },
+                T { test: Consume(0), kind: Method, state: Pop(1) },
             ],
         ],
     }
@@ -258,11 +262,12 @@ impl<'doc> Parser<'doc> {
         let line_buf = unicode::strip_newline(&line_buf);
         let mut off = 0;
         let mut token_beg = 0;
-        let mut state = 0;
+        let mut state_stack = Vec::new_in(&*scratch);
+        let mut state = 0u8;
         let mut kind = TokenKind::Other;
 
         loop {
-            while off < line_buf.len() && !self.starter[state][line_buf[off] as usize] {
+            while off < line_buf.len() && !self.starter[state as usize][line_buf[off] as usize] {
                 off += 1;
             }
             if off >= line_buf.len() {
@@ -272,7 +277,7 @@ impl<'doc> Parser<'doc> {
             let mut hit = false;
             let beg = off;
 
-            for t in self.language.states[state] {
+            for t in self.language.states[state as usize] {
                 match t.test {
                     Test::Consume(n) => {
                         off += n;
@@ -300,13 +305,32 @@ impl<'doc> Parser<'doc> {
                     if kind != t.kind {
                         token_beg = beg;
                     }
-                    state = t.state;
+                    match t.state {
+                        StateStack::Change(to) => {
+                            if let Some(last) = state_stack.last_mut() {
+                                *last = to;
+                            }
+                            state = to;
+                        }
+                        StateStack::Push(to) => {
+                            state_stack.push(state);
+                            state = to;
+                        }
+                        StateStack::Pop(count) => {
+                            state_stack.truncate(state_stack.len().saturating_sub(count as usize));
+                            state = state_stack.last().copied().unwrap_or(0);
+                        }
+                    }
                     kind = t.kind;
                     if state == 0 {
                         res.push(Token { range: token_beg..off, kind });
                     }
                     break;
                 }
+            }
+
+            if !hit {
+                off += 1;
             }
         }
 
