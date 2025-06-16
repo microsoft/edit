@@ -4,9 +4,19 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+        - '.gitignore'
+        - '.vscode/**'
+        - '**.md'
+        - 'LICENSE'
   pull_request:
     branches:
       - main
+    paths-ignore:
+        - '.gitignore'
+        - '.vscode/**'
+        - '**.md'
+        - 'LICENSE'
 
 env:
   CARGO_TERM_COLOR: always
