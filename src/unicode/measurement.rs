@@ -174,8 +174,11 @@ impl<'doc> MeasurementConfig<'doc> {
         let mut chunk_iter = Utf8Chars::new(b"", 0);
         let mut chunk_range = offset..offset;
         let mut props_next_cluster = ucd_start_of_text_properties();
+        let mut width;
 
         loop {
+            width = 0;
+
             // Have we reached the target already? Stop.
             if offset >= offset_target
                 || logical_pos_x >= logical_target_x
@@ -188,7 +191,6 @@ impl<'doc> MeasurementConfig<'doc> {
             let mut props_last_char;
             let mut offset_next_cluster;
             let mut state = 0;
-            let mut width = 0;
 
             // Since we want to measure the width of the current cluster,
             // by necessity we need to seek to the next cluster.
@@ -359,7 +361,7 @@ impl<'doc> MeasurementConfig<'doc> {
                 // Of course we only need to do this if the cursor isn't on a wrap opportunity already.
 
                 // The loop below should not modify the target we already found.
-                let mut visual_pos_x_lookahead = visual_pos_x;
+                let mut visual_pos_x_lookahead = visual_pos_x + width;
 
                 loop {
                     let props_current_cluster = props_next_cluster;
@@ -914,6 +916,41 @@ mod test {
                 logical_pos: Point { x: 14, y: 0 },
                 visual_pos: Point { x: 3, y: 2 },
                 column: 14,
+                wrap_opp: false,
+            }
+        );
+    }
+
+    // Similar to the `test_force_wrap` test, but here we vertically descend
+    // down the document without ever touching the first or last column.
+    // I found that this finds curious bugs at times.
+    #[test]
+    fn test_force_wrap_space() {
+        // |a_      |
+        // |b______ |
+        let bytes = "a b\t\t ".as_bytes();
+        let mut cfg = MeasurementConfig::new(&bytes).with_tab_size(4).with_word_wrap_column(8);
+
+        let end0 = cfg.goto_visual(Point { x: CoordType::MAX, y: 0 });
+        assert_eq!(
+            end0,
+            Cursor {
+                offset: 2,
+                logical_pos: Point { x: 2, y: 0 },
+                visual_pos: Point { x: 2, y: 0 },
+                column: 2,
+                wrap_opp: true,
+            }
+        );
+
+        let end1 = cfg.goto_visual(Point { x: CoordType::MAX, y: 1 });
+        assert_eq!(
+            end1,
+            Cursor {
+                offset: 6,
+                logical_pos: Point { x: 6, y: 0 },
+                visual_pos: Point { x: 7, y: 1 },
+                column: 9,
                 wrap_opp: false,
             }
         );
