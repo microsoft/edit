@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
-use edit::simd::memrchr2;
 use edit::{apperr, path, sys};
 
 use crate::state::DisplayablePathBuf;
@@ -63,7 +62,7 @@ impl Document {
         let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let dir = path.parent().map(ToOwned::to_owned).unwrap_or_default();
         self.filename = filename;
-        self.dir = Some(DisplayablePathBuf::new(dir));
+        self.dir = Some(DisplayablePathBuf::from_path(dir));
         self.path = Some(path);
         self.update_file_mode();
     }
@@ -114,13 +113,7 @@ impl DocumentManager {
     }
 
     pub fn add_untitled(&mut self) -> apperr::Result<&mut Document> {
-        let buffer = TextBuffer::new_rc(false)?;
-        {
-            let mut tb = buffer.borrow_mut();
-            tb.set_margin_enabled(true);
-            tb.set_line_highlight_enabled(true);
-        }
-
+        let buffer = Self::create_buffer()?;
         let mut doc = Document {
             buffer,
             path: None,
@@ -167,13 +160,10 @@ impl DocumentManager {
             return Ok(doc);
         }
 
-        let buffer = TextBuffer::new_rc(false)?;
+        let buffer = Self::create_buffer()?;
         {
-            let mut tb = buffer.borrow_mut();
-            tb.set_margin_enabled(true);
-            tb.set_line_highlight_enabled(true);
-
             if let Some(file) = &mut file {
+                let mut tb = buffer.borrow_mut();
                 tb.read_file(file, None)?;
 
                 if let Some(goto) = goto
@@ -194,8 +184,25 @@ impl DocumentManager {
         };
         doc.set_path(path);
 
+        if let Some(active) = self.active()
+            && active.path.is_none()
+            && active.file_id.is_none()
+            && !active.buffer.borrow().is_dirty()
+        {
+            // If the current document is a pristine Untitled document with no
+            // name and no ID, replace it with the new document.
+            self.remove_active();
+        }
+
         self.list.push_front(doc);
         Ok(self.list.front_mut().unwrap())
+    }
+
+    pub fn reflow_all(&self) {
+        for doc in &self.list {
+            let mut tb = doc.buffer.borrow_mut();
+            tb.reflow();
+        }
     }
 
     pub fn open_for_reading(path: &Path) -> apperr::Result<File> {
@@ -204,6 +211,17 @@ impl DocumentManager {
 
     pub fn open_for_writing(path: &Path) -> apperr::Result<File> {
         File::create(path).map_err(apperr::Error::from)
+    }
+
+    fn create_buffer() -> apperr::Result<RcTextBuffer> {
+        let buffer = TextBuffer::new_rc(false)?;
+        {
+            let mut tb = buffer.borrow_mut();
+            tb.set_insert_final_newline(!cfg!(windows)); // As mandated by POSIX.
+            tb.set_margin_enabled(true);
+            tb.set_line_highlight_enabled(true);
+        }
+        Ok(buffer)
     }
 
     // Parse a filename in the form of "filename:line:char".
@@ -225,8 +243,12 @@ impl DocumentManager {
             Some(num)
         }
 
+        fn find_colon_rev(bytes: &[u8], offset: usize) -> Option<usize> {
+            (0..offset.min(bytes.len())).rev().find(|&i| bytes[i] == b':')
+        }
+
         let bytes = path.as_os_str().as_encoded_bytes();
-        let colend = match memrchr2(b':', b':', bytes, bytes.len()) {
+        let colend = match find_colon_rev(bytes, bytes.len()) {
             // Reject filenames that would result in an empty filename after stripping off the :line:char suffix.
             // For instance, a filename like ":123:456" will not be processed by this function.
             Some(colend) if colend > 0 => colend,
@@ -241,7 +263,7 @@ impl DocumentManager {
         let mut len = colend;
         let mut goto = Point { x: 0, y: last };
 
-        if let Some(colbeg) = memrchr2(b':', b':', bytes, colend) {
+        if let Some(colbeg) = find_colon_rev(bytes, colend) {
             // Same here: Don't allow empty filenames.
             if colbeg != 0
                 && let Some(first) = parse(&bytes[colbeg + 1..colend])

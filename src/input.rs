@@ -6,13 +6,15 @@
 //! In the future this allows us to take apart the application and
 //! support input schemes that aren't VT, such as UEFI, or GUI.
 
+use std::mem;
+
 use crate::helpers::{CoordType, Point, Size};
 use crate::vt;
 
 /// Represents a key/modifier combination.
 ///
 /// TODO: Is this a good idea? I did it to allow typing `kbmod::CTRL | vk::A`.
-/// The reason it's an awkard u32 and not a struct is to hopefully make ABIs easier later.
+/// The reason it's an awkward u32 and not a struct is to hopefully make ABIs easier later.
 /// Of course you could just translate on the ABI boundary, but my hope is that this
 /// design lets me realize some restrictions early on that I can't foresee yet.
 #[repr(transparent)]
@@ -40,8 +42,8 @@ impl InputKey {
         self.0
     }
 
-    pub(crate) const fn key(&self) -> InputKey {
-        InputKey(self.0 & 0x00FFFFFF)
+    pub(crate) const fn key(&self) -> Self {
+        Self(self.0 & 0x00FFFFFF)
     }
 
     pub(crate) const fn modifiers(&self) -> InputKeyMod {
@@ -52,8 +54,8 @@ impl InputKey {
         (self.0 & modifier.0) != 0
     }
 
-    pub(crate) const fn with_modifiers(&self, modifiers: InputKeyMod) -> InputKey {
-        InputKey(self.0 | modifiers.0)
+    pub(crate) const fn with_modifiers(&self, modifiers: InputKeyMod) -> Self {
+        Self(self.0 | modifiers.0)
     }
 }
 
@@ -67,16 +69,16 @@ impl InputKeyMod {
         Self(v)
     }
 
-    pub(crate) const fn contains(&self, modifier: InputKeyMod) -> bool {
+    pub(crate) const fn contains(&self, modifier: Self) -> bool {
         (self.0 & modifier.0) != 0
     }
 }
 
 impl std::ops::BitOr<InputKeyMod> for InputKey {
-    type Output = InputKey;
+    type Output = Self;
 
-    fn bitor(self, rhs: InputKeyMod) -> InputKey {
-        InputKey(self.0 | rhs.0)
+    fn bitor(self, rhs: InputKeyMod) -> Self {
+        Self(self.0 | rhs.0)
     }
 }
 
@@ -217,16 +219,6 @@ pub mod kbmod {
     pub const CTRL_ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x07000000);
 }
 
-/// Text input.
-///
-/// "Keyboard" input is also "text" input and vice versa.
-/// It differs in that text input can also be Unicode.
-#[derive(Clone, Copy)]
-pub struct InputText<'a> {
-    pub text: &'a str,
-    pub bracketed: bool,
-}
-
 /// Mouse input state. Up/Down, Left/Right, etc.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum InputMouseState {
@@ -261,9 +253,10 @@ pub enum Input<'input> {
     /// Window resize event.
     Resize(Size),
     /// Text input.
-    ///
     /// Note that [`Input::Keyboard`] events can also be text.
-    Text(InputText<'input>),
+    Text(&'input str),
+    /// A clipboard paste.
+    Paste(Vec<u8>),
     /// Keyboard input.
     Keyboard(InputKey),
     /// Mouse input.
@@ -273,6 +266,7 @@ pub enum Input<'input> {
 /// Parses VT sequences into input events.
 pub struct Parser {
     bracketed_paste: bool,
+    bracketed_paste_buf: Vec<u8>,
     x10_mouse_want: bool,
     x10_mouse_buf: [u8; 3],
     x10_mouse_len: usize,
@@ -285,6 +279,7 @@ impl Parser {
     pub fn new() -> Self {
         Self {
             bracketed_paste: false,
+            bracketed_paste_buf: Vec::new(),
             x10_mouse_want: false,
             x10_mouse_buf: [0; 3],
             x10_mouse_len: 0,
@@ -302,16 +297,15 @@ impl Parser {
 }
 
 /// An iterator that parses VT sequences into input events.
-///
-/// Can't implement [`Iterator`], because this is a "lending iterator".
 pub struct Stream<'parser, 'vt, 'input> {
     parser: &'parser mut Parser,
     stream: vt::Stream<'vt, 'input>,
 }
 
-impl<'input> Stream<'_, '_, 'input> {
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<Input<'input>> {
+impl<'input> Iterator for Stream<'_, '_, 'input> {
+    type Item = Input<'input>;
+
+    fn next(&mut self) -> Option<Input<'input>> {
         loop {
             if self.parser.bracketed_paste {
                 return self.handle_bracketed_paste();
@@ -334,7 +328,7 @@ impl<'input> Stream<'_, '_, 'input> {
 
             match self.stream.next()? {
                 vt::Token::Text(text) => {
-                    return Some(Input::Text(InputText { text, bracketed: false }));
+                    return Some(Input::Text(text));
                 }
                 vt::Token::Ctrl(ch) => match ch {
                     '\0' | '\t' | '\r' => return Some(Input::Keyboard(InputKey::new(ch as u32))),
@@ -489,7 +483,9 @@ impl<'input> Stream<'_, '_, 'input> {
             }
         }
     }
+}
 
+impl<'input> Stream<'_, '_, 'input> {
     /// Once we encounter the start of a bracketed paste
     /// we seek to the end of the paste in this function.
     ///
@@ -498,8 +494,8 @@ impl<'input> Stream<'_, '_, 'input> {
     /// <ESC>[201~    lots of text    <ESC>[201~
     /// ```
     ///
-    /// That text inbetween is then expected to be taken literally.
-    /// It can inbetween be anything though, including other escape sequences.
+    /// That in between text is then expected to be taken literally.
+    /// It can be in between anything though, including other escape sequences.
     /// This is the reason why this is a separate method.
     #[cold]
     fn handle_bracketed_paste(&mut self) -> Option<Input<'input>> {
@@ -518,8 +514,13 @@ impl<'input> Stream<'_, '_, 'input> {
         }
 
         if end != beg {
-            let input = self.stream.input();
-            Some(Input::Text(InputText { text: &input[beg..end], bracketed: true }))
+            self.parser
+                .bracketed_paste_buf
+                .extend_from_slice(&self.stream.input().as_bytes()[beg..end]);
+        }
+
+        if !self.parser.bracketed_paste {
+            Some(Input::Paste(mem::take(&mut self.parser.bracketed_paste_buf)))
         } else {
             None
         }

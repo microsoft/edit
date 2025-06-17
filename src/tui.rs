@@ -10,7 +10,7 @@
 //! fairly minimal, and for that purpose an immediate mode design is much simpler to use.
 //!
 //! So what's "immediate mode"? The primary alternative is called "retained mode".
-//! The diference is that when you create a button in this framework in one frame,
+//! The difference is that when you create a button in this framework in one frame,
 //! and you stop telling this framework in the next frame, the button will vanish.
 //! When you use a regular retained mode UI framework, you create the button once,
 //! set up callbacks for when it is clicked, and then stop worrying about it.
@@ -131,7 +131,7 @@
 //!
 //!         // Thanks to the lack of callbacks, we can use a primitive
 //!         // if condition here, as well as in any potential C code.
-//!         if ctx.button("button", "Click me!") {
+//!         if ctx.button("button", "Click me!", ButtonStyle::default()) {
 //!             state.counter += 1;
 //!         }
 //!
@@ -152,20 +152,22 @@ use std::{iter, mem, ptr, time};
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::{CursorMovement, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
+use crate::clipboard::Clipboard;
 use crate::document::WriteableDocument;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::hash::*;
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
-use crate::{apperr, arena_format, input, unicode};
+use crate::{apperr, arena_format, input, simd, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
+const KBMOD_FOR_WORD_NAV: InputKeyMod =
+    if cfg!(target_os = "macos") { kbmod::ALT } else { kbmod::CTRL };
 
 type Input<'input> = input::Input<'input>;
 type InputKey = input::InputKey;
 type InputMouseState = input::InputMouseState;
-type InputText<'input> = input::InputText<'input>;
 
 /// Since [`TextBuffer`] creation and management is expensive,
 /// we cache instances of them for reuse between frames.
@@ -257,6 +259,41 @@ pub enum Overflow {
     TruncateTail,
 }
 
+/// Controls the style with which a button label renders
+#[derive(Clone, Copy)]
+pub struct ButtonStyle {
+    accelerator: Option<char>,
+    checked: Option<bool>,
+    bracketed: bool,
+}
+
+impl ButtonStyle {
+    /// Draw an accelerator label: `[_E_xample button]` or `[Example button(X)]`
+    ///
+    /// Must provide an upper-case ASCII character.
+    pub fn accelerator(self, char: char) -> Self {
+        Self { accelerator: Some(char), ..self }
+    }
+    /// Draw a checkbox prefix: `[🗹 Example Button]`
+    pub fn checked(self, checked: bool) -> Self {
+        Self { checked: Some(checked), ..self }
+    }
+    /// Draw with or without brackets: `[Example Button]` or `Example Button`
+    pub fn bracketed(self, bracketed: bool) -> Self {
+        Self { bracketed, ..self }
+    }
+}
+
+impl Default for ButtonStyle {
+    fn default() -> Self {
+        Self {
+            accelerator: None,
+            checked: None,
+            bracketed: true, // Default style for most buttons. Brackets may be disabled e.g. for buttons in menus
+        }
+    }
+}
+
 /// There's two types of lifetimes the TUI code needs to manage:
 /// * Across frames
 /// * Per frame
@@ -326,10 +363,7 @@ pub struct Tui {
     cached_text_buffers: Vec<CachedTextBuffer>,
 
     /// The clipboard contents.
-    clipboard: Vec<u8>,
-    /// A counter that is incremented every time the clipboard changes.
-    /// Allows for tracking clipboard changes without comparing contents.
-    clipboard_generation: u32,
+    clipboard: Clipboard,
 
     settling_have: i32,
     settling_want: i32,
@@ -379,8 +413,7 @@ impl Tui {
 
             cached_text_buffers: Vec::with_capacity(16),
 
-            clipboard: Vec::new(),
-            clipboard_generation: 0,
+            clipboard: Default::default(),
 
             settling_have: 0,
             settling_want: 0,
@@ -453,16 +486,14 @@ impl Tui {
         self.framebuffer.contrasted(color)
     }
 
-    /// Returns the current clipboard contents.
-    pub fn clipboard(&self) -> &[u8] {
+    /// Returns the clipboard.
+    pub fn clipboard_ref(&self) -> &Clipboard {
         &self.clipboard
     }
 
-    /// Returns the current clipboard generation.
-    /// The generation changes every time the clipboard contents change.
-    /// This allows you to track clipboard changes.
-    pub fn clipboard_generation(&self) -> u32 {
-        self.clipboard_generation
+    /// Returns the clipboard (mutable).
+    pub fn clipboard_mut(&mut self) -> &mut Clipboard {
+        &mut self.clipboard
     }
 
     /// Starts a new frame and returns a [`Context`] for it.
@@ -486,17 +517,21 @@ impl Tui {
             self.mouse_is_drag = false;
         }
 
-        if self.scroll_to_focused() {
-            self.needs_more_settling();
-        }
-
         let now = std::time::Instant::now();
         let mut input_text = None;
         let mut input_keyboard = None;
         let mut input_mouse_modifiers = kbmod::NONE;
         let mut input_mouse_click = 0;
         let mut input_scroll_delta = Point { x: 0, y: 0 };
-        let input_consumed = self.needs_settling();
+        // `input_consumed` should be `true` if we're in the settling phase which is indicated by
+        // `self.needs_settling() == true`. However, there's a possibility for it being true from
+        // a previous frame, and we do have fresh new input. In that case want `input_consumed`
+        // to be false of course which is ensured by checking for `input.is_none()`.
+        let input_consumed = self.needs_settling() && input.is_none();
+
+        if self.scroll_to_focused() {
+            self.needs_more_settling();
+        }
 
         match input {
             None => {}
@@ -512,10 +547,16 @@ impl Tui {
                 // This causes us to ignore the keyboard input here. We need a way to inform the caller over
                 // how much of the input text we actually processed in a single frame. Or perhaps we could use
                 // the needs_settling logic?
-                if !text.bracketed && text.text.len() == 1 {
-                    let ch = text.text.as_bytes()[0];
+                if text.len() == 1 {
+                    let ch = text.as_bytes()[0];
                     input_keyboard = InputKey::from_ascii(ch as char)
                 }
+            }
+            Some(Input::Paste(paste)) => {
+                let clipboard = self.clipboard_mut();
+                clipboard.write(paste);
+                clipboard.mark_as_synchronized();
+                input_keyboard = Some(kbmod::CTRL | vk::V);
             }
             Some(Input::Keyboard(keyboard)) => {
                 input_keyboard = Some(keyboard);
@@ -535,7 +576,10 @@ impl Tui {
                 let mut hovered_node = None; // Needed for `mouse_down`
                 let mut focused_node = None; // Needed for `mouse_down` and `is_click`
                 if mouse_down || mouse_up {
-                    for root in self.prev_tree.iterate_roots() {
+                    // Roots (aka windows) are ordered in Z order, so we iterate
+                    // them in reverse order, from topmost to bottommost.
+                    for root in self.prev_tree.iterate_roots_rev() {
+                        // Find the node that contains the cursor.
                         Tree::visit_all(root, root, true, |node| {
                             let n = node.borrow();
                             if !n.outer_clipped.contains(next_position) {
@@ -548,6 +592,18 @@ impl Tui {
                             }
                             VisitControl::Continue
                         });
+
+                        // This root/window contains the cursor.
+                        // We don't care about any lower roots.
+                        if hovered_node.is_some() {
+                            break;
+                        }
+
+                        // This root is modal and swallows all clicks,
+                        // no matter whether the click was inside it or not.
+                        if matches!(root.borrow().content, NodeContent::Modal(_)) {
+                            break;
+                        }
                     }
                 }
 
@@ -640,6 +696,7 @@ impl Tui {
 
             tree,
             last_modal: None,
+            focused_node: None,
             next_block_id_mixin: 0,
             needs_settling: false,
 
@@ -651,7 +708,13 @@ impl Tui {
     fn report_context_completion<'a>(&'a mut self, ctx: &mut Context<'a, '_>) {
         // If this hits, you forgot to block_end() somewhere. The best way to figure
         // out where is to do a binary search of commenting out code in main.rs.
-        debug_assert!(ctx.tree.current_node.borrow().stack_parent.is_none());
+        debug_assert!(
+            ctx.tree.current_node.borrow().stack_parent.is_none(),
+            "Dangling parent! Did you miss a block_end?"
+        );
+
+        // End the root node.
+        ctx.block_end();
 
         // Ensure that focus doesn't escape the active modal.
         if let Some(node) = ctx.last_modal
@@ -684,17 +747,7 @@ impl Tui {
         // Remove any unknown nodes from the focus path.
         // It's important that we do this after the tree has been swapped out,
         // so that pop_focusable_node() has access to the newest version of the tree.
-        let focus_path_changed = self.pop_focusable_node(focus_path_pop_min);
-        needs_settling |= focus_path_changed;
-
-        // If some elements went away and the focus path changed above, we ignore tab presses.
-        // It may otherwise lead to weird situations where focus moves unexpectedly.
-        if !focus_path_changed
-            && !ctx.input_consumed
-            && let Some(input) = ctx.input_keyboard
-        {
-            needs_settling |= self.move_focus(input);
-        }
+        needs_settling |= self.pop_focusable_node(focus_path_pop_min);
 
         // `needs_more_settling()` depends on the current value
         // of `settling_have` and so we increment it first.
@@ -854,7 +907,7 @@ impl Tui {
             }
         }
 
-        if node.attributes.float.is_some() && node.attributes.bg & 0xff000000 == 0xff000000 {
+        if node.attributes.float.is_some() {
             if !node.attributes.bordered {
                 let mut fill = ArenaString::new_in(&scratch);
                 fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left) as usize);
@@ -870,6 +923,14 @@ impl Tui {
             }
 
             self.framebuffer.replace_attr(outer_clipped, Attributes::All, Attributes::None);
+
+            if matches!(node.content, NodeContent::Modal(_)) {
+                let rect =
+                    Rect { left: 0, top: 0, right: self.size.width, bottom: self.size.height };
+                let dim = self.indexed_alpha(IndexedColor::Background, 1, 2);
+                self.framebuffer.blend_bg(rect, dim);
+                self.framebuffer.blend_fg(rect, dim);
+            }
         }
 
         self.framebuffer.blend_bg(outer_clipped, node.attributes.bg);
@@ -1213,117 +1274,6 @@ impl Tui {
         last_before != last_after
     }
 
-    // TODO: Move this into `block_end()` and run it whenever the block is a `focus_well`.
-    // It makes no sense otherwise that all input handling occurs in the controls, except for this.
-    fn move_focus(&mut self, input: InputKey) -> bool {
-        if !matches!(input, vk::TAB | SHIFT_TAB | vk::UP | vk::DOWN | vk::LEFT | vk::RIGHT) {
-            return false;
-        }
-
-        let focused_id = self.focused_node_path.last().cloned().unwrap_or(0);
-        let Some(focused) = self.prev_node_map.get(focused_id) else {
-            debug_assert!(false); // The caller should've cleaned up the focus path.
-            return false;
-        };
-
-        let mut focused_start = focused;
-        let mut root = focused;
-
-        // Figure out if we're inside a focus void (a container that doesn't
-        // allow tabbing inside), and in that case, toss the focus to it.
-        //
-        // Also, figure out the container within which the focus must be contained.
-        // This way, tab/shift-tab only moves within the same window.
-        // The ROOT_ID node has no parent, and the others have a float attribute.
-        // If the root is the focused node, it should of course not move upward.
-        loop {
-            let root_node = root.borrow();
-            if root_node.attributes.focus_well {
-                break;
-            }
-            if root_node.attributes.focus_void {
-                focused_start = root;
-            }
-            root = match root_node.parent {
-                Some(parent) => parent,
-                None => break,
-            }
-        }
-
-        let forward;
-        let min_depth;
-        match input {
-            SHIFT_TAB | vk::TAB => {
-                forward = input == vk::TAB;
-                min_depth = usize::MAX;
-            }
-            vk::UP | vk::DOWN => {
-                forward = input == vk::DOWN;
-                min_depth = usize::MAX;
-            }
-            vk::LEFT | vk::RIGHT => {
-                // Find the cell within a row within a table that we're in.
-                // To do so we'll use a circular buffer of the last 3 nodes while we travel up.
-                let mut buf = [None; 3];
-                let mut idx = buf.len() - 1;
-                let mut node = focused_start;
-
-                loop {
-                    idx = (idx + 1) % buf.len();
-                    buf[idx] = Some(node);
-                    if let NodeContent::Table(..) = &node.borrow().content {
-                        break;
-                    }
-                    if ptr::eq(node, root) {
-                        return false;
-                    }
-                    node = match node.borrow().parent {
-                        Some(parent) => parent,
-                        None => return false,
-                    }
-                }
-
-                // The current `idx` points to the table.
-                // The last item is the row.
-                // The 2nd to last item is the cell.
-                let Some(row) = buf[(idx + 3 - 1) % buf.len()] else {
-                    return false;
-                };
-                let Some(cell) = buf[(idx + 3 - 2) % buf.len()] else {
-                    return false;
-                };
-
-                root = row;
-                focused_start = cell;
-                forward = input == vk::RIGHT;
-                min_depth = root.borrow().depth;
-            }
-            _ => return false,
-        }
-
-        let mut focused_next = focused_start;
-        Tree::visit_all(root, focused_start, forward, |node| {
-            let n = node.borrow();
-            if ptr::eq(node, root) {
-                VisitControl::Continue
-            } else if n.attributes.focusable && !ptr::eq(node, focused_start) {
-                focused_next = node;
-                VisitControl::Stop
-            } else if n.attributes.focus_void || n.depth >= min_depth {
-                VisitControl::SkipChildren
-            } else {
-                VisitControl::Continue
-            }
-        });
-
-        if ptr::eq(focused_next, focused_start) {
-            false
-        } else {
-            Tui::build_node_path(Some(focused_next), &mut self.focused_node_path);
-            true
-        }
-    }
-
     // Scroll the focused node(s) into view inside scrollviews
     fn scroll_to_focused(&mut self) -> bool {
         let focused_id = self.focused_node_path.last().cloned().unwrap_or(0);
@@ -1364,7 +1314,7 @@ pub struct Context<'a, 'input> {
     tui: &'a mut Tui,
 
     /// Current text input, if any.
-    input_text: Option<InputText<'input>>,
+    input_text: Option<&'input str>,
     /// Current keyboard input, if any.
     input_keyboard: Option<InputKey>,
     input_mouse_modifiers: InputKeyMod,
@@ -1375,6 +1325,7 @@ pub struct Context<'a, 'input> {
 
     tree: Tree<'a>,
     last_modal: Option<&'a NodeCell<'a>>,
+    focused_node: Option<&'a NodeCell<'a>>,
     next_block_id_mixin: u64,
     needs_settling: bool,
 
@@ -1425,25 +1376,14 @@ impl<'a> Context<'a, '_> {
         self.tui.framebuffer.contrasted(color)
     }
 
-    /// Returns the current clipboard contents.
-    pub fn clipboard(&self) -> &[u8] {
-        self.tui.clipboard()
+    /// Returns the clipboard.
+    pub fn clipboard_ref(&self) -> &Clipboard {
+        &self.tui.clipboard
     }
 
-    /// Returns the current clipboard generation.
-    /// The generation changes every time the clipboard contents change.
-    /// This allows you to track clipboard changes.
-    pub fn clipboard_generation(&self) -> u32 {
-        self.tui.clipboard_generation()
-    }
-
-    /// Sets the clipboard contents.
-    pub fn set_clipboard(&mut self, data: Vec<u8>) {
-        if !data.is_empty() {
-            self.tui.clipboard = data;
-            self.tui.clipboard_generation = self.tui.clipboard_generation.wrapping_add(1);
-            self.needs_rerender();
-        }
+    /// Returns the clipboard (mutable).
+    pub fn clipboard_mut(&mut self) -> &mut Clipboard {
+        &mut self.tui.clipboard
     }
 
     /// Tell the UI framework that your state changed and you need another layout pass.
@@ -1484,6 +1424,85 @@ impl<'a> Context<'a, '_> {
     /// Ends the current UI block, returning to its parent container.
     pub fn block_end(&mut self) {
         self.tree.pop_stack();
+        self.block_end_move_focus();
+    }
+
+    fn block_end_move_focus(&mut self) {
+        // At this point, it's more like "focus_well?" instead of "focus_well!".
+        let focus_well = self.tree.last_node;
+
+        // Remember the focused node, if any, because once the code below runs,
+        // we need it for the `Tree::visit_all` call.
+        if self.is_focused() {
+            self.focused_node = Some(focus_well);
+        }
+
+        // The mere fact that there's a `focused_node` indicates that we're the
+        // first `block_end()` call that's a focus well and also contains the focus.
+        let Some(focused) = self.focused_node else {
+            return;
+        };
+
+        // Filter down to nodes that are focus wells and contain the focus. They're
+        // basically the "tab container". We test for the node depth to ensure that
+        // we don't accidentally pick a focus well next to or inside the focused node.
+        {
+            let n = focus_well.borrow();
+            if !n.attributes.focus_well || n.depth > focused.borrow().depth {
+                return;
+            }
+        }
+
+        // Filter down to Tab/Shift+Tab inputs.
+        if self.input_consumed {
+            return;
+        }
+        let Some(input) = self.input_keyboard else {
+            return;
+        };
+        if !matches!(input, SHIFT_TAB | vk::TAB) {
+            return;
+        }
+
+        let forward = input == vk::TAB;
+        let mut focused_start = focused;
+        let mut focused_next = focused;
+
+        // We may be in a focus void right now (= doesn't want to be tabbed into),
+        // so first we must go up the tree until we're outside of it.
+        loop {
+            if ptr::eq(focused_start, focus_well) {
+                // If we hit the root / focus well, we weren't in a focus void,
+                // and can reset `focused_before` to the current focused node.
+                focused_start = focused;
+                break;
+            }
+
+            focused_start = focused_start.borrow().parent.unwrap();
+            if focused_start.borrow().attributes.focus_void {
+                break;
+            }
+        }
+
+        Tree::visit_all(focus_well, focused_start, forward, |node| {
+            let n = node.borrow();
+            if n.attributes.focusable && !ptr::eq(node, focused_start) {
+                focused_next = node;
+                VisitControl::Stop
+            } else if n.attributes.focus_void {
+                VisitControl::SkipChildren
+            } else {
+                VisitControl::Continue
+            }
+        });
+
+        if ptr::eq(focused_next, focused_start) {
+            return;
+        }
+
+        Tui::build_node_path(Some(focused_next), &mut self.tui.focused_node_path);
+        self.set_input_consumed();
+        self.needs_rerender();
     }
 
     /// Mixes in an extra value to the next UI block's ID for uniqueness.
@@ -1696,15 +1715,8 @@ impl<'a> Context<'a, '_> {
     /// Begins a modal window. Call [`Context::modal_end()`].
     pub fn modal_begin(&mut self, classname: &'static str, title: &str) {
         self.block_begin(classname);
-        self.attr_float(FloatSpec { anchor: Anchor::Root, ..Default::default() });
-        self.attr_intrinsic_size(Size { width: self.tui.size.width, height: self.tui.size.height });
-        self.attr_background_rgba(self.indexed_alpha(IndexedColor::Background, 1, 2));
-        self.attr_foreground_rgba(self.indexed_alpha(IndexedColor::Background, 1, 2));
-        self.attr_focus_well();
-
-        self.block_begin("window");
         self.attr_float(FloatSpec {
-            anchor: Anchor::Last,
+            anchor: Anchor::Root,
             gravity_x: 0.5,
             gravity_y: 0.5,
             offset_x: self.tui.size.width as f32 * 0.5,
@@ -1713,7 +1725,7 @@ impl<'a> Context<'a, '_> {
         self.attr_border();
         self.attr_background_rgba(self.tui.modal_default_bg);
         self.attr_foreground_rgba(self.tui.modal_default_fg);
-        self.inherit_focus();
+        self.attr_focus_well();
         self.focus_on_first_present();
 
         let mut last_node = self.tree.last_node.borrow_mut();
@@ -1729,7 +1741,6 @@ impl<'a> Context<'a, '_> {
     /// Ends the current modal window block.
     /// Returns true if the user pressed Escape (a request to close).
     pub fn modal_end(&mut self) -> bool {
-        self.block_end();
         self.block_end();
 
         // Consume the input unconditionally, so that the root (the "main window")
@@ -1796,11 +1807,17 @@ impl<'a> Context<'a, '_> {
                 debug_assert!(matches!(parent.content, NodeContent::Table(_)));
 
                 self.block_end();
+                self.table_end_row();
+
                 self.next_block_id_mixin(parent.child_count as u64);
             }
         }
 
         self.block_begin("row");
+    }
+
+    fn table_end_row(&mut self) {
+        self.table_move_focus(vk::LEFT, vk::RIGHT);
     }
 
     /// Ends the current table block.
@@ -1811,9 +1828,70 @@ impl<'a> Context<'a, '_> {
         // current_node will refer to the table. Otherwise, it'll refer to the current row.
         if !matches!(current_node.content, NodeContent::Table(_)) {
             self.block_end();
+            self.table_end_row();
         }
 
         self.block_end(); // table
+        self.table_move_focus(vk::UP, vk::DOWN);
+    }
+
+    fn table_move_focus(&mut self, prev_key: InputKey, next_key: InputKey) {
+        // Filter down to table rows that are focused.
+        if !self.contains_focus() {
+            return;
+        }
+
+        // Filter down to our prev/next inputs.
+        if self.input_consumed {
+            return;
+        }
+        let Some(input) = self.input_keyboard else {
+            return;
+        };
+        if input != prev_key && input != next_key {
+            return;
+        }
+
+        let container = self.tree.last_node;
+        let Some(&focused_id) = self.tui.focused_node_path.get(container.borrow().depth + 1) else {
+            return;
+        };
+
+        let mut prev_next = NodeSiblings { prev: None, next: None };
+        let mut focused = None;
+
+        // Iterate through the cells in the row / the rows in the table, looking for focused_id.
+        // Take note of the previous and next focusable cells / rows around the focused one.
+        for cell in Tree::iterate_siblings(container.borrow().children.first) {
+            let n = cell.borrow();
+            if n.id == focused_id {
+                focused = Some(cell);
+            } else if n.attributes.focusable {
+                if focused.is_none() {
+                    prev_next.prev = Some(cell);
+                } else {
+                    prev_next.next = Some(cell);
+                    break;
+                }
+            }
+        }
+
+        if focused.is_none() {
+            return;
+        }
+
+        let forward = input == next_key;
+        let children_idx = if forward { NodeChildren::FIRST } else { NodeChildren::LAST };
+        let siblings_idx = if forward { NodeSiblings::NEXT } else { NodeSiblings::PREV };
+        let Some(focused_next) =
+            prev_next.get(siblings_idx).or_else(|| container.borrow().children.get(children_idx))
+        else {
+            return;
+        };
+
+        Tui::build_node_path(Some(focused_next), &mut self.tui.focused_node_path);
+        self.set_input_consumed();
+        self.needs_rerender();
     }
 
     /// Creates a simple text label.
@@ -1918,17 +1996,12 @@ impl<'a> Context<'a, '_> {
 
     /// Creates a button with the given text.
     /// Returns true if the button was activated.
-    pub fn button(&mut self, classname: &'static str, text: &str) -> bool {
-        self.styled_label_begin(classname);
+    pub fn button(&mut self, classname: &'static str, text: &str, style: ButtonStyle) -> bool {
+        self.button_label(classname, text, style);
         self.attr_focusable();
         if self.is_focused() {
             self.attr_reverse();
         }
-        self.styled_label_add_text("[");
-        self.styled_label_add_text(text);
-        self.styled_label_add_text("]");
-        self.styled_label_end();
-
         self.button_activated()
     }
 
@@ -1940,7 +2013,7 @@ impl<'a> Context<'a, '_> {
         if self.is_focused() {
             self.attr_reverse();
         }
-        self.styled_label_add_text(if *checked { "[▣ " } else { "[☐ " });
+        self.styled_label_add_text(if *checked { "[🗹 " } else { "[☐ " });
         self.styled_label_add_text(text);
         self.styled_label_add_text("]");
         self.styled_label_end();
@@ -1968,11 +2041,7 @@ impl<'a> Context<'a, '_> {
 
     /// Creates a text input field.
     /// Returns true if the text contents changed.
-    pub fn editline<'s, 'b: 's>(
-        &'s mut self,
-        classname: &'static str,
-        text: &'b mut dyn WriteableDocument,
-    ) -> bool {
+    pub fn editline(&mut self, classname: &'static str, text: &mut dyn WriteableDocument) -> bool {
         self.textarea_internal(classname, TextBufferPayload::Editline(text))
     }
 
@@ -2115,6 +2184,7 @@ impl<'a> Context<'a, '_> {
         let mut tb = tc.buffer.borrow_mut();
         let tb = &mut *tb;
         let mut make_cursor_visible = false;
+        let mut change_preferred_column = false;
 
         if self.tui.mouse_state != InputMouseState::None
             && self.tui.was_mouse_down_on_node(node_prev.id)
@@ -2221,7 +2291,8 @@ impl<'a> Context<'a, '_> {
                             let trackable = track_rect.height() - tc.thumb_height;
                             let delta_y = mouse.y - self.tui.mouse_down_position.y;
                             tc.scroll_offset.y = tc.scroll_offset_y_drag_start
-                                + ((delta_y * scrollable_height) / trackable);
+                                + (delta_y as i64 * scrollable_height as i64 / trackable as i64)
+                                    as CoordType;
                         }
                     }
                 }
@@ -2236,14 +2307,10 @@ impl<'a> Context<'a, '_> {
             return false;
         }
 
-        let mut write: &[u8] = b"";
-        let mut write_raw = false;
+        let mut write: &[u8] = &[];
 
         if let Some(input) = &self.input_text {
-            write = input.text.as_bytes();
-            write_raw = input.bracketed;
-            tc.preferred_column = tb.cursor_visual_pos().x;
-            make_cursor_visible = true;
+            write = input.as_bytes();
         } else if let Some(input) = &self.input_keyboard {
             let key = input.key();
             let modifiers = input.modifiers();
@@ -2426,7 +2493,7 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::LEFT => {
-                    let granularity = if modifiers.contains(kbmod::CTRL) {
+                    let granularity = if modifiers.contains(KBMOD_FOR_WORD_NAV) {
                         CursorMovement::Word
                     } else {
                         CursorMovement::Grapheme
@@ -2440,6 +2507,9 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::UP => {
+                    if single_line {
+                        return false;
+                    }
                     match modifiers {
                         kbmod::NONE => {
                             let mut x = tc.preferred_column;
@@ -2484,7 +2554,7 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::RIGHT => {
-                    let granularity = if modifiers.contains(kbmod::CTRL) {
+                    let granularity = if modifiers.contains(KBMOD_FOR_WORD_NAV) {
                         CursorMovement::Word
                     } else {
                         CursorMovement::Grapheme
@@ -2497,67 +2567,69 @@ impl<'a> Context<'a, '_> {
                         tb.cursor_move_delta(granularity, 1);
                     }
                 }
-                vk::DOWN => match modifiers {
-                    kbmod::NONE => {
-                        let mut x = tc.preferred_column;
-                        let mut y = tb.cursor_visual_pos().y + 1;
-
-                        // If there's a selection we put the cursor below it.
-                        if let Some((_, end)) = tb.selection_range() {
-                            x = end.visual_pos.x;
-                            y = end.visual_pos.y + 1;
-                            tc.preferred_column = x;
-                        }
-
-                        // If the cursor was already on the last line,
-                        // move it to the end of the buffer.
-                        if y >= tb.visual_line_count() {
-                            x = CoordType::MAX;
-                        }
-
-                        tb.cursor_move_to_visual(Point { x, y });
-
-                        // If we fell into the `if y >= tb.get_visual_line_count()` above, we wanted to
-                        // update the `preferred_column` but didn't know yet what it was. Now we know!
-                        if x == CoordType::MAX {
-                            tc.preferred_column = tb.cursor_visual_pos().x;
-                        }
+                vk::DOWN => {
+                    if single_line {
+                        return false;
                     }
-                    kbmod::CTRL => {
-                        tc.scroll_offset.y += 1;
-                        make_cursor_visible = false;
-                    }
-                    kbmod::SHIFT => {
-                        // If the cursor was already on the last line,
-                        // move it to the end of the buffer.
-                        if tb.cursor_visual_pos().y >= tb.visual_line_count() - 1 {
-                            tc.preferred_column = CoordType::MAX;
-                        }
+                    match modifiers {
+                        kbmod::NONE => {
+                            let mut x = tc.preferred_column;
+                            let mut y = tb.cursor_visual_pos().y + 1;
 
-                        tb.selection_update_visual(Point {
-                            x: tc.preferred_column,
-                            y: tb.cursor_visual_pos().y + 1,
-                        });
+                            // If there's a selection we put the cursor below it.
+                            if let Some((_, end)) = tb.selection_range() {
+                                x = end.visual_pos.x;
+                                y = end.visual_pos.y + 1;
+                                tc.preferred_column = x;
+                            }
 
-                        if tc.preferred_column == CoordType::MAX {
-                            tc.preferred_column = tb.cursor_visual_pos().x;
+                            // If the cursor was already on the last line,
+                            // move it to the end of the buffer.
+                            if y >= tb.visual_line_count() {
+                                x = CoordType::MAX;
+                            }
+
+                            tb.cursor_move_to_visual(Point { x, y });
+
+                            // If we fell into the `if y >= tb.get_visual_line_count()` above, we wanted to
+                            // update the `preferred_column` but didn't know yet what it was. Now we know!
+                            if x == CoordType::MAX {
+                                tc.preferred_column = tb.cursor_visual_pos().x;
+                            }
                         }
+                        kbmod::CTRL => {
+                            tc.scroll_offset.y += 1;
+                            make_cursor_visible = false;
+                        }
+                        kbmod::SHIFT => {
+                            // If the cursor was already on the last line,
+                            // move it to the end of the buffer.
+                            if tb.cursor_visual_pos().y >= tb.visual_line_count() - 1 {
+                                tc.preferred_column = CoordType::MAX;
+                            }
+
+                            tb.selection_update_visual(Point {
+                                x: tc.preferred_column,
+                                y: tb.cursor_visual_pos().y + 1,
+                            });
+
+                            if tc.preferred_column == CoordType::MAX {
+                                tc.preferred_column = tb.cursor_visual_pos().x;
+                            }
+                        }
+                        kbmod::CTRL_ALT => {
+                            // TODO: Add cursor above
+                        }
+                        _ => return false,
                     }
-                    kbmod::CTRL_ALT => {
-                        // TODO: Add cursor above
-                    }
-                    _ => return false,
-                },
+                }
                 vk::INSERT => match modifiers {
-                    kbmod::SHIFT => {
-                        write = &self.tui.clipboard;
-                        write_raw = true;
-                    }
-                    kbmod::CTRL => self.set_clipboard(tb.extract_selection(false)),
+                    kbmod::SHIFT => tb.paste(self.clipboard_ref()),
+                    kbmod::CTRL => tb.copy(self.clipboard_mut()),
                     _ => tb.set_overtype(!tb.is_overtype()),
                 },
                 vk::DELETE => match modifiers {
-                    kbmod::SHIFT => self.set_clipboard(tb.extract_selection(true)),
+                    kbmod::SHIFT => tb.cut(self.clipboard_mut()),
                     kbmod::CTRL => tb.delete(CursorMovement::Word, 1),
                     _ => tb.delete(CursorMovement::Grapheme, 1),
                 },
@@ -2565,23 +2637,36 @@ impl<'a> Context<'a, '_> {
                     kbmod::CTRL => tb.select_all(),
                     _ => return false,
                 },
+                vk::B => match modifiers {
+                    kbmod::ALT if cfg!(target_os = "macos") => {
+                        // On macOS, terminals commonly emit the Emacs style
+                        // Alt+B (ESC b) sequence for Alt+Left.
+                        tb.cursor_move_delta(CursorMovement::Word, -1);
+                    }
+                    _ => return false,
+                },
+                vk::F => match modifiers {
+                    kbmod::ALT if cfg!(target_os = "macos") => {
+                        // On macOS, terminals commonly emit the Emacs style
+                        // Alt+F (ESC f) sequence for Alt+Right.
+                        tb.cursor_move_delta(CursorMovement::Word, 1);
+                    }
+                    _ => return false,
+                },
                 vk::H => match modifiers {
                     kbmod::CTRL => tb.delete(CursorMovement::Word, -1),
                     _ => return false,
                 },
                 vk::X => match modifiers {
-                    kbmod::CTRL => self.set_clipboard(tb.extract_selection(true)),
+                    kbmod::CTRL => tb.cut(self.clipboard_mut()),
                     _ => return false,
                 },
                 vk::C => match modifiers {
-                    kbmod::CTRL => self.set_clipboard(tb.extract_selection(false)),
+                    kbmod::CTRL => tb.copy(self.clipboard_mut()),
                     _ => return false,
                 },
                 vk::V => match modifiers {
-                    kbmod::CTRL => {
-                        write = &self.tui.clipboard;
-                        write_raw = true;
-                    }
+                    kbmod::CTRL => tb.paste(self.clipboard_ref()),
                     _ => return false,
                 },
                 vk::Y => match modifiers {
@@ -2597,19 +2682,23 @@ impl<'a> Context<'a, '_> {
                 _ => return false,
             }
 
-            if !matches!(key, vk::PRIOR | vk::NEXT | vk::UP | vk::DOWN) {
-                tc.preferred_column = tb.cursor_visual_pos().x;
-            }
+            change_preferred_column = !matches!(key, vk::PRIOR | vk::NEXT | vk::UP | vk::DOWN);
         } else {
             return false;
         }
 
         if single_line && !write.is_empty() {
-            let (end, _) = unicode::newlines_forward(write, 0, 0, 1);
+            let (end, _) = simd::lines_fwd(write, 0, 0, 1);
             write = unicode::strip_newline(&write[..end]);
         }
         if !write.is_empty() {
-            tb.write(write, write_raw);
+            tb.write_canon(write);
+            change_preferred_column = true;
+            make_cursor_visible = true;
+        }
+
+        if change_preferred_column {
+            tc.preferred_column = tb.cursor_visual_pos().x;
         }
 
         self.set_input_consumed();
@@ -2745,7 +2834,9 @@ impl<'a> Context<'a, '_> {
                                     let delta_y =
                                         self.tui.mouse_position.y - self.tui.mouse_down_position.y;
                                     sc.scroll_offset.y = sc.scroll_offset_y_drag_start
-                                        + ((delta_y * scrollable_height) / trackable);
+                                        + (delta_y as i64 * scrollable_height as i64
+                                            / trackable as i64)
+                                            as CoordType;
                                 }
 
                                 self.set_input_consumed();
@@ -2876,6 +2967,23 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    /// [`Context::steal_focus`], but for a list view.
+    ///
+    /// This exists, because didn't want to figure out how to get
+    /// [`Context::styled_list_item_end`] to recognize a regular,
+    /// programmatic focus steal.
+    pub fn list_item_steal_focus(&mut self) {
+        self.steal_focus();
+
+        match &mut self.tree.current_node.borrow_mut().content {
+            NodeContent::List(content) => {
+                content.selected = self.tree.last_node.borrow().id;
+                content.selected_node = Some(self.tree.last_node);
+            }
+            _ => unreachable!(),
+        }
+    }
+
     /// Ends the current list block.
     pub fn list_end(&mut self) {
         self.block_end();
@@ -2995,15 +3103,21 @@ impl<'a> Context<'a, '_> {
     ///
     /// Returns true if the menu is open. Continue appending items to it in that case.
     pub fn menubar_menu_begin(&mut self, text: &str, accelerator: char) -> bool {
+        let accelerator = if cfg!(target_os = "macos") { '\0' } else { accelerator };
         let mixin = self.tree.current_node.borrow().child_count as u64;
         self.next_block_id_mixin(mixin);
 
-        self.menubar_label(text, accelerator, None);
+        self.button_label(
+            "menu_button",
+            text,
+            ButtonStyle::default().accelerator(accelerator).bracketed(false),
+        );
         self.attr_focusable();
         self.attr_padding(Rect::two(0, 1));
 
         let contains_focus = self.contains_focus();
-        let keyboard_focus = !contains_focus
+        let keyboard_focus = accelerator != '\0'
+            && !contains_focus
             && self.consume_shortcut(kbmod::ALT | InputKey::new(accelerator as u32));
 
         if contains_focus || keyboard_focus {
@@ -3072,7 +3186,11 @@ impl<'a> Context<'a, '_> {
         let clicked =
             self.button_activated() || self.consume_shortcut(InputKey::new(accelerator as u32));
 
-        self.menubar_label(text, accelerator, Some(checked));
+        self.button_label(
+            "menu_checkbox",
+            text,
+            ButtonStyle::default().bracketed(false).checked(checked).accelerator(accelerator),
+        );
         self.menubar_shortcut(shortcut);
 
         if clicked {
@@ -3090,9 +3208,11 @@ impl<'a> Context<'a, '_> {
 
         if !self.input_consumed
             && let Some(key) = self.input_keyboard
-            && matches!(key, vk::ESCAPE | vk::UP | vk::DOWN | vk::LEFT | vk::RIGHT)
+            && matches!(key, vk::ESCAPE | vk::UP | vk::DOWN)
         {
             if matches!(key, vk::UP | vk::DOWN) {
+                // If the focus is on the menubar, and the user presses up/down,
+                // focus the first/last item of the flyout respectively.
                 let ln = self.tree.last_node.borrow();
                 if self.tui.is_node_focused(ln.parent.map_or(0, |n| n.borrow().id)) {
                     let selected_next =
@@ -3103,14 +3223,9 @@ impl<'a> Context<'a, '_> {
                     }
                 }
             } else if self.contains_focus() {
-                if key == vk::ESCAPE {
-                    // TODO: This should reassign the previous focused path.
-                    self.needs_rerender();
-                    self.set_input_consumed();
-                    Tui::clean_node_path(&mut self.tui.focused_node_path);
-                } else if !self.is_focused() {
-                    self.tui.pop_focusable_node(2);
-                }
+                // Otherwise, if the menu is the focused one and the
+                // user presses Escape, pass focus back to the menubar.
+                self.tui.pop_focusable_node(1);
             }
         }
     }
@@ -3120,51 +3235,64 @@ impl<'a> Context<'a, '_> {
         self.table_end();
     }
 
-    fn menubar_label(&mut self, text: &str, accelerator: char, checked: Option<bool>) {
-        if !accelerator.is_ascii_uppercase() {
-            self.label("label", text);
-            return;
+    /// Renders a button label with an optional accelerator character
+    /// May also renders a checkbox or square brackets for inline buttons
+    fn button_label(&mut self, classname: &'static str, text: &str, style: ButtonStyle) {
+        // Label prefix
+        self.styled_label_begin(classname);
+        if style.bracketed {
+            self.styled_label_add_text("[");
         }
+        if let Some(checked) = style.checked {
+            self.styled_label_add_text(if checked { "🗹 " } else { "  " });
+        }
+        // Label text
+        match style.accelerator {
+            Some(accelerator) if accelerator.is_ascii_uppercase() => {
+                // Complex case:
+                // Locate the offset of the accelerator character in the label text
+                let mut off = text.len();
+                for (i, c) in text.bytes().enumerate() {
+                    // Perfect match (uppercase character) --> stop
+                    if c as char == accelerator {
+                        off = i;
+                        break;
+                    }
+                    // Inexact match (lowercase character) --> use first hit
+                    if (c & !0x20) as char == accelerator && off == text.len() {
+                        off = i;
+                    }
+                }
 
-        let mut off = text.len();
-
-        for (i, c) in text.bytes().enumerate() {
-            // Perfect match (uppercase character) --> stop
-            if c as char == accelerator {
-                off = i;
-                break;
+                if off < text.len() {
+                    // Add an underline to the accelerator.
+                    self.styled_label_add_text(&text[..off]);
+                    self.styled_label_set_attributes(Attributes::Underlined);
+                    self.styled_label_add_text(&text[off..off + 1]);
+                    self.styled_label_set_attributes(Attributes::None);
+                    self.styled_label_add_text(&text[off + 1..]);
+                } else {
+                    // Add the accelerator in parentheses and underline it.
+                    let ch = accelerator as u8;
+                    self.styled_label_add_text(text);
+                    self.styled_label_add_text("(");
+                    self.styled_label_set_attributes(Attributes::Underlined);
+                    self.styled_label_add_text(unsafe { str_from_raw_parts(&ch, 1) });
+                    self.styled_label_set_attributes(Attributes::None);
+                    self.styled_label_add_text(")");
+                }
             }
-            // Inexact match (lowercase character) --> use first hit
-            if (c & !0x20) as char == accelerator && off == text.len() {
-                off = i;
+            _ => {
+                // Simple case:
+                // no accelerator character
+                self.styled_label_add_text(text);
             }
         }
-
-        self.styled_label_begin("label");
-        if let Some(checked) = checked {
-            self.styled_label_add_text(if checked { "▣ " } else { "  " });
+        // Label postfix
+        if style.bracketed {
+            self.styled_label_add_text("]");
         }
-
-        if off < text.len() {
-            // Add an underline to the accelerator.
-            self.styled_label_add_text(&text[..off]);
-            self.styled_label_set_attributes(Attributes::Underlined);
-            self.styled_label_add_text(&text[off..off + 1]);
-            self.styled_label_set_attributes(Attributes::None);
-            self.styled_label_add_text(&text[off + 1..]);
-        } else {
-            // Add the accelerator in parentheses and underline it.
-            let ch = accelerator as u8;
-            self.styled_label_add_text(text);
-            self.styled_label_add_text("(");
-            self.styled_label_set_attributes(Attributes::Underlined);
-            self.styled_label_add_text(unsafe { str_from_raw_parts(&ch, 1) });
-            self.styled_label_set_attributes(Attributes::None);
-            self.styled_label_add_text(")");
-        }
-
         self.styled_label_end();
-        self.attr_padding(Rect { left: 0, top: 0, right: 2, bottom: 0 });
     }
 
     fn menubar_shortcut(&mut self, shortcut: InputKey) {
@@ -3190,7 +3318,7 @@ impl<'a> Context<'a, '_> {
             self.block_begin("shortcut");
             self.block_end();
         }
-        self.attr_padding(Rect { left: 0, top: 0, right: 2, bottom: 0 });
+        self.attr_padding(Rect { left: 2, top: 0, right: 2, bottom: 0 });
     }
 }
 
@@ -3317,9 +3445,10 @@ impl<'a> Tree<'a> {
     /// Completes the current node and moves focus to the parent.
     fn pop_stack(&mut self) {
         let current_node = self.current_node.borrow();
-        let stack_parent = current_node.stack_parent.unwrap();
-        self.last_node = self.current_node;
-        self.current_node = stack_parent;
+        if let Some(stack_parent) = current_node.stack_parent {
+            self.last_node = self.current_node;
+            self.current_node = stack_parent;
+        }
     }
 
     fn iterate_siblings(
@@ -3332,8 +3461,22 @@ impl<'a> Tree<'a> {
         })
     }
 
+    fn iterate_siblings_rev(
+        mut node: Option<&'a NodeCell<'a>>,
+    ) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
+        iter::from_fn(move || {
+            let n = node?;
+            node = n.borrow().siblings.prev;
+            Some(n)
+        })
+    }
+
     fn iterate_roots(&self) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
         Self::iterate_siblings(Some(self.root_first))
+    }
+
+    fn iterate_roots_rev(&self) -> impl Iterator<Item = &'a NodeCell<'a>> + use<'a> {
+        Self::iterate_siblings_rev(Some(self.root_last))
     }
 
     /// Visits all nodes under and including `root` in depth order.

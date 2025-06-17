@@ -30,14 +30,16 @@ const ALLOC_CHUNK_SIZE: usize = 64 * KIBI;
 ///
 /// The biggest benefit though is that it sometimes massively simplifies lifetime
 /// and memory management. This can best be seen by this project's UI code, which
-/// uses an arena to allocate a tree of UI nodes. This is infameously difficult
+/// uses an arena to allocate a tree of UI nodes. This is infamously difficult
 /// to do in Rust, but not so when you got an arena allocator:
 /// All nodes have the same lifetime, so you can just use references.
 ///
-/// # Safety
+/// <div class="warning">
 ///
 /// **Do not** push objects into the arena that require destructors.
 /// Destructors are not executed. Use a pool allocator for that.
+///
+/// </div>
 pub struct Arena {
     base: NonNull<u8>,
     capacity: usize,
@@ -62,11 +64,11 @@ impl Arena {
         }
     }
 
-    pub fn new(capacity: usize) -> apperr::Result<Arena> {
+    pub fn new(capacity: usize) -> apperr::Result<Self> {
         let capacity = (capacity.max(1) + ALLOC_CHUNK_SIZE - 1) & !(ALLOC_CHUNK_SIZE - 1);
         let base = unsafe { sys::virtual_reserve(capacity)? };
 
-        Ok(Arena {
+        Ok(Self {
             base,
             capacity,
             commit: Cell::new(0),
@@ -177,7 +179,7 @@ impl Drop for Arena {
 
 impl Default for Arena {
     fn default() -> Self {
-        Arena::empty()
+        Self::empty()
     }
 }
 

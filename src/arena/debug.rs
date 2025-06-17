@@ -44,7 +44,7 @@ pub enum Arena {
 
 impl Drop for Arena {
     fn drop(&mut self) {
-        if let Arena::Delegated { delegate, borrow } = self {
+        if let Self::Delegated { delegate, borrow } = self {
             let borrows = delegate.borrows.get();
             assert_eq!(*borrow, borrows);
             delegate.borrows.set(borrows - 1);
@@ -63,11 +63,11 @@ impl Arena {
         Self::Owned { arena: release::Arena::empty() }
     }
 
-    pub fn new(capacity: usize) -> apperr::Result<Arena> {
+    pub fn new(capacity: usize) -> apperr::Result<Self> {
         Ok(Self::Owned { arena: release::Arena::new(capacity)? })
     }
 
-    pub(super) fn delegated(delegate: &release::Arena) -> Arena {
+    pub(super) fn delegated(delegate: &release::Arena) -> Self {
         let borrow = delegate.borrows.get() + 1;
         delegate.borrows.set(borrow);
         Self::Delegated { delegate: unsafe { mem::transmute(delegate) }, borrow }
@@ -76,22 +76,22 @@ impl Arena {
     #[inline]
     pub(super) fn delegate_target(&self) -> &release::Arena {
         match *self {
-            Arena::Delegated { delegate, borrow } => {
+            Self::Delegated { delegate, borrow } => {
                 assert!(
                     borrow == delegate.borrows.get(),
                     "Arena already borrowed by a newer ScratchArena"
                 );
                 delegate
             }
-            Arena::Owned { ref arena } => arena,
+            Self::Owned { ref arena } => arena,
         }
     }
 
     #[inline]
     pub(super) fn delegate_target_unchecked(&self) -> &release::Arena {
         match self {
-            Arena::Delegated { delegate, .. } => delegate,
-            Arena::Owned { arena } => arena,
+            Self::Delegated { delegate, .. } => delegate,
+            Self::Owned { arena } => arena,
         }
     }
 

@@ -6,7 +6,6 @@ use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::{Path, PathBuf};
 
-use edit::buffer::TextBuffer;
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::tui::*;
@@ -20,7 +19,7 @@ pub struct FormatApperr(apperr::Error);
 
 impl From<apperr::Error> for FormatApperr {
     fn from(err: apperr::Error) -> Self {
-        FormatApperr(err)
+        Self(err)
     }
 }
 
@@ -41,7 +40,15 @@ pub struct DisplayablePathBuf {
 }
 
 impl DisplayablePathBuf {
-    pub fn new(value: PathBuf) -> Self {
+    #[allow(dead_code, reason = "only used on Windows")]
+    pub fn from_string(string: String) -> Self {
+        let str = Cow::Borrowed(string.as_str());
+        let str = unsafe { mem::transmute::<Cow<'_, str>, Cow<'_, str>>(str) };
+        let value = PathBuf::from(string);
+        Self { value, str }
+    }
+
+    pub fn from_path(value: PathBuf) -> Self {
         let str = value.to_string_lossy();
         let str = unsafe { mem::transmute::<Cow<'_, str>, Cow<'_, str>>(str) };
         Self { value, str }
@@ -68,19 +75,19 @@ impl Default for DisplayablePathBuf {
 
 impl Clone for DisplayablePathBuf {
     fn clone(&self) -> Self {
-        DisplayablePathBuf::new(self.value.clone())
+        Self::from_path(self.value.clone())
     }
 }
 
 impl From<OsString> for DisplayablePathBuf {
-    fn from(s: OsString) -> DisplayablePathBuf {
-        DisplayablePathBuf::new(PathBuf::from(s))
+    fn from(s: OsString) -> Self {
+        Self::from_path(PathBuf::from(s))
     }
 }
 
 impl<T: ?Sized + AsRef<OsStr>> From<&T> for DisplayablePathBuf {
-    fn from(s: &T) -> DisplayablePathBuf {
-        DisplayablePathBuf::new(PathBuf::from(s))
+    fn from(s: &T) -> Self {
+        Self::from_path(PathBuf::from(s))
     }
 }
 
@@ -126,9 +133,11 @@ pub struct State {
 
     pub wants_file_picker: StateFilePicker,
     pub file_picker_pending_dir: DisplayablePathBuf,
+    pub file_picker_pending_dir_revision: u64, // Bumped every time `file_picker_pending_dir` changes.
     pub file_picker_pending_name: PathBuf,
-    pub file_picker_entries: Option<Vec<DisplayablePathBuf>>,
-    pub file_picker_overwrite_warning: Option<PathBuf>, // The path the warning is about.
+    pub file_picker_entries: Option<[Vec<DisplayablePathBuf>; 3]>, // ["..", directories, files]
+    pub file_picker_overwrite_warning: Option<PathBuf>,            // The path the warning is about.
+    pub file_picker_autocomplete: Vec<DisplayablePathBuf>,
 
     pub wants_search: StateSearch,
     pub search_needle: String,
@@ -136,32 +145,30 @@ pub struct State {
     pub search_options: buffer::SearchOptions,
     pub search_success: bool,
 
-    pub wants_save: bool,
-    pub wants_statusbar_focus: bool,
     pub wants_encoding_picker: bool,
     pub wants_encoding_change: StateEncodingChange,
+    pub encoding_picker_needle: String,
+    pub encoding_picker_results: Option<Vec<icu::Encoding>>,
+
+    pub wants_save: bool,
+    pub wants_statusbar_focus: bool,
     pub wants_indentation_picker: bool,
-    pub wants_document_picker: bool,
+    pub wants_go_to_file: bool,
     pub wants_about: bool,
     pub wants_close: bool,
     pub wants_exit: bool,
+    pub wants_goto: bool,
+    pub goto_target: String,
+    pub goto_invalid: bool,
 
     pub osc_title_filename: String,
-    pub osc_clipboard_seen_generation: u32,
-    pub osc_clipboard_send_generation: u32,
+    pub osc_clipboard_sync: bool,
     pub osc_clipboard_always_send: bool,
     pub exit: bool,
 }
 
 impl State {
     pub fn new() -> apperr::Result<Self> {
-        let buffer = TextBuffer::new_rc(false)?;
-        {
-            let mut tb = buffer.borrow_mut();
-            tb.set_margin_enabled(true);
-            tb.set_line_highlight_enabled(true);
-        }
-
         Ok(Self {
             menubar_color_bg: 0,
             menubar_color_fg: 0,
@@ -174,9 +181,11 @@ impl State {
 
             wants_file_picker: StateFilePicker::None,
             file_picker_pending_dir: Default::default(),
+            file_picker_pending_dir_revision: 0,
             file_picker_pending_name: Default::default(),
             file_picker_entries: None,
             file_picker_overwrite_warning: None,
+            file_picker_autocomplete: Vec::new(),
 
             wants_search: StateSearch { kind: StateSearchKind::Hidden, focus: false },
             search_needle: Default::default(),
@@ -184,19 +193,24 @@ impl State {
             search_options: Default::default(),
             search_success: true,
 
+            wants_encoding_picker: false,
+            encoding_picker_needle: Default::default(),
+            encoding_picker_results: Default::default(),
+
             wants_save: false,
             wants_statusbar_focus: false,
-            wants_encoding_picker: false,
             wants_encoding_change: StateEncodingChange::None,
             wants_indentation_picker: false,
-            wants_document_picker: false,
+            wants_go_to_file: false,
             wants_about: false,
             wants_close: false,
             wants_exit: false,
+            wants_goto: false,
+            goto_target: Default::default(),
+            goto_invalid: false,
 
             osc_title_filename: Default::default(),
-            osc_clipboard_seen_generation: 0,
-            osc_clipboard_send_generation: 0,
+            osc_clipboard_sync: false,
             osc_clipboard_always_send: false,
             exit: false,
         })
@@ -242,7 +256,7 @@ pub fn draw_error_log(ctx: &mut Context, state: &mut State) {
         }
         ctx.block_end();
 
-        if ctx.button("ok", loc(LocId::Ok)) {
+        if ctx.button("ok", loc(LocId::Ok), ButtonStyle::default()) {
             state.error_log_count = 0;
         }
         ctx.attr_position(Position::Center);

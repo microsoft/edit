@@ -15,14 +15,33 @@ use crate::buffer::TextBuffer;
 use crate::unicode::Utf8Chars;
 use crate::{apperr, arena_format, sys};
 
-static mut ENCODINGS: Vec<&'static str> = Vec::new();
+#[derive(Clone, Copy)]
+pub struct Encoding {
+    pub label: &'static str,
+    pub canonical: &'static str,
+}
+
+pub struct Encodings {
+    pub preferred: &'static [Encoding],
+    pub all: &'static [Encoding],
+}
+
+static mut ENCODINGS: Encodings = Encodings { preferred: &[], all: &[] };
 
 /// Returns a list of encodings ICU supports.
-pub fn get_available_encodings() -> &'static [&'static str] {
+pub fn get_available_encodings() -> &'static Encodings {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     unsafe {
-        if ENCODINGS.is_empty() {
+        if ENCODINGS.all.is_empty() {
+            let scratch = scratch_arena(None);
+            let mut preferred = Vec::new_in(&*scratch);
+            let mut alternative = Vec::new_in(&*scratch);
+
+            // These encodings are always available.
+            preferred.push(Encoding { label: "UTF-8", canonical: "UTF-8" });
+            preferred.push(Encoding { label: "UTF-8 BOM", canonical: "UTF-8 BOM" });
+
             if let Ok(f) = init_if_needed() {
                 let mut n = 0;
                 loop {
@@ -30,15 +49,44 @@ pub fn get_available_encodings() -> &'static [&'static str] {
                     if name.is_null() {
                         break;
                     }
-                    ENCODINGS.push(CStr::from_ptr(name).to_str().unwrap_unchecked());
+
                     n += 1;
+
+                    let name = CStr::from_ptr(name).to_str().unwrap_unchecked();
+                    // We have already pushed UTF-8 above and can skip it.
+                    // There is no need to filter UTF-8 BOM here,
+                    // since ICU does not distinguish it from UTF-8.
+                    if name.is_empty() || name == "UTF-8" {
+                        continue;
+                    }
+
+                    let mut status = icu_ffi::U_ZERO_ERROR;
+                    let mime = (f.ucnv_getStandardName)(
+                        name.as_ptr(),
+                        c"MIME".as_ptr() as *const _,
+                        &mut status,
+                    );
+                    if !mime.is_null() && status.is_success() {
+                        let mime = CStr::from_ptr(mime).to_str().unwrap_unchecked();
+                        preferred.push(Encoding { label: mime, canonical: name });
+                    } else {
+                        alternative.push(Encoding { label: name, canonical: name });
+                    }
                 }
             }
 
-            if ENCODINGS.is_empty() {
-                ENCODINGS.push("UTF-8");
-            }
+            let preferred_len = preferred.len();
+
+            // Combine the preferred and alternative encodings into a single list.
+            let mut all = Vec::with_capacity(preferred.len() + alternative.len());
+            all.extend(preferred);
+            all.extend(alternative);
+
+            let all = all.leak();
+            ENCODINGS.preferred = &all[..preferred_len];
+            ENCODINGS.all = &all[..];
         }
+
         &ENCODINGS
     }
 }
@@ -198,6 +246,7 @@ impl<'pivot> Converter<'pivot> {
 const CACHE_SIZE: usize = 64;
 
 /// Caches a chunk of TextBuffer contents (UTF-8) in UTF-16 format.
+#[repr(C)]
 struct Cache {
     /// The translated text. Contains [`Cache::utf16_len`]-many valid items.
     utf16: [u16; CACHE_SIZE],
@@ -220,6 +269,7 @@ struct Cache {
     utf8_range: Range<usize>,
 }
 
+#[repr(C)]
 struct DoubleCache {
     cache: [Cache; 2],
     /// You can consider this a 1 bit index into `cache`.
@@ -283,10 +333,7 @@ impl Text {
         let ut = unsafe { &mut *ptr };
         ut.p_funcs = &FUNCS;
         ut.context = tb as *const TextBuffer as *mut _;
-        ut.a = tb.generation() as i64;
-
-        // ICU unfortunately expects a `UText` instance to have valid contents after construction.
-        utext_access(ut, 0, true);
+        ut.a = -1;
 
         Ok(Self(ut))
     }
@@ -321,26 +368,14 @@ extern "C" fn utext_clone(
         return null_mut();
     }
 
+    // TODO: I'm somewhat unsure whether we have to preserve the `chunk_offset`.
+    // We can't blindly copy chunk contents and the `Cache` in `ut.p_extra`,
+    // because they may contain dirty contents (different `TextBuffer` generation).
     unsafe {
         let ut = &mut *ut_ptr;
-        let src_double_cache = double_cache_from_utext(src);
-        let dst_double_cache = double_cache_from_utext(ut);
-        let src_cache = &src_double_cache.cache[src_double_cache.mru as usize];
-        let dst_cache = &mut dst_double_cache.cache[dst_double_cache.mru as usize];
-
-        ut.provider_properties = src.provider_properties;
-        ut.chunk_native_limit = src.chunk_native_limit;
-        ut.native_indexing_limit = src.native_indexing_limit;
-        ut.chunk_native_start = src.chunk_native_start;
-        ut.chunk_offset = src.chunk_offset;
-        ut.chunk_length = src.chunk_length;
-        ut.chunk_contents = dst_cache.utf16.as_ptr();
         ut.p_funcs = src.p_funcs;
         ut.context = src.context;
-        ut.a = src.a;
-
-        // I wonder if it would make sense to use a Cow here. But probably not.
-        std::ptr::copy_nonoverlapping(src_cache, dst_cache, 1);
+        ut.a = -1;
     }
 
     ut_ptr
@@ -622,17 +657,25 @@ impl Regex {
     /// # Safety
     ///
     /// The caller must ensure that the given `Text` outlives the `Regex` instance.
-    pub unsafe fn set_text(&mut self, text: &Text) {
+    pub unsafe fn set_text(&mut self, text: &mut Text, offset: usize) {
+        // Get `utext_access_impl` to detect the `TextBuffer::generation` change,
+        // and refresh its contents. This ensures that ICU doesn't reuse
+        // stale `UText::chunk_contents`, as it has no way tell that it's stale.
+        utext_access(text.0, offset as i64, true);
+
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
         unsafe { (f.uregex_setUText)(self.0, text.0 as *const _ as *mut _, &mut status) };
+        // `uregex_setUText` resets the regex to the start of the text.
+        // Because of this, we must also call `uregex_reset64`.
+        unsafe { (f.uregex_reset64)(self.0, offset as i64, &mut status) };
     }
 
     /// Sets the regex to the absolute offset in the underlying text.
-    pub fn reset(&mut self, index: usize) {
+    pub fn reset(&mut self, offset: usize) {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
-        unsafe { (f.uregex_reset64)(self.0, index as i64, &mut status) };
+        unsafe { (f.uregex_reset64)(self.0, offset as i64, &mut status) };
     }
 
     /// Gets captured group count.
@@ -693,16 +736,25 @@ static mut ROOT_COLLATOR: Option<*mut icu_ffi::UCollator> = None;
 
 /// Compares two UTF-8 strings for sorting using ICU's collation algorithm.
 pub fn compare_strings(a: &[u8], b: &[u8]) -> Ordering {
+    #[cold]
+    fn init() {
+        unsafe {
+            let mut coll = null_mut();
+
+            if let Ok(f) = init_if_needed() {
+                let mut status = icu_ffi::U_ZERO_ERROR;
+                coll = (f.ucol_open)(c"".as_ptr(), &mut status);
+            }
+
+            ROOT_COLLATOR = Some(coll);
+        }
+    }
+
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     let coll = unsafe {
         if ROOT_COLLATOR.is_none() {
-            ROOT_COLLATOR = Some(if let Ok(f) = init_if_needed() {
-                let mut status = icu_ffi::U_ZERO_ERROR;
-                (f.ucol_open)(c"".as_ptr(), &mut status)
-            } else {
-                null_mut()
-            });
+            init();
         }
         ROOT_COLLATOR.unwrap_unchecked()
     };
@@ -842,6 +894,15 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
     result
 }
 
+// NOTE:
+// To keep this neat, fields are ordered by prefix (= `ucol_` before `uregex_`),
+// followed by functions in this order:
+// * Static methods (e.g. `ucnv_getAvailableName`)
+// * Constructors (e.g. `ucnv_open`)
+// * Destructors (e.g. `ucnv_close`)
+// * Methods, grouped by relationship
+//   (e.g. `uregex_start64` and `uregex_end64` are near each other)
+//
 // WARNING:
 // The order of the fields MUST match the order of strings in the following two arrays.
 #[allow(non_snake_case)]
@@ -849,16 +910,19 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
 struct LibraryFunctions {
     // LIBICUUC_PROC_NAMES
     u_errorName: icu_ffi::u_errorName,
+    ucasemap_open: icu_ffi::ucasemap_open,
+    ucasemap_utf8FoldCase: icu_ffi::ucasemap_utf8FoldCase,
     ucnv_getAvailableName: icu_ffi::ucnv_getAvailableName,
+    ucnv_getStandardName: icu_ffi::ucnv_getStandardName,
     ucnv_open: icu_ffi::ucnv_open,
     ucnv_close: icu_ffi::ucnv_close,
     ucnv_convertEx: icu_ffi::ucnv_convertEx,
-    ucasemap_open: icu_ffi::ucasemap_open,
-    ucasemap_utf8FoldCase: icu_ffi::ucasemap_utf8FoldCase,
     utext_setup: icu_ffi::utext_setup,
     utext_close: icu_ffi::utext_close,
 
     // LIBICUI18N_PROC_NAMES
+    ucol_open: icu_ffi::ucol_open,
+    ucol_strcollUTF8: icu_ffi::ucol_strcollUTF8,
     uregex_open: icu_ffi::uregex_open,
     uregex_close: icu_ffi::uregex_close,
     uregex_setTimeLimit: icu_ffi::uregex_setTimeLimit,
@@ -868,25 +932,26 @@ struct LibraryFunctions {
     uregex_groupCount: icu_ffi::uregex_groupCount,
     uregex_start64: icu_ffi::uregex_start64,
     uregex_end64: icu_ffi::uregex_end64,
-    ucol_open: icu_ffi::ucol_open,
-    ucol_strcollUTF8: icu_ffi::ucol_strcollUTF8,
 }
 
-const LIBICUUC_PROC_NAMES: [&CStr; 9] = [
-    // Found in libicuuc.so on UNIX, icuuc.dll/icu.dll on Windows.
+// Found in libicuuc.so on UNIX, icuuc.dll/icu.dll on Windows.
+const LIBICUUC_PROC_NAMES: [&CStr; 10] = [
     c"u_errorName",
+    c"ucasemap_open",
+    c"ucasemap_utf8FoldCase",
     c"ucnv_getAvailableName",
+    c"ucnv_getStandardName",
     c"ucnv_open",
     c"ucnv_close",
     c"ucnv_convertEx",
-    c"ucasemap_open",
-    c"ucasemap_utf8FoldCase",
     c"utext_setup",
     c"utext_close",
 ];
 
+// Found in libicui18n.so on UNIX, icuin.dll/icu.dll on Windows.
 const LIBICUI18N_PROC_NAMES: [&CStr; 11] = [
-    // Found in libicui18n.so on UNIX, icuin.dll/icu.dll on Windows.
+    c"ucol_open",
+    c"ucol_strcollUTF8",
     c"uregex_open",
     c"uregex_close",
     c"uregex_setTimeLimit",
@@ -896,8 +961,6 @@ const LIBICUI18N_PROC_NAMES: [&CStr; 11] = [
     c"uregex_groupCount",
     c"uregex_start64",
     c"uregex_end64",
-    c"ucol_open",
-    c"ucol_strcollUTF8",
 ];
 
 enum LibraryFunctionsState {
@@ -1037,7 +1100,13 @@ mod icu_ffi {
 
     pub struct UConverter;
 
-    pub type ucnv_getAvailableName = unsafe extern "C" fn(n: i32) -> *mut c_char;
+    pub type ucnv_getAvailableName = unsafe extern "C" fn(n: i32) -> *const c_char;
+
+    pub type ucnv_getStandardName = unsafe extern "C" fn(
+        name: *const u8,
+        standard: *const u8,
+        status: &mut UErrorCode,
+    ) -> *const c_char;
 
     pub type ucnv_open =
         unsafe extern "C" fn(converter_name: *const u8, status: &mut UErrorCode) -> *mut UConverter;

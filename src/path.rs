@@ -3,15 +3,13 @@
 
 //! Path related helpers.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Component, MAIN_SEPARATOR_STR, Path, PathBuf};
 
 /// Normalizes a given path by removing redundant components.
 /// The given path must be absolute (e.g. by joining it with the current working directory).
 pub fn normalize(path: &Path) -> PathBuf {
-    debug_assert!(path.is_absolute());
-
-    let mut res = PathBuf::with_capacity(path.as_os_str().len());
+    let mut res = PathBuf::with_capacity(path.as_os_str().as_encoded_bytes().len());
     let mut root_len = 0;
 
     for component in path.components() {
@@ -19,7 +17,7 @@ pub fn normalize(path: &Path) -> PathBuf {
             Component::Prefix(p) => res.push(p.as_os_str()),
             Component::RootDir => {
                 res.push(OsStr::new(MAIN_SEPARATOR_STR));
-                root_len = res.as_os_str().len();
+                root_len = res.as_os_str().as_encoded_bytes().len();
             }
             Component::CurDir => {}
             Component::ParentDir => {
@@ -30,7 +28,13 @@ pub fn normalize(path: &Path) -> PathBuf {
                     // Ensure we don't pop the root directory
                     && len >= root_len
                 {
-                    res.as_mut_os_string().truncate(len);
+                    // Pop the last component from `res`.
+                    //
+                    // This can be replaced with a plain `res.as_mut_os_string().truncate(len)`
+                    // once `os_string_truncate` is stabilized (#133262).
+                    let mut bytes = res.into_os_string().into_encoded_bytes();
+                    bytes.truncate(len);
+                    res = PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(bytes) });
                 }
             }
             Component::Normal(p) => res.push(p),
