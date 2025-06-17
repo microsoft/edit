@@ -1255,7 +1255,15 @@ impl TextBuffer {
             // Unescape any escaped characters.
             while off < replacement.len() && replacement[off] == b'\\' {
                 off += 2;
-                text.push(match replacement.get(off - 1).map_or(b'\\', |&c| c) {
+
+                // If this backslash is the last character (e.g. because
+                // `replacement` is just 1 byte long, holding just b"\\"),
+                // we can't unescape it. In that case, we map it to `b'\\'` here.
+                // This results in us appending a literal backslash to the text.
+                let ch = replacement.get(off - 1).map_or(b'\\', |&c| c);
+
+                // Unescape and append the character.
+                text.push(match ch {
                     b'n' => b'\n',
                     b'r' => b'\r',
                     b't' => b'\t',
