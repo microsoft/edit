@@ -136,6 +136,11 @@ pub struct SearchOptions {
     pub use_regex: bool,
 }
 
+enum RegexReplacement<'a> {
+    Group(i32),
+    Text(Vec<u8, &'a Arena>),
+}
+
 /// Caches the start and length of the active edit line for a single edit.
 /// This helps us avoid having to remeasure the buffer after an edit.
 struct ActiveEditLineInfo {
@@ -1078,15 +1083,18 @@ impl TextBuffer {
         &mut self,
         pattern: &str,
         options: SearchOptions,
-        replacement: &str,
+        replacement: &[u8],
     ) -> apperr::Result<()> {
         // Editors traditionally replace the previous search hit, not the next possible one.
-        if let (Some(search), Some(..)) = (&mut self.search, &self.selection) {
-            let search = search.get_mut();
+        if let (Some(search), Some(..)) = (&self.search, &self.selection) {
+            let search = unsafe { &mut *search.get() };
             if search.selection_generation == self.selection_generation {
                 let scratch = scratch_arena(None);
-                let processed_replacement = self.get_regex_replacement(&scratch, replacement);
-                self.write(processed_replacement.as_bytes(), self.cursor, true);
+                let parsed_replacements =
+                    Self::find_parse_replacement(&scratch, &mut *search, replacement);
+                let replacement =
+                    self.find_fill_replacement(&mut *search, replacement, &parsed_replacements);
+                self.write(&replacement, self.cursor, true);
             }
         }
 
@@ -1098,11 +1106,12 @@ impl TextBuffer {
         &mut self,
         pattern: &str,
         options: SearchOptions,
-        replacement: &str,
+        replacement: &[u8],
     ) -> apperr::Result<()> {
         let scratch = scratch_arena(None);
         let mut search = self.find_construct_search(pattern, options)?;
         let mut offset = 0;
+        let parsed_replacements = Self::find_parse_replacement(&scratch, &mut search, replacement);
 
         loop {
             self.find_select_next(&mut search, offset, false);
@@ -1110,8 +1119,9 @@ impl TextBuffer {
                 break;
             }
 
-            let processed_replacement = self.get_regex_replacement(&scratch, replacement);
-            self.write(processed_replacement.as_bytes(), self.cursor, true);
+            let replacement =
+                self.find_fill_replacement(&mut search, replacement, &parsed_replacements);
+            self.write(&replacement, self.cursor, true);
             offset = self.cursor.offset;
         }
 
@@ -1217,6 +1227,122 @@ impl TextBuffer {
             search.no_matches = true;
             self.set_selection(None)
         };
+    }
+
+    fn find_parse_replacement<'a>(
+        arena: &'a Arena,
+        search: &mut ActiveSearch,
+        replacement: &[u8],
+    ) -> Vec<RegexReplacement<'a>, &'a Arena> {
+        let mut res = Vec::new_in(arena);
+
+        if !search.options.use_regex {
+            return res;
+        }
+
+        let group_count = search.regex.group_count();
+        let mut text = Vec::new_in(arena);
+        let mut text_beg = 0;
+
+        loop {
+            let mut off = memchr2(b'$', b'\\', replacement, text_beg);
+
+            // Push the raw, unescaped text, if any.
+            if text_beg < off {
+                text.extend_from_slice(&replacement[text_beg..off]);
+            }
+
+            // Unescape any escaped characters.
+            while off < replacement.len() && replacement[off] == b'\\' {
+                off += 2;
+                text.push(match replacement.get(off - 1).map_or(b'\\', |&c| c) {
+                    b'n' => b'\n',
+                    b'r' => b'\r',
+                    b't' => b'\t',
+                    ch => ch,
+                });
+            }
+
+            // Parse out a group number, if any.
+            let mut group = -1;
+            if off < replacement.len() && replacement[off] == b'$' {
+                let mut beg = off;
+                let mut end = off + 1;
+                let mut acc = 0i32;
+                let mut acc_bad = true;
+
+                if end < replacement.len() {
+                    let ch = replacement[end];
+
+                    if ch == b'$' {
+                        // Translate "$$" to "$".
+                        beg += 1;
+                        end += 1;
+                    } else if ch.is_ascii_digit() {
+                        // Parse "$1234" into 1234i32.
+                        // If the number is larger than the group count,
+                        // we flag `acc_bad` which causes us to treat it as text.
+                        acc_bad = false;
+                        while {
+                            acc =
+                                acc.wrapping_mul(10).wrapping_add((replacement[end] - b'0') as i32);
+                            acc_bad |= acc > group_count;
+                            end += 1;
+                            end < replacement.len() && replacement[end].is_ascii_digit()
+                        } {}
+                    }
+                }
+
+                if !acc_bad {
+                    group = acc;
+                } else {
+                    text.extend_from_slice(&replacement[beg..end]);
+                }
+
+                off = end;
+            }
+
+            if !text.is_empty() {
+                res.push(RegexReplacement::Text(text));
+                text = Vec::new_in(arena);
+            }
+            if group >= 0 {
+                res.push(RegexReplacement::Group(group));
+            }
+
+            text_beg = off;
+            if text_beg >= replacement.len() {
+                break;
+            }
+        }
+
+        res
+    }
+
+    fn find_fill_replacement<'a>(
+        &self,
+        search: &mut ActiveSearch,
+        replacement: &'a [u8],
+        parsed_replacements: &[RegexReplacement],
+    ) -> Cow<'a, [u8]> {
+        if !search.options.use_regex {
+            Cow::Borrowed(replacement)
+        } else {
+            let mut res = Vec::new();
+
+            for replacement in parsed_replacements {
+                match replacement {
+                    RegexReplacement::Text(text) => res.extend_from_slice(text),
+                    RegexReplacement::Group(group) => {
+                        if let Some(range) = search.regex.group(*group) {
+                            self.buffer.extract_raw(range, &mut res, usize::MAX);
+                        }
+                    }
+                }
+            }
+
+            Cow::Owned(res)
+        }
     }
 
     fn measurement_config(&self) -> MeasurementConfig<'_> {
@@ -2513,80 +2639,6 @@ impl TextBuffer {
     /// For interfacing with ICU.
     pub fn read_forward(&self, off: usize) -> &[u8] {
         self.buffer.read_forward(off)
-    }
-
-    /// Processes the replacement string when using regex for capture groups.
-    fn get_regex_replacement<'a>(
-        &mut self,
-        arena: &'a Arena,
-        replacement: &str,
-    ) -> ArenaString<'a> {
-        let mut result = ArenaString::with_capacity_in(replacement.len(), arena);
-
-        let Some(search) = &mut self.search else {
-            result.push_str(replacement);
-            return result;
-        };
-        let search = search.get_mut();
-
-        if !search.options.use_regex || !replacement.contains('$') {
-            result.push_str(replacement);
-            return result;
-        }
-
-        let Some(group_count) = search.regex.get_captured_group_count() else {
-            result.push_str(replacement);
-            return result;
-        };
-
-        let scratch = scratch_arena(Some(arena));
-        let mut chars = replacement.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            match ch {
-                '$' => {
-                    let mut digits = ArenaString::new_in(&scratch);
-                    let mut group_num: Option<i32> = None;
-
-                    while let Some(&next_ch) = chars.peek() {
-                        if digits.is_empty() && next_ch == '$' {
-                            // Consume the escaped dollar sign.
-                            chars.next();
-                            break;
-                        }
-
-                        if !next_ch.is_ascii_digit() {
-                            break;
-                        }
-
-                        digits.push(next_ch);
-
-                        let Ok(next_group_num) = digits.parse::<i32>() else {
-                            break;
-                        };
-                        if next_group_num > group_count {
-                            break;
-                        }
-
-                        group_num = Some(next_group_num);
-                        chars.next();
-                    }
-
-                    if let Some(group_num) = group_num {
-                        if let Some(range) = search.regex.get_captured_group_range(group_num) {
-                            let mut out = Vec::new();
-                            self.buffer.extract_raw(range.start, range.end, &mut out, 0);
-                            result.push_str(&String::from_utf8_lossy(&out));
-                        }
-                    } else {
-                        result.push(ch);
-                    }
-                }
-                _ => result.push(ch),
-            }
-        }
-
-        result
     }
 }
 
