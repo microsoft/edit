@@ -46,14 +46,14 @@ By default, the project will look for a SONAME without version suffix:
 
 If your installation uses a different SONAME, please set the following environment variable at build time:
 * `EDIT_CFG_ICUUC_SONAME`:
-  Set this to `libicuuc.so.76`, for instance.
+  For instance, `libicuuc.so.76`.
 * `EDIT_CFG_ICUI18N_SONAME`:
-  Set this to `libicui18n.so.76`, for instance.
+  For instance, `libicui18n.so.76`.
 
 Additionally, this project assumes that the ICU exports are without version suffix, such as `u_errorName`.
 If your installation uses versioned exports, please set:
 * `EDIT_CFG_ICU_RENAMING_VERSION`:
-  If the ICU library exports have a version suffix, such as `u_errorName_76`, set this to the version number, such as `76`.
+  If set to a version number, such as `76`, it'll look for symbols such as `u_errorName_76`.
 
 Finally, you can set the following environment variables:
 * `EDIT_CFG_ICU_RENAMING_AUTO_DETECT`:
