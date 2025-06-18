@@ -181,12 +181,12 @@ pub fn search_execute(ctx: &mut Context, state: &mut State, action: SearchAction
         SearchAction::Replace => doc.buffer.borrow_mut().find_and_replace(
             &state.search_needle,
             state.search_options,
-            &state.search_replacement,
+            state.search_replacement.as_bytes(),
         ),
         SearchAction::ReplaceAll => doc.buffer.borrow_mut().find_and_replace_all(
             &state.search_needle,
             state.search_options,
-            &state.search_replacement,
+            state.search_replacement.as_bytes(),
         ),
     }
     .is_ok();
