@@ -1763,7 +1763,7 @@ impl TextBuffer {
                 {
                     cursor = self.cursor_move_to_logical_internal(
                         cursor,
-                        Point { x: selection_beg.x, y: selection_beg.y },
+                        selection_beg,
                     );
                     selection_off.start = cursor.offset;
                     selection_pos_beg = cursor.visual_pos.x;
@@ -1775,7 +1775,7 @@ impl TextBuffer {
                 {
                     cursor = self.cursor_move_to_logical_internal(
                         cursor,
-                        Point { x: selection_end.x, y: selection_end.y },
+                        selection_end,
                     );
                     selection_off.end = cursor.offset;
                     selection_pos_end = cursor.visual_pos.x;
