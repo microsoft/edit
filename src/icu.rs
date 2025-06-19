@@ -924,7 +924,8 @@ struct LibraryFunctions {
 
 macro_rules! proc_name {
     ($s:literal) => {
-        concat!($s, env!("EDIT_CFG_ICU_RENAMING_VERSION"), "\0").as_ptr() as *const c_char
+        concat!(env!("EDIT_CFG_ICU_EXPORT_PREFIX"), $s, env!("EDIT_CFG_ICU_EXPORT_SUFFIX"), "\0")
+            .as_ptr() as *const c_char
     };
 }
 

@@ -468,13 +468,34 @@ pub struct LibIcu {
 }
 
 pub fn load_icu() -> apperr::Result<LibIcu> {
-    let libicuuc = concat!(env!("EDIT_CFG_ICUUC_SONAME"), "\0");
-    let libicui18n = concat!(env!("EDIT_CFG_ICUI18N_SONAME"), "\0");
-    let libicuuc = unsafe { load_library(libicuuc.as_ptr() as *const _)? };
-    let libicui18n = unsafe { load_library(libicui18n.as_ptr() as *const _)? };
-    Ok(LibIcu { libicuuc, libicui18n })
-}
+    const fn const_str_eq(a: &str, b: &str) -> bool {
+        let a = a.as_bytes();
+        let b = b.as_bytes();
+        let mut i = 0;
 
+        loop {
+            if i >= a.len() || i >= b.len() {
+                return a.len() == b.len();
+            }
+            if a[i] != b[i] {
+                return false;
+            }
+            i += 1;
+        }
+    }
+
+    const LIBICUUC: &str = concat!(env!("EDIT_CFG_ICUUC_SONAME"), "\0");
+    const LIBICUI18N: &str = concat!(env!("EDIT_CFG_ICUI18N_SONAME"), "\0");
+
+    if const { const_str_eq(LIBICUUC, LIBICUI18N) } {
+        let icu = unsafe { load_library(LIBICUUC.as_ptr() as *const _)? };
+        Ok(LibIcu { libicuuc: icu, libicui18n: icu })
+    } else {
+        let libicuuc = unsafe { load_library(LIBICUUC.as_ptr() as *const _)? };
+        let libicui18n = unsafe { load_library(LIBICUI18N.as_ptr() as *const _)? };
+        Ok(LibIcu { libicuuc, libicui18n })
+    }
+}
 /// ICU, by default, adds the major version as a suffix to each exported symbol.
 /// They also recommend to disable this for system-level installations (`runConfigureICU Linux --disable-renaming`),
 /// but I found that many (most?) Linux distributions don't do this for some reason.

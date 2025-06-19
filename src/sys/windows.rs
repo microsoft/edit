@@ -612,9 +612,34 @@ pub struct LibIcu {
 }
 
 pub fn load_icu() -> apperr::Result<LibIcu> {
-    let libicuuc = unsafe { load_library(w_env!("EDIT_CFG_ICUUC_SONAME"))? };
-    let libicui18n = unsafe { load_library(w_env!("EDIT_CFG_ICUI18N_SONAME"))? };
-    Ok(LibIcu { libicuuc, libicui18n })
+    const fn const_ptr_u16_eq(a: *const u16, b: *const u16) -> bool {
+        unsafe {
+            let mut a = a;
+            let mut b = b;
+            loop {
+                if *a != *b {
+                    return false;
+                }
+                if *a == 0 {
+                    return true;
+                }
+                a = a.add(1);
+                b = b.add(1);
+            }
+        }
+    }
+
+    const LIBICUUC: *const u16 = w_env!("EDIT_CFG_ICUUC_SONAME");
+    const LIBICUI18N: *const u16 = w_env!("EDIT_CFG_ICUI18N_SONAME");
+
+    if const { const_ptr_u16_eq(LIBICUUC, LIBICUI18N) } {
+        let icu = unsafe { load_library(LIBICUUC)? };
+        Ok(LibIcu { libicuuc: icu, libicui18n: icu })
+    } else {
+        let libicuuc = unsafe { load_library(LIBICUUC)? };
+        let libicui18n = unsafe { load_library(LIBICUI18N)? };
+        Ok(LibIcu { libicuuc, libicui18n })
+    }
 }
 
 /// Returns a list of preferred languages for the current user.
