@@ -44,7 +44,7 @@ use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
 use crate::oklab::oklab_blend;
 use crate::simd::memchr2;
-use crate::unicode::{self, Cursor, MeasurementConfig};
+use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
 use crate::{apperr, icu, simd};
 
 /// The margin template is used for line numbers.
@@ -54,8 +54,10 @@ const MARGIN_TEMPLATE: &str = "                    │ ";
 /// Just a bunch of whitespace you can use for turning tabs into spaces.
 /// Happens to reuse MARGIN_TEMPLATE, because it has sufficient whitespace.
 const TAB_WHITESPACE: &str = MARGIN_TEMPLATE;
-const RENDERED_TAB_WHITESPACE: &str = "→";
-const RENDERED_WHITESPACE: &str = "⸱";
+const VISUAL_SPACE: &str = "･";
+const VISUAL_SPACE_PREFIX_ADD: usize = '･'.len_utf8() - 1;
+const VISUAL_TAB: &str = "￫       ";
+const VISUAL_TAB_PREFIX_ADD: usize = '￫'.len_utf8() - 1;
 
 /// Stores statistics about the whole document.
 #[derive(Copy, Clone)]
@@ -1740,6 +1742,67 @@ impl TextBuffer {
                 }
             }
 
+            let mut selection_off = 0..0;
+            let mut selection_pos = 0..0;
+
+            // Figure out the selection range on this line, if any.
+            if cursor_beg.visual_pos.y == visual_line
+                && selection_beg <= cursor_end.logical_pos
+                && selection_end >= cursor_beg.logical_pos
+            {
+                let mut cursor = cursor_beg;
+
+                // By default, we assume the entire line is selected.
+                selection_off.start = cursor_beg.offset;
+                selection_off.end = cursor_end.offset;
+                selection_pos.start = 0;
+                selection_pos.end = COORD_TYPE_SAFE_MAX;
+
+                // The start of the selection is within this line. We need to update selection_beg.
+                if selection_beg <= cursor_end.logical_pos
+                    && selection_beg >= cursor_beg.logical_pos
+                {
+                    cursor = self.cursor_move_to_logical_internal(
+                        cursor,
+                        Point { x: selection_beg.x.max(origin.x), y: selection_beg.y },
+                    );
+                    selection_off.start = cursor.offset;
+                    selection_pos.start = cursor.visual_pos.x;
+                }
+
+                // The end of the selection is within this line. We need to update selection_end.
+                if selection_end <= cursor_end.logical_pos
+                    && selection_end >= cursor_beg.logical_pos
+                {
+                    cursor = self.cursor_move_to_logical_internal(
+                        cursor,
+                        Point { x: selection_end.x.min(origin.x + text_width), y: selection_end.y },
+                    );
+                    selection_off.end = cursor.offset;
+                    selection_pos.end = cursor.visual_pos.x;
+                }
+
+                let left = destination.left + self.margin_width - origin.x;
+                let top = destination.top + y;
+                let rect = Rect {
+                    left: left + selection_pos.start,
+                    top,
+                    right: left + selection_pos.end,
+                    bottom: top + 1,
+                };
+
+                let mut bg = oklab_blend(
+                    fb.indexed(IndexedColor::Foreground),
+                    fb.indexed_alpha(IndexedColor::BrightBlue, 1, 2),
+                );
+                if !focused {
+                    bg = oklab_blend(bg, fb.indexed_alpha(IndexedColor::Background, 1, 2))
+                };
+                let fg = fb.contrasted(bg);
+                fb.blend_bg(rect, bg);
+                fb.blend_fg(rect, fg);
+            }
+
             // Nothing to do if the entire line is empty.
             if cursor_beg.offset != cursor_end.offset {
                 // If we couldn't reach the left edge, we may have stopped short due to a wide glyph.
@@ -1759,84 +1822,97 @@ impl TextBuffer {
                     }
                 }
 
-                fn find_control_char(text: &[u8], mut offset: usize) -> usize {
-                    while offset < text.len() && (text[offset] >= 0x20 && text[offset] != 0x7f) {
-                        offset += 1;
-                    }
-                    offset
-                }
-
                 let mut global_off = cursor_beg.offset;
-                let mut cursor_tab = cursor_beg;
-                let mut cursor_visualizer = cursor_beg;
+                let mut cursor_line = cursor_beg;
 
                 while global_off < cursor_end.offset {
                     let chunk = self.read_forward(global_off);
                     let chunk = &chunk[..chunk.len().min(cursor_end.offset - global_off)];
+                    let mut it = Utf8Chars::new(chunk, 0);
 
-                    let mut chunk_off = 0;
-                    while chunk_off < chunk.len() {
-                        let beg = chunk_off;
-                        chunk_off = find_control_char(chunk, beg);
+                    // TODO: Looping char-by-char is bad for performance.
+                    // >25% of the total rendering time is spent here.
+                    loop {
+                        let chunk_off = it.offset();
+                        let global_off = global_off + chunk_off;
+                        let Some(ch) = it.next() else {
+                            break;
+                        };
 
-                        for chunk in chunk[beg..chunk_off].utf8_chunks() {
-                            if !chunk.valid().is_empty() {
-                                line.push_str(chunk.valid());
+                        if ch == ' ' || ch == '\t' {
+                            let is_tab = ch == '\t';
+                            let visualize = selection_off.contains(&global_off);
+                            let mut whitespace = TAB_WHITESPACE;
+                            let mut prefix_add = 0;
+
+                            if is_tab || visualize {
+                                // We need the character's visual position in order to either compute the tab size,
+                                // or set the foreground color of the visualizer, respectively.
+                                // TODO: Doing this char-by-char is of course also bad for performance.
+                                cursor_line =
+                                    self.cursor_move_to_offset_internal(cursor_line, global_off);
                             }
-                            if !chunk.invalid().is_empty() {
-                                line.push('\u{FFFD}');
-                            }
-                        }
 
-                        while chunk_off < chunk.len()
-                            && (chunk[chunk_off] < 0x20 || chunk[chunk_off] == 0x7f)
-                        {
-                            let ch = chunk[chunk_off];
-                            chunk_off += 1;
+                            let tab_size = if is_tab {
+                                self.tab_size - (cursor_line.column % self.tab_size)
+                            } else {
+                                1
+                            };
 
-                            if ch == b'\t' {
-                                cursor_tab = self.cursor_move_to_offset_internal(
-                                    cursor_tab,
-                                    global_off + chunk_off - 1,
+                            if visualize {
+                                // If the whitespace is part of the selection,
+                                // we replace " " with "･" and "\t" with "￫".
+                                (whitespace, prefix_add) = if is_tab {
+                                    (VISUAL_TAB, VISUAL_TAB_PREFIX_ADD)
+                                } else {
+                                    (VISUAL_SPACE, VISUAL_SPACE_PREFIX_ADD)
+                                };
+
+                                // Make the visualized characters slightly gray.
+                                let visualizer_rect = {
+                                    let left = destination.left
+                                        + self.margin_width
+                                        + cursor_line.visual_pos.x
+                                        - origin.x;
+                                    let top = destination.top + cursor_line.visual_pos.y - origin.y;
+                                    Rect { left, top, right: left + 1, bottom: top + 1 }
+                                };
+                                fb.blend_fg(
+                                    visualizer_rect,
+                                    fb.indexed_alpha(IndexedColor::Foreground, 1, 2),
                                 );
-                                let tab_size = self.tab_size - (cursor_tab.column % self.tab_size);
-                                line.push_str(&TAB_WHITESPACE[..tab_size as usize]);
-
-                                // Since we know that we just aligned ourselves to the next tab stop,
-                                // we can trivially process any successive tabs.
-                                while chunk_off < chunk.len() && chunk[chunk_off] == b'\t' {
-                                    line.push_str(&TAB_WHITESPACE[..self.tab_size as usize]);
-                                    chunk_off += 1;
-                                }
-                                continue;
                             }
 
-                            visualizer_buf[2] = if ch == 0x7F {
+                            line.push_str(&whitespace[..prefix_add + tab_size as usize]);
+                        } else if ch <= '\x1f' || ('\u{7f}'..='\u{9f}').contains(&ch) {
+                            // Append a Unicode representation of the C0 or C1 control character.
+                            visualizer_buf[2] = if ch <= '\x1f' {
+                                0x80 | ch as u8 // U+2400..=U+241F
+                            } else if ch == '\x7f' {
                                 0xA1 // U+2421
                             } else {
-                                0x80 | ch // 0x00..=0x1F => U+2400..=U+241F
+                                0xA6 // U+2426, because there are no pictures for C1 control characters.
                             };
+
                             // Our manually constructed UTF8 is never going to be invalid. Trust.
                             line.push_str(unsafe { str::from_utf8_unchecked(&visualizer_buf) });
 
-                            cursor_visualizer = self.cursor_move_to_offset_internal(
-                                cursor_visualizer,
-                                global_off + chunk_off - 1,
-                            );
+                            // Highlight the control character yellow.
+                            cursor_line =
+                                self.cursor_move_to_offset_internal(cursor_line, global_off);
                             let visualizer_rect = {
-                                let left = destination.left
-                                    + self.margin_width
-                                    + cursor_visualizer.visual_pos.x
-                                    - origin.x;
-                                let top =
-                                    destination.top + cursor_visualizer.visual_pos.y - origin.y;
+                                let left =
+                                    destination.left + self.margin_width + cursor_line.visual_pos.x
+                                        - origin.x;
+                                let top = destination.top + cursor_line.visual_pos.y - origin.y;
                                 Rect { left, top, right: left + 1, bottom: top + 1 }
                             };
-
                             let bg = fb.indexed(IndexedColor::Yellow);
                             let fg = fb.contrasted(bg);
                             fb.blend_bg(visualizer_rect, bg);
                             fb.blend_fg(visualizer_rect, fg);
+                        } else {
+                            line.push(ch);
                         }
                     }
 
@@ -1847,129 +1923,6 @@ impl TextBuffer {
             }
 
             fb.replace_text(destination.top + y, destination.left, destination.right, &line);
-
-            // Draw the selection on this line, if any.
-            // FYI: `cursor_beg.visual_pos.y == visual_line` is necessary as the `visual_line`
-            // may be past the end of the document, and so it may not receive a highlight.
-            if cursor_beg.visual_pos.y == visual_line
-                && selection_beg <= cursor_end.logical_pos
-                && selection_end >= cursor_beg.logical_pos
-            {
-                // By default, we assume the entire line is selected.
-                let mut beg = 0;
-                let mut end = COORD_TYPE_SAFE_MAX;
-                let mut cursor = cursor_beg;
-
-                // The start of the selection is within this line. We need to update selection_beg.
-                if selection_beg <= cursor_end.logical_pos
-                    && selection_beg >= cursor_beg.logical_pos
-                {
-                    cursor = self.cursor_move_to_logical_internal(cursor, selection_beg);
-                    beg = cursor.visual_pos.x;
-                }
-
-                // The end of the selection is within this line. We need to update selection_end.
-                if selection_end <= cursor_end.logical_pos
-                    && selection_end >= cursor_beg.logical_pos
-                {
-                    cursor = self.cursor_move_to_logical_internal(cursor, selection_end);
-                    end = cursor.visual_pos.x;
-                }
-
-                beg = beg.max(origin.x);
-                end = end.min(origin.x + text_width);
-
-                let left = destination.left + self.margin_width - origin.x;
-                let top = destination.top + y;
-                let rect = Rect { left: left + beg, top, right: left + end, bottom: top + 1 };
-
-                let mut bg = oklab_blend(
-                    fb.indexed(IndexedColor::Foreground),
-                    fb.indexed_alpha(IndexedColor::BrightBlue, 1, 2),
-                );
-                if !focused {
-                    bg = oklab_blend(bg, fb.indexed_alpha(IndexedColor::Background, 1, 2))
-                };
-                let fg = fb.contrasted(bg);
-                fb.blend_bg(rect, bg);
-                fb.blend_fg(rect, fg);
-
-                // Overwrite line in selection with rendered whitespaces
-                let mut cursor_wh = cursor_beg;
-                let mut cursor_wh_end = cursor_end;
-
-                if selection_beg >= cursor_wh.logical_pos {
-                    cursor_wh = self.cursor_move_to_logical_internal(cursor_wh, selection_beg);
-                }
-
-                if selection_end <= cursor_wh_end.logical_pos {
-                    cursor_wh_end = self.cursor_move_to_logical_internal(cursor_wh_end, selection_end);
-                }
-
-                if cursor_wh.visual_pos.x > origin.x {
-                    let cursor_prev = self.cursor_move_to_logical_internal(
-                        cursor_wh,
-                        Point { x: cursor_wh.logical_pos.x - 1, y: cursor_wh.logical_pos.y },
-                    );
-
-                    let chunk = self.read_forward(cursor_prev.offset);
-                    let chunk = &chunk[..1];
-                    let ch = chunk[0] as char;
-
-                    if ch == '\t' && cursor_prev.visual_pos.x < origin.x {
-                        let missing = origin.x - cursor_prev.visual_pos.x;
-
-                        let left = destination.left + self.margin_width - origin.x
-                            + cursor_prev.visual_pos.x
-                            + missing;
-                        let top = destination.top + y;
-                        let rect = Rect { left, top, right: left + 1, bottom: top + 1 };
-
-                        fb.replace_text(
-                            destination.top + y,
-                            left,
-                            left + 1,
-                            &RENDERED_TAB_WHITESPACE,
-                        );
-
-                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
-                    }
-                }
-
-                while cursor_wh.offset < cursor_wh_end.offset {
-                    let chunk = self.read_forward(cursor_wh.offset);
-                    let chunk = &chunk[..1];
-                    let ch = chunk[0] as char;
-
-                    if ch == ' ' {
-                        let left = destination.left + self.margin_width - origin.x
-                            + cursor_wh.visual_pos.x;
-                        let top = destination.top + cursor_wh.visual_pos.y - origin.y;
-                        let rect = Rect { left, top, right: left + 1, bottom: top + 1 };
-
-                        fb.replace_text(destination.top + y, left, left + 1, &RENDERED_WHITESPACE);
-
-                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
-                    } else if ch == '\t' {
-                        let left = destination.left + self.margin_width - origin.x
-                            + cursor_wh.visual_pos.x;
-                        let top = destination.top + y;
-                        let rect = Rect { left, top, right: left + 1, bottom: top + 1 };
-
-                        fb.replace_text(
-                            destination.top + y,
-                            left,
-                            left + 1,
-                            &RENDERED_TAB_WHITESPACE,
-                        );
-
-                        fb.blend_fg(rect, fb.indexed_alpha(IndexedColor::Foreground, 3, 1));
-                    }
-
-                    cursor_wh =
-                        self.cursor_move_to_offset_internal(cursor_wh, cursor_wh.offset + 1);
-                }
-            }
 
             cursor = cursor_end;
         }
