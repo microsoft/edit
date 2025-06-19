@@ -22,11 +22,13 @@ pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
         if !contains_focus && ctx.consume_shortcut(vk::F10) {
             ctx.steal_focus();
         }
-        if state.documents.active().is_some() && ctx.menubar_menu_begin(loc(LocId::Edit), 'E') {
-            draw_menu_edit(ctx, state);
-        }
-        if ctx.menubar_menu_begin(loc(LocId::View), 'V') {
-            draw_menu_view(ctx, state);
+        if state.documents.active().is_some() {
+            if ctx.menubar_menu_begin(loc(LocId::Edit), 'E') {
+                draw_menu_edit(ctx, state);
+            }
+            if ctx.menubar_menu_begin(loc(LocId::View), 'V') {
+                draw_menu_view(ctx, state);
+            }
         }
         if ctx.menubar_menu_begin(loc(LocId::Help), 'H') {
             draw_menu_help(ctx, state);
@@ -49,9 +51,9 @@ fn draw_menu_file(ctx: &mut Context, state: &mut State) {
         if ctx.menubar_menu_button(loc(LocId::FileSaveAs), 'A', vk::NULL) {
             state.wants_file_picker = StateFilePicker::SaveAs;
         }
-    }
-    if ctx.menubar_menu_button(loc(LocId::FileClose), 'C', kbmod::CTRL | vk::W) {
-        state.wants_close = true;
+        if ctx.menubar_menu_button(loc(LocId::FileClose), 'C', kbmod::CTRL | vk::W) {
+            state.wants_close = true;
+        }
     }
     if ctx.menubar_menu_button(loc(LocId::FileExit), 'X', kbmod::CTRL | vk::Q) {
         state.wants_exit = true;
@@ -72,13 +74,15 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
         ctx.needs_rerender();
     }
     if ctx.menubar_menu_button(loc(LocId::EditCut), 'T', kbmod::CTRL | vk::X) {
-        ctx.set_clipboard(tb.extract_selection(true));
+        tb.cut(ctx.clipboard_mut());
+        ctx.needs_rerender();
     }
     if ctx.menubar_menu_button(loc(LocId::EditCopy), 'C', kbmod::CTRL | vk::C) {
-        ctx.set_clipboard(tb.extract_selection(false));
+        tb.copy(ctx.clipboard_mut());
+        ctx.needs_rerender();
     }
     if ctx.menubar_menu_button(loc(LocId::EditPaste), 'P', kbmod::CTRL | vk::V) {
-        tb.write(ctx.clipboard(), true);
+        tb.paste(ctx.clipboard_ref());
         ctx.needs_rerender();
     }
     if state.wants_search.kind != StateSearchKind::Disabled {
@@ -99,16 +103,16 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
 }
 
 fn draw_menu_view(ctx: &mut Context, state: &mut State) {
-    if ctx.menubar_menu_button(loc(LocId::ViewFocusStatusbar), 'S', vk::NULL) {
-        state.wants_statusbar_focus = true;
-    }
-
     if let Some(doc) = state.documents.active() {
         let mut tb = doc.buffer.borrow_mut();
         let word_wrap = tb.is_word_wrap_enabled();
 
-        if ctx.menubar_menu_button(loc(LocId::ViewDocumentPicker), 'P', kbmod::CTRL | vk::P) {
-            state.wants_document_picker = true;
+        // All values on the statusbar are currently document specific.
+        if ctx.menubar_menu_button(loc(LocId::ViewFocusStatusbar), 'S', vk::NULL) {
+            state.wants_statusbar_focus = true;
+        }
+        if ctx.menubar_menu_button(loc(LocId::ViewGoToFile), 'F', kbmod::CTRL | vk::P) {
+            state.wants_go_to_file = true;
         }
         if ctx.menubar_menu_button(loc(LocId::FileGoto), 'G', kbmod::CTRL | vk::G) {
             state.wants_goto = true;

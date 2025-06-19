@@ -50,7 +50,7 @@ pub fn scratch_arena(conflict: Option<&Arena>) -> ScratchArena<'static> {
         let conflict = conflict.map(|a| a.delegate_target_unchecked());
 
         let index = opt_ptr_eq(conflict, Some(&S_SCRATCH[0])) as usize;
-        let arena = &mut S_SCRATCH[index];
+        let arena = &S_SCRATCH[index];
         ScratchArena::new(arena)
     }
 }

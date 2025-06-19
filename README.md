@@ -8,18 +8,24 @@ This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/
 
 ## Installation
 
-* Download the latest release from our [releases page](https://github.com/microsoft/edit/releases/latest)
-* Extract the archive
-* Copy the `edit` binary to a directory in your `PATH`
-* You may delete any other files in the archive if you don't need them
+[![Packaging status](https://repology.org/badge/vertical-allrepos/microsoft-edit.svg?exclude_unsupported=1)](https://repology.org/project/microsoft-edit/versions)
 
-### WinGet (Windows)
+You can also download binaries from [our Releases page](https://github.com/microsoft/edit/releases/latest).
 
-* Open up a terminal of your choice and run the following command:
-  ```powershell
-  winget install Microsoft.Edit
-  ```
-* `edit` will be automatically added to your `PATH`. If typing `edit` doesn't work, open a new terminal.
+### Windows
+
+You can install the latest version with WinGet:
+```powershell
+winget install Microsoft.Edit
+```
+
+### Notes to Package Maintainers
+
+The canonical executable name is "edit" and the alternative name is "msedit".
+
+We're aware of the potential conflict of "edit" with existing commands and as such recommend naming packages and executables "msedit".
+Names such as "ms-edit" should be avoided.
+Assigning an "edit" alias is recommended if possible.
 
 ## Build Instructions
 
