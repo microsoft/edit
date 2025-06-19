@@ -156,6 +156,11 @@ struct ActiveEditLineInfo {
     distance_next_line_start: usize,
 }
 
+/// Undo/redo grouping works by recording a set of "overrides",
+/// which are then applied in [`TextBuffer::edit_begin()`].
+/// This allows us to create a group of edits that all share a
+/// common `generation_before` and can be undone/redone together.
+/// This struct stores those overrides.
 struct ActiveEditGroupInfo {
     /// [`TextBuffer::cursor`] position before the change was made.
     cursor_before: Point,
@@ -175,6 +180,7 @@ pub enum CursorMovement {
     Word,
 }
 
+/// See [`TextBuffer::move_selected_lines`].
 pub enum MoveLineDirection {
     Up,
     Down,
@@ -2054,7 +2060,7 @@ impl TextBuffer {
         }
 
         if !edit_begun {
-        self.edit_begin(history_type, at);
+            self.edit_begin(history_type, at);
         }
 
         let mut offset = 0;
@@ -2280,6 +2286,7 @@ impl TextBuffer {
             let mut width = 0;
             let mut remove = 0;
 
+            // Figure out how many characters to `remove`.
             'outer: loop {
                 let chunk = self.read_forward(offset);
                 if chunk.is_empty() {
@@ -2300,12 +2307,15 @@ impl TextBuffer {
 
                 offset += chunk.len();
 
+                // No need to do another round if we
+                // already got the exact right amount.
                 if width >= self.tab_size {
                     break 'outer;
                 }
             }
 
             if remove > 0 {
+                // As the lines get unindented, the selection should shift with them.
                 if y == selection_beg.y {
                     selection_beg.x -= remove;
                 }
@@ -2318,7 +2328,11 @@ impl TextBuffer {
         }
         self.edit_end_grouping();
 
+        // Move the cursor to the new end of the selection.
         self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, selection_end));
+
+        // NOTE: If the selection was previously `None`,
+        // it should continue to be `None` after this.
         self.set_selection(
             selection.map(|_| TextBufferSelection { beg: selection_beg, end: selection_end }),
         );
@@ -2329,11 +2343,13 @@ impl TextBuffer {
         let selection = self.selection;
         let cursor = self.cursor;
 
+        // If there's no selection, we move the line the cursor is on instead.
         let [beg, end] = match self.selection {
             Some(s) => minmax(s.beg.y, s.end.y),
             None => [cursor.logical_pos.y, cursor.logical_pos.y],
         };
 
+        // Check if this would be a no-op.
         if match direction {
             MoveLineDirection::Up => beg <= 0,
             MoveLineDirection::Down => end >= self.stats.logical_lines - 1,
@@ -2352,11 +2368,22 @@ impl TextBuffer {
 
         self.edit_begin_grouping();
         {
+            // Let's say this is `MoveLineDirection::Up`.
+            // In that case, we'll cut (remove) the line above the selection here...
             self.cursor_move_to_logical(Point { x: 0, y: cut });
             let line = self.extract_selection(true);
 
+            // ...and paste it below the selection. This will then
+            // appear to the user as if the selection was moved up.
             self.cursor_move_to_logical(Point { x: 0, y: paste });
             self.edit_begin(HistoryType::Write, self.cursor);
+            // The `extract_selection` call can return an empty `Vec`),
+            // if the `cut` line was at the end of the file. Since we want to
+            // paste the line somewhere it needs a trailing newline at the minimum.
+            //
+            // Similarly, if the `paste` line is at the end of the file
+            // and there's no trailing newline, we'll have failed to reach
+            // that end in which case `logical_pos.y != past`.
             if line.is_empty() || self.cursor.logical_pos.y != paste {
                 self.write_canon(b"\n");
             }
@@ -2367,6 +2394,7 @@ impl TextBuffer {
         }
         self.edit_end_grouping();
 
+        // Shift the cursor and selection together with the moved lines.
         self.cursor_move_to_logical(Point {
             x: cursor.logical_pos.x,
             y: cursor.logical_pos.y + delta,
