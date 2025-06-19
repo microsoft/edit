@@ -91,6 +91,8 @@ struct HistoryEntry {
     /// [`TextBuffer::stats`] before the change was made.
     stats_before: TextBufferStatistics,
     /// [`GapBuffer::generation`] before the change was made.
+    ///
+    /// **NOTE:** Entries with the same generation are grouped together.
     generation_before: u32,
     /// Logical cursor position where the change took place.
     /// The position is at the start of the changed range.
@@ -154,6 +156,19 @@ struct ActiveEditLineInfo {
     distance_next_line_start: usize,
 }
 
+struct ActiveEditGroupInfo {
+    /// [`TextBuffer::cursor`] position before the change was made.
+    cursor_before: Point,
+    /// [`TextBuffer::selection`] before the change was made.
+    selection_before: Option<TextBufferSelection>,
+    /// [`TextBuffer::stats`] before the change was made.
+    stats_before: TextBufferStatistics,
+    /// [`GapBuffer::generation`] before the change was made.
+    ///
+    /// **NOTE:** Entries with the same generation are grouped together.
+    generation_before: u32,
+}
+
 /// Char- or word-wise navigation? Your choice.
 pub enum CursorMovement {
     Grapheme,
@@ -189,6 +204,7 @@ pub struct TextBuffer {
     last_history_type: HistoryType,
     last_save_generation: u32,
 
+    active_edit_group: Option<ActiveEditGroupInfo>,
     active_edit_line_info: Option<ActiveEditLineInfo>,
     active_edit_depth: i32,
     active_edit_off: usize,
@@ -240,6 +256,7 @@ impl TextBuffer {
             last_history_type: HistoryType::Other,
             last_save_generation: 0,
 
+            active_edit_group: None,
             active_edit_line_info: None,
             active_edit_depth: 0,
             active_edit_off: 0,
@@ -583,141 +600,6 @@ impl TextBuffer {
                 self.stats.visual_lines = self.stats.logical_lines;
             }
         }
-    }
-
-    /// Displaces the current, cursor or the selection, line(s) in the given direction.
-    pub fn move_selected_lines(&mut self, direction: MoveLineDirection) -> bool {
-        let original_cursor_pos = self.cursor.logical_pos;
-        let original_selection = self.selection;
-        let logical_line_limit = self.stats.logical_lines - 1;
-
-        // Determine line(s) to be moved & validate boundaries
-        let (first_line, last_line) = match self.selection {
-            None => {
-                // No selection, so we move the cursor line
-                let current_line = original_cursor_pos.y;
-                match direction {
-                    MoveLineDirection::Up => {
-                        if current_line <= 0 {
-                            return false;
-                        }
-                    }
-                    MoveLineDirection::Down => {
-                        if current_line >= logical_line_limit {
-                            return false;
-                        }
-                    }
-                }
-                (current_line, current_line)
-            }
-            Some(existing_selection) => {
-                let [start, mut end] = minmax(existing_selection.beg, existing_selection.end);
-                match direction {
-                    MoveLineDirection::Up => {
-                        if start.y <= 0 {
-                            return false;
-                        }
-                    }
-                    MoveLineDirection::Down => {
-                        if end.y >= logical_line_limit {
-                            return false;
-                        }
-                    }
-                }
-                // If end cursor is at the start of a new line, don't include that line in the range (vscode behavior)
-                if end.x == 0 {
-                    end.y -= 1
-                }
-                (start.y, end.y)
-            }
-        };
-
-        let target_line = match direction {
-            MoveLineDirection::Up => first_line - 1,
-            MoveLineDirection::Down => last_line + 1,
-        };
-
-        // Extract the text we want to move
-        let mut source_text = Vec::new();
-        let source_beg =
-            self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: first_line });
-        let source_end =
-            self.cursor_move_to_logical_internal(source_beg, Point { x: 0, y: last_line + 1 });
-        self.buffer.extract_raw(source_beg.offset, source_end.offset, &mut source_text, 0);
-
-        // Move to the target line & extract it's text
-        let target_beg =
-            self.cursor_move_to_logical_internal(source_beg, Point { x: 0, y: target_line });
-        let target_end =
-            self.cursor_move_to_logical_internal(target_beg, Point { x: 0, y: target_line + 1 });
-        let mut target_text = Vec::new();
-        self.buffer.extract_raw(target_beg.offset, target_end.offset, &mut target_text, 0);
-
-        // Prepare the combined text based on direction
-        // note: care to handle EOL tokens when moving around the bottom lines of a document
-        let eol_offset = if self.is_crlf() { 2 } else { 1 };
-        let mut reordered_text = Vec::new();
-        match direction {
-            MoveLineDirection::Up => {
-                if last_line == logical_line_limit {
-                    // Moving selection up when it contains the last line
-                    let (target_content, target_eol) =
-                        target_text.split_at(target_text.len() - eol_offset);
-                    reordered_text.extend(source_text);
-                    reordered_text.extend_from_slice(target_eol);
-                    reordered_text.extend(target_content);
-                } else {
-                    reordered_text.extend(source_text);
-                    reordered_text.extend(target_text);
-                }
-            }
-            MoveLineDirection::Down => {
-                if target_line == logical_line_limit {
-                    // Moving selection down when target is the last line
-                    let (source_content, source_eol) =
-                        source_text.split_at(source_text.len() - eol_offset);
-                    reordered_text.extend(target_text);
-                    reordered_text.extend_from_slice(source_eol);
-                    reordered_text.extend(source_content);
-                } else {
-                    reordered_text.extend(target_text);
-                    reordered_text.extend(source_text);
-                }
-            }
-        }
-        // Replace the original texts in the buffer with the reordered texts
-        let (replacement_start, replacement_end) = match direction {
-            MoveLineDirection::Up => (target_beg, source_end),
-            MoveLineDirection::Down => (source_beg, target_end),
-        };
-        self.edit_begin(HistoryType::Write, replacement_start);
-        self.set_selection(Some(TextBufferSelection {
-            beg: replacement_start.logical_pos,
-            end: replacement_end.logical_pos,
-        }));
-        self.write(&reordered_text, true);
-        self.edit_end();
-
-        // Restore original selection range and/or original cursor position (shifted by direction)
-        let direction_offset = match direction {
-            MoveLineDirection::Up => -1,
-            MoveLineDirection::Down => 1,
-        };
-        self.cursor_move_to_logical(Point {
-            y: original_cursor_pos.y + direction_offset,
-            x: original_cursor_pos.x,
-        });
-        if let Some(original_selection) = original_selection {
-            // Normalize the selection (ensure beg comes before end logically)
-            let [normalized_beg, normalized_end] =
-                minmax(original_selection.beg, original_selection.end);
-            let restored_selection = TextBufferSelection {
-                beg: Point { y: normalized_beg.y + direction_offset, x: normalized_beg.x },
-                end: Point { y: normalized_end.y + direction_offset, x: normalized_end.x },
-            };
-            self.set_selection(Some(restored_selection));
-        }
-        true
     }
 
     /// Replaces the entire buffer contents with the given `text`.
@@ -2169,9 +2051,7 @@ impl TextBuffer {
             return;
         }
 
-        if self.active_edit_depth <= 0 {
-            self.edit_begin(history_type, at);
-        }
+        self.edit_begin(history_type, at);
 
         let mut offset = 0;
         let scratch = scratch_arena(None);
@@ -2386,58 +2266,52 @@ impl TextBuffer {
             selection_end = end;
         }
 
-        let [beg, end] = minmax(selection_beg, selection_end);
-        let beg = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: beg.y });
-        let end = self.cursor_move_to_logical_internal(beg, Point { x: CoordType::MAX, y: end.y });
+        self.edit_begin_grouping();
 
-        let mut replacement = Vec::new();
-        self.buffer.extract_raw(beg.offset..end.offset, &mut replacement, 0);
+        for y in selection_beg.y..=selection_end.y {
+            self.cursor_move_to_logical(Point { x: 0, y });
 
-        let initial_len = replacement.len();
-        let mut offset = 0;
-        let mut y = beg.logical_pos.y;
+            let mut offset = self.cursor.offset;
+            let mut width = 0;
+            let mut remove = 1;
 
-        loop {
-            if offset >= replacement.len() {
-                break;
-            }
+            'outer: loop {
+                let chunk = self.read_forward(offset);
+                if chunk.is_empty() {
+                    break;
+                }
 
-            let mut remove = 0;
-
-            if replacement[offset] == b'\t' {
-                remove = 1;
-            } else {
-                while remove < self.tab_size as usize
-                    && offset + remove < replacement.len()
-                    && replacement[offset + remove] == b' '
-                {
+                for &c in chunk {
+                    width += match c {
+                        b' ' => 1,
+                        b'\t' => self.tab_size,
+                        _ => COORD_TYPE_SAFE_MAX,
+                    };
+                    if width > self.tab_size {
+                        break 'outer;
+                    }
                     remove += 1;
+                }
+
+                offset += chunk.len();
+
+                if width >= self.tab_size {
+                    break 'outer;
                 }
             }
 
             if remove > 0 {
-                replacement.drain(offset..offset + remove);
-            }
+                if y == selection_beg.y {
+                    selection_beg.x -= remove;
+                }
+                if y == selection_end.y {
+                    selection_end.x -= remove;
+                }
 
-            if y == selection_beg.y {
-                selection_beg.x -= remove as CoordType;
+                self.delete(CursorMovement::Grapheme, remove);
             }
-            if y == selection_end.y {
-                selection_end.x -= remove as CoordType;
-            }
-
-            (offset, y) = simd::lines_fwd(&replacement, offset, y, y + 1);
         }
-
-        if replacement.len() == initial_len {
-            // Nothing to do.
-            return;
-        }
-
-        self.edit_begin(HistoryType::Other, beg);
-        self.edit_delete(end);
-        self.edit_write(&replacement);
-        self.edit_end();
+        self.edit_end_grouping();
 
         if let Some(TextBufferSelection { beg, end }) = &mut self.selection {
             *beg = selection_beg;
@@ -2445,6 +2319,58 @@ impl TextBuffer {
         }
 
         self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, selection_end));
+    }
+
+    /// Displaces the current, cursor or the selection, line(s) in the given direction.
+    pub fn move_selected_lines(&mut self, direction: MoveLineDirection) {
+        let selection = self.selection;
+        let cursor = self.cursor;
+
+        let [beg, end] = match self.selection {
+            Some(s) => minmax(s.beg.y, s.end.y),
+            None => [cursor.logical_pos.y, cursor.logical_pos.y],
+        };
+
+        if match direction {
+            MoveLineDirection::Up => beg <= 0,
+            MoveLineDirection::Down => end >= self.stats.logical_lines - 1,
+        } {
+            return;
+        }
+
+        let delta = match direction {
+            MoveLineDirection::Up => -1,
+            MoveLineDirection::Down => 1,
+        };
+        let (cut, paste) = match direction {
+            MoveLineDirection::Up => (beg - 1, end),
+            MoveLineDirection::Down => (end + 1, beg),
+        };
+
+        self.edit_begin_grouping();
+        {
+            self.cursor_move_to_logical(Point { x: 0, y: cut });
+            let line = self.extract_selection(true);
+
+            self.cursor_move_to_logical(Point { x: 0, y: paste });
+            self.edit_begin(HistoryType::Write, self.cursor);
+            if self.cursor.logical_pos.y != paste {
+                self.write_canon(b"\n");
+            }
+            self.write_raw(&line);
+            self.edit_end();
+        }
+        self.edit_end_grouping();
+
+        self.cursor_move_to_logical(Point {
+            x: cursor.logical_pos.x,
+            y: cursor.logical_pos.y + delta,
+        });
+        self.set_selection(selection.map(|mut s| {
+            s.beg.y += delta;
+            s.end.y += delta;
+            s
+        }));
     }
 
     /// Extracts the contents of the current selection.
@@ -2518,6 +2444,19 @@ impl TextBuffer {
         if beg.offset < end.offset { Some((beg, end)) } else { None }
     }
 
+    fn edit_begin_grouping(&mut self) {
+        self.active_edit_group = Some(ActiveEditGroupInfo {
+            cursor_before: self.cursor.logical_pos,
+            selection_before: self.selection,
+            stats_before: self.stats,
+            generation_before: self.buffer.generation(),
+        });
+    }
+
+    fn edit_end_grouping(&mut self) {
+        self.active_edit_group = None;
+    }
+
     /// Starts a new edit operation.
     /// This is used for tracking the undo/redo history.
     fn edit_begin(&mut self, history_type: HistoryType, cursor: Cursor) {
@@ -2530,7 +2469,8 @@ impl TextBuffer {
         self.set_cursor_internal(cursor);
 
         // If both the last and this are a Write/Delete operation, we skip allocating a new undo history item.
-        if history_type != self.last_history_type
+        if cursor_before.offset != cursor.offset
+            || history_type != self.last_history_type
             || !matches!(history_type, HistoryType::Write | HistoryType::Delete)
         {
             self.redo_stack.clear();
@@ -2548,6 +2488,16 @@ impl TextBuffer {
                 deleted: Vec::new(),
                 added: Vec::new(),
             }));
+
+            if let Some(info) = &self.active_edit_group
+                && let Some(entry) = self.undo_stack.back()
+            {
+                let mut entry = entry.borrow_mut();
+                entry.cursor_before = info.cursor_before;
+                entry.selection_before = info.selection_before;
+                entry.stats_before = info.stats_before;
+                entry.generation_before = info.generation_before;
+            }
         }
 
         self.active_edit_off = cursor.offset;
@@ -2601,9 +2551,12 @@ impl TextBuffer {
         let mut out_off = usize::MAX;
 
         let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
+
+        // If this is a continued backspace operation,
+        // we need to prepend the deleted portion to the undo entry.
         if self.cursor.logical_pos < undo.cursor {
-            out_off = 0; // Prepend the deleted portion.
-            undo.cursor = self.cursor.logical_pos; // Note the start of the deleted portion.
+            out_off = 0;
+            undo.cursor = self.cursor.logical_pos;
         }
 
         // Copy the deleted portion into the undo entry.
@@ -2621,7 +2574,7 @@ impl TextBuffer {
     /// and recalculates the line statistics.
     fn edit_end(&mut self) {
         self.active_edit_depth -= 1;
-        assert!(self.active_edit_depth >= 0);
+        debug_assert!(self.active_edit_depth >= 0);
         if self.active_edit_depth > 0 {
             return;
         }
@@ -2676,107 +2629,124 @@ impl TextBuffer {
     }
 
     fn undo_redo(&mut self, undo: bool) {
-        // Transfer the last entry from the undo stack to the redo stack or vice versa.
-        {
-            let (from, to) = if undo {
-                (&mut self.undo_stack, &mut self.redo_stack)
-            } else {
-                (&mut self.redo_stack, &mut self.undo_stack)
-            };
+        let buffer_generation = self.buffer.generation();
+        let mut entry_buffer_generation = None;
 
-            let Some(list) = from.cursor_back_mut().remove_current_as_list() else {
-                return;
-            };
-
-            to.cursor_back_mut().splice_after(list);
-        }
-
-        let change = {
-            let to = if undo { &self.redo_stack } else { &self.undo_stack };
-            to.back().unwrap()
-        };
-
-        // Move to the point where the modification took place.
-        let cursor = self.cursor_move_to_logical_internal(self.cursor, change.borrow().cursor);
-
-        let safe_cursor = if self.word_wrap_column > 0 {
-            // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
-            // This is because the undo/redo operation may have changed the visual position of the cursor.
-            self.goto_line_start(cursor, cursor.logical_pos.y)
-        } else {
-            cursor
-        };
-
-        {
-            let buffer_generation = self.buffer.generation();
-            let mut change = change.borrow_mut();
-            let change = &mut *change;
-
-            // Undo: Whatever was deleted is now added and vice versa.
-            mem::swap(&mut change.deleted, &mut change.added);
-
-            // Delete the inserted portion.
-            self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
-
-            // Reinsert the deleted portion.
+        loop {
+            // Transfer the last entry from the undo stack to the redo stack or vice versa.
             {
-                let added = &change.added[..];
-                let mut beg = 0;
-                let mut offset = cursor.offset;
+                let (from, to) = if undo {
+                    (&mut self.undo_stack, &mut self.redo_stack)
+                } else {
+                    (&mut self.redo_stack, &mut self.undo_stack)
+                };
 
-                while beg < added.len() {
-                    let (end, line) = simd::lines_fwd(added, beg, 0, 1);
-                    let has_newline = line != 0;
-                    let link = &added[beg..end];
-                    let line = unicode::strip_newline(link);
-                    let mut written;
+                if let Some(g) = entry_buffer_generation
+                    && from.back().is_none_or(|c| c.borrow().generation_before != g)
+                {
+                    break;
+                }
 
-                    {
-                        let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
-                        written = slice_copy_safe(gap, line);
+                let Some(list) = from.cursor_back_mut().remove_current_as_list() else {
+                    break;
+                };
 
-                        if has_newline {
-                            if self.newlines_are_crlf && written < gap.len() {
-                                gap[written] = b'\r';
-                                written += 1;
+                to.cursor_back_mut().splice_after(list);
+            }
+
+            let change = {
+                let to = if undo { &self.redo_stack } else { &self.undo_stack };
+                to.back().unwrap()
+            };
+
+            // Remember the buffer generation of the change so we can stop popping undos/redos.
+            // Also, move to the point where the modification took place.
+            let cursor = {
+                let change = change.borrow();
+                entry_buffer_generation = Some(change.generation_before);
+                self.cursor_move_to_logical_internal(self.cursor, change.cursor)
+            };
+
+            let safe_cursor = if self.word_wrap_column > 0 {
+                // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
+                // This is because the undo/redo operation may have changed the visual position of the cursor.
+                self.goto_line_start(cursor, cursor.logical_pos.y)
+            } else {
+                cursor
+            };
+
+            {
+                let mut change = change.borrow_mut();
+                let change = &mut *change;
+
+                // Undo: Whatever was deleted is now added and vice versa.
+                mem::swap(&mut change.deleted, &mut change.added);
+
+                // Delete the inserted portion.
+                self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
+
+                // Reinsert the deleted portion.
+                {
+                    let added = &change.added[..];
+                    let mut beg = 0;
+                    let mut offset = cursor.offset;
+
+                    while beg < added.len() {
+                        let (end, line) = simd::lines_fwd(added, beg, 0, 1);
+                        let has_newline = line != 0;
+                        let link = &added[beg..end];
+                        let line = unicode::strip_newline(link);
+                        let mut written;
+
+                        {
+                            let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
+                            written = slice_copy_safe(gap, line);
+
+                            if has_newline {
+                                if self.newlines_are_crlf && written < gap.len() {
+                                    gap[written] = b'\r';
+                                    written += 1;
+                                }
+                                if written < gap.len() {
+                                    gap[written] = b'\n';
+                                    written += 1;
+                                }
                             }
-                            if written < gap.len() {
-                                gap[written] = b'\n';
-                                written += 1;
-                            }
+
+                            self.buffer.commit_gap(written);
                         }
 
-                        self.buffer.commit_gap(written);
+                        beg = end;
+                        offset += written;
                     }
-
-                    beg = end;
-                    offset += written;
                 }
-            }
 
-            // Restore the previous line statistics.
-            mem::swap(&mut self.stats, &mut change.stats_before);
+                // Restore the previous line statistics.
+                mem::swap(&mut self.stats, &mut change.stats_before);
 
-            // Restore the previous selection.
-            mem::swap(&mut self.selection, &mut change.selection_before);
+                // Restore the previous selection.
+                mem::swap(&mut self.selection, &mut change.selection_before);
 
-            // Pretend as if the buffer was never modified.
-            self.buffer.set_generation(change.generation_before);
-            change.generation_before = buffer_generation;
+                // Pretend as if the buffer was never modified.
+                self.buffer.set_generation(change.generation_before);
+                change.generation_before = buffer_generation;
 
-            // Restore the previous cursor.
-            let cursor_before =
-                self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
-            change.cursor_before = self.cursor.logical_pos;
-            // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
-            self.cursor = cursor_before;
+                // Restore the previous cursor.
+                let cursor_before =
+                    self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
+                change.cursor_before = self.cursor.logical_pos;
+                // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
+                self.cursor = cursor_before;
 
-            if self.undo_stack.is_empty() {
-                self.last_history_type = HistoryType::Other;
+                if self.undo_stack.is_empty() {
+                    self.last_history_type = HistoryType::Other;
+                }
             }
         }
 
-        self.recalc_after_content_changed();
+        if entry_buffer_generation.is_some() {
+            self.recalc_after_content_changed();
+        }
     }
 
     /// For interfacing with ICU.
@@ -2826,507 +2796,4 @@ fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
         }
     }
     None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::arena;
-    // Helper function to create a properly initialized text buffer for tests
-    fn create_test_buffer() -> TextBuffer {
-        arena::init(128 * KIBI).expect("Failed to initialize arena");
-        // Create a new buffer for each test
-        TextBuffer::new(true).expect("Failed to create buffer")
-    }
-    // Helper function for testing `move_selected_lines` with no selection
-    fn move_line_with_no_selection(direction: MoveLineDirection) {
-        let mut buffer = create_test_buffer();
-        let test_cursor_pos = Point { x: 0, y: 2 };
-        let expected_cursor_pos = Point {
-            x: test_cursor_pos.x,
-            y: match direction {
-                MoveLineDirection::Up => test_cursor_pos.y - 1,
-                MoveLineDirection::Down => test_cursor_pos.y + 1,
-            },
-        };
-        let test_lines: Vec<&str> = vec!["Line 1", "Line 2", "Line 3", "Line 4", "Line 5"];
-        let expected_lines: Vec<&str> = match direction {
-            MoveLineDirection::Up => vec!["Line 1", "Line 3", "Line 2", "Line 4", "Line 5"],
-            MoveLineDirection::Down => vec!["Line 1", "Line 2", "Line 4", "Line 3", "Line 5"],
-        };
-        let content = test_lines.join("\n");
-        buffer.newlines_are_crlf = false;
-        buffer.write(content.as_bytes(), true);
-        buffer.cursor_move_to_logical(test_cursor_pos);
-        let result = buffer.move_selected_lines(direction);
-
-        assert!(result, "Expected move_selected_lines to return true");
-        assert_eq!(
-            expected_cursor_pos,
-            buffer.cursor_logical_pos(),
-            "Cursor position should be updated to the new line position"
-        );
-
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(expected_lines, lines_out, "Expected lines did not match after move");
-    }
-    #[test]
-    fn test_move_line_up_with_no_selection() {
-        move_line_with_no_selection(MoveLineDirection::Up);
-    }
-
-    #[test]
-    fn test_move_line_down_with_no_selection() {
-        move_line_with_no_selection(MoveLineDirection::Down);
-    }
-
-    fn move_lines_with_selection(direction: MoveLineDirection) {
-        let mut buffer = create_test_buffer();
-        let test_lines: Vec<&str> = vec!["Line 1", "Line 2", "Line 3", "Line 4", "Line 5"];
-        let direction_offset = match direction {
-            MoveLineDirection::Up => -1,
-            MoveLineDirection::Down => 1,
-        };
-        let test_selection =
-            TextBufferSelection { end: Point { y: 1, x: 2 }, beg: Point { y: 3, x: 4 } };
-        // note: the inner call `get_selection_range` sorts the beg/end points of the existing selection
-        let expected_selection = TextBufferSelection {
-            beg: Point { y: 1 + direction_offset, x: 2 },
-            end: Point { y: 3 + direction_offset, x: 4 },
-        };
-        let expected_lines: Vec<&str> = match direction {
-            MoveLineDirection::Up => vec!["Line 2", "Line 3", "Line 4", "Line 1", "Line 5"],
-            MoveLineDirection::Down => vec!["Line 1", "Line 5", "Line 2", "Line 3", "Line 4"],
-        };
-        let test_cursor_pos = Point { y: 2, x: 3 }; //also test cursor restoration
-        let expected_cursor_pos = {
-            let mut point = test_cursor_pos;
-            match direction {
-                MoveLineDirection::Up => point.y -= 1,
-                MoveLineDirection::Down => point.y += 1,
-            };
-            point
-        };
-
-        let content = test_lines.join("\n");
-        buffer.newlines_are_crlf = false;
-        buffer.write(content.as_bytes(), true);
-
-        buffer.cursor_move_to_logical(test_cursor_pos);
-        buffer.set_selection(Some(test_selection));
-
-        let result = buffer.move_selected_lines(direction);
-        assert!(result, "Expected move_selected_lines to return true");
-
-        assert_eq!(
-            expected_cursor_pos,
-            buffer.cursor_logical_pos(),
-            "Cursor position should be updated in the direction of the move"
-        );
-
-        let resulting_selection = buffer.selection.unwrap();
-        assert_eq!(
-            expected_selection.beg, resulting_selection.beg,
-            "Selection start position should be updated to respect the new text position"
-        );
-        assert_eq!(
-            expected_selection.end, resulting_selection.end,
-            "Selection end position should be updated to respect the new text position"
-        );
-
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(expected_lines, lines_out, "Expected lines did not match after move");
-    }
-
-    #[test]
-    fn test_move_lines_up_with_selection() {
-        move_lines_with_selection(MoveLineDirection::Up);
-    }
-
-    #[test]
-    fn test_move_lines_down_with_selection() {
-        move_lines_with_selection(MoveLineDirection::Down);
-    }
-
-    #[test]
-    fn test_move_selection_with_reversed_selection_limits() {
-        let mut buffer = create_test_buffer();
-        let test_lines: Vec<&str> = vec!["Line 1", "Line 2", "Line 3"];
-        let content = test_lines.join("\n");
-        buffer.newlines_are_crlf = false;
-        buffer.write(content.as_bytes(), true);
-        // create a selection that has the cursor end before the beginning
-        let test_selection =
-            TextBufferSelection { end: Point { y: 0, x: 0 }, beg: Point { y: 1, x: 4 } };
-        buffer.set_selection(Some(test_selection));
-
-        let result = buffer.move_selected_lines(MoveLineDirection::Down);
-        assert!(result, "Expected move_selected_lines to return true");
-        let expected_lines: Vec<&str> = vec!["Line 3", "Line 1", "Line 2"];
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(expected_lines, lines_out, "Expected lines did not match after move");
-        // note: the range will be sorted by the function `get_selection_range`
-        let expected_selection =
-            TextBufferSelection { beg: Point { y: 1, x: 0 }, end: Point { y: 2, x: 4 } };
-        let resulting_selection = buffer.selection.unwrap();
-        assert_eq!(
-            expected_selection.beg, resulting_selection.beg,
-            "Selection start position should be updated to respect the new text position"
-        );
-        assert_eq!(
-            expected_selection.end, resulting_selection.end,
-            "Selection end position should be updated to respect the new text position"
-        );
-    }
-
-    #[test]
-    fn test_move_selection_with_end_cursor_in_new_line() {
-        let mut buffer = create_test_buffer();
-        let test_lines: Vec<&str> = vec!["Line 1", "Line 2", "Line 3", "Line 4", "Line 5"];
-        let content = test_lines.join("\n");
-        buffer.newlines_are_crlf = false;
-        buffer.write(content.as_bytes(), true);
-        // create a selection with the end cursor at start of a newline
-        // this line will be ignored when moving the selection
-        let test_selection =
-            TextBufferSelection { beg: Point { x: 0, y: 1 }, end: Point { x: 0, y: 3 } };
-        buffer.set_selection(Some(test_selection));
-        // Test moving selection up
-        let result = buffer.move_selected_lines(MoveLineDirection::Down);
-        assert!(result, "Expected move_selected_lines to return true");
-        let expected_lines: Vec<&str> = vec!["Line 1", "Line 4", "Line 2", "Line 3", "Line 5"];
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(expected_lines, lines_out, "Expected lines did not match after move");
-        // Test moving selection down
-        buffer.select_all();
-        buffer.write(content.as_bytes(), true);
-        buffer.set_selection(Some(test_selection));
-        let result = buffer.move_selected_lines(MoveLineDirection::Up);
-        assert!(result, "Expected move_selected_lines to return true");
-        let expected_lines: Vec<&str> = vec!["Line 2", "Line 3", "Line 1", "Line 4", "Line 5"];
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(expected_lines, lines_out, "Expected lines did not match after move");
-    }
-
-    #[test]
-    fn test_move_empty_line_up_from_bottom() {
-        let mut buffer = create_test_buffer();
-        let test_lines: Vec<&str> = vec!["Line 1", "Line 2", "Line 3", ""];
-        let expected_lines = vec!["Line 1", "Line 2", "", "Line 3"];
-        let content = test_lines.join("\n");
-        buffer.newlines_are_crlf = false;
-        buffer.write(content.as_bytes(), true);
-
-        let last_line = test_lines.len() as isize - 1;
-        buffer.cursor_move_to_logical(Point { x: 0, y: last_line });
-
-        let result = buffer.move_selected_lines(MoveLineDirection::Up);
-        assert!(result, "Expected move_selected_lines to return true");
-
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(expected_lines, lines_out, "Expected lines did not match after move");
-
-        let resulting_cursor = buffer.cursor_logical_pos();
-        assert_eq!(
-            Point { x: 0, y: last_line - 1 },
-            resulting_cursor,
-            "Cursor position should be updated to the new line position"
-        );
-    }
-    #[test]
-    fn test_move_penultimate_line_down() {
-        let mut buffer = create_test_buffer();
-        let test_lines: Vec<&str> = vec!["Line 1", "Line 2", "Line 3"];
-        let expected_lines = vec!["Line 1", "Line 3", "Line 2"];
-        let content = test_lines.join("\n");
-        buffer.newlines_are_crlf = false;
-        buffer.write(content.as_bytes(), true);
-
-        let penultimate_line = test_lines.len() as isize - 2;
-        buffer.cursor_move_to_logical(Point { x: 0, y: penultimate_line });
-
-        let result = buffer.move_selected_lines(MoveLineDirection::Down);
-
-        assert!(result, "Expected move_selected_lines to return true");
-
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(expected_lines, lines_out, "Expected lines did not match after move");
-    }
-
-    #[test]
-    fn test_move_selection_with_penultimate_line_down() {
-        let mut buffer = create_test_buffer();
-        let test_lines: Vec<&str> =
-            vec!["Line 1", "Line 2", "Line 3", "Line 4", "Line 5", "Line 6"];
-        let penultimate_line = test_lines.len() as isize - 2; // 0-indexed
-        // Create a selection that spans multiple columns and includes the penultimate line
-        let test_selection = TextBufferSelection {
-            beg: Point { x: 0, y: 1 },
-            end: Point { x: 1, y: penultimate_line },
-        };
-        let expected_lines: Vec<&str> =
-            vec!["Line 1", "Line 6", "Line 2", "Line 3", "Line 4", "Line 5"];
-
-        let expected_selection = TextBufferSelection {
-            beg: Point { x: test_selection.beg.x, y: test_selection.beg.y + 1 },
-            end: Point { x: test_selection.end.x, y: test_selection.end.y + 1 },
-        };
-        let content = test_lines.join("\n");
-        buffer.newlines_are_crlf = false;
-        buffer.write(content.as_bytes(), true);
-        buffer.cursor_move_to_logical(Point { x: 0, y: 0 });
-        buffer.set_selection(Some(test_selection));
-
-        let result = buffer.move_selected_lines(MoveLineDirection::Down);
-        assert!(result, "Expected move_selected_lines to return true");
-
-        let resulting_selection = buffer.selection.unwrap();
-        assert_eq!(
-            expected_selection.beg, resulting_selection.beg,
-            "Selection start position should be updated to the new line position"
-        );
-        assert_eq!(
-            expected_selection.end, resulting_selection.end,
-            "Selection end position should be updated to the new line position"
-        );
-
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(expected_lines, lines_out, "Expected lines did not match after move");
-    }
-
-    #[test]
-    fn test_move_ultimate_line_up() {
-        let mut buffer = create_test_buffer();
-        let test_lines: Vec<&str> = vec!["Line 1", "Line 2", "Line 3"];
-        let expected_lines = vec!["Line 1", "Line 3", "Line 2"];
-        let content = test_lines.join("\n");
-        buffer.newlines_are_crlf = false;
-        buffer.write(content.as_bytes(), true);
-
-        let last_line = test_lines.len() as isize - 1;
-        buffer.cursor_move_to_logical(Point { x: 0, y: last_line });
-
-        let result = buffer.move_selected_lines(MoveLineDirection::Up);
-
-        assert!(result, "Expected move_selected_lines to return true");
-
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(expected_lines, lines_out, "Expected lines did not match after move");
-    }
-
-    #[test]
-    fn test_move_selection_with_ultimate_line_up() {
-        let mut buffer = create_test_buffer();
-        let test_lines: Vec<&str> =
-            vec!["Line 1", "Line 2", "Line 3", "Line 4", "Line 5", "Line 6"];
-        let ultimate_line = test_lines.len() as isize - 1; // 0-indexed
-        // Create a selection that spans multiple columns and includes the ultimate line
-        let test_selection = TextBufferSelection {
-            beg: Point { x: 0, y: 2 },
-            end: Point { x: 1, y: ultimate_line },
-        };
-        let expected_lines: Vec<&str> =
-            vec!["Line 1", "Line 3", "Line 4", "Line 5", "Line 6", "Line 2"];
-
-        let expected_selection = TextBufferSelection {
-            beg: Point { x: test_selection.beg.x, y: test_selection.beg.y - 1 },
-            end: Point { x: test_selection.end.x, y: test_selection.end.y - 1 },
-        };
-        let content = test_lines.join("\n");
-        buffer.newlines_are_crlf = false;
-        buffer.write(content.as_bytes(), true);
-        buffer.cursor_move_to_logical(Point { x: 0, y: 0 });
-        buffer.set_selection(Some(test_selection));
-
-        let result = buffer.move_selected_lines(MoveLineDirection::Up);
-        assert!(result, "Expected move_selected_lines to return true");
-
-        let resulting_selection = buffer.selection.unwrap();
-        assert_eq!(
-            expected_selection.beg, resulting_selection.beg,
-            "Selection start position should be updated to the new line position"
-        );
-        assert_eq!(
-            expected_selection.end, resulting_selection.end,
-            "Selection end position should be updated to the new line position"
-        );
-
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(expected_lines, lines_out, "Expected lines did not match after move");
-    }
-
-    #[test]
-    fn test_move_selected_line_past_top() {
-        let mut buffer = create_test_buffer();
-        let test_lines: Vec<&str> = vec!["Line 1", "Line 2", "Line 3"];
-        let content = test_lines.join("\n");
-        buffer.newlines_are_crlf = false;
-        buffer.write(content.as_bytes(), true);
-        // Testing with no selection
-        let top_line = 0;
-        buffer.cursor_move_to_logical(Point { x: 3, y: top_line });
-        let result = buffer.move_selected_lines(MoveLineDirection::Up);
-        assert!(!result, "Expected move_selected_lines to return false at top boundary");
-
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(test_lines, lines_out, "Buffer should remain unchanged at top boundary");
-
-        buffer.set_selection(Some(TextBufferSelection {
-            beg: Point { x: 2, y: top_line },
-            end: Point { x: 3, y: 2 },
-        }));
-        // Testing with selection including the first line
-        let result = buffer.move_selected_lines(MoveLineDirection::Up);
-        assert!(
-            !result,
-            "Expected move_selected_lines to return false with selection at top boundary"
-        );
-
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(
-            test_lines, lines_out,
-            "Buffer should remain unchanged with selection at top boundary"
-        );
-    }
-
-    #[test]
-    fn test_move_selected_lines_past_bottom() {
-        let mut buffer = create_test_buffer();
-        let test_lines: Vec<&str> = vec!["1", "2", "3", "4", "5"];
-        let content = test_lines.join("\n");
-        buffer.newlines_are_crlf = false;
-        buffer.write(content.as_bytes(), true);
-
-        // Testing with no selection
-        let bottom_line = test_lines.len() as CoordType - 1;
-        buffer.cursor_move_to_logical(Point { x: 0, y: bottom_line });
-
-        let result = buffer.move_selected_lines(MoveLineDirection::Down);
-        assert!(
-            !result,
-            "Expected move_selected_lines to return false when cursor is at the bottom line"
-        );
-
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(test_lines, lines_out, "Buffer should remain unchanged after failed move.");
-
-        // Testing with selection including the last line
-        buffer.set_selection(Some(TextBufferSelection {
-            beg: Point { x: 0, y: bottom_line - 1 },
-            end: Point { x: 1, y: bottom_line },
-        }));
-
-        let result = buffer.move_selected_lines(MoveLineDirection::Down);
-        assert!(
-            !result,
-            "Expected move_selected_lines to return false when range includes bottom line"
-        );
-
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(test_lines, lines_out, "Buffer should remain unchanged after failed move.");
-
-        // Testing with selection but with cursor at START OF last line
-        buffer.cursor_move_to_logical(Point { x: 0, y: bottom_line });
-        buffer.set_selection(Some(TextBufferSelection {
-            beg: Point { x: 1, y: bottom_line - 1 },
-            end: Point { x: 0, y: bottom_line },
-        }));
-        let result = buffer.move_selected_lines(MoveLineDirection::Down);
-        assert!(
-            !result,
-            "Expected move_selected_lines with range to return false when cursor is at bottom line"
-        );
-        let mut content_out = String::new();
-        buffer.save_as_string(&mut content_out);
-        let lines_out: Vec<&str> = content_out.lines().collect();
-        assert_eq!(test_lines, lines_out, "Buffer should remain unchanged after failed move.");
-    }
-
-    #[test]
-    fn test_move_selected_lines_undo_selection_restoration() {
-        // Test that the selection is correctly restored when undoing move operations
-        // Does two b2b move operations and verifies that `undo` restores each.
-        let mut buffer = create_test_buffer();
-        let test_lines: Vec<&str> = vec!["Line 1", "Line 2", "Line 3", "Line 4", "Line 5"];
-        let content = test_lines.join("\n");
-        buffer.newlines_are_crlf = false;
-        buffer.write(content.as_bytes(), true);
-        buffer.cursor_move_to_logical(Point { x: 0, y: 0 });
-
-        let first_selection = TextBufferSelection {
-            beg: Point { x: 0, y: 1 }, // L2C0
-            end: Point { x: 4, y: 2 }, // L3C4
-        };
-        buffer.set_selection(Some(first_selection));
-
-        let result1 = buffer.move_selected_lines(MoveLineDirection::Down);
-        assert!(result1, "First move operation should succeed");
-
-        buffer.cursor_move_to_logical(Point { x: 0, y: 0 });
-        let second_selection = TextBufferSelection {
-            beg: Point { x: 1, y: 1 }, // L2C2
-            end: Point { x: 3, y: 3 }, // L4C4
-        };
-        buffer.set_selection(Some(second_selection));
-
-        let result2 = buffer.move_selected_lines(MoveLineDirection::Down);
-        assert!(result2, "Second move operation should succeed");
-
-        // Undo and verify second selection is restored
-        buffer.undo();
-        if let Some(selection_after_first_undo) = buffer.selection {
-            assert_eq!(
-                second_selection.beg, selection_after_first_undo.beg,
-                "First undo should restore the second selection start position",
-            );
-            assert_eq!(
-                second_selection.end, selection_after_first_undo.end,
-                "First undo should restore the second selection end position"
-            );
-        } else {
-            panic!("Selection should be restored after first undo, but got None");
-        }
-
-        // Undo again and verify first selection is restored
-        buffer.undo();
-        if let Some(selection_after_second_undo) = buffer.selection {
-            assert_eq!(
-                first_selection.beg, selection_after_second_undo.beg,
-                "Second undo should restore the original first selection start position"
-            );
-            assert_eq!(
-                first_selection.end, selection_after_second_undo.end,
-                "Second undo should restore the original first selection end position"
-            );
-        } else {
-            panic!("Selection should be restored after second undo, but got None");
-        }
-    }
 }
