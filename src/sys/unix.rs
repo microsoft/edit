@@ -537,6 +537,7 @@ pub fn icu_detect_renaming_suffix(arena: &Arena, handle: NonNull<c_void>) -> Are
 }
 
 #[cfg(edit_icu_renaming_auto_detect)]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn icu_add_renaming_suffix<'a, 'b, 'r>(
     arena: &'a Arena,
     name: *const c_char,
