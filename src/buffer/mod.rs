@@ -2032,6 +2032,7 @@ impl TextBuffer {
 
     fn write(&mut self, text: &[u8], at: Cursor, raw: bool) {
         let history_type = if raw { HistoryType::Other } else { HistoryType::Write };
+        let mut edit_begun = false;
 
         // If we have an active selection, writing an empty `text`
         // will still delete the selection. As such, we check this first.
@@ -2039,19 +2040,22 @@ impl TextBuffer {
             self.edit_begin(history_type, beg);
             self.edit_delete(end);
             self.set_selection(None);
+            edit_begun = true;
         }
 
         // If the text is empty the remaining code won't do anything,
         // allowing us to exit early.
         if text.is_empty() {
             // ...we still need to end any active edit session though.
-            if self.active_edit_depth > 0 {
+            if edit_begun {
                 self.edit_end();
             }
             return;
         }
 
+        if !edit_begun {
         self.edit_begin(history_type, at);
+        }
 
         let mut offset = 0;
         let scratch = scratch_arena(None);
