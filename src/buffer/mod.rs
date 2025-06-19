@@ -1761,10 +1761,7 @@ impl TextBuffer {
                 if selection_beg <= cursor_end.logical_pos
                     && selection_beg >= cursor_beg.logical_pos
                 {
-                    cursor = self.cursor_move_to_logical_internal(
-                        cursor,
-                        selection_beg,
-                    );
+                    cursor = self.cursor_move_to_logical_internal(cursor, selection_beg);
                     selection_off.start = cursor.offset;
                     selection_pos_beg = cursor.visual_pos.x;
                 }
@@ -1773,10 +1770,7 @@ impl TextBuffer {
                 if selection_end <= cursor_end.logical_pos
                     && selection_end >= cursor_beg.logical_pos
                 {
-                    cursor = self.cursor_move_to_logical_internal(
-                        cursor,
-                        selection_end,
-                    );
+                    cursor = self.cursor_move_to_logical_internal(cursor, selection_end);
                     selection_off.end = cursor.offset;
                     selection_pos_end = cursor.visual_pos.x;
                 }
