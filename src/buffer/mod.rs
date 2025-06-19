@@ -1743,7 +1743,6 @@ impl TextBuffer {
             }
 
             let mut selection_off = 0..0;
-            let mut selection_pos = 0..0;
 
             // Figure out the selection range on this line, if any.
             if cursor_beg.visual_pos.y == visual_line
@@ -1753,10 +1752,10 @@ impl TextBuffer {
                 let mut cursor = cursor_beg;
 
                 // By default, we assume the entire line is selected.
+                let mut selection_pos_beg = 0;
+                let mut selection_pos_end = COORD_TYPE_SAFE_MAX;
                 selection_off.start = cursor_beg.offset;
                 selection_off.end = cursor_end.offset;
-                selection_pos.start = 0;
-                selection_pos.end = COORD_TYPE_SAFE_MAX;
 
                 // The start of the selection is within this line. We need to update selection_beg.
                 if selection_beg <= cursor_end.logical_pos
@@ -1764,10 +1763,10 @@ impl TextBuffer {
                 {
                     cursor = self.cursor_move_to_logical_internal(
                         cursor,
-                        Point { x: selection_beg.x.max(origin.x), y: selection_beg.y },
+                        Point { x: selection_beg.x, y: selection_beg.y },
                     );
                     selection_off.start = cursor.offset;
-                    selection_pos.start = cursor.visual_pos.x;
+                    selection_pos_beg = cursor.visual_pos.x;
                 }
 
                 // The end of the selection is within this line. We need to update selection_end.
@@ -1776,18 +1775,18 @@ impl TextBuffer {
                 {
                     cursor = self.cursor_move_to_logical_internal(
                         cursor,
-                        Point { x: selection_end.x.min(origin.x + text_width), y: selection_end.y },
+                        Point { x: selection_end.x, y: selection_end.y },
                     );
                     selection_off.end = cursor.offset;
-                    selection_pos.end = cursor.visual_pos.x;
+                    selection_pos_end = cursor.visual_pos.x;
                 }
 
                 let left = destination.left + self.margin_width - origin.x;
                 let top = destination.top + y;
                 let rect = Rect {
-                    left: left + selection_pos.start,
+                    left: left + selection_pos_beg.max(origin.x),
                     top,
-                    right: left + selection_pos.end,
+                    right: left + selection_pos_end.min(origin.x + text_width),
                     bottom: top + 1,
                 };
 
