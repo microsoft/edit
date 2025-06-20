@@ -547,7 +547,7 @@ impl Tui {
                 // This causes us to ignore the keyboard input here. We need a way to inform the caller over
                 // how much of the input text we actually processed in a single frame. Or perhaps we could use
                 // the needs_settling logic?
-                if !matches!(text, "{" | "[" | "(") && text.len() == 1 {
+                if text.len() == 1 {
                     let ch = text.as_bytes()[0];
                     input_keyboard = InputKey::from_ascii(ch as char)
                 }
