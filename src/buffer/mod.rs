@@ -38,6 +38,7 @@ use std::str;
 pub use gap_buffer::GapBuffer;
 
 use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::buffer::highlighter::{HighlightKind, Highlighter};
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
@@ -1721,7 +1722,7 @@ impl TextBuffer {
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut visual_pos_x_max = 0;
-        //let mut highlighter = Parser::new(&self.buffer, Default::default());
+        let mut highlighter = Highlighter::new(&self.buffer);
 
         // Pick the cursor closer to the `origin.y`.
         let mut cursor = {
@@ -1960,28 +1961,28 @@ impl TextBuffer {
                     global_off += chunk.len();
                 }
 
-                /*while highlighter.logical_pos_y() < cursor.logical_pos.y {
+                while highlighter.logical_pos_y() < cursor.logical_pos.y {
                     let scratch_alt = scratch_arena(Some(&scratch));
                     _ = highlighter.parse_next_line(&scratch_alt);
                 }
 
                 let highlights = highlighter.parse_next_line(&scratch);
                 let mut highlight_cursor = cursor_beg;
-                for t in highlights {
-                    let color = match t.kind {
-                        TokenKind::Other => IndexedColor::Foreground,
-                        TokenKind::Comment => IndexedColor::Green,
-                        TokenKind::Keyword => IndexedColor::Magenta,
-                        TokenKind::Operator => IndexedColor::White,
-                        TokenKind::Number => IndexedColor::BrightGreen,
-                        TokenKind::String => IndexedColor::BrightRed,
-                        TokenKind::Variable => IndexedColor::BrightCyan,
+                for h in highlights {
+                    let color = match h.kind {
+                        HighlightKind::Comment => IndexedColor::Green,
+                        HighlightKind::Number => IndexedColor::BrightGreen,
+                        HighlightKind::String => IndexedColor::BrightRed,
+                        HighlightKind::Variable => IndexedColor::BrightCyan,
+                        HighlightKind::Operator => IndexedColor::White,
+                        HighlightKind::Keyword => IndexedColor::BrightMagenta,
+                        HighlightKind::Method => IndexedColor::BrightYellow,
                     };
 
                     let highlight_beg =
-                        self.cursor_move_to_offset_internal(highlight_cursor, t.range.start);
+                        self.cursor_move_to_offset_internal(highlight_cursor, h.range.start);
                     let highlight_end =
-                        self.cursor_move_to_offset_internal(highlight_beg, t.range.end);
+                        self.cursor_move_to_offset_internal(highlight_beg, h.range.end);
                     highlight_cursor = highlight_end;
 
                     fb.blend_fg(
@@ -1997,7 +1998,7 @@ impl TextBuffer {
                         },
                         fb.indexed(color),
                     );
-                }*/
+                }
 
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
