@@ -46,11 +46,16 @@ pub fn init(capacity: usize) -> apperr::Result<()> {
 /// If your function takes an [`Arena`] argument, you **MUST** pass it to `scratch_arena` as `Some(&arena)`.
 pub fn scratch_arena(conflict: Option<&Arena>) -> ScratchArena<'static> {
     unsafe {
+        #[cfg(test)]
+        if S_SCRATCH[0].is_empty() {
+            init(128 * 1024 * 1024).unwrap();
+        }
+
         #[cfg(debug_assertions)]
         let conflict = conflict.map(|a| a.delegate_target_unchecked());
 
         let index = opt_ptr_eq(conflict, Some(&S_SCRATCH[0])) as usize;
-        let arena = &mut S_SCRATCH[index];
+        let arena = &S_SCRATCH[index];
         ScratchArena::new(arena)
     }
 }

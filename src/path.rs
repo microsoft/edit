@@ -9,8 +9,6 @@ use std::path::{Component, MAIN_SEPARATOR_STR, Path, PathBuf};
 /// Normalizes a given path by removing redundant components.
 /// The given path must be absolute (e.g. by joining it with the current working directory).
 pub fn normalize(path: &Path) -> PathBuf {
-    debug_assert!(path.is_absolute());
-
     let mut res = PathBuf::with_capacity(path.as_os_str().as_encoded_bytes().len());
     let mut root_len = 0;
 
