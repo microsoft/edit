@@ -3368,11 +3368,15 @@ impl<'a> Context<'a, '_> {
     }
 
     /// Checks if we should delete both opening and closing brackets
+    /// 
     /// Returns true if we should delete both brackets, false for normal deletion
     fn should_delete_both_brackets(&mut self, tb: &mut TextBuffer) -> bool {
-        // Get the text before and after the cursor
-        let text_before = tb.read_backward(1);
-        let text_after = tb.read_forward(1);
+        // Get the current cursor offset
+        let cursor_pos = tb.cursor_logical_pos();
+        
+        // Read text before cursor (try to get at least 1 character)
+        let text_before = tb.read_backward(cursor_pos.x as usize);
+        let text_after = tb.read_forward(cursor_pos.x as usize);
         
         // Check for common bracket pairs
         if text_before.ends_with(b"(") && text_after.starts_with(b")") {
