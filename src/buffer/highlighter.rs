@@ -1,5 +1,6 @@
 #![allow(dead_code, unused_variables, unused_mut)]
 
+use std::fmt::Debug;
 use std::ops::{Range, RangeInclusive};
 
 use crate::arena::{Arena, scratch_arena};
@@ -7,10 +8,8 @@ use crate::document::ReadableDocument;
 use crate::helpers::*;
 use crate::{simd, unicode};
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum TokenKind {
-    #[default]
-    Other,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HighlightKind {
     Comment,
     Number,
     String,
@@ -20,10 +19,16 @@ pub enum TokenKind {
     Method,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Token {
+#[derive(Clone, PartialEq, Eq)]
+pub struct Higlight {
     pub range: Range<usize>,
-    pub kind: TokenKind,
+    pub kind: HighlightKind,
+}
+
+impl Debug for Higlight {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}..{}, {:?})", self.range.start, self.range.end, self.kind)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -57,15 +62,15 @@ enum StateStack {
 
 struct Transition {
     test: Test,
-    kind: TokenKind,
+    kind: HighlightKind,
     state: StateStack,
 }
 
 const POWERSHELL: Language = {
     type T = Transition;
+    use HighlightKind::*;
     use StateStack::*;
     use Test::*;
-    use TokenKind::*;
 
     const GROUND: u8 = 0;
 
@@ -98,15 +103,15 @@ const POWERSHELL: Language = {
                 // Variables
                 T { test: ConsumePrefix("$"), kind: Variable, state: Change(VARIABLE) },
                 // Operators
-                T { test: ConsumePrefix("-"), kind: Operator, state: Change(GROUND) },
-                T { test: ConsumePrefix("*"), kind: Operator, state: Change(GROUND) },
-                T { test: ConsumePrefix("/"), kind: Operator, state: Change(GROUND) },
-                T { test: ConsumePrefix("%"), kind: Operator, state: Change(GROUND) },
-                T { test: ConsumePrefix("+"), kind: Operator, state: Change(GROUND) },
-                T { test: ConsumePrefix("<"), kind: Operator, state: Change(GROUND) },
-                T { test: ConsumePrefix("="), kind: Operator, state: Change(GROUND) },
-                T { test: ConsumePrefix(">"), kind: Operator, state: Change(GROUND) },
-                T { test: ConsumePrefix("|"), kind: Operator, state: Change(GROUND) },
+                T { test: ConsumePrefix("-"), kind: Operator, state: Pop(1) },
+                T { test: ConsumePrefix("*"), kind: Operator, state: Pop(1) },
+                T { test: ConsumePrefix("/"), kind: Operator, state: Pop(1) },
+                T { test: ConsumePrefix("%"), kind: Operator, state: Pop(1) },
+                T { test: ConsumePrefix("+"), kind: Operator, state: Pop(1) },
+                T { test: ConsumePrefix("<"), kind: Operator, state: Pop(1) },
+                T { test: ConsumePrefix("="), kind: Operator, state: Pop(1) },
+                T { test: ConsumePrefix(">"), kind: Operator, state: Pop(1) },
+                T { test: ConsumePrefix("|"), kind: Operator, state: Pop(1) },
                 // Keywords
                 T { test: ConsumePrefix("break"), kind: Keyword, state: Change(KEYWORD) },
                 T { test: ConsumePrefix("catch"), kind: Keyword, state: Change(KEYWORD) },
@@ -165,7 +170,7 @@ const POWERSHELL: Language = {
     }
 };
 
-pub struct Parser<'a> {
+pub struct Highlighter<'a> {
     doc: &'a dyn ReadableDocument,
     offset: usize,
     logical_pos_y: CoordType,
@@ -175,7 +180,7 @@ pub struct Parser<'a> {
     starter: Vec<[bool; 256]>,
 }
 
-impl<'doc> Parser<'doc> {
+impl<'doc> Highlighter<'doc> {
     pub fn new(doc: &'doc dyn ReadableDocument) -> Self {
         let language = &POWERSHELL;
 
@@ -209,9 +214,9 @@ impl<'doc> Parser<'doc> {
         self.logical_pos_y
     }
 
-    pub fn parse_next_line<'a>(&mut self, arena: &'a Arena) -> Vec<Token, &'a Arena> {
+    pub fn parse_next_line<'a>(&mut self, arena: &'a Arena) -> Vec<Higlight, &'a Arena> {
         let scratch = scratch_arena(Some(arena));
-        let line_offset = self.offset;
+        let line_beg = self.offset;
         let mut line_buf = Vec::new_in(&*scratch);
         let mut res = Vec::new_in(arena);
 
@@ -261,10 +266,9 @@ impl<'doc> Parser<'doc> {
 
         let line_buf = unicode::strip_newline(&line_buf);
         let mut off = 0;
-        let mut token_beg = 0;
-        let mut state_stack = Vec::new_in(&*scratch);
+        let mut state_stack: Vec<(u8, HighlightKind), &Arena> = Vec::new_in(&*scratch);
         let mut state = 0u8;
-        let mut kind = TokenKind::Other;
+        let mut kind = None;
 
         loop {
             while off < line_buf.len() && !self.starter[state as usize][line_buf[off] as usize] {
@@ -275,7 +279,7 @@ impl<'doc> Parser<'doc> {
             }
 
             let mut hit = false;
-            let beg = off;
+            let start = off;
 
             for t in self.language.states[state as usize] {
                 match t.test {
@@ -302,40 +306,59 @@ impl<'doc> Parser<'doc> {
                 };
 
                 if hit {
-                    if kind != t.kind {
-                        token_beg = beg;
+                    if kind != Some(t.kind) {
+                        kind = Some(t.kind);
+
+                        if let Some(last) = res.last_mut()
+                            && last.range.end > start
+                        {
+                            last.range.end = start;
+                        }
+
+                        res.push(Higlight { range: start..line_buf.len(), kind: t.kind });
                     }
+
                     match t.state {
                         StateStack::Change(to) => {
                             if let Some(last) = state_stack.last_mut() {
-                                *last = to;
+                                *last = (state, t.kind);
                             }
                             state = to;
                         }
                         StateStack::Push(to) => {
-                            state_stack.push(state);
+                            state_stack.push((state, t.kind));
                             state = to;
                         }
                         StateStack::Pop(count) => {
                             state_stack.truncate(state_stack.len().saturating_sub(count as usize));
-                            state = state_stack.last().copied().unwrap_or(0);
+                            (state, kind) =
+                                state_stack.last().map_or((0, None), |s| (s.0, Some(s.1)));
                         }
                     }
-                    kind = t.kind;
-                    if state == 0 {
-                        res.push(Token { range: token_beg..off, kind });
+
+                    if kind != Some(t.kind) {
+                        if let Some(last) = res.last_mut() {
+                            last.range.end = off;
+                        }
+                        if let Some(kind) = kind {
+                            res.push(Higlight { range: off..line_buf.len(), kind });
+                        }
                     }
+
                     break;
                 }
             }
 
+            // False starter hit.
             if !hit {
                 off += 1;
             }
         }
 
-        if state != 0 {
-            res.push(Token { range: token_beg..off, kind });
+        // Adjust the range to account for the line offset.
+        for h in &mut res {
+            h.range.start += line_beg;
+            h.range.end += line_beg;
         }
 
         res
@@ -351,18 +374,18 @@ mod tests {
         let doc = r#"$response = Read-Host "Delete branch '$branch'? [y/N]""#;
         let bytes = doc.as_bytes();
         let scratch = scratch_arena(None);
-        let mut parser = Parser::new(&bytes);
+        let mut parser = Highlighter::new(&bytes);
 
         let tokens = parser.parse_next_line(&scratch);
         assert_eq!(
             tokens,
             &[
-                Token { range: 0..9, kind: TokenKind::Variable },
-                Token { range: 10..11, kind: TokenKind::Operator },
-                Token { range: 12..21, kind: TokenKind::Method },
-                Token { range: 22..38, kind: TokenKind::String },
-                Token { range: 38..45, kind: TokenKind::Variable },
-                Token { range: 45..54, kind: TokenKind::String },
+                Higlight { range: 0..9, kind: HighlightKind::Variable },
+                Higlight { range: 10..11, kind: HighlightKind::Operator },
+                Higlight { range: 12..21, kind: HighlightKind::Method },
+                Higlight { range: 22..38, kind: HighlightKind::String },
+                Higlight { range: 38..45, kind: HighlightKind::Variable },
+                Higlight { range: 45..54, kind: HighlightKind::String },
             ]
         );
     }
