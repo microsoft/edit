@@ -250,11 +250,13 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
                     print_version();
                     return Ok(true);
                 }
-                Some("-") | Some("--") => {
+                Some("--") => {
                     allow_positional = true;
-                    if arg == "-" {
-                        paths.clear();
-                    }
+                    continue;
+                }
+                Some("-") => {
+                    allow_positional = true;
+                    paths.clear();
                     continue;
                 }
                 Some(s) if s.starts_with('-') => {
