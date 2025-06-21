@@ -45,8 +45,9 @@ enum CharClass {
 enum Test {
     Consume(usize),
     ConsumePrefix(&'static str),
+    ConsumeDigits,
     ConsumeWord,
-    ConsumeToLineEnd,
+    ConsumeLine,
 }
 
 struct Language {
@@ -85,8 +86,9 @@ const POWERSHELL: Language = {
     const VARIABLE_BRACE: u8 = 7;
     const VARIABLE_PAREN: u8 = 8;
 
-    const KEYWORD: u8 = 9;
-    const METHOD: u8 = 10;
+    const PARAMETER: u8 = 9;
+    const KEYWORD: u8 = 10;
+    const METHOD: u8 = 11;
 
     Language {
         word_chars: &[b'0'..=b'9', b'A'..=b'Z', b'a'..=b'z', b'?'..=b'?', b'_'..=b'_'],
@@ -97,13 +99,14 @@ const POWERSHELL: Language = {
                 T { test: ConsumePrefix("#"), kind: Comment, state: Change(LINE_COMMENT) },
                 T { test: ConsumePrefix("<#"), kind: Comment, state: Change(BLOCK_COMMENT) },
                 // Numbers
+                T { test: ConsumeDigits, kind: Number, state: Pop(1) },
                 // Strings
                 T { test: ConsumePrefix("'"), kind: String, state: Change(STRING_SINGLE) },
                 T { test: ConsumePrefix("\""), kind: String, state: Change(STRING_DOUBLE) },
                 // Variables
                 T { test: ConsumePrefix("$"), kind: Variable, state: Change(VARIABLE) },
                 // Operators
-                T { test: ConsumePrefix("-"), kind: Operator, state: Pop(1) },
+                T { test: ConsumePrefix("-"), kind: Operator, state: Change(PARAMETER) },
                 T { test: ConsumePrefix("*"), kind: Operator, state: Pop(1) },
                 T { test: ConsumePrefix("/"), kind: Operator, state: Pop(1) },
                 T { test: ConsumePrefix("%"), kind: Operator, state: Pop(1) },
@@ -132,7 +135,7 @@ const POWERSHELL: Language = {
                 T { test: ConsumeWord, kind: Method, state: Change(METHOD) },
             ],
             // LINE_COMMENT: # comment
-            &[T { test: ConsumeToLineEnd, kind: Comment, state: Pop(1) }],
+            &[T { test: ConsumeLine, kind: Comment, state: Pop(1) }],
             // BLOCK_COMMENT: <# comment #>
             &[T { test: ConsumePrefix("#>"), kind: Comment, state: Pop(1) }],
             // STRING_SINGLE: 'string'
@@ -155,6 +158,11 @@ const POWERSHELL: Language = {
             &[T { test: ConsumePrefix("}"), kind: Variable, state: Pop(1) }],
             // VARIABLE_PAREN: $(command)
             &[T { test: ConsumePrefix(")"), kind: Variable, state: Pop(1) }],
+            // PARAMETER: -parameter
+            &[
+                T { test: ConsumeWord, kind: Operator, state: Pop(1) },
+                T { test: Consume(0), kind: Operator, state: Pop(1) },
+            ],
             // KEYWORD: foreach, if, etc.
             &[
                 T { test: ConsumeWord, kind: Method, state: Change(METHOD) },
@@ -178,6 +186,10 @@ pub struct Highlighter<'a> {
     language: &'static Language,
     word_chars: [bool; 256],
     starter: Vec<[bool; 256]>,
+
+    state: usize,
+    kind: Option<HighlightKind>,
+    state_stack: Vec<(usize, HighlightKind)>,
 }
 
 impl<'doc> Highlighter<'doc> {
@@ -193,14 +205,27 @@ impl<'doc> Highlighter<'doc> {
                 match t.test {
                     Test::Consume(n) => starter.fill(true),
                     Test::ConsumePrefix(prefix) => starter[prefix.as_bytes()[0] as usize] = true,
+                    Test::ConsumeDigits => starter[b'0' as usize..=b'9' as usize].fill(true),
                     Test::ConsumeWord => Self::fill_word_chars(&mut starter, language.word_chars),
-                    Test::ConsumeToLineEnd => {}
+                    Test::ConsumeLine => {}
                 }
             }
             starter
         }));
 
-        Self { doc, offset: 0, logical_pos_y: 0, language, word_chars, starter }
+        Self {
+            doc,
+            offset: 0,
+            logical_pos_y: 0,
+
+            language,
+            word_chars,
+            starter,
+
+            state: 0,
+            kind: None,
+            state_stack: Vec::new(),
+        }
     }
 
     fn fill_word_chars(dst: &mut [bool; 256], src: &[RangeInclusive<u8>]) {
@@ -266,92 +291,111 @@ impl<'doc> Highlighter<'doc> {
 
         let line_buf = unicode::strip_newline(&line_buf);
         let mut off = 0;
-        let mut state_stack: Vec<(u8, HighlightKind), &Arena> = Vec::new_in(&*scratch);
-        let mut state = 0u8;
-        let mut kind = None;
+
+        if let Some(kind) = self.kind {
+            res.push(Higlight { range: 0..line_buf.len(), kind });
+        }
 
         loop {
-            while off < line_buf.len() && !self.starter[state as usize][line_buf[off] as usize] {
+            while off < line_buf.len() && !self.starter[self.state][line_buf[off] as usize] {
                 off += 1;
             }
-            if off >= line_buf.len() {
-                break;
-            }
 
-            let mut hit = false;
             let start = off;
+            let mut hit = None;
 
-            for t in self.language.states[state as usize] {
+            for t in self.language.states[self.state] {
                 match t.test {
                     Test::Consume(n) => {
                         off += n;
-                        hit = true;
+                        hit = Some(t);
+                        break;
                     }
                     Test::ConsumePrefix(str) => {
-                        hit = line_buf[off..].starts_with(str.as_bytes());
-                        if hit {
+                        if line_buf[off..].starts_with(str.as_bytes()) {
                             off += str.len();
+                            hit = Some(t);
+                            break;
+                        }
+                    }
+                    Test::ConsumeDigits => {
+                        if off < line_buf.len() && line_buf[off].is_ascii_digit() {
+                            while {
+                                off += 1;
+                                off < line_buf.len() && line_buf[off].is_ascii_digit()
+                            } {}
+                            hit = Some(t);
+                            break;
                         }
                     }
                     Test::ConsumeWord => {
-                        while off < line_buf.len() && self.word_chars[line_buf[off] as usize] {
-                            off += 1;
-                            hit = true;
+                        if off < line_buf.len() && self.word_chars[line_buf[off] as usize] {
+                            while {
+                                off += 1;
+                                off < line_buf.len() && self.word_chars[line_buf[off] as usize]
+                            } {}
+                            hit = Some(t);
+                            break;
                         }
                     }
-                    Test::ConsumeToLineEnd => {
+                    Test::ConsumeLine => {
                         off = line_buf.len();
-                        hit = true;
+                        hit = Some(t);
+                        break;
                     }
                 };
-
-                if hit {
-                    if kind != Some(t.kind) {
-                        kind = Some(t.kind);
-
-                        if let Some(last) = res.last_mut()
-                            && last.range.end > start
-                        {
-                            last.range.end = start;
-                        }
-
-                        res.push(Higlight { range: start..line_buf.len(), kind: t.kind });
-                    }
-
-                    match t.state {
-                        StateStack::Change(to) => {
-                            if let Some(last) = state_stack.last_mut() {
-                                *last = (state, t.kind);
-                            }
-                            state = to;
-                        }
-                        StateStack::Push(to) => {
-                            state_stack.push((state, t.kind));
-                            state = to;
-                        }
-                        StateStack::Pop(count) => {
-                            state_stack.truncate(state_stack.len().saturating_sub(count as usize));
-                            (state, kind) =
-                                state_stack.last().map_or((0, None), |s| (s.0, Some(s.1)));
-                        }
-                    }
-
-                    if kind != Some(t.kind) {
-                        if let Some(last) = res.last_mut() {
-                            last.range.end = off;
-                        }
-                        if let Some(kind) = kind {
-                            res.push(Higlight { range: off..line_buf.len(), kind });
-                        }
-                    }
-
-                    break;
-                }
             }
 
-            // False starter hit.
-            if !hit {
+            if let Some(t) = hit {
+                if self.kind != Some(t.kind) {
+                    self.kind = Some(t.kind);
+
+                    if let Some(last) = res.last_mut()
+                        && last.range.end > start
+                    {
+                        last.range.end = start;
+                    }
+
+                    res.push(Higlight { range: start..line_buf.len(), kind: t.kind });
+                }
+
+                match t.state {
+                    StateStack::Change(to) => {
+                        if let Some(last) = self.state_stack.last_mut() {
+                            *last = (self.state, t.kind);
+                        }
+                        if let Some(last) = res.last_mut() {
+                            last.kind = t.kind;
+                        }
+                        self.state = to as usize;
+                    }
+                    StateStack::Push(to) => {
+                        self.state_stack.push((self.state, t.kind));
+                        self.state = to as usize;
+                    }
+                    StateStack::Pop(count) => {
+                        self.state_stack
+                            .truncate(self.state_stack.len().saturating_sub(count as usize));
+                        (self.state, self.kind) =
+                            self.state_stack.last().map_or((0, None), |s| (s.0, Some(s.1)));
+                    }
+                }
+
+                if self.kind != Some(t.kind) {
+                    if let Some(last) = res.last_mut() {
+                        last.range.end = off;
+                    }
+                    if let Some(kind) = self.kind {
+                        res.push(Higlight { range: off..line_buf.len(), kind });
+                    }
+                }
+            } else {
+                // False starter hit.
                 off += 1;
+            }
+
+            if off >= line_buf.len() {
+                break;
             }
         }
 
