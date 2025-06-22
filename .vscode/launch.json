@@ -10,7 +10,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/src/bin/edit/main.rs"
+                "C:/Users/lhecker/projects/posh-git/src/GitPrompt.ps1"
             ],
         },
         {
@@ -21,7 +21,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/src/bin/edit/main.rs"
+                "C:/Users/lhecker/projects/posh-git/src/GitPrompt.ps1"
             ],
         },
         {
@@ -32,7 +32,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/src/bin/edit/main.rs"
+                "C:/Users/lhecker/projects/posh-git/src/GitPrompt.ps1"
             ],
         }
     ]

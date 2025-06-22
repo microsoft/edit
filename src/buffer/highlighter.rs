@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_variables, unused_mut)]
 
 use std::fmt::Debug;
-use std::ops::{Range, RangeInclusive};
+use std::ops::Range;
 
 use crate::arena::{Arena, scratch_arena};
 use crate::document::ReadableDocument;
@@ -51,7 +51,7 @@ enum Test {
 }
 
 struct Language {
-    word_chars: &'static [RangeInclusive<u8>],
+    word_chars: &'static [u16; 6],
     states: &'static [&'static [Transition]],
 }
 
@@ -91,7 +91,20 @@ const POWERSHELL: Language = {
     const METHOD: u8 = 11;
 
     Language {
-        word_chars: &[b'0'..=b'9', b'A'..=b'Z', b'a'..=b'z', b'?'..=b'?', b'_'..=b'_'],
+        word_chars: &[
+            // /.-,+*)('&%$#"!
+            0b_1110110000101010,
+            // ?>=<;:9876543210
+            0b_1111011111111111,
+            // ONMLKJIHGFEDCBA@
+            0b_1111111111111110,
+            // _^]\[ZYXWVUTSRQP
+            0b_1111111111111111,
+            // onmlkjihgfedcba`
+            0b_1111111111111111,
+            //  ~}|{zyxwvutsrqp
+            0b_0100011111111111,
+        ],
         states: &[
             // GROUND
             &[
@@ -228,9 +241,14 @@ impl<'doc> Highlighter<'doc> {
         }
     }
 
-    fn fill_word_chars(dst: &mut [bool; 256], src: &[RangeInclusive<u8>]) {
-        for r in src {
-            dst[*r.start() as usize..=*r.end() as usize].fill(true);
+    fn fill_word_chars(dst: &mut [bool; 256], src: &[u16; 6]) {
+        for y in 0..src.len() {
+            let mut r = src[y];
+            while r != 0 {
+                let bit = r.trailing_zeros() as usize;
+                r &= !(1 << bit);
+                dst[32 + y * 16 + bit] = true;
+            }
         }
         dst[0x80..].fill(true);
     }
@@ -245,6 +263,10 @@ impl<'doc> Highlighter<'doc> {
         let mut line_buf = Vec::new_in(&*scratch);
         let mut res = Vec::new_in(arena);
 
+        if self.offset != 0 {
+            self.logical_pos_y += 1;
+        }
+
         // Accumulate a line of text into `line_buf`.
         {
             let mut chunk = self.doc.read_forward(self.offset);
@@ -252,10 +274,6 @@ impl<'doc> Highlighter<'doc> {
             // Check if the last line was the last line in the document.
             if chunk.is_empty() {
                 return res;
-            }
-
-            if self.offset != 0 {
-                self.logical_pos_y += 1;
             }
 
             loop {
