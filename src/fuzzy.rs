@@ -23,10 +23,6 @@ pub fn score_fuzzy<'a>(
         return (NO_MATCH, Vec::new_in(arena));
     }
 
-    if needle.len() > haystack.len() {
-        // impossible for query to be contained in target
-        return (NO_MATCH, Vec::new_in(arena));
-    }
 
     let scratch = scratch_arena(Some(arena));
     let target = map_chars(&scratch, haystack);
