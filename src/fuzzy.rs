@@ -23,12 +23,17 @@ pub fn score_fuzzy<'a>(
         return (NO_MATCH, Vec::new_in(arena));
     }
 
+    if needle.len() > haystack.len() {
+        // impossible for query to be contained in target
+        return (NO_MATCH, Vec::new_in(arena));
+    }
+
     let scratch = scratch_arena(Some(arena));
     let target = map_chars(&scratch, haystack);
     let query = map_chars(&scratch, needle);
 
     if target.len() < query.len() {
-        // impossible for query to be contained in target
+        // impossible for query to be contained in target (double-check after mapping)
         return (NO_MATCH, Vec::new_in(arena));
     }
 
@@ -37,7 +42,11 @@ pub fn score_fuzzy<'a>(
     let target_lower = map_chars(&scratch, &target_lower);
     let query_lower = map_chars(&scratch, &query_lower);
 
-    let area = query.len() * target.len();
+    let area = query.len().checked_mul(target.len()).unwrap_or(0);
+    if area == 0 {
+        return (NO_MATCH, Vec::new_in(arena));
+    }
+
     let mut scores = vec::from_elem_in(0, area, &*scratch);
     let mut matches = vec::from_elem_in(0, area, &*scratch);
 
@@ -69,10 +78,8 @@ pub fn score_fuzzy<'a>(
                 0
             };
             let left_score = if target_index > 0 { scores[current_index - 1] } else { 0 };
-            let diag_score =
-                if query_index > 0 && target_index > 0 { scores[diag_index] } else { 0 };
-            let matches_sequence_len =
-                if query_index > 0 && target_index > 0 { matches[diag_index] } else { 0 };
+            let diag_score = if query_index > 0 && target_index > 0 { scores[diag_index] } else { 0 };
+            let matches_sequence_len = if query_index > 0 && target_index > 0 { matches[diag_index] } else { 0 };
 
             // If we are not matching on the first query character anymore, we only produce a
             // score if we had a score previously for the last query index (by looking at the diagScore).
@@ -85,7 +92,7 @@ pub fn score_fuzzy<'a>(
                 compute_char_score(
                     query[query_index],
                     query_lower[query_index],
-                    if target_index != 0 { Some(target[target_index - 1]) } else { None },
+                    target.get(target_index.wrapping_sub(1)).copied(),
                     target[target_index],
                     target_lower[target_index],
                     matches_sequence_len,
@@ -100,12 +107,12 @@ pub fn score_fuzzy<'a>(
                 && (
                     // We don't need to check if it's contiguous if we allow non-contiguous matches
                     allow_non_contiguous_matches ||
-                        // We must be looking for a contiguous match.
-                        // Looking at an index above 0 in the query means we must have already
-                        // found out this is contiguous otherwise there wouldn't have been a score
-                        query_index > 0 ||
-                        // lastly check if the query is completely contiguous at this index in the target
-                        target_lower[target_index..].starts_with(&query_lower)
+                    // We must be looking for a contiguous match.
+                    // Looking at an index above 0 in the query means we must have already
+                    // found out this is contiguous otherwise there wouldn't have been a score
+                    query_index > 0 ||
+                    // lastly check if the query is completely contiguous at this index in the target
+                    target_lower.get(target_index..).map_or(false, |sub| sub.starts_with(&query_lower))
                 )
             {
                 matches[current_index] = matches_sequence_len + 1;
