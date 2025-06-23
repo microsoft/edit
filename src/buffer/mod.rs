@@ -542,6 +542,27 @@ impl TextBuffer {
         }
     }
 
+    /// Calculates the amount of spaces a tab key press would insert at the given column.
+    /// This also equals the visual width of an actual tab character.
+    ///
+    /// This exists because Rust doesn't have range constraints yet, and without
+    /// them assembly blows up in size by 7x. It's a recurring issue with Rust.
+    #[inline]
+    fn tab_size_eval(&self, column: CoordType) -> CoordType {
+        // SAFETY: `set_tab_size` clamps `self.tab_size` to 1-8.
+        unsafe { std::hint::assert_unchecked(self.tab_size >= 1 && self.tab_size <= 8) };
+        self.tab_size - (column % self.tab_size)
+    }
+
+    /// If the cursor is at an indentation of `column`, this returns
+    /// the column to which a backspace key press would delete to.
+    #[inline]
+    fn tab_size_prev_column(&self, column: CoordType) -> CoordType {
+        // SAFETY: `set_tab_size` clamps `self.tab_size` to 1-8.
+        unsafe { std::hint::assert_unchecked(self.tab_size >= 1 && self.tab_size <= 8) };
+        (column - 1).max(0) / self.tab_size * self.tab_size
+    }
+
     /// Returns whether tabs are used for indentation.
     pub fn indent_with_tabs(&self) -> bool {
         self.indent_with_tabs
@@ -1874,11 +1895,8 @@ impl TextBuffer {
                                     self.cursor_move_to_offset_internal(cursor_line, global_off);
                             }
 
-                            let tab_size = if is_tab {
-                                self.tab_size - (cursor_line.column % self.tab_size)
-                            } else {
-                                1
-                            };
+                            let tab_size =
+                                if is_tab { self.tab_size_eval(cursor_line.column) } else { 1 };
 
                             if visualize {
                                 // If the whitespace is part of the selection,
@@ -2113,7 +2131,7 @@ impl TextBuffer {
 
                 // Now replace tabs with spaces.
                 while line_off < line.len() && line[line_off] == b'\t' {
-                    let spaces = self.tab_size - (self.cursor.column % self.tab_size);
+                    let spaces = self.tab_size_eval(self.cursor.column);
                     let spaces = &TAB_WHITESPACE.as_bytes()[..spaces as usize];
                     self.edit_write(spaces);
                     line_off += 1;
@@ -2144,11 +2162,10 @@ impl TextBuffer {
                 // because "  a\n  a\n" should give the 3rd line a total indentation of 4.
                 // Assuming your terminal has bracketed paste, this won't be a concern though.
                 // (If it doesn't, use a different terminal.)
-                let tab_size = self.tab_size as usize;
                 let line_beg = self.goto_line_start(self.cursor, self.cursor.logical_pos.y);
                 let limit = self.cursor.offset;
                 let mut off = line_beg.offset;
-                let mut newline_indentation = 0usize;
+                let mut newline_indentation = 0;
 
                 'outer: while off < limit {
                     let chunk = self.read_forward(off);
@@ -2158,7 +2175,7 @@ impl TextBuffer {
                         if c == b' ' {
                             newline_indentation += 1;
                         } else if c == b'\t' {
-                            newline_indentation += tab_size - (newline_indentation % tab_size);
+                            newline_indentation += self.tab_size_eval(newline_indentation);
                         } else {
                             break 'outer;
                         }
@@ -2169,14 +2186,14 @@ impl TextBuffer {
 
                 // If tabs are enabled, add as many tabs as we can.
                 if self.indent_with_tabs {
-                    let tab_count = newline_indentation / tab_size;
-                    newline_buffer.push_repeat('\t', tab_count);
-                    newline_indentation -= tab_count * tab_size;
+                    let tab_count = newline_indentation / self.tab_size;
+                    newline_buffer.push_repeat('\t', tab_count as usize);
+                    newline_indentation -= tab_count * self.tab_size;
                 }
 
                 // If tabs are disabled, or if the indentation wasn't a multiple of the tab size,
                 // add spaces to make up the difference.
-                newline_buffer.push_repeat(' ', newline_indentation);
+                newline_buffer.push_repeat(' ', newline_indentation as usize);
             }
 
             self.edit_write(newline_buffer.as_bytes());
@@ -2262,145 +2279,12 @@ impl TextBuffer {
     /// Return `.x == 0` if there are no non-whitespace characters.
     pub fn indent_end_logical_pos(&self) -> Point {
         let cursor = self.goto_line_start(self.cursor, self.cursor.logical_pos.y);
-        let mut chars = 0;
-        let mut offset = cursor.offset;
-
-        'outer: loop {
-            let chunk = self.read_forward(offset);
-            if chunk.is_empty() {
-                break;
-            }
-
-            for &c in chunk {
-                if c == b'\n' || c == b'\r' || (c != b' ' && c != b'\t') {
-                    break 'outer;
-                }
-                chars += 1;
-            }
-
-            offset += chunk.len();
-        }
-
+        let (chars, _) = self.measure_indent_internal(cursor.offset, CoordType::MAX);
         Point { x: chars, y: cursor.logical_pos.y }
     }
 
-    fn get_preferred_indent_type(&self, delta: isize) -> Vec<u8> {
-        if self.indent_with_tabs { vec![b'\t'; delta as usize] } 
-        else { vec![b' '; delta as usize * self.tab_size as usize] }
-    }
-
-    fn get_bytes_to_unindent_by(line: &[u8], cursor_pos: usize, tab_size: usize) -> (isize, usize) {
-        let mut start = cursor_pos;
-        let mut width = 0;
-        let mut pos = cursor_pos;
-        while pos > 0 && width < tab_size {
-            pos -= 1;
-            match line[pos] {
-                b' ' => { width += 1; start = pos; }
-                b'\t' => { width += tab_size; start = pos; }
-                _ => break,
-            }
-        }
-        (line[start..cursor_pos].iter().filter(|&&b| b == b' ' || b == b'\t').count() as isize, start)
-    }
-    
-    fn update_cursor_after_indent(&mut self, change_x: isize, selection_range: Option<(Point, Point)>, cursor_pos: Point) {
-        match selection_range {
-            Some((beg, end)) => {
-                self.selection = Some(TextBufferSelection {
-                    beg: Point { x: (beg.x + change_x).max(0), y: beg.y },
-                    end: Point { x: (end.x + change_x).max(0), y: end.y },
-                });
-                self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, self.selection.unwrap().beg));
-            }
-            None => {
-                let new_pos = Point { x: (cursor_pos.x + change_x).max(0), y: cursor_pos.y };
-                self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, new_pos));
-            }
-        }
-    }
-    
-    fn apply_indent_to_line(&mut self, delta: isize, start_point: Point, selection_range: Option<(Point, Point)>, cursor_pos: Point) {
-        if delta > 0 {
-            let insert_offset = self.cursor_move_to_logical_internal(self.cursor, start_point).offset;
-            self.edit_begin(HistoryType::Other, self.cursor_move_to_offset_internal(self.cursor, insert_offset));
-            self.edit_write(&self.get_preferred_indent_type(delta));
-            self.edit_end();
-            let width_delta: isize = if self.indent_with_tabs { delta } else { delta * self.tab_size };
-            self.update_cursor_after_indent(width_delta, selection_range, cursor_pos);
-        } else {
-            let line_start = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: start_point.y });
-            let target_offset = self.cursor_move_to_logical_internal(line_start, start_point).offset;
-            let mut line_bytes = Vec::new();
-            self.buffer.extract_raw(line_start.offset..target_offset, &mut line_bytes, 0);
-            let cursor_byte_offset = target_offset - line_start.offset;
-            let (removed_count, del_start) = Self::get_bytes_to_unindent_by(&line_bytes, cursor_byte_offset, self.tab_size as usize);
-            if removed_count > 0 {
-                let del_start_offset = line_start.offset + del_start;
-                let del_end_offset = line_start.offset + cursor_byte_offset;
-                self.edit_begin(HistoryType::Other, self.cursor_move_to_offset_internal(self.cursor, del_start_offset));
-                self.edit_delete(self.cursor_move_to_offset_internal(self.cursor, del_end_offset));
-                self.edit_end();
-                self.update_cursor_after_indent(-(removed_count as isize), selection_range, cursor_pos);
-            }
-        }
-    }
-
-    fn handle_current_line_indent(&mut self, delta: isize) {
-        let cursor_pos = self.cursor.logical_pos;
-        let (start_point, selection_range) = self.selection
-            .map(|sel| { let [start, end] = minmax(sel.beg, sel.end); (start, Some((start, end))) })
-            .unwrap_or((cursor_pos, None));
-        self.apply_indent_to_line(delta, start_point, selection_range, cursor_pos);
-    }
-
-    fn handle_multi_line_indent(&mut self, delta: isize) {
-        let sel = self.selection.unwrap(); // we know it's multiline, so selection exists
-        let [start, end] = minmax(sel.beg, sel.end);
-        
-        for line_y in start.y..=end.y {
-            self.selection = None; // temporarily clear selection to treat each line individually
-            if delta > 0 {
-                self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: line_y }));
-            } else {
-                let line_start_cursor = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: line_y });
-                let mut temp_bytes = Vec::new();
-                let sample_end = (line_start_cursor.offset + (self.tab_size as usize * 2).min(50)).min(self.buffer.len());
-                self.buffer.extract_raw(line_start_cursor.offset..sample_end, &mut temp_bytes, 0);
-                let whitespace_end = temp_bytes.iter().take_while(|&&b| matches!(b, b' ' | b'\t')).count();
-                let cursor_x = if whitespace_end > 0 { whitespace_end.min(self.tab_size as usize) } else { 0 };
-                self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, Point { x: cursor_x as isize, y: line_y }));
-            }
-            self.handle_current_line_indent(delta); 
-        }
-        
-        // re-establish the selection after modifying multiple lines
-        let width_delta = if delta > 0 { if self.indent_with_tabs { delta } else { delta * self.tab_size } } else { -1 };
-        self.selection = Some(TextBufferSelection {
-            beg: Point { x: (start.x + width_delta).max(0), y: start.y },
-            end: Point { x: (end.x + width_delta).max(0), y: end.y },
-        });
-        self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, self.selection.unwrap().beg));
-    }
-
-    pub fn change_indent(&mut self, delta: isize) {
-        let is_multiline = self.selection.map(|sel| { let [start, end] = minmax(sel.beg, sel.end); start.y != end.y }).unwrap_or(false);
-        
-        if is_multiline {
-            self.handle_multi_line_indent(delta);
-        } else {
-            self.handle_current_line_indent(delta);
-        }
-    }
-
-    /// Unindents the current selection or line.
-    ///
-    /// TODO: This function is ripe for some optimizations:
-    /// * Instead of replacing the entire selection,
-    ///   it should unindent each line directly (as if multiple cursors had been used).
-    /// * The cursor movement at the end is rather costly, but at least without word wrap
-    ///   it should be possible to calculate it directly from the removed amount.
-    pub fn unindent(&mut self) {
+    /// Indents/unindents the current selection or line.
+    pub fn indent_change(&mut self, direction: CoordType) {
         let selection = self.selection;
         let mut selection_beg = self.cursor.logical_pos;
         let mut selection_end = selection_beg;
@@ -2410,53 +2294,49 @@ impl TextBuffer {
             selection_end = *end;
         }
 
+        if direction >= 0 && self.selection.is_none_or(|sel| sel.beg.y == sel.end.y) {
+            self.write_canon(b"\t");
+            return;
+        }
+
         self.edit_begin_grouping();
 
         for y in selection_beg.y.min(selection_end.y)..=selection_beg.y.max(selection_end.y) {
             self.cursor_move_to_logical(Point { x: 0, y });
 
-            let mut offset = self.cursor.offset;
-            let mut width = 0;
-            let mut remove = 0;
+            let line_start_offset = self.cursor.offset;
+            let (curr_chars, curr_columns) =
+                self.measure_indent_internal(line_start_offset, CoordType::MAX);
 
-            // Figure out how many characters to `remove`.
-            'outer: loop {
-                let chunk = self.read_forward(offset);
-                if chunk.is_empty() {
-                    break;
+            self.cursor_move_to_logical(Point { x: curr_chars, y: self.cursor.logical_pos.y });
+
+            let delta;
+
+            if direction < 0 {
+                // Unindent the line. If there's no indentation, skip.
+                if curr_columns <= 0 {
+                    continue;
                 }
 
-                for &c in chunk {
-                    width += match c {
-                        b' ' => 1,
-                        b'\t' => self.tab_size,
-                        _ => COORD_TYPE_SAFE_MAX,
-                    };
-                    if width > self.tab_size {
-                        break 'outer;
-                    }
-                    remove += 1;
-                }
+                let (prev_chars, _) = self.measure_indent_internal(
+                    line_start_offset,
+                    self.tab_size_prev_column(curr_columns),
+                );
 
-                offset += chunk.len();
-
-                // No need to do another round if we
-                // already got the exact right amount.
-                if width >= self.tab_size {
-                    break 'outer;
-                }
+                delta = prev_chars - curr_chars;
+                self.delete(CursorMovement::Grapheme, delta);
+            } else {
+                // Indent the line. `self.cursor` is already at the level of indentation.
+                delta = self.tab_size_eval(curr_columns);
+                self.write_canon(b"\t");
             }
 
-            if remove > 0 {
-                // As the lines get unindented, the selection should shift with them.
-                if y == selection_beg.y {
-                    selection_beg.x -= remove;
-                }
-                if y == selection_end.y {
-                    selection_end.x -= remove;
-                }
-
-                self.delete(CursorMovement::Grapheme, remove);
+            // As the lines get unindented, the selection should shift with them.
+            if y == selection_beg.y {
+                selection_beg.x += delta;
+            }
+            if y == selection_end.y {
+                selection_end.x += delta;
             }
         }
         self.edit_end_grouping();
@@ -2469,6 +2349,45 @@ impl TextBuffer {
         self.set_selection(
             selection.map(|_| TextBufferSelection { beg: selection_beg, end: selection_end }),
         );
+    }
+
+    fn measure_indent_internal(
+        &self,
+        mut offset: usize,
+        max_columns: CoordType,
+    ) -> (CoordType, CoordType) {
+        let mut chars = 0;
+        let mut columns = 0;
+
+        'outer: loop {
+            let chunk = self.read_forward(offset);
+            if chunk.is_empty() {
+                break;
+            }
+
+            for &c in chunk {
+                let next = match c {
+                    b' ' => columns + 1,
+                    b'\t' => columns + self.tab_size_eval(columns),
+                    _ => break 'outer,
+                };
+                if next > max_columns {
+                    break 'outer;
+                }
+                chars += 1;
+                columns = next;
+            }
+
+            offset += chunk.len();
+
+            // No need to do another round if we
+            // already got the exact right amount.
+            if columns >= max_columns {
+                break;
+            }
+        }
+
+        (chars, columns)
     }
 
     /// Displaces the current, cursor or the selection, line(s) in the given direction.
