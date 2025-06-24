@@ -1010,7 +1010,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* de      */ "Datei existiert bereits. Möchten Sie sie überschreiben?",
         /* es      */ "El archivo ya existe. ¿Desea sobrescribirlo?",
         /* fr      */ "Le fichier existe déjà. Voulez-vous l’écraser ?",
-        /* hu      */ "A fájl mér létezik. Felül szeretnéd írni?",
+        /* hu      */ "A fájl már létezik. Felül szeretnéd írni?",
         /* it      */ "Il file esiste già. Vuoi sovrascriverlo?",
         /* ja      */ "ファイルは既に存在します。上書きしますか？",
         /* ko      */ "파일이 이미 존재합니다. 덮어쓰시겠습니까?",
