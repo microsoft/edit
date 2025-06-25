@@ -169,9 +169,14 @@ fn run() -> apperr::Result<()> {
             let mut output = tui.render(&scratch);
 
             {
-                let filename = state.documents.active().map_or("", |d| &d.filename);
-                if filename != state.osc_title_filename {
-                    write_terminal_title(&mut output, filename);
+                let active_document = state.documents.active();
+                let filename = active_document.as_ref().map_or("", |d| &d.filename);
+                if filename != state.osc_title_filename || active_document.is_some() {
+                    write_terminal_title(
+                        &mut output,
+                        filename,
+                        active_document.map_or(false, |d| d.buffer.borrow().is_dirty()),
+                    );
                     state.osc_title_filename = filename.to_string();
                 }
             }
@@ -378,10 +383,13 @@ fn draw_handle_wants_exit(_ctx: &mut Context, state: &mut State) {
 }
 
 #[cold]
-fn write_terminal_title(output: &mut ArenaString, filename: &str) {
+fn write_terminal_title(output: &mut ArenaString, filename: &str, is_dirty: bool) {
     output.push_str("\x1b]0;");
 
     if !filename.is_empty() {
+        if is_dirty {
+            output.push('*');
+        }
         output.push_str(&sanitize_control_chars(filename));
         output.push_str(" - ");
     }
