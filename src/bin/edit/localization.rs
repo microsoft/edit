@@ -823,7 +823,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
     // SearchMatchCase (toggle)
     [
         /* en      */ "Match Case",
-        /* cs      */ "Rozlišovat velká a malá písmena",
+        /* cs      */ "Velká/malá písmena",
         /* de      */ "Groß/Klein",
         /* es      */ "May/Min",
         /* fr      */ "Resp. la casse",
