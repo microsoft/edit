@@ -2315,22 +2315,18 @@ impl<'a> Context<'a, '_> {
                 "{" => {
                     self.handle_auto_closing_brackets(tb, "{", "}");
                     tc.preferred_column = tb.cursor_visual_pos().x;
-                    make_cursor_visible = true;
                 }
                 "[" => {
                     self.handle_auto_closing_brackets(tb, "[", "]");
                     tc.preferred_column = tb.cursor_visual_pos().x;
-                    make_cursor_visible = true;
                 }
                 "(" => {
                     self.handle_auto_closing_brackets(tb, "(", ")");
                     tc.preferred_column = tb.cursor_visual_pos().x;
-                    make_cursor_visible = true;
                 }
                 _ => {
                     write = input.as_bytes();
                     tc.preferred_column = tb.cursor_visual_pos().x;
-                    make_cursor_visible = true;
                 }
             }
         } else if let Some(input) = &self.input_keyboard {
