@@ -202,8 +202,8 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
 
         // We got some leftover broken UTF8 from a previous read? Prepend it.
         if STATE.utf8_len != 0 {
-            STATE.utf8_len = 0;
             buf.extend_from_slice(&STATE.utf8_buf[..STATE.utf8_len]);
+            STATE.utf8_len = 0;
         }
 
         loop {
