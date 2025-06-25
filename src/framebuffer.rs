@@ -58,9 +58,25 @@ pub const INDEXED_COLORS_COUNT: usize = 18;
 
 /// Fallback theme. Matches Windows Terminal's Ottosson theme.
 pub const DEFAULT_THEME: [u32; INDEXED_COLORS_COUNT] = [
-    0xff000000, 0xff212cbe, 0xff3aae3f, 0xff4a9abe, 0xffbe4d20, 0xffbe54bb, 0xffb2a700, 0xffbebebe,
-    0xff808080, 0xff303eff, 0xff51ea58, 0xff44c9ff, 0xffff6a2f, 0xffff74fc, 0xfff0e100, 0xffffffff,
-    0xff000000, 0xffffffff,
+    0xff000000, // Black
+    0xff212cbe, // Red
+    0xff3aae3f, // Green
+    0xff4a9abe, // Yellow
+    0xffbe4d20, // Blue
+    0xffbe54bb, // Magenta
+    0xffb2a700, // Cyan
+    0xffbebebe, // White
+    0xff808080, // BrightBlack
+    0xff303eff, // BrightRed
+    0xff51ea58, // BrightGreen
+    0xff44c9ff, // BrightYellow
+    0xffff6a2f, // BrightBlue
+    0xffff74fc, // BrightMagenta
+    0xfff0e100, // BrightCyan
+    0xffffffff, // BrightWhite
+    // --------
+    0xff000000, // Background
+    0xffbebebe, // Foreground
 ];
 
 /// A shoddy framebuffer for terminal applications.
@@ -100,7 +116,7 @@ impl Framebuffer {
             frame_counter: 0,
             auto_colors: [
                 DEFAULT_THEME[IndexedColor::Black as usize],
-                DEFAULT_THEME[IndexedColor::White as usize],
+                DEFAULT_THEME[IndexedColor::BrightWhite as usize],
             ],
             contrast_colors: [const { Cell::new((0, 0)) }; CACHE_TABLE_SIZE],
             background_fill: DEFAULT_THEME[IndexedColor::Background as usize],
@@ -779,7 +795,7 @@ impl Bitmap {
     }
 
     /// Iterates over each row in the bitmap.
-    fn iter(&self) -> ChunksExact<u32> {
+    fn iter(&self) -> ChunksExact<'_, u32> {
         self.data.chunks_exact(self.size.width as usize)
     }
 }
@@ -865,7 +881,7 @@ impl AttributeBuffer {
     }
 
     /// Iterates over each row in the bitmap.
-    fn iter(&self) -> ChunksExact<Attributes> {
+    fn iter(&self) -> ChunksExact<'_, Attributes> {
         self.data.chunks_exact(self.size.width as usize)
     }
 }

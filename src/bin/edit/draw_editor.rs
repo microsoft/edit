@@ -37,13 +37,6 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
 }
 
 fn draw_search(ctx: &mut Context, state: &mut State) {
-    enum SearchAction {
-        None,
-        Search,
-        Replace,
-        ReplaceAll,
-    }
-
     if let Err(err) = icu::init() {
         error_log_add(ctx, state, err);
         state.wants_search.kind = StateSearchKind::Disabled;
@@ -55,7 +48,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         return;
     };
 
-    let mut action = SearchAction::None;
+    let mut action = None;
     let mut focus = StateSearchKind::Hidden;
 
     if state.wants_search.focus {
@@ -87,7 +80,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                 ctx.label("label", loc(LocId::SearchNeedleLabel));
 
                 if ctx.editline("needle", &mut state.search_needle) {
-                    action = SearchAction::Search;
+                    action = Some(SearchAction::Search);
                 }
                 if !state.search_success {
                     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
@@ -98,7 +91,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                     ctx.steal_focus();
                 }
                 if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
-                    action = SearchAction::Search;
+                    action = Some(SearchAction::Search);
                 }
             }
 
@@ -113,9 +106,9 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                 }
                 if ctx.is_focused() {
                     if ctx.consume_shortcut(vk::RETURN) {
-                        action = SearchAction::Replace;
+                        action = Some(SearchAction::Replace);
                     } else if ctx.consume_shortcut(kbmod::CTRL_ALT | vk::RETURN) {
-                        action = SearchAction::ReplaceAll;
+                        action = Some(SearchAction::ReplaceAll);
                     }
                 }
             }
@@ -126,7 +119,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         ctx.table_set_cell_gap(Size { width: 2, height: 0 });
         {
             let mut change = false;
-            let mut change_action = SearchAction::Search;
+            let mut change_action = Some(SearchAction::Search);
 
             ctx.table_next_row();
 
@@ -149,7 +142,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                 && ctx.button("replace-all", loc(LocId::SearchReplaceAll), ButtonStyle::default())
             {
                 change = true;
-                change_action = SearchAction::ReplaceAll;
+                change_action = Some(SearchAction::ReplaceAll);
             }
             if ctx.button("close", loc(LocId::SearchClose), ButtonStyle::default()) {
                 state.wants_search.kind = StateSearchKind::Hidden;
@@ -165,20 +158,35 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
     }
     ctx.block_end();
 
+    if let Some(action) = action {
+        search_execute(ctx, state, action);
+    }
+}
+
+pub enum SearchAction {
+    Search,
+    Replace,
+    ReplaceAll,
+}
+
+pub fn search_execute(ctx: &mut Context, state: &mut State, action: SearchAction) {
+    let Some(doc) = state.documents.active_mut() else {
+        return;
+    };
+
     state.search_success = match action {
-        SearchAction::None => return,
         SearchAction::Search => {
             doc.buffer.borrow_mut().find_and_select(&state.search_needle, state.search_options)
         }
         SearchAction::Replace => doc.buffer.borrow_mut().find_and_replace(
             &state.search_needle,
             state.search_options,
-            &state.search_replacement,
+            state.search_replacement.as_bytes(),
         ),
         SearchAction::ReplaceAll => doc.buffer.borrow_mut().find_and_replace_all(
             &state.search_needle,
             state.search_options,
-            &state.search_replacement,
+            state.search_replacement.as_bytes(),
         ),
     }
     .is_ok();
@@ -278,13 +286,20 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
 
     match action {
         Action::None => return,
-        Action::Save => state.wants_save = true,
-        Action::Discard => state.documents.remove_active(),
-        Action::Cancel => state.wants_exit = false,
+        Action::Save => {
+            state.wants_save = true;
+        }
+        Action::Discard => {
+            state.documents.remove_active();
+            state.wants_close = false;
+        }
+        Action::Cancel => {
+            state.wants_exit = false;
+            state.wants_close = false;
+        }
     }
 
-    state.wants_close = false;
-    ctx.toss_focus_up();
+    ctx.needs_rerender();
 }
 
 pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {

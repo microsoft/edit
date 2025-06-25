@@ -1,13 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![feature(
-    allocator_api,
-    let_chains,
-    linked_list_cursors,
-    os_string_truncate,
-    string_from_utf8_lossy_owned
-)]
+#![feature(allocator_api, let_chains, linked_list_cursors, string_from_utf8_lossy_owned)]
 
 mod documents;
 mod draw_editor;
@@ -21,6 +15,7 @@ use std::borrow::Cow;
 #[cfg(feature = "debug-latency")]
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::{env, process};
 
 use draw_editor::*;
@@ -29,12 +24,12 @@ use draw_menubar::*;
 use draw_statusbar::*;
 use edit::arena::{self, Arena, ArenaString, scratch_arena};
 use edit::framebuffer::{self, IndexedColor};
-use edit::helpers::{KIBI, MEBI, MetricFormatter, Rect, Size};
+use edit::helpers::{CoordType, KIBI, MEBI, MetricFormatter, Rect, Size};
 use edit::input::{self, kbmod, vk};
 use edit::oklab::oklab_blend;
 use edit::tui::*;
 use edit::vt::{self, Token};
-use edit::{apperr, arena_format, base64, path, sys};
+use edit::{apperr, arena_format, base64, path, sys, unicode};
 use localization::*;
 use state::*;
 
@@ -85,7 +80,7 @@ fn run() -> apperr::Result<()> {
     let mut input_parser = input::Parser::new();
     let mut tui = Tui::new()?;
 
-    let _restore = setup_terminal(&mut tui, &mut vt_parser);
+    let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
 
     state.menubar_color_bg = oklab_blend(
         tui.indexed(IndexedColor::Background),
@@ -181,8 +176,8 @@ fn run() -> apperr::Result<()> {
                 }
             }
 
-            if state.osc_clipboard_send_generation == tui.clipboard_generation() {
-                write_osc_clipboard(&mut output, &mut state, &tui);
+            if state.osc_clipboard_sync {
+                write_osc_clipboard(&mut tui, &mut state, &mut output);
             }
 
             #[cfg(feature = "debug-latency")]
@@ -274,7 +269,6 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     }
 
     state.file_picker_pending_dir = DisplayablePathBuf::from_path(cwd);
-    state.file_picker_pending_dir_revision = state.file_picker_pending_dir_revision.wrapping_add(1);
     Ok(false)
 }
 
@@ -317,13 +311,13 @@ fn draw(ctx: &mut Context, state: &mut State) {
     if state.wants_encoding_change != StateEncodingChange::None {
         draw_dialog_encoding_change(ctx, state);
     }
-    if state.wants_document_picker {
-        draw_document_picker(ctx, state);
+    if state.wants_go_to_file {
+        draw_go_to_file(ctx, state);
     }
     if state.wants_about {
         draw_dialog_about(ctx, state);
     }
-    if state.osc_clipboard_seen_generation != ctx.clipboard_generation() {
+    if ctx.clipboard_ref().wants_host_sync() {
         draw_handle_clipboard_change(ctx, state);
     }
     if state.error_log_count != 0 {
@@ -344,7 +338,7 @@ fn draw(ctx: &mut Context, state: &mut State) {
         } else if key == kbmod::CTRL | vk::W {
             state.wants_close = true;
         } else if key == kbmod::CTRL | vk::P {
-            state.wants_document_picker = true;
+            state.wants_go_to_file = true;
         } else if key == kbmod::CTRL | vk::Q {
             state.wants_exit = true;
         } else if key == kbmod::CTRL | vk::G {
@@ -357,6 +351,8 @@ fn draw(ctx: &mut Context, state: &mut State) {
         {
             state.wants_search.kind = StateSearchKind::Replace;
             state.wants_search.focus = true;
+        } else if key == vk::F3 {
+            search_execute(ctx, state, SearchAction::Search);
         } else {
             return;
         }
@@ -393,18 +389,19 @@ fn write_terminal_title(output: &mut ArenaString, filename: &str) {
     output.push_str("edit\x1b\\");
 }
 
-const LARGE_CLIPBOARD_THRESHOLD: usize = 4 * KIBI;
+const LARGE_CLIPBOARD_THRESHOLD: usize = 128 * KIBI;
 
 fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
-    let generation = ctx.clipboard_generation();
+    let data_len = ctx.clipboard_ref().read().len();
 
-    if state.osc_clipboard_always_send || ctx.clipboard().len() < LARGE_CLIPBOARD_THRESHOLD {
-        state.osc_clipboard_seen_generation = generation;
-        state.osc_clipboard_send_generation = generation;
+    if state.osc_clipboard_always_send || data_len < LARGE_CLIPBOARD_THRESHOLD {
+        ctx.clipboard_mut().mark_as_synchronized();
+        state.osc_clipboard_sync = true;
         return;
     }
 
-    let over_limit = ctx.clipboard().len() >= SCRATCH_ARENA_CAPACITY / 4;
+    let over_limit = data_len >= SCRATCH_ARENA_CAPACITY / 4;
+    let mut done = None;
 
     ctx.modal_begin("warning", loc(LocId::WarningDialogTitle));
     {
@@ -419,7 +416,7 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
         } else {
             let label2 = {
                 let template = loc(LocId::LargeClipboardWarningLine2);
-                let size = arena_format!(ctx.arena(), "{}", MetricFormatter(ctx.clipboard().len()));
+                let size = arena_format!(ctx.arena(), "{}", MetricFormatter(data_len));
 
                 let mut label =
                     ArenaString::with_capacity_in(template.len() + size.len(), ctx.arena());
@@ -448,28 +445,26 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
 
             if over_limit {
                 if ctx.button("ok", loc(LocId::Ok), ButtonStyle::default()) {
-                    state.osc_clipboard_seen_generation = generation;
+                    done = Some(true);
                 }
                 ctx.inherit_focus();
             } else {
                 if ctx.button("always", loc(LocId::Always), ButtonStyle::default()) {
                     state.osc_clipboard_always_send = true;
-                    state.osc_clipboard_seen_generation = generation;
-                    state.osc_clipboard_send_generation = generation;
+                    done = Some(true);
                 }
 
                 if ctx.button("yes", loc(LocId::Yes), ButtonStyle::default()) {
-                    state.osc_clipboard_seen_generation = generation;
-                    state.osc_clipboard_send_generation = generation;
+                    done = Some(true);
                 }
-                if ctx.clipboard().len() < 10 * LARGE_CLIPBOARD_THRESHOLD {
+                if data_len < 10 * LARGE_CLIPBOARD_THRESHOLD {
                     ctx.inherit_focus();
                 }
 
                 if ctx.button("no", loc(LocId::No), ButtonStyle::default()) {
-                    state.osc_clipboard_seen_generation = generation;
+                    done = Some(false);
                 }
-                if ctx.clipboard().len() >= 10 * LARGE_CLIPBOARD_THRESHOLD {
+                if data_len >= 10 * LARGE_CLIPBOARD_THRESHOLD {
                     ctx.inherit_focus();
                 }
             }
@@ -477,24 +472,33 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
         ctx.table_end();
     }
     if ctx.modal_end() {
-        state.osc_clipboard_seen_generation = generation;
+        done = Some(false);
+    }
+
+    if let Some(sync) = done {
+        state.osc_clipboard_sync = sync;
+        ctx.clipboard_mut().mark_as_synchronized();
+        ctx.needs_rerender();
     }
 }
 
 #[cold]
-fn write_osc_clipboard(output: &mut ArenaString, state: &mut State, tui: &Tui) {
-    let clipboard = tui.clipboard();
-    if !clipboard.is_empty() {
+fn write_osc_clipboard(tui: &mut Tui, state: &mut State, output: &mut ArenaString) {
+    let clipboard = tui.clipboard_mut();
+    let data = clipboard.read();
+
+    if !data.is_empty() {
         // Rust doubles the size of a string when it needs to grow it.
-        // If `clipboard` is *really* large, this may then double
+        // If `data` is *really* large, this may then double
         // the size of the `output` from e.g. 100MB to 200MB. Not good.
         // We can avoid that by reserving the needed size in advance.
-        output.reserve_exact(base64::encode_len(clipboard.len()) + 16);
+        output.reserve_exact(base64::encode_len(data.len()) + 16);
         output.push_str("\x1b]52;c;");
-        base64::encode(output, clipboard);
+        base64::encode(output, data);
         output.push_str("\x1b\\");
     }
-    state.osc_clipboard_send_generation = tui.clipboard_generation().wrapping_sub(1);
+
+    state.osc_clipboard_sync = false;
 }
 
 struct RestoreModes;
@@ -503,13 +507,12 @@ impl Drop for RestoreModes {
     fn drop(&mut self) {
         // Same as in the beginning but in the reverse order.
         // It also includes DECSCUSR 0 to reset the cursor style and DECTCEM to show the cursor.
-        sys::write_stdout(
-            "\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1036l\x1b[?1002;1006;2004l\x1b[?1049l",
-        );
+        // We specifically don't reset mode 1036, because most applications expect it to be set nowadays.
+        sys::write_stdout("\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1002;1006;2004l\x1b[?1049l");
     }
 }
 
-fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
+fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) -> RestoreModes {
     sys::write_stdout(concat!(
         // 1049: Alternative Screen Buffer
         //   I put the ASB switch in the beginning, just in case the terminal performs
@@ -524,6 +527,12 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
         "\x1b]4;8;?;9;?;10;?;11;?;12;?;13;?;14;?;15;?\x07",
         // OSC 10 and 11 queries for the current foreground and background colors.
         "\x1b]10;?\x07\x1b]11;?\x07",
+        // Test whether ambiguous width characters are two columns wide.
+        // We use "…", because it's the most common ambiguous width character we use,
+        // and the old Windows conhost doesn't actually use wcwidth, it measures the
+        // actual display width of the character and assigns it columns accordingly.
+        // We detect it by writing the character and asking for the cursor position.
+        "\r…\x1b[6n",
         // CSI c reports the terminal capabilities.
         // It also helps us to detect the end of the responses, because not all
         // terminals support the OSC queries, but all of them support CSI c.
@@ -534,17 +543,27 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
     let mut osc_buffer = String::new();
     let mut indexed_colors = framebuffer::DEFAULT_THEME;
     let mut color_responses = 0;
+    let mut ambiguous_width = 1;
 
     while !done {
         let scratch = scratch_arena(None);
-        let Some(input) = sys::read_stdin(&scratch, vt_parser.read_timeout()) else {
+
+        // We explicitly set a high read timeout, because we're not
+        // waiting for user keyboard input. If we encounter a lone ESC,
+        // it's unlikely to be from a ESC keypress, but rather from a VT sequence.
+        let Some(input) = sys::read_stdin(&scratch, Duration::from_secs(3)) else {
             break;
         };
 
         let mut vt_stream = vt_parser.parse(&input);
         while let Some(token) = vt_stream.next() {
             match token {
-                Token::Csi(state) if state.final_byte == 'c' => done = true,
+                Token::Csi(csi) => match csi.final_byte {
+                    'c' => done = true,
+                    // CPR (Cursor Position Report) response.
+                    'R' => ambiguous_width = csi.params[1] as CoordType - 1,
+                    _ => {}
+                },
                 Token::Osc { mut data, partial } => {
                     if partial {
                         osc_buffer.push_str(data);
@@ -599,6 +618,11 @@ fn setup_terminal(tui: &mut Tui, vt_parser: &mut vt::Parser) -> RestoreModes {
                 _ => {}
             }
         }
+    }
+
+    if ambiguous_width == 2 {
+        unicode::setup_ambiguous_width(2);
+        state.documents.reflow_all();
     }
 
     if color_responses == indexed_colors.len() {

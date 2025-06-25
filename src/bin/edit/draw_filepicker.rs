@@ -5,9 +5,10 @@ use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use edit::arena::scratch_arena;
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
-use edit::input::vk;
+use edit::input::{kbmod, vk};
 use edit::tui::*;
 use edit::{icu, path};
 
@@ -40,6 +41,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     );
     ctx.attr_intrinsic_size(Size { width, height });
     {
+        let contains_focus = ctx.contains_focus();
         let mut activated = false;
 
         ctx.table_begin("path");
@@ -58,8 +60,72 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.inherit_focus();
 
             ctx.label("name-label", loc(LocId::SaveAsDialogNameLabel));
-            ctx.editline("name", &mut state.file_picker_pending_name);
+
+            let name_changed = ctx.editline("name", &mut state.file_picker_pending_name);
             ctx.inherit_focus();
+
+            if ctx.contains_focus() {
+                if name_changed && ctx.is_focused() {
+                    update_autocomplete_suggestions(state);
+                }
+            } else if !state.file_picker_autocomplete.is_empty() {
+                state.file_picker_autocomplete.clear();
+            }
+
+            if !state.file_picker_autocomplete.is_empty() {
+                let bg = ctx.indexed_alpha(IndexedColor::Background, 3, 4);
+                let fg = ctx.contrasted(bg);
+                let focus_list_beg = ctx.is_focused() && ctx.consume_shortcut(vk::DOWN);
+                let focus_list_end = ctx.is_focused() && ctx.consume_shortcut(vk::UP);
+                let mut autocomplete_done = ctx.consume_shortcut(vk::ESCAPE);
+
+                ctx.list_begin("suggestions");
+                ctx.attr_float(FloatSpec {
+                    anchor: Anchor::Last,
+                    gravity_x: 0.0,
+                    gravity_y: 0.0,
+                    offset_x: 0.0,
+                    offset_y: 1.0,
+                });
+                ctx.attr_border();
+                ctx.attr_background_rgba(bg);
+                ctx.attr_foreground_rgba(fg);
+                {
+                    for (idx, suggestion) in state.file_picker_autocomplete.iter().enumerate() {
+                        let sel = ctx.list_item(false, suggestion.as_str());
+                        if sel != ListSelection::Unchanged {
+                            state.file_picker_pending_name = suggestion.as_path().into();
+                        }
+                        if sel == ListSelection::Activated {
+                            autocomplete_done = true;
+                        }
+
+                        let is_first = idx == 0;
+                        let is_last = idx == state.file_picker_autocomplete.len() - 1;
+                        if (is_first && focus_list_beg) || (is_last && focus_list_end) {
+                            ctx.list_item_steal_focus();
+                        } else if ctx.is_focused()
+                            && ((is_first && ctx.consume_shortcut(vk::UP))
+                                || (is_last && ctx.consume_shortcut(vk::DOWN)))
+                        {
+                            ctx.toss_focus_up();
+                        }
+                    }
+                }
+                ctx.list_end();
+
+                // If the user typed something, we want to put focus back into the editline.
+                // TODO: The input should be processed by the editline and not simply get swallowed.
+                if ctx.keyboard_input().is_some() {
+                    ctx.set_input_consumed();
+                    autocomplete_done = true;
+                }
+
+                if autocomplete_done {
+                    state.file_picker_autocomplete.clear();
+                }
+            }
+
             if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
                 activated = true;
             }
@@ -69,8 +135,6 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         if state.file_picker_entries.is_none() {
             draw_dialog_saveas_refresh_files(state);
         }
-
-        let files = state.file_picker_entries.as_ref().unwrap();
 
         ctx.scrollarea_begin(
             "directory",
@@ -83,28 +147,34 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             },
         );
         ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
-        ctx.next_block_id_mixin(state.file_picker_pending_dir_revision);
         {
+            ctx.next_block_id_mixin(state.file_picker_pending_dir_revision);
             ctx.list_begin("files");
             ctx.inherit_focus();
-            for entry in files {
-                match ctx.list_item(false, entry.as_str()) {
-                    ListSelection::Unchanged => {}
-                    ListSelection::Selected => {
-                        state.file_picker_pending_name = entry.as_path().into()
-                    }
-                    ListSelection::Activated => activated = true,
-                }
-                ctx.attr_overflow(Overflow::TruncateMiddle);
-            }
-            ctx.list_end();
 
-            if ctx.contains_focus() && ctx.consume_shortcut(vk::BACK) {
-                state.file_picker_pending_name = "..".into();
-                activated = true;
+            for entries in state.file_picker_entries.as_ref().unwrap() {
+                for entry in entries {
+                    match ctx.list_item(false, entry.as_str()) {
+                        ListSelection::Unchanged => {}
+                        ListSelection::Selected => {
+                            state.file_picker_pending_name = entry.as_path().into()
+                        }
+                        ListSelection::Activated => activated = true,
+                    }
+                    ctx.attr_overflow(Overflow::TruncateMiddle);
+                }
             }
+
+            ctx.list_end();
         }
         ctx.scrollarea_end();
+
+        if contains_focus
+            && (ctx.consume_shortcut(vk::BACK) || ctx.consume_shortcut(kbmod::ALT | vk::UP))
+        {
+            state.file_picker_pending_name = "..".into();
+            activated = true;
+        }
 
         if activated {
             doit = draw_file_picker_update_path(state);
@@ -191,6 +261,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         state.file_picker_pending_name = Default::default();
         state.file_picker_entries = Default::default();
         state.file_picker_overwrite_warning = Default::default();
+        state.file_picker_autocomplete = Default::default();
     }
 }
 
@@ -221,6 +292,8 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     };
     if dir != state.file_picker_pending_dir.as_path() {
         state.file_picker_pending_dir = DisplayablePathBuf::from_path(dir.to_path_buf());
+        state.file_picker_pending_dir_revision =
+            state.file_picker_pending_dir_revision.wrapping_add(1);
         state.file_picker_entries = None;
     }
 
@@ -230,54 +303,106 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
 
 fn draw_dialog_saveas_refresh_files(state: &mut State) {
     let dir = state.file_picker_pending_dir.as_path();
-    let mut files = Vec::new();
-    let mut off = 0;
+    // ["..", directories, files]
+    let mut dirs_files = [Vec::new(), Vec::new(), Vec::new()];
 
     #[cfg(windows)]
     if dir.as_os_str().is_empty() {
         // If the path is empty, we are at the drive picker.
         // Add all drives as entries.
         for drive in edit::sys::drives() {
-            files.push(DisplayablePathBuf::from_string(format!("{drive}:\\")));
+            dirs_files[1].push(DisplayablePathBuf::from_string(format!("{drive}:\\")));
         }
 
-        state.file_picker_entries = Some(files);
+        state.file_picker_entries = Some(dirs_files);
         return;
     }
 
     if cfg!(windows) || dir.parent().is_some() {
-        files.push(DisplayablePathBuf::from(".."));
-        off = 1;
+        dirs_files[0].push(DisplayablePathBuf::from(".."));
     }
 
     if let Ok(iter) = fs::read_dir(dir) {
         for entry in iter.flatten() {
             if let Ok(metadata) = entry.metadata() {
                 let mut name = entry.file_name();
-                if metadata.is_dir()
+                let dir = metadata.is_dir()
                     || (metadata.is_symlink()
-                        && fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()))
-                {
+                        && fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()));
+                let idx = if dir { 1 } else { 2 };
+
+                if dir {
                     name.push("/");
                 }
-                files.push(DisplayablePathBuf::from(name));
+
+                dirs_files[idx].push(DisplayablePathBuf::from(name));
             }
         }
     }
 
-    // Sort directories first, then by name, case-insensitive.
-    files[off..].sort_by(|a, b| {
-        let a = a.as_bytes();
-        let b = b.as_bytes();
+    for entries in &mut dirs_files[1..] {
+        entries.sort_by(|a, b| {
+            let a = a.as_bytes();
+            let b = b.as_bytes();
 
-        let a_is_dir = a.last() == Some(&b'/');
-        let b_is_dir = b.last() == Some(&b'/');
+            let a_is_dir = a.last() == Some(&b'/');
+            let b_is_dir = b.last() == Some(&b'/');
 
-        match b_is_dir.cmp(&a_is_dir) {
-            Ordering::Equal => icu::compare_strings(a, b),
-            other => other,
+            match b_is_dir.cmp(&a_is_dir) {
+                Ordering::Equal => icu::compare_strings(a, b),
+                other => other,
+            }
+        });
+    }
+
+    state.file_picker_entries = Some(dirs_files);
+}
+
+#[inline(never)]
+fn update_autocomplete_suggestions(state: &mut State) {
+    state.file_picker_autocomplete.clear();
+
+    if state.file_picker_pending_name.as_os_str().is_empty() {
+        return;
+    }
+
+    let scratch = scratch_arena(None);
+    let needle = state.file_picker_pending_name.as_os_str().as_encoded_bytes();
+    let mut matches = Vec::new();
+
+    // Using binary search below we'll quickly find the lower bound
+    // of items that match the needle (= share a common prefix).
+    //
+    // The problem is finding the upper bound. Here I'm using a trick:
+    // By appending U+10FFFF (the highest possible Unicode code point)
+    // we create a needle that naturally yields an upper bound.
+    let mut needle_upper_bound = Vec::with_capacity_in(needle.len() + 4, &*scratch);
+    needle_upper_bound.extend_from_slice(needle);
+    needle_upper_bound.extend_from_slice(b"\xf4\x8f\xbf\xbf");
+
+    if let Some(dirs_files) = &state.file_picker_entries {
+        'outer: for entries in &dirs_files[1..] {
+            let lower = entries
+                .binary_search_by(|entry| icu::compare_strings(entry.as_bytes(), needle))
+                .unwrap_or_else(|i| i);
+
+            for entry in &entries[lower..] {
+                let haystack = entry.as_bytes();
+                match icu::compare_strings(haystack, &needle_upper_bound) {
+                    Ordering::Less => {
+                        matches.push(entry.clone());
+                        if matches.len() >= 5 {
+                            break 'outer; // Limit to 5 suggestions
+                        }
+                    }
+                    // We're looking for suggestions, not for matches.
+                    Ordering::Equal => {}
+                    // No more matches possible.
+                    Ordering::Greater => break,
+                }
+            }
         }
-    });
+    }
 
-    state.file_picker_entries = Some(files);
+    state.file_picker_autocomplete = matches;
 }

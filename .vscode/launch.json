@@ -23,6 +23,17 @@
             "args": [
                 "${workspaceFolder}/src/bin/edit/main.rs"
             ],
+        },
+        {
+            "name": "Launch Debug (LLDB)",
+            "preLaunchTask": "rust: cargo build",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/target/debug/edit",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "${workspaceFolder}/src/bin/edit/main.rs"
+            ],
         }
     ]
 }
