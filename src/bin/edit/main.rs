@@ -285,7 +285,11 @@ fn print_help() {
 }
 
 fn print_version() {
-    sys::write_stdout(concat!("edit version ", env!("CARGO_PKG_VERSION"), "\r\n"));
+    let version = format!("edit version {}", env!("CARGO_PKG_VERSION"));
+    #[cfg(not(windows))]
+    sys::write_stdout(&format!("{}\n", version));
+    #[cfg(windows)]
+    sys::write_stdout(&format!("{}\r\n", version));
 }
 
 fn draw(ctx: &mut Context, state: &mut State) {
