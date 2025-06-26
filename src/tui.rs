@@ -154,7 +154,7 @@ use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer,
 use crate::cell::*;
 use crate::clipboard::Clipboard;
 use crate::document::WriteableDocument;
-use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
+use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor, ColorMode};
 use crate::hash::*;
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
@@ -427,6 +427,11 @@ impl Tui {
     /// Sets up the framebuffer's color palette.
     pub fn setup_indexed_colors(&mut self, colors: [u32; INDEXED_COLORS_COUNT]) {
         self.framebuffer.set_indexed_colors(colors);
+    }
+
+    /// Sets the color rendering mode based on terminal capabilities.
+    pub fn setup_color_mode(&mut self, mode: ColorMode) {
+        self.framebuffer.set_color_mode(mode);
     }
 
     /// Set up translations for Ctrl/Alt/Shift modifiers.

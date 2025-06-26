@@ -53,6 +53,14 @@ pub enum IndexedColor {
     Foreground,
 }
 
+/// Color modes used in format_color function
+#[derive(Clone, Copy, Default)]
+pub enum ColorMode {
+    #[default]
+    TrueColor,
+    Color256,
+}
+
 /// Number of indices used by [`IndexedColor`].
 pub const INDEXED_COLORS_COUNT: usize = 18;
 
@@ -105,6 +113,8 @@ pub struct Framebuffer {
     contrast_colors: [Cell<(u32, u32)>; CACHE_TABLE_SIZE],
     background_fill: u32,
     foreground_fill: u32,
+    // The color mode, either truecolor(default) or color256
+    color_mode: ColorMode,
 }
 
 impl Framebuffer {
@@ -121,6 +131,7 @@ impl Framebuffer {
             contrast_colors: [const { Cell::new((0, 0)) }; CACHE_TABLE_SIZE],
             background_fill: DEFAULT_THEME[IndexedColor::Background as usize],
             foreground_fill: DEFAULT_THEME[IndexedColor::Foreground as usize],
+            color_mode: ColorMode::default(),
         }
     }
 
@@ -537,6 +548,12 @@ impl Framebuffer {
         result
     }
 
+    // Sets the color rendering mode, either truecolor(default) or color256, determined by the
+    // setup_terminal function in main.rs
+    pub fn set_color_mode(&mut self, mode: ColorMode) {
+        self.color_mode = mode;
+    }
+
     fn format_color(&self, dst: &mut ArenaString, fg: bool, mut color: u32) {
         let typ = if fg { '3' } else { '4' };
 
@@ -567,7 +584,35 @@ impl Framebuffer {
         let r = color & 0xff;
         let g = (color >> 8) & 0xff;
         let b = (color >> 16) & 0xff;
-        _ = write!(dst, "\x1b[{typ}8;2;{r};{g};{b}m");
+
+        // If the terminal doesn't support truecolor, the rgb channel needs to be
+        // downsampled to display properly.
+        match self.color_mode {
+            ColorMode::TrueColor => {
+                _ = write!(dst, "\x1b[{typ}8;2;{r};{g};{b}m");
+            }
+            ColorMode::Color256 => {
+                let index: u8 = if r == g && g == b {
+                    // grayscale path
+                    if r < 8 {
+                        16
+                    } else if r > 248 {
+                        231
+                    } else {
+                        let gray_index = ((r - 8 + 5) / 10).min(23);
+                        232 + gray_index
+                    }
+                } else {
+                    // Color path
+                    let r_idx = (r * 6 / 256) as u32;
+                    let g_idx = (g * 6 / 256) as u32;
+                    let b_idx = (b * 6 / 256) as u32;
+                    (16 + 36 * r_idx + 6 * g_idx + b_idx) as u32
+                } as u8;
+
+                _ = write!(dst, "\x1b[{typ}8;5;{index}m");
+            }
+        }
     }
 }
 
