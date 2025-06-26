@@ -109,12 +109,15 @@ unsafe fn lines_fwd_avx2(
         }
 
         let lf = _mm256_set1_epi8(b'\n' as i8);
-        let mut remaining = end.offset_from_unsigned(beg);
+        let off = beg.align_offset(32);
+        if off != 0 && off < end.offset_from_unsigned(beg) {
+            (beg, line) = lines_fwd_fallback(beg, beg.add(off), line, line_stop);
+        }
 
         if line < line_stop {
             // Unrolling the loop by 4x speeds things up by >3x.
             // It allows us to accumulate matches before doing a single `vpsadbw`.
-            while remaining >= 128 {
+            while end.offset_from_unsigned(beg) >= 128 {
                 let v1 = _mm256_loadu_si256(beg.add(0) as *const _);
                 let v2 = _mm256_loadu_si256(beg.add(32) as *const _);
                 let v3 = _mm256_loadu_si256(beg.add(64) as *const _);
@@ -138,11 +141,10 @@ unsafe fn lines_fwd_avx2(
                 }
 
                 beg = beg.add(128);
-                remaining -= 128;
                 line = line_next;
             }
 
-            while remaining >= 32 {
+            while end.offset_from_unsigned(beg) >= 32 {
                 let v = _mm256_loadu_si256(beg as *const _);
                 let c = _mm256_cmpeq_epi8(v, lf);
 
@@ -159,7 +161,6 @@ unsafe fn lines_fwd_avx2(
                 }
 
                 beg = beg.add(32);
-                remaining -= 32;
                 line = line_next;
             }
         }
@@ -179,10 +180,13 @@ unsafe fn lines_fwd_neon(
         use std::arch::aarch64::*;
 
         let lf = vdupq_n_u8(b'\n');
-        let mut remaining = end.offset_from_unsigned(beg);
+        let off = beg.align_offset(16);
+        if off != 0 && off < end.offset_from_unsigned(beg) {
+            (beg, line) = lines_fwd_fallback(beg, beg.add(off), line, line_stop);
+        }
 
         if line < line_stop {
-            while remaining >= 64 {
+            while end.offset_from_unsigned(beg) >= 64 {
                 let v1 = vld1q_u8(beg.add(0));
                 let v2 = vld1q_u8(beg.add(16));
                 let v3 = vld1q_u8(beg.add(32));
@@ -204,11 +208,10 @@ unsafe fn lines_fwd_neon(
                 }
 
                 beg = beg.add(64);
-                remaining -= 64;
                 line = line_next;
             }
 
-            while remaining >= 16 {
+            while end.offset_from_unsigned(beg) >= 16 {
                 let v = vld1q_u8(beg);
                 let c = vceqq_u8(v, lf);
                 let c = vandq_u8(c, vdupq_n_u8(0x01));
@@ -220,7 +223,6 @@ unsafe fn lines_fwd_neon(
                 }
 
                 beg = beg.add(16);
-                remaining -= 16;
                 line = line_next;
             }
         }
