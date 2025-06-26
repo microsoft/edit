@@ -110,9 +110,12 @@ unsafe fn lines_bwd_avx2(
 
         let lf = _mm256_set1_epi8(b'\n' as i8);
         let line_stop = line_stop.min(line);
-        let mut remaining = end.offset_from_unsigned(beg);
+        let off = end.addr() & 31;
+        if off != 0 && off < end.offset_from_unsigned(beg) {
+            (end, line) = lines_bwd_fallback(end.sub(off), end, line, line_stop);
+        }
 
-        while remaining >= 128 {
+        while end.offset_from_unsigned(beg) >= 128 {
             let chunk_start = end.sub(128);
 
             let v1 = _mm256_loadu_si256(chunk_start.add(0) as *const _);
@@ -135,11 +138,10 @@ unsafe fn lines_bwd_avx2(
             }
 
             end = chunk_start;
-            remaining -= 128;
             line = line_next;
         }
 
-        while remaining >= 32 {
+        while end.offset_from_unsigned(beg) >= 32 {
             let chunk_start = end.sub(32);
             let v = _mm256_loadu_si256(chunk_start as *const _);
             let c = _mm256_cmpeq_epi8(v, lf);
@@ -154,7 +156,6 @@ unsafe fn lines_bwd_avx2(
             }
 
             end = chunk_start;
-            remaining -= 32;
             line = line_next;
         }
 
@@ -174,9 +175,12 @@ unsafe fn lines_bwd_neon(
 
         let lf = vdupq_n_u8(b'\n');
         let line_stop = line_stop.min(line);
-        let mut remaining = end.offset_from_unsigned(beg);
+        let off = end.addr() & 15;
+        if off != 0 && off < end.offset_from_unsigned(beg) {
+            (end, line) = lines_bwd_fallback(end.sub(off), end, line, line_stop);
+        }
 
-        while remaining >= 64 {
+        while end.offset_from_unsigned(beg) >= 64 {
             let chunk_start = end.sub(64);
 
             let v1 = vld1q_u8(chunk_start.add(0));
@@ -198,11 +202,10 @@ unsafe fn lines_bwd_neon(
             }
 
             end = chunk_start;
-            remaining -= 64;
             line = line_next;
         }
 
-        while remaining >= 16 {
+        while end.offset_from_unsigned(beg) >= 16 {
             let chunk_start = end.sub(16);
             let v = vld1q_u8(chunk_start);
             let c = vceqq_u8(v, lf);
@@ -215,7 +218,6 @@ unsafe fn lines_bwd_neon(
             }
 
             end = chunk_start;
-            remaining -= 16;
             line = line_next;
         }
 
