@@ -154,7 +154,7 @@ use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer,
 use crate::cell::*;
 use crate::clipboard::Clipboard;
 use crate::document::WriteableDocument;
-use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor, ColorMode};
+use crate::framebuffer::{Attributes, ColorMode, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::hash::*;
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
