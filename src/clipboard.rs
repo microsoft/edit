@@ -50,4 +50,23 @@ impl Clipboard {
     pub fn write_was_line_copy(&mut self, line_copy: bool) {
         self.line_copy = line_copy;
     }
+
+   ///Tests if writing to clipboard and 
+   ///reading from it returns the correct data.
+
+   #[cfg(test)]
+   mod tests {
+     use super::*;
+
+     #[test]
+     fn test_write_and_read() {
+         let mut clipboard = Clipboard::default();
+         let data = b"Hello, world!".to_vec();
+         clipboard.write(data.clone());
+         assert_eq!(clipboard.read(), &data[..]);
+         assert!(clipboard.wants_host_sync());
+    }
+}
+
+
 }
