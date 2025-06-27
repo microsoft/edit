@@ -169,15 +169,13 @@ fn run() -> apperr::Result<()> {
             let mut output = tui.render(&scratch);
 
             {
-                let active_document = state.documents.active();
-                let filename = active_document.as_ref().map_or("", |d| &d.filename);
-                if filename != state.osc_title_filename || active_document.is_some() {
-                    write_terminal_title(
-                        &mut output,
-                        filename,
-                        active_document.map_or(false, |d| d.buffer.borrow().is_dirty()),
-                    );
-                    state.osc_title_filename = filename.to_string();
+                let file_status = state
+                    .documents
+                    .active()
+                    .map(|d| (d.filename.clone(), d.buffer.borrow().is_dirty()));
+                if file_status != state.osc_title_file_status {
+                    write_terminal_title(&mut output, &file_status);
+                    state.osc_title_file_status = file_status;
                 }
             }
 
@@ -383,11 +381,11 @@ fn draw_handle_wants_exit(_ctx: &mut Context, state: &mut State) {
 }
 
 #[cold]
-fn write_terminal_title(output: &mut ArenaString, filename: &str, is_dirty: bool) {
+fn write_terminal_title(output: &mut ArenaString, file_status: &Option<(String, bool)>) {
     output.push_str("\x1b]0;");
 
-    if !filename.is_empty() {
-        if is_dirty {
+    if let Some((filename, is_dirty)) = file_status {
+        if *is_dirty {
             output.push('*');
         }
         output.push_str(&sanitize_control_chars(filename));
