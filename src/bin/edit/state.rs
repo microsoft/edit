@@ -161,7 +161,7 @@ pub struct State {
     pub goto_target: String,
     pub goto_invalid: bool,
 
-    pub osc_title_filename: String,
+    pub osc_title_file_status: Option<(String, bool)>,
     pub osc_clipboard_sync: bool,
     pub osc_clipboard_always_send: bool,
     pub exit: bool,
@@ -209,7 +209,7 @@ impl State {
             goto_target: Default::default(),
             goto_invalid: false,
 
-            osc_title_filename: Default::default(),
+            osc_title_file_status: Default::default(),
             osc_clipboard_sync: false,
             osc_clipboard_always_send: false,
             exit: false,
