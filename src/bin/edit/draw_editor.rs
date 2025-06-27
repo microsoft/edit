@@ -19,11 +19,20 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
 
     let size = ctx.size();
     // TODO: The layout code should be able to just figure out the height on its own.
-    let height_reduction = match state.wants_search.kind {
-        StateSearchKind::Search => 4,
-        StateSearchKind::Replace => 5,
-        _ => 2,
+    let mut height_reduction = match state.wants_search.kind {
+        StateSearchKind::Search => 5,
+        StateSearchKind::Replace => 6,
+        _ => 3,
     };
+    
+    // Add space for AI dock if visible
+    if state.ai_dock_visible {
+        height_reduction += match state.ai_dock_size {
+            AiDockSize::Minimized => 3,  // Just header and border
+            AiDockSize::Default => 8,    // Normal size
+            AiDockSize::Expanded => size.height / 2,  // 50% of screen
+        };
+    }
 
     if let Some(doc) = state.documents.active() {
         ctx.textarea("textarea", doc.buffer.clone());

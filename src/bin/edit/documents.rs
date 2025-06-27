@@ -70,6 +70,13 @@ impl Document {
     fn update_file_mode(&mut self) {
         let mut tb = self.buffer.borrow_mut();
         tb.set_ruler(if self.filename == "COMMIT_EDITMSG" { 72 } else { 0 });
+        
+        // Set syntax highlighting based on file extension
+        if let Some(path) = &self.path {
+            if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
+                tb.set_syntax_from_extension(extension);
+            }
+        }
     }
 }
 
@@ -110,6 +117,46 @@ impl DocumentManager {
 
     pub fn remove_active(&mut self) {
         self.list.pop_front();
+    }
+
+    /// Get the index of the currently active document
+    pub fn active_index(&self) -> usize {
+        0 // The active document is always at the front (index 0)
+    }
+
+    /// Set the active document by index
+    pub fn set_active_index(&mut self, index: usize) {
+        if index >= self.list.len() {
+            return;
+        }
+        
+        let mut cursor = self.list.cursor_front_mut();
+        for _ in 0..index {
+            cursor.move_next();
+        }
+        
+        if let Some(list) = cursor.remove_current_as_list() {
+            self.list.cursor_front_mut().splice_before(list);
+        }
+    }
+
+    /// Remove document at specific index
+    pub fn remove_at_index(&mut self, index: usize) {
+        if index >= self.list.len() {
+            return;
+        }
+        
+        let mut cursor = self.list.cursor_front_mut();
+        for _ in 0..index {
+            cursor.move_next();
+        }
+        
+        cursor.remove_current();
+    }
+
+    /// Get an iterator over all documents
+    pub fn iter(&self) -> impl Iterator<Item = &Document> {
+        self.list.iter()
     }
 
     pub fn add_untitled(&mut self) -> apperr::Result<&mut Document> {
@@ -165,6 +212,11 @@ impl DocumentManager {
             if let Some(file) = &mut file {
                 let mut tb = buffer.borrow_mut();
                 tb.read_file(file, None)?;
+
+                // Set syntax highlighting based on file extension
+                if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
+                    tb.set_syntax_from_extension(extension);
+                }
 
                 if let Some(goto) = goto
                     && goto != Default::default()

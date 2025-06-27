@@ -1,0 +1,11 @@
+Package: edit
+Version: 1.2.1
+Section: editors
+Priority: optional
+Architecture: amd64
+Depends: libc6 (>= 2.17)
+Maintainer: Microsoft <support@microsoft.com>
+Description: Fast and efficient text editor CLI tool
+ A modern, fast, and efficient command-line text editor
+ built with Rust. Provides MS-DOS style editing capabilities
+ with modern performance and cross-platform support.

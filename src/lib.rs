@@ -31,6 +31,7 @@ pub mod input;
 pub mod oklab;
 pub mod path;
 pub mod simd;
+pub mod syntax;
 pub mod sys;
 pub mod tui;
 pub mod unicode;
