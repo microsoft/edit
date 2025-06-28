@@ -37,7 +37,7 @@ impl Drop for BackingBuffer {
     }
 }
 
-/// Most people know how Vec<T> works: It has some spare capacity at the end,
+/// Most people know how `Vec<T>` works: It has some spare capacity at the end,
 /// so that pushing into it doesn't reallocate every single time. A gap buffer
 /// is the same thing, but the spare capacity can be anywhere in the buffer.
 /// This variant is optimized for large buffers and uses virtual memory.
@@ -245,17 +245,9 @@ impl GapBuffer {
         self.text_length = 0;
     }
 
-    pub fn extract_raw(
-        &self,
-        mut beg: usize,
-        mut end: usize,
-        out: &mut Vec<u8>,
-        mut out_off: usize,
-    ) {
-        debug_assert!(beg <= end && end <= self.text_length);
-
-        end = end.min(self.text_length);
-        beg = beg.min(end);
+    pub fn extract_raw(&self, range: Range<usize>, out: &mut Vec<u8>, mut out_off: usize) {
+        let end = range.end.min(self.text_length);
+        let mut beg = range.start.min(end);
         out_off = out_off.min(out.len());
 
         if beg >= end {

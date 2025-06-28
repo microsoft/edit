@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::ffi::{CStr, OsString, c_void};
+use std::ffi::{OsString, c_char, c_void};
 use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::mem::MaybeUninit;
@@ -19,6 +19,35 @@ use windows_sys::w;
 use crate::apperr;
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::helpers::*;
+
+macro_rules! w_env {
+    ($s:literal) => {{
+        const INPUT: &[u8] = env!($s).as_bytes();
+        const OUTPUT_LEN: usize = windows_sys::core::utf16_len(INPUT) + 1;
+        const OUTPUT: &[u16; OUTPUT_LEN] = {
+            let mut buffer = [0; OUTPUT_LEN];
+            let mut input_pos = 0;
+            let mut output_pos = 0;
+            while let Some((mut code_point, new_pos)) =
+                windows_sys::core::decode_utf8_char(INPUT, input_pos)
+            {
+                input_pos = new_pos;
+                if code_point <= 0xffff {
+                    buffer[output_pos] = code_point as u16;
+                    output_pos += 1;
+                } else {
+                    code_point -= 0x10000;
+                    buffer[output_pos] = 0xd800 + (code_point >> 10) as u16;
+                    output_pos += 1;
+                    buffer[output_pos] = 0xdc00 + (code_point & 0x3ff) as u16;
+                    output_pos += 1;
+                }
+            }
+            &{ buffer }
+        };
+        OUTPUT.as_ptr()
+    }};
+}
 
 type ReadConsoleInputExW = unsafe extern "system" fn(
     h_console_input: Foundation::HANDLE,
@@ -109,7 +138,10 @@ pub fn init() -> apperr::Result<Deinit> {
         }
 
         unsafe fn load_read_func(module: *const u16) -> apperr::Result<ReadConsoleInputExW> {
-            unsafe { get_module(module).and_then(|m| get_proc_address(m, c"ReadConsoleInputExW")) }
+            unsafe {
+                get_module(module)
+                    .and_then(|m| get_proc_address(m, c"ReadConsoleInputExW".as_ptr()))
+            }
         }
 
         // `kernel32.dll` doesn't exist on OneCore variants of Windows.
@@ -515,9 +547,11 @@ pub unsafe fn virtual_reserve(size: usize) -> apperr::Result<NonNull<u8>> {
 ///
 /// This function is unsafe because it uses raw pointers.
 /// Make sure to only pass pointers acquired from [`virtual_reserve`].
-pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
+pub unsafe fn virtual_release(base: NonNull<u8>, _size: usize) {
     unsafe {
-        Memory::VirtualFree(base.as_ptr() as *mut _, size, Memory::MEM_RELEASE);
+        // NOTE: `VirtualFree` fails if the pointer isn't
+        // a valid base address or if the size isn't zero.
+        Memory::VirtualFree(base.as_ptr() as *mut _, 0, Memory::MEM_RELEASE);
     }
 }
 
@@ -562,25 +596,54 @@ unsafe fn load_library(name: *const u16) -> apperr::Result<NonNull<c_void>> {
 /// of the function you're loading. No type checks whatsoever are performed.
 //
 // It'd be nice to constrain T to std::marker::FnPtr, but that's unstable.
-pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apperr::Result<T> {
+pub unsafe fn get_proc_address<T>(
+    handle: NonNull<c_void>,
+    name: *const c_char,
+) -> apperr::Result<T> {
     unsafe {
-        let ptr = LibraryLoader::GetProcAddress(handle.as_ptr(), name.as_ptr() as *const u8);
+        let ptr = LibraryLoader::GetProcAddress(handle.as_ptr(), name as *const u8);
         if let Some(ptr) = ptr { Ok(mem::transmute_copy(&ptr)) } else { Err(get_last_error()) }
     }
 }
 
-/// Loads the "common" portion of ICU4C.
-pub fn load_libicuuc() -> apperr::Result<NonNull<c_void>> {
-    unsafe { load_library(w!("icuuc.dll")) }
+pub struct LibIcu {
+    pub libicuuc: NonNull<c_void>,
+    pub libicui18n: NonNull<c_void>,
 }
 
-/// Loads the internationalization portion of ICU4C.
-pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
-    unsafe { load_library(w!("icuin.dll")) }
+pub fn load_icu() -> apperr::Result<LibIcu> {
+    const fn const_ptr_u16_eq(a: *const u16, b: *const u16) -> bool {
+        unsafe {
+            let mut a = a;
+            let mut b = b;
+            loop {
+                if *a != *b {
+                    return false;
+                }
+                if *a == 0 {
+                    return true;
+                }
+                a = a.add(1);
+                b = b.add(1);
+            }
+        }
+    }
+
+    const LIBICUUC: *const u16 = w_env!("EDIT_CFG_ICUUC_SONAME");
+    const LIBICUI18N: *const u16 = w_env!("EDIT_CFG_ICUI18N_SONAME");
+
+    if const { const_ptr_u16_eq(LIBICUUC, LIBICUI18N) } {
+        let icu = unsafe { load_library(LIBICUUC)? };
+        Ok(LibIcu { libicuuc: icu, libicui18n: icu })
+    } else {
+        let libicuuc = unsafe { load_library(LIBICUUC)? };
+        let libicui18n = unsafe { load_library(LIBICUI18N)? };
+        Ok(LibIcu { libicuuc, libicui18n })
+    }
 }
 
 /// Returns a list of preferred languages for the current user.
-pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString, &Arena> {
+pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
     // If the GetUserPreferredUILanguages() don't fit into 512 characters,
     // honestly, just give up. How many languages do you realistically need?
     const LEN: usize = 512;
