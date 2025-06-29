@@ -1,9 +1,9 @@
 name: Build and Release Linux binary
 
-#on:
-#  push:
-#    tags:
-#      - 'v*'  # Triggers only on version tags like v1.0.0
+on:
+  push:
+    tags:
+      - '*' 
 
 jobs:
   build:
