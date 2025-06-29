@@ -40,7 +40,7 @@ jobs:
       - name: icu artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: *
+          pattern: ./release/*
           merge-multiple: true
 
       - name: Create GitHub Release
