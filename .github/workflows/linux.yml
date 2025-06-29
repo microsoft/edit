@@ -39,9 +39,8 @@ jobs:
     steps:
       - name: icu artifacts
         uses: actions/download-artifact@v4
-#        with:
-#          pattern: edit.icu*
-#          merge-multiple: true
+        with:
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
