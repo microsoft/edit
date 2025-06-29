@@ -2,8 +2,9 @@ name: Build and Release Linux binary
 
 on:
   push:
-    branches:
-      - dockerfile
+    tags:
+      - '*' 
+
 
 jobs:
   build:
