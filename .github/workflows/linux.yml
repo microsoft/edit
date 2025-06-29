@@ -46,7 +46,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ./release/edit.icu*
+          files: ./release/*
+          files: ./*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
