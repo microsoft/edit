@@ -16,7 +16,7 @@ jobs:
       - name: Build for icu 74
         run: |
           docker build -t icu74 -f Dockerfile.GNU .
-          docker run -it --rm -v ${{ github.workspace }}:/workspace /bin/sh -c "cp -v target/release/edit /workspace/edit.icu74"
+          docker run --rm -v ${{ github.workspace }}:/workspace /bin/sh -c "cp -v target/release/edit /workspace/edit.icu74"
 
       - name: Upload asset as artifact 
         uses: actions/upload-artifact@v4
