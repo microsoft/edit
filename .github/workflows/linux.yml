@@ -3,34 +3,41 @@ name: Build and Release Linux binary
 on:
   push:
     tags:
-      - '*' 
+      - 'v*' 
 
 
 jobs:
-  build:
+  build for linux:
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        icuversion:
+          - 72
+          - 74
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build for icu 74
+      - name: Build for icu ${{ matrix.icuversion }}
         run: |
-          docker build -t icu74 -f Dockerfile.GNU .
-          docker run --rm -v ${{ github.workspace }}:/workspace icu74 /bin/sh -c "cp -v target/release/edit /workspace/edit.icu74"
+          docker build -t icu -f Dockerfile.GNU .
+          docker run --rm -v ${{ github.workspace }}:/workspace icu /bin/sh -c "cp -v target/release/edit /workspace/edit.icu${{ matrix.icuversion }}"
 
       - name: Upload asset as artifact 
         uses: actions/upload-artifact@v4
         with:
           name: built-asset
-          path: edit.icu74
+          path: edit.icu${{ matrix.icuversion }}
 
   release:
     runs-on: ubuntu-latest
     needs: build
 
     steps:
-      - name: icu 74 artifact
+      - name: icu artifacts
         uses: actions/download-artifact@v4
         with:
           name: built-asset
@@ -39,7 +46,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ./release/edit.icu74
+          files: ./release/edit.icu*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

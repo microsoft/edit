@@ -9,6 +9,6 @@ ENV EDIT_CFG_ICUI18N_SONAME=libicui18n.so.${ICU_VERSION}
 COPY . .
 
 RUN cargo build --config .cargo/release.toml --release
-RUN cp -v ./target/release/edit /edit.gnu.icu74
+RUN cp -v ./target/release/edit /edit.gnu.icu${ICU_VERSION}
 
 
