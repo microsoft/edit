@@ -1,4 +1,4 @@
-name: Build and Release Linux binary
+name: Build and Release Linux-libicu binary
 
 on:
   push:
@@ -29,7 +29,7 @@ jobs:
       - name: Upload asset as artifact 
         uses: actions/upload-artifact@v4
         with:
-          name: built-asset
+          name: built-asset-icu${{matrix.icuversion }}
           path: edit.icu${{ matrix.icuversion }}
 
   release:
@@ -40,8 +40,8 @@ jobs:
       - name: icu artifacts
         uses: actions/download-artifact@v4
         with:
-          name: built-asset
-          path: ./release
+          pattern: *
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
