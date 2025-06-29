@@ -2655,6 +2655,10 @@ impl<'a> Context<'a, '_> {
                     kbmod::CTRL => tb.delete(CursorMovement::Word, -1),
                     _ => return false,
                 },
+                vk::L => match modifiers {
+                    kbmod::CTRL => tb.select_line(),
+                    _ => return false,
+                },
                 vk::X => match modifiers {
                     kbmod::CTRL => tb.cut(self.clipboard_mut()),
                     _ => return false,
