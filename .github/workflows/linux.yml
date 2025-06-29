@@ -23,7 +23,7 @@ jobs:
 
       - name: Build for icu ${{ matrix.icuversion }}
         run: |
-          docker build -t icu -f Dockerfile.GNU .
+          docker build -t icu -f Dockerfile .
           docker run --rm -v ${{ github.workspace }}:/workspace icu /bin/sh -c "cp -v target/release/edit /workspace/edit.icu${{ matrix.icuversion }}"
 
       - name: Upload asset as artifact 
