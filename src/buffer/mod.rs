@@ -36,7 +36,7 @@ use std::str;
 
 pub use gap_buffer::GapBuffer;
 
-use crate::arena::{ArenaString, scratch_arena};
+use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
@@ -44,7 +44,7 @@ use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
 use crate::oklab::oklab_blend;
 use crate::simd::memchr2;
-use crate::unicode::{self, Cursor, MeasurementConfig};
+use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
 use crate::{apperr, icu, simd};
 
 /// The margin template is used for line numbers.
@@ -54,6 +54,10 @@ const MARGIN_TEMPLATE: &str = "                    │ ";
 /// Just a bunch of whitespace you can use for turning tabs into spaces.
 /// Happens to reuse MARGIN_TEMPLATE, because it has sufficient whitespace.
 const TAB_WHITESPACE: &str = MARGIN_TEMPLATE;
+const VISUAL_SPACE: &str = "･";
+const VISUAL_SPACE_PREFIX_ADD: usize = '･'.len_utf8() - 1;
+const VISUAL_TAB: &str = "￫       ";
+const VISUAL_TAB_PREFIX_ADD: usize = '￫'.len_utf8() - 1;
 
 /// Stores statistics about the whole document.
 #[derive(Copy, Clone)]
@@ -91,6 +95,8 @@ struct HistoryEntry {
     /// [`TextBuffer::stats`] before the change was made.
     stats_before: TextBufferStatistics,
     /// [`GapBuffer::generation`] before the change was made.
+    ///
+    /// **NOTE:** Entries with the same generation are grouped together.
     generation_before: u32,
     /// Logical cursor position where the change took place.
     /// The position is at the start of the changed range.
@@ -136,6 +142,11 @@ pub struct SearchOptions {
     pub use_regex: bool,
 }
 
+enum RegexReplacement<'a> {
+    Group(i32),
+    Text(Vec<u8, &'a Arena>),
+}
+
 /// Caches the start and length of the active edit line for a single edit.
 /// This helps us avoid having to remeasure the buffer after an edit.
 struct ActiveEditLineInfo {
@@ -149,10 +160,34 @@ struct ActiveEditLineInfo {
     distance_next_line_start: usize,
 }
 
+/// Undo/redo grouping works by recording a set of "overrides",
+/// which are then applied in [`TextBuffer::edit_begin()`].
+/// This allows us to create a group of edits that all share a
+/// common `generation_before` and can be undone/redone together.
+/// This struct stores those overrides.
+struct ActiveEditGroupInfo {
+    /// [`TextBuffer::cursor`] position before the change was made.
+    cursor_before: Point,
+    /// [`TextBuffer::selection`] before the change was made.
+    selection_before: Option<TextBufferSelection>,
+    /// [`TextBuffer::stats`] before the change was made.
+    stats_before: TextBufferStatistics,
+    /// [`GapBuffer::generation`] before the change was made.
+    ///
+    /// **NOTE:** Entries with the same generation are grouped together.
+    generation_before: u32,
+}
+
 /// Char- or word-wise navigation? Your choice.
 pub enum CursorMovement {
     Grapheme,
     Word,
+}
+
+/// See [`TextBuffer::move_selected_lines`].
+pub enum MoveLineDirection {
+    Up,
+    Down,
 }
 
 /// The result of a call to [`TextBuffer::render()`].
@@ -179,6 +214,7 @@ pub struct TextBuffer {
     last_history_type: HistoryType,
     last_save_generation: u32,
 
+    active_edit_group: Option<ActiveEditGroupInfo>,
     active_edit_line_info: Option<ActiveEditLineInfo>,
     active_edit_depth: i32,
     active_edit_off: usize,
@@ -230,6 +266,7 @@ impl TextBuffer {
             last_history_type: HistoryType::Other,
             last_save_generation: 0,
 
+            active_edit_group: None,
             active_edit_line_info: None,
             active_edit_depth: 0,
             active_edit_off: 0,
@@ -503,6 +540,27 @@ impl TextBuffer {
             self.reflow();
             true
         }
+    }
+
+    /// Calculates the amount of spaces a tab key press would insert at the given column.
+    /// This also equals the visual width of an actual tab character.
+    ///
+    /// This exists because Rust doesn't have range constraints yet, and without
+    /// them assembly blows up in size by 7x. It's a recurring issue with Rust.
+    #[inline]
+    fn tab_size_eval(&self, column: CoordType) -> CoordType {
+        // SAFETY: `set_tab_size` clamps `self.tab_size` to 1-8.
+        unsafe { std::hint::assert_unchecked(self.tab_size >= 1 && self.tab_size <= 8) };
+        self.tab_size - (column % self.tab_size)
+    }
+
+    /// If the cursor is at an indentation of `column`, this returns
+    /// the column to which a backspace key press would delete to.
+    #[inline]
+    fn tab_size_prev_column(&self, column: CoordType) -> CoordType {
+        // SAFETY: `set_tab_size` clamps `self.tab_size` to 1-8.
+        unsafe { std::hint::assert_unchecked(self.tab_size >= 1 && self.tab_size <= 8) };
+        (column - 1).max(0) / self.tab_size * self.tab_size
     }
 
     /// Returns whether tabs are used for indentation.
@@ -1078,13 +1136,18 @@ impl TextBuffer {
         &mut self,
         pattern: &str,
         options: SearchOptions,
-        replacement: &str,
+        replacement: &[u8],
     ) -> apperr::Result<()> {
         // Editors traditionally replace the previous search hit, not the next possible one.
-        if let (Some(search), Some(..)) = (&mut self.search, &self.selection) {
-            let search = search.get_mut();
+        if let (Some(search), Some(..)) = (&self.search, &self.selection) {
+            let search = unsafe { &mut *search.get() };
             if search.selection_generation == self.selection_generation {
-                self.write(replacement.as_bytes(), self.cursor, true);
+                let scratch = scratch_arena(None);
+                let parsed_replacements =
+                    Self::find_parse_replacement(&scratch, &mut *search, replacement);
+                let replacement =
+                    self.find_fill_replacement(&mut *search, replacement, &parsed_replacements);
+                self.write(&replacement, self.cursor, true);
             }
         }
 
@@ -1096,18 +1159,22 @@ impl TextBuffer {
         &mut self,
         pattern: &str,
         options: SearchOptions,
-        replacement: &str,
+        replacement: &[u8],
     ) -> apperr::Result<()> {
-        let replacement = replacement.as_bytes();
+        let scratch = scratch_arena(None);
         let mut search = self.find_construct_search(pattern, options)?;
         let mut offset = 0;
+        let parsed_replacements = Self::find_parse_replacement(&scratch, &mut search, replacement);
 
         loop {
             self.find_select_next(&mut search, offset, false);
             if !self.has_selection() {
                 break;
             }
-            self.write(replacement, self.cursor, true);
+
+            let replacement =
+                self.find_fill_replacement(&mut search, replacement, &parsed_replacements);
+            self.write(&replacement, self.cursor, true);
             offset = self.cursor.offset;
         }
 
@@ -1213,6 +1280,130 @@ impl TextBuffer {
             search.no_matches = true;
             self.set_selection(None)
         };
+    }
+
+    fn find_parse_replacement<'a>(
+        arena: &'a Arena,
+        search: &mut ActiveSearch,
+        replacement: &[u8],
+    ) -> Vec<RegexReplacement<'a>, &'a Arena> {
+        let mut res = Vec::new_in(arena);
+
+        if !search.options.use_regex {
+            return res;
+        }
+
+        let group_count = search.regex.group_count();
+        let mut text = Vec::new_in(arena);
+        let mut text_beg = 0;
+
+        loop {
+            let mut off = memchr2(b'$', b'\\', replacement, text_beg);
+
+            // Push the raw, unescaped text, if any.
+            if text_beg < off {
+                text.extend_from_slice(&replacement[text_beg..off]);
+            }
+
+            // Unescape any escaped characters.
+            while off < replacement.len() && replacement[off] == b'\\' {
+                off += 2;
+
+                // If this backslash is the last character (e.g. because
+                // `replacement` is just 1 byte long, holding just b"\\"),
+                // we can't unescape it. In that case, we map it to `b'\\'` here.
+                // This results in us appending a literal backslash to the text.
+                let ch = replacement.get(off - 1).map_or(b'\\', |&c| c);
+
+                // Unescape and append the character.
+                text.push(match ch {
+                    b'n' => b'\n',
+                    b'r' => b'\r',
+                    b't' => b'\t',
+                    ch => ch,
+                });
+            }
+
+            // Parse out a group number, if any.
+            let mut group = -1;
+            if off < replacement.len() && replacement[off] == b'$' {
+                let mut beg = off;
+                let mut end = off + 1;
+                let mut acc = 0i32;
+                let mut acc_bad = true;
+
+                if end < replacement.len() {
+                    let ch = replacement[end];
+
+                    if ch == b'$' {
+                        // Translate "$$" to "$".
+                        beg += 1;
+                        end += 1;
+                    } else if ch.is_ascii_digit() {
+                        // Parse "$1234" into 1234i32.
+                        // If the number is larger than the group count,
+                        // we flag `acc_bad` which causes us to treat it as text.
+                        acc_bad = false;
+                        while {
+                            acc =
+                                acc.wrapping_mul(10).wrapping_add((replacement[end] - b'0') as i32);
+                            acc_bad |= acc > group_count;
+                            end += 1;
+                            end < replacement.len() && replacement[end].is_ascii_digit()
+                        } {}
+                    }
+                }
+
+                if !acc_bad {
+                    group = acc;
+                } else {
+                    text.extend_from_slice(&replacement[beg..end]);
+                }
+
+                off = end;
+            }
+
+            if !text.is_empty() {
+                res.push(RegexReplacement::Text(text));
+                text = Vec::new_in(arena);
+            }
+            if group >= 0 {
+                res.push(RegexReplacement::Group(group));
+            }
+
+            text_beg = off;
+            if text_beg >= replacement.len() {
+                break;
+            }
+        }
+
+        res
+    }
+
+    fn find_fill_replacement<'a>(
+        &self,
+        search: &mut ActiveSearch,
+        replacement: &'a [u8],
+        parsed_replacements: &[RegexReplacement],
+    ) -> Cow<'a, [u8]> {
+        if !search.options.use_regex {
+            Cow::Borrowed(replacement)
+        } else {
+            let mut res = Vec::new();
+
+            for replacement in parsed_replacements {
+                match replacement {
+                    RegexReplacement::Text(text) => res.extend_from_slice(text),
+                    RegexReplacement::Group(group) => {
+                        if let Some(range) = search.regex.group(*group) {
+                            self.buffer.extract_raw(range, &mut res, usize::MAX);
+                        }
+                    }
+                }
+            }
+
+            Cow::Owned(res)
+        }
     }
 
     fn measurement_config(&self) -> MeasurementConfig<'_> {
@@ -1600,6 +1791,60 @@ impl TextBuffer {
                 }
             }
 
+            let mut selection_off = 0..0;
+
+            // Figure out the selection range on this line, if any.
+            if cursor_beg.visual_pos.y == visual_line
+                && selection_beg <= cursor_end.logical_pos
+                && selection_end >= cursor_beg.logical_pos
+            {
+                let mut cursor = cursor_beg;
+
+                // By default, we assume the entire line is selected.
+                let mut selection_pos_beg = 0;
+                let mut selection_pos_end = COORD_TYPE_SAFE_MAX;
+                selection_off.start = cursor_beg.offset;
+                selection_off.end = cursor_end.offset;
+
+                // The start of the selection is within this line. We need to update selection_beg.
+                if selection_beg <= cursor_end.logical_pos
+                    && selection_beg >= cursor_beg.logical_pos
+                {
+                    cursor = self.cursor_move_to_logical_internal(cursor, selection_beg);
+                    selection_off.start = cursor.offset;
+                    selection_pos_beg = cursor.visual_pos.x;
+                }
+
+                // The end of the selection is within this line. We need to update selection_end.
+                if selection_end <= cursor_end.logical_pos
+                    && selection_end >= cursor_beg.logical_pos
+                {
+                    cursor = self.cursor_move_to_logical_internal(cursor, selection_end);
+                    selection_off.end = cursor.offset;
+                    selection_pos_end = cursor.visual_pos.x;
+                }
+
+                let left = destination.left + self.margin_width - origin.x;
+                let top = destination.top + y;
+                let rect = Rect {
+                    left: left + selection_pos_beg.max(origin.x),
+                    top,
+                    right: left + selection_pos_end.min(origin.x + text_width),
+                    bottom: top + 1,
+                };
+
+                let mut bg = oklab_blend(
+                    fb.indexed(IndexedColor::Foreground),
+                    fb.indexed_alpha(IndexedColor::BrightBlue, 1, 2),
+                );
+                if !focused {
+                    bg = oklab_blend(bg, fb.indexed_alpha(IndexedColor::Background, 1, 2))
+                };
+                let fg = fb.contrasted(bg);
+                fb.blend_bg(rect, bg);
+                fb.blend_fg(rect, fg);
+            }
+
             // Nothing to do if the entire line is empty.
             if cursor_beg.offset != cursor_end.offset {
                 // If we couldn't reach the left edge, we may have stopped short due to a wide glyph.
@@ -1619,84 +1864,94 @@ impl TextBuffer {
                     }
                 }
 
-                fn find_control_char(text: &[u8], mut offset: usize) -> usize {
-                    while offset < text.len() && (text[offset] >= 0x20 && text[offset] != 0x7f) {
-                        offset += 1;
-                    }
-                    offset
-                }
-
                 let mut global_off = cursor_beg.offset;
-                let mut cursor_tab = cursor_beg;
-                let mut cursor_visualizer = cursor_beg;
+                let mut cursor_line = cursor_beg;
 
                 while global_off < cursor_end.offset {
                     let chunk = self.read_forward(global_off);
                     let chunk = &chunk[..chunk.len().min(cursor_end.offset - global_off)];
+                    let mut it = Utf8Chars::new(chunk, 0);
 
-                    let mut chunk_off = 0;
-                    while chunk_off < chunk.len() {
-                        let beg = chunk_off;
-                        chunk_off = find_control_char(chunk, beg);
+                    // TODO: Looping char-by-char is bad for performance.
+                    // >25% of the total rendering time is spent here.
+                    loop {
+                        let chunk_off = it.offset();
+                        let global_off = global_off + chunk_off;
+                        let Some(ch) = it.next() else {
+                            break;
+                        };
 
-                        for chunk in chunk[beg..chunk_off].utf8_chunks() {
-                            if !chunk.valid().is_empty() {
-                                line.push_str(chunk.valid());
+                        if ch == ' ' || ch == '\t' {
+                            let is_tab = ch == '\t';
+                            let visualize = selection_off.contains(&global_off);
+                            let mut whitespace = TAB_WHITESPACE;
+                            let mut prefix_add = 0;
+
+                            if is_tab || visualize {
+                                // We need the character's visual position in order to either compute the tab size,
+                                // or set the foreground color of the visualizer, respectively.
+                                // TODO: Doing this char-by-char is of course also bad for performance.
+                                cursor_line =
+                                    self.cursor_move_to_offset_internal(cursor_line, global_off);
                             }
-                            if !chunk.invalid().is_empty() {
-                                line.push('\u{FFFD}');
-                            }
-                        }
 
-                        while chunk_off < chunk.len()
-                            && (chunk[chunk_off] < 0x20 || chunk[chunk_off] == 0x7f)
-                        {
-                            let ch = chunk[chunk_off];
-                            chunk_off += 1;
+                            let tab_size =
+                                if is_tab { self.tab_size_eval(cursor_line.column) } else { 1 };
 
-                            if ch == b'\t' {
-                                cursor_tab = self.cursor_move_to_offset_internal(
-                                    cursor_tab,
-                                    global_off + chunk_off - 1,
+                            if visualize {
+                                // If the whitespace is part of the selection,
+                                // we replace " " with "･" and "\t" with "￫".
+                                (whitespace, prefix_add) = if is_tab {
+                                    (VISUAL_TAB, VISUAL_TAB_PREFIX_ADD)
+                                } else {
+                                    (VISUAL_SPACE, VISUAL_SPACE_PREFIX_ADD)
+                                };
+
+                                // Make the visualized characters slightly gray.
+                                let visualizer_rect = {
+                                    let left = destination.left
+                                        + self.margin_width
+                                        + cursor_line.visual_pos.x
+                                        - origin.x;
+                                    let top = destination.top + cursor_line.visual_pos.y - origin.y;
+                                    Rect { left, top, right: left + 1, bottom: top + 1 }
+                                };
+                                fb.blend_fg(
+                                    visualizer_rect,
+                                    fb.indexed_alpha(IndexedColor::Foreground, 1, 2),
                                 );
-                                let tab_size = self.tab_size - (cursor_tab.column % self.tab_size);
-                                line.push_str(&TAB_WHITESPACE[..tab_size as usize]);
-
-                                // Since we know that we just aligned ourselves to the next tab stop,
-                                // we can trivially process any successive tabs.
-                                while chunk_off < chunk.len() && chunk[chunk_off] == b'\t' {
-                                    line.push_str(&TAB_WHITESPACE[..self.tab_size as usize]);
-                                    chunk_off += 1;
-                                }
-                                continue;
                             }
 
-                            visualizer_buf[2] = if ch == 0x7F {
+                            line.push_str(&whitespace[..prefix_add + tab_size as usize]);
+                        } else if ch <= '\x1f' || ('\u{7f}'..='\u{9f}').contains(&ch) {
+                            // Append a Unicode representation of the C0 or C1 control character.
+                            visualizer_buf[2] = if ch <= '\x1f' {
+                                0x80 | ch as u8 // U+2400..=U+241F
+                            } else if ch == '\x7f' {
                                 0xA1 // U+2421
                             } else {
-                                0x80 | ch // 0x00..=0x1F => U+2400..=U+241F
+                                0xA6 // U+2426, because there are no pictures for C1 control characters.
                             };
+
                             // Our manually constructed UTF8 is never going to be invalid. Trust.
                             line.push_str(unsafe { str::from_utf8_unchecked(&visualizer_buf) });
 
-                            cursor_visualizer = self.cursor_move_to_offset_internal(
-                                cursor_visualizer,
-                                global_off + chunk_off - 1,
-                            );
+                            // Highlight the control character yellow.
+                            cursor_line =
+                                self.cursor_move_to_offset_internal(cursor_line, global_off);
                             let visualizer_rect = {
-                                let left = destination.left
-                                    + self.margin_width
-                                    + cursor_visualizer.visual_pos.x
-                                    - origin.x;
-                                let top =
-                                    destination.top + cursor_visualizer.visual_pos.y - origin.y;
+                                let left =
+                                    destination.left + self.margin_width + cursor_line.visual_pos.x
+                                        - origin.x;
+                                let top = destination.top + cursor_line.visual_pos.y - origin.y;
                                 Rect { left, top, right: left + 1, bottom: top + 1 }
                             };
-
                             let bg = fb.indexed(IndexedColor::Yellow);
                             let fg = fb.contrasted(bg);
                             fb.blend_bg(visualizer_rect, bg);
                             fb.blend_fg(visualizer_rect, fg);
+                        } else {
+                            line.push(ch);
                         }
                     }
 
@@ -1707,53 +1962,6 @@ impl TextBuffer {
             }
 
             fb.replace_text(destination.top + y, destination.left, destination.right, &line);
-
-            // Draw the selection on this line, if any.
-            // FYI: `cursor_beg.visual_pos.y == visual_line` is necessary as the `visual_line`
-            // may be past the end of the document, and so it may not receive a highlight.
-            if cursor_beg.visual_pos.y == visual_line
-                && selection_beg <= cursor_end.logical_pos
-                && selection_end >= cursor_beg.logical_pos
-            {
-                // By default, we assume the entire line is selected.
-                let mut beg = 0;
-                let mut end = COORD_TYPE_SAFE_MAX;
-                let mut cursor = cursor_beg;
-
-                // The start of the selection is within this line. We need to update selection_beg.
-                if selection_beg <= cursor_end.logical_pos
-                    && selection_beg >= cursor_beg.logical_pos
-                {
-                    cursor = self.cursor_move_to_logical_internal(cursor, selection_beg);
-                    beg = cursor.visual_pos.x;
-                }
-
-                // The end of the selection is within this line. We need to update selection_end.
-                if selection_end <= cursor_end.logical_pos
-                    && selection_end >= cursor_beg.logical_pos
-                {
-                    cursor = self.cursor_move_to_logical_internal(cursor, selection_end);
-                    end = cursor.visual_pos.x;
-                }
-
-                beg = beg.max(origin.x);
-                end = end.min(origin.x + text_width);
-
-                let left = destination.left + self.margin_width - origin.x;
-                let top = destination.top + y;
-                let rect = Rect { left: left + beg, top, right: left + end, bottom: top + 1 };
-
-                let mut bg = oklab_blend(
-                    fb.indexed(IndexedColor::Foreground),
-                    fb.indexed_alpha(IndexedColor::BrightBlue, 1, 2),
-                );
-                if !focused {
-                    bg = oklab_blend(bg, fb.indexed_alpha(IndexedColor::Background, 1, 2))
-                };
-                let fg = fb.contrasted(bg);
-                fb.blend_bg(rect, bg);
-                fb.blend_fg(rect, fg);
-            }
 
             cursor = cursor_end;
         }
@@ -1872,6 +2080,7 @@ impl TextBuffer {
 
     fn write(&mut self, text: &[u8], at: Cursor, raw: bool) {
         let history_type = if raw { HistoryType::Other } else { HistoryType::Write };
+        let mut edit_begun = false;
 
         // If we have an active selection, writing an empty `text`
         // will still delete the selection. As such, we check this first.
@@ -1879,19 +2088,20 @@ impl TextBuffer {
             self.edit_begin(history_type, beg);
             self.edit_delete(end);
             self.set_selection(None);
+            edit_begun = true;
         }
 
         // If the text is empty the remaining code won't do anything,
         // allowing us to exit early.
         if text.is_empty() {
             // ...we still need to end any active edit session though.
-            if self.active_edit_depth > 0 {
+            if edit_begun {
                 self.edit_end();
             }
             return;
         }
 
-        if self.active_edit_depth <= 0 {
+        if !edit_begun {
             self.edit_begin(history_type, at);
         }
 
@@ -1921,7 +2131,7 @@ impl TextBuffer {
 
                 // Now replace tabs with spaces.
                 while line_off < line.len() && line[line_off] == b'\t' {
-                    let spaces = self.tab_size - (self.cursor.column % self.tab_size);
+                    let spaces = self.tab_size_eval(self.cursor.column);
                     let spaces = &TAB_WHITESPACE.as_bytes()[..spaces as usize];
                     self.edit_write(spaces);
                     line_off += 1;
@@ -1952,11 +2162,10 @@ impl TextBuffer {
                 // because "  a\n  a\n" should give the 3rd line a total indentation of 4.
                 // Assuming your terminal has bracketed paste, this won't be a concern though.
                 // (If it doesn't, use a different terminal.)
-                let tab_size = self.tab_size as usize;
                 let line_beg = self.goto_line_start(self.cursor, self.cursor.logical_pos.y);
                 let limit = self.cursor.offset;
                 let mut off = line_beg.offset;
-                let mut newline_indentation = 0usize;
+                let mut newline_indentation = 0;
 
                 'outer: while off < limit {
                     let chunk = self.read_forward(off);
@@ -1966,7 +2175,7 @@ impl TextBuffer {
                         if c == b' ' {
                             newline_indentation += 1;
                         } else if c == b'\t' {
-                            newline_indentation += tab_size - (newline_indentation % tab_size);
+                            newline_indentation += self.tab_size_eval(newline_indentation);
                         } else {
                             break 'outer;
                         }
@@ -1977,14 +2186,14 @@ impl TextBuffer {
 
                 // If tabs are enabled, add as many tabs as we can.
                 if self.indent_with_tabs {
-                    let tab_count = newline_indentation / tab_size;
-                    newline_buffer.push_repeat('\t', tab_count);
-                    newline_indentation -= tab_count * tab_size;
+                    let tab_count = newline_indentation / self.tab_size;
+                    newline_buffer.push_repeat('\t', tab_count as usize);
+                    newline_indentation -= tab_count * self.tab_size;
                 }
 
                 // If tabs are disabled, or if the indentation wasn't a multiple of the tab size,
                 // add spaces to make up the difference.
-                newline_buffer.push_repeat(' ', newline_indentation);
+                newline_buffer.push_repeat(' ', newline_indentation as usize);
             }
 
             self.edit_write(newline_buffer.as_bytes());
@@ -2070,8 +2279,85 @@ impl TextBuffer {
     /// Return `.x == 0` if there are no non-whitespace characters.
     pub fn indent_end_logical_pos(&self) -> Point {
         let cursor = self.goto_line_start(self.cursor, self.cursor.logical_pos.y);
+        let (chars, _) = self.measure_indent_internal(cursor.offset, CoordType::MAX);
+        Point { x: chars, y: cursor.logical_pos.y }
+    }
+
+    /// Indents/unindents the current selection or line.
+    pub fn indent_change(&mut self, direction: CoordType) {
+        let selection = self.selection;
+        let mut selection_beg = self.cursor.logical_pos;
+        let mut selection_end = selection_beg;
+
+        if let Some(TextBufferSelection { beg, end }) = &selection {
+            selection_beg = *beg;
+            selection_end = *end;
+        }
+
+        if direction >= 0 && self.selection.is_none_or(|sel| sel.beg.y == sel.end.y) {
+            self.write_canon(b"\t");
+            return;
+        }
+
+        self.edit_begin_grouping();
+
+        for y in selection_beg.y.min(selection_end.y)..=selection_beg.y.max(selection_end.y) {
+            self.cursor_move_to_logical(Point { x: 0, y });
+
+            let line_start_offset = self.cursor.offset;
+            let (curr_chars, curr_columns) =
+                self.measure_indent_internal(line_start_offset, CoordType::MAX);
+
+            self.cursor_move_to_logical(Point { x: curr_chars, y: self.cursor.logical_pos.y });
+
+            let delta;
+
+            if direction < 0 {
+                // Unindent the line. If there's no indentation, skip.
+                if curr_columns <= 0 {
+                    continue;
+                }
+
+                let (prev_chars, _) = self.measure_indent_internal(
+                    line_start_offset,
+                    self.tab_size_prev_column(curr_columns),
+                );
+
+                delta = prev_chars - curr_chars;
+                self.delete(CursorMovement::Grapheme, delta);
+            } else {
+                // Indent the line. `self.cursor` is already at the level of indentation.
+                delta = self.tab_size_eval(curr_columns);
+                self.write_canon(b"\t");
+            }
+
+            // As the lines get unindented, the selection should shift with them.
+            if y == selection_beg.y {
+                selection_beg.x += delta;
+            }
+            if y == selection_end.y {
+                selection_end.x += delta;
+            }
+        }
+        self.edit_end_grouping();
+
+        // Move the cursor to the new end of the selection.
+        self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, selection_end));
+
+        // NOTE: If the selection was previously `None`,
+        // it should continue to be `None` after this.
+        self.set_selection(
+            selection.map(|_| TextBufferSelection { beg: selection_beg, end: selection_end }),
+        );
+    }
+
+    fn measure_indent_internal(
+        &self,
+        mut offset: usize,
+        max_columns: CoordType,
+    ) -> (CoordType, CoordType) {
         let mut chars = 0;
-        let mut offset = cursor.offset;
+        let mut columns = 0;
 
         'outer: loop {
             let chunk = self.read_forward(offset);
@@ -2080,93 +2366,96 @@ impl TextBuffer {
             }
 
             for &c in chunk {
-                if c == b'\n' || c == b'\r' || (c != b' ' && c != b'\t') {
+                let next = match c {
+                    b' ' => columns + 1,
+                    b'\t' => columns + self.tab_size_eval(columns),
+                    _ => break 'outer,
+                };
+                if next > max_columns {
                     break 'outer;
                 }
                 chars += 1;
+                columns = next;
             }
 
             offset += chunk.len();
-        }
 
-        Point { x: chars, y: cursor.logical_pos.y }
-    }
-
-    /// Unindents the current selection or line.
-    ///
-    /// TODO: This function is ripe for some optimizations:
-    /// * Instead of replacing the entire selection,
-    ///   it should unindent each line directly (as if multiple cursors had been used).
-    /// * The cursor movement at the end is rather costly, but at least without word wrap
-    ///   it should be possible to calculate it directly from the removed amount.
-    pub fn unindent(&mut self) {
-        let mut selection_beg = self.cursor.logical_pos;
-        let mut selection_end = selection_beg;
-
-        if let Some(TextBufferSelection { beg, end }) = self.selection {
-            selection_beg = beg;
-            selection_end = end;
-        }
-
-        let [beg, end] = minmax(selection_beg, selection_end);
-        let beg = self.cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: beg.y });
-        let end = self.cursor_move_to_logical_internal(beg, Point { x: CoordType::MAX, y: end.y });
-
-        let mut replacement = Vec::new();
-        self.buffer.extract_raw(beg.offset..end.offset, &mut replacement, 0);
-
-        let initial_len = replacement.len();
-        let mut offset = 0;
-        let mut y = beg.logical_pos.y;
-
-        loop {
-            if offset >= replacement.len() {
+            // No need to do another round if we
+            // already got the exact right amount.
+            if columns >= max_columns {
                 break;
             }
-
-            let mut remove = 0;
-
-            if replacement[offset] == b'\t' {
-                remove = 1;
-            } else {
-                while remove < self.tab_size as usize
-                    && offset + remove < replacement.len()
-                    && replacement[offset + remove] == b' '
-                {
-                    remove += 1;
-                }
-            }
-
-            if remove > 0 {
-                replacement.drain(offset..offset + remove);
-            }
-
-            if y == selection_beg.y {
-                selection_beg.x -= remove as CoordType;
-            }
-            if y == selection_end.y {
-                selection_end.x -= remove as CoordType;
-            }
-
-            (offset, y) = simd::lines_fwd(&replacement, offset, y, y + 1);
         }
 
-        if replacement.len() == initial_len {
-            // Nothing to do.
+        (chars, columns)
+    }
+
+    /// Displaces the current, cursor or the selection, line(s) in the given direction.
+    pub fn move_selected_lines(&mut self, direction: MoveLineDirection) {
+        let selection = self.selection;
+        let cursor = self.cursor;
+
+        // If there's no selection, we move the line the cursor is on instead.
+        let [beg, end] = match self.selection {
+            Some(s) => minmax(s.beg.y, s.end.y),
+            None => [cursor.logical_pos.y, cursor.logical_pos.y],
+        };
+
+        // Check if this would be a no-op.
+        if match direction {
+            MoveLineDirection::Up => beg <= 0,
+            MoveLineDirection::Down => end >= self.stats.logical_lines - 1,
+        } {
             return;
         }
 
-        self.edit_begin(HistoryType::Other, beg);
-        self.edit_delete(end);
-        self.edit_write(&replacement);
-        self.edit_end();
+        let delta = match direction {
+            MoveLineDirection::Up => -1,
+            MoveLineDirection::Down => 1,
+        };
+        let (cut, paste) = match direction {
+            MoveLineDirection::Up => (beg - 1, end),
+            MoveLineDirection::Down => (end + 1, beg),
+        };
 
-        if let Some(TextBufferSelection { beg, end }) = &mut self.selection {
-            *beg = selection_beg;
-            *end = selection_end;
+        self.edit_begin_grouping();
+        {
+            // Let's say this is `MoveLineDirection::Up`.
+            // In that case, we'll cut (remove) the line above the selection here...
+            self.cursor_move_to_logical(Point { x: 0, y: cut });
+            let line = self.extract_selection(true);
+
+            // ...and paste it below the selection. This will then
+            // appear to the user as if the selection was moved up.
+            self.cursor_move_to_logical(Point { x: 0, y: paste });
+            self.edit_begin(HistoryType::Write, self.cursor);
+            // The `extract_selection` call can return an empty `Vec`),
+            // if the `cut` line was at the end of the file. Since we want to
+            // paste the line somewhere it needs a trailing newline at the minimum.
+            //
+            // Similarly, if the `paste` line is at the end of the file
+            // and there's no trailing newline, we'll have failed to reach
+            // that end in which case `logical_pos.y != past`.
+            if line.is_empty() || self.cursor.logical_pos.y != paste {
+                self.write_canon(b"\n");
+            }
+            if !line.is_empty() {
+                self.write_raw(&line);
+            }
+            self.edit_end();
         }
+        self.edit_end_grouping();
 
-        self.set_cursor_internal(self.cursor_move_to_logical_internal(self.cursor, selection_end));
+        // Shift the cursor and selection together with the moved lines.
+        self.cursor_move_to_logical(Point {
+            x: cursor.logical_pos.x,
+            y: cursor.logical_pos.y + delta,
+        });
+        self.set_selection(selection.map(|mut s| {
+            s.beg.y += delta;
+            s.end.y += delta;
+            s
+        }));
     }
 
     /// Extracts the contents of the current selection.
@@ -2240,6 +2529,19 @@ impl TextBuffer {
         if beg.offset < end.offset { Some((beg, end)) } else { None }
     }
 
+    fn edit_begin_grouping(&mut self) {
+        self.active_edit_group = Some(ActiveEditGroupInfo {
+            cursor_before: self.cursor.logical_pos,
+            selection_before: self.selection,
+            stats_before: self.stats,
+            generation_before: self.buffer.generation(),
+        });
+    }
+
+    fn edit_end_grouping(&mut self) {
+        self.active_edit_group = None;
+    }
+
     /// Starts a new edit operation.
     /// This is used for tracking the undo/redo history.
     fn edit_begin(&mut self, history_type: HistoryType, cursor: Cursor) {
@@ -2252,7 +2554,8 @@ impl TextBuffer {
         self.set_cursor_internal(cursor);
 
         // If both the last and this are a Write/Delete operation, we skip allocating a new undo history item.
-        if history_type != self.last_history_type
+        if cursor_before.offset != cursor.offset
+            || history_type != self.last_history_type
             || !matches!(history_type, HistoryType::Write | HistoryType::Delete)
         {
             self.redo_stack.clear();
@@ -2270,6 +2573,16 @@ impl TextBuffer {
                 deleted: Vec::new(),
                 added: Vec::new(),
             }));
+
+            if let Some(info) = &self.active_edit_group
+                && let Some(entry) = self.undo_stack.back()
+            {
+                let mut entry = entry.borrow_mut();
+                entry.cursor_before = info.cursor_before;
+                entry.selection_before = info.selection_before;
+                entry.stats_before = info.stats_before;
+                entry.generation_before = info.generation_before;
+            }
         }
 
         self.active_edit_off = cursor.offset;
@@ -2323,9 +2636,12 @@ impl TextBuffer {
         let mut out_off = usize::MAX;
 
         let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
+
+        // If this is a continued backspace operation,
+        // we need to prepend the deleted portion to the undo entry.
         if self.cursor.logical_pos < undo.cursor {
-            out_off = 0; // Prepend the deleted portion.
-            undo.cursor = self.cursor.logical_pos; // Note the start of the deleted portion.
+            out_off = 0;
+            undo.cursor = self.cursor.logical_pos;
         }
 
         // Copy the deleted portion into the undo entry.
@@ -2343,7 +2659,7 @@ impl TextBuffer {
     /// and recalculates the line statistics.
     fn edit_end(&mut self) {
         self.active_edit_depth -= 1;
-        assert!(self.active_edit_depth >= 0);
+        debug_assert!(self.active_edit_depth >= 0);
         if self.active_edit_depth > 0 {
             return;
         }
@@ -2398,107 +2714,124 @@ impl TextBuffer {
     }
 
     fn undo_redo(&mut self, undo: bool) {
-        // Transfer the last entry from the undo stack to the redo stack or vice versa.
-        {
-            let (from, to) = if undo {
-                (&mut self.undo_stack, &mut self.redo_stack)
-            } else {
-                (&mut self.redo_stack, &mut self.undo_stack)
-            };
+        let buffer_generation = self.buffer.generation();
+        let mut entry_buffer_generation = None;
 
-            let Some(list) = from.cursor_back_mut().remove_current_as_list() else {
-                return;
-            };
-
-            to.cursor_back_mut().splice_after(list);
-        }
-
-        let change = {
-            let to = if undo { &self.redo_stack } else { &self.undo_stack };
-            to.back().unwrap()
-        };
-
-        // Move to the point where the modification took place.
-        let cursor = self.cursor_move_to_logical_internal(self.cursor, change.borrow().cursor);
-
-        let safe_cursor = if self.word_wrap_column > 0 {
-            // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
-            // This is because the undo/redo operation may have changed the visual position of the cursor.
-            self.goto_line_start(cursor, cursor.logical_pos.y)
-        } else {
-            cursor
-        };
-
-        {
-            let buffer_generation = self.buffer.generation();
-            let mut change = change.borrow_mut();
-            let change = &mut *change;
-
-            // Undo: Whatever was deleted is now added and vice versa.
-            mem::swap(&mut change.deleted, &mut change.added);
-
-            // Delete the inserted portion.
-            self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
-
-            // Reinsert the deleted portion.
+        loop {
+            // Transfer the last entry from the undo stack to the redo stack or vice versa.
             {
-                let added = &change.added[..];
-                let mut beg = 0;
-                let mut offset = cursor.offset;
+                let (from, to) = if undo {
+                    (&mut self.undo_stack, &mut self.redo_stack)
+                } else {
+                    (&mut self.redo_stack, &mut self.undo_stack)
+                };
 
-                while beg < added.len() {
-                    let (end, line) = simd::lines_fwd(added, beg, 0, 1);
-                    let has_newline = line != 0;
-                    let link = &added[beg..end];
-                    let line = unicode::strip_newline(link);
-                    let mut written;
+                if let Some(g) = entry_buffer_generation
+                    && from.back().is_none_or(|c| c.borrow().generation_before != g)
+                {
+                    break;
+                }
 
-                    {
-                        let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
-                        written = slice_copy_safe(gap, line);
+                let Some(list) = from.cursor_back_mut().remove_current_as_list() else {
+                    break;
+                };
 
-                        if has_newline {
-                            if self.newlines_are_crlf && written < gap.len() {
-                                gap[written] = b'\r';
-                                written += 1;
+                to.cursor_back_mut().splice_after(list);
+            }
+
+            let change = {
+                let to = if undo { &self.redo_stack } else { &self.undo_stack };
+                to.back().unwrap()
+            };
+
+            // Remember the buffer generation of the change so we can stop popping undos/redos.
+            // Also, move to the point where the modification took place.
+            let cursor = {
+                let change = change.borrow();
+                entry_buffer_generation = Some(change.generation_before);
+                self.cursor_move_to_logical_internal(self.cursor, change.cursor)
+            };
+
+            let safe_cursor = if self.word_wrap_column > 0 {
+                // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
+                // This is because the undo/redo operation may have changed the visual position of the cursor.
+                self.goto_line_start(cursor, cursor.logical_pos.y)
+            } else {
+                cursor
+            };
+
+            {
+                let mut change = change.borrow_mut();
+                let change = &mut *change;
+
+                // Undo: Whatever was deleted is now added and vice versa.
+                mem::swap(&mut change.deleted, &mut change.added);
+
+                // Delete the inserted portion.
+                self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
+
+                // Reinsert the deleted portion.
+                {
+                    let added = &change.added[..];
+                    let mut beg = 0;
+                    let mut offset = cursor.offset;
+
+                    while beg < added.len() {
+                        let (end, line) = simd::lines_fwd(added, beg, 0, 1);
+                        let has_newline = line != 0;
+                        let link = &added[beg..end];
+                        let line = unicode::strip_newline(link);
+                        let mut written;
+
+                        {
+                            let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
+                            written = slice_copy_safe(gap, line);
+
+                            if has_newline {
+                                if self.newlines_are_crlf && written < gap.len() {
+                                    gap[written] = b'\r';
+                                    written += 1;
+                                }
+                                if written < gap.len() {
+                                    gap[written] = b'\n';
+                                    written += 1;
+                                }
                             }
-                            if written < gap.len() {
-                                gap[written] = b'\n';
-                                written += 1;
-                            }
+
+                            self.buffer.commit_gap(written);
                         }
 
-                        self.buffer.commit_gap(written);
+                        beg = end;
+                        offset += written;
                     }
-
-                    beg = end;
-                    offset += written;
                 }
-            }
 
-            // Restore the previous line statistics.
-            mem::swap(&mut self.stats, &mut change.stats_before);
+                // Restore the previous line statistics.
+                mem::swap(&mut self.stats, &mut change.stats_before);
 
-            // Restore the previous selection.
-            mem::swap(&mut self.selection, &mut change.selection_before);
+                // Restore the previous selection.
+                mem::swap(&mut self.selection, &mut change.selection_before);
 
-            // Pretend as if the buffer was never modified.
-            self.buffer.set_generation(change.generation_before);
-            change.generation_before = buffer_generation;
+                // Pretend as if the buffer was never modified.
+                self.buffer.set_generation(change.generation_before);
+                change.generation_before = buffer_generation;
 
-            // Restore the previous cursor.
-            let cursor_before =
-                self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
-            change.cursor_before = self.cursor.logical_pos;
-            // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
-            self.cursor = cursor_before;
+                // Restore the previous cursor.
+                let cursor_before =
+                    self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
+                change.cursor_before = self.cursor.logical_pos;
+                // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
+                self.cursor = cursor_before;
 
-            if self.undo_stack.is_empty() {
-                self.last_history_type = HistoryType::Other;
+                if self.undo_stack.is_empty() {
+                    self.last_history_type = HistoryType::Other;
+                }
             }
         }
 
-        self.recalc_after_content_changed();
+        if entry_buffer_generation.is_some() {
+            self.recalc_after_content_changed();
+        }
     }
 
     /// For interfacing with ICU.

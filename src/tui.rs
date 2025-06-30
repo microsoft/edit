@@ -150,7 +150,7 @@ use std::fmt::Write as _;
 use std::{iter, mem, ptr, time};
 
 use crate::arena::{Arena, ArenaString, scratch_arena};
-use crate::buffer::{CursorMovement, RcTextBuffer, TextBuffer, TextBufferCell};
+use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
 use crate::clipboard::Clipboard;
 use crate::document::WriteableDocument;
@@ -2331,11 +2331,7 @@ impl<'a> Context<'a, '_> {
                         // If this is just a simple input field, don't consume Tab (= early return).
                         return false;
                     }
-                    if modifiers == kbmod::SHIFT {
-                        tb.unindent();
-                    } else {
-                        write = b"\t";
-                    }
+                    tb.indent_change(if modifiers == kbmod::SHIFT { -1 } else { 1 });
                 }
                 vk::RETURN => {
                     if single_line {
@@ -2547,6 +2543,7 @@ impl<'a> Context<'a, '_> {
                                 y: tb.cursor_visual_pos().y - 1,
                             });
                         }
+                        kbmod::ALT => tb.move_selected_lines(MoveLineDirection::Up),
                         kbmod::CTRL_ALT => {
                             // TODO: Add cursor above
                         }
@@ -2617,6 +2614,7 @@ impl<'a> Context<'a, '_> {
                                 tc.preferred_column = tb.cursor_visual_pos().x;
                             }
                         }
+                        kbmod::ALT => tb.move_selected_lines(MoveLineDirection::Down),
                         kbmod::CTRL_ALT => {
                             // TODO: Add cursor above
                         }

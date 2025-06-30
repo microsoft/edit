@@ -135,8 +135,8 @@ pub struct State {
     pub file_picker_pending_dir: DisplayablePathBuf,
     pub file_picker_pending_dir_revision: u64, // Bumped every time `file_picker_pending_dir` changes.
     pub file_picker_pending_name: PathBuf,
-    pub file_picker_entries: Option<Vec<DisplayablePathBuf>>,
-    pub file_picker_overwrite_warning: Option<PathBuf>, // The path the warning is about.
+    pub file_picker_entries: Option<[Vec<DisplayablePathBuf>; 3]>, // ["..", directories, files]
+    pub file_picker_overwrite_warning: Option<PathBuf>,            // The path the warning is about.
     pub file_picker_autocomplete: Vec<DisplayablePathBuf>,
 
     pub wants_search: StateSearch,
