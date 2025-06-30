@@ -329,6 +329,10 @@ fn draw(ctx: &mut Context, state: &mut State) {
 
         if key == kbmod::CTRL | vk::N {
             draw_add_untitled_document(ctx, state);
+        } else if key == kbmod::CTRL | vk::NEXT {
+            goto_next_file(ctx, state);
+        } else if key == kbmod::CTRL | vk::PRIOR {
+            goto_prev_file(ctx, state);
         } else if key == kbmod::CTRL | vk::O {
             state.wants_file_picker = StateFilePicker::Open;
         } else if key == kbmod::CTRL | vk::S {
