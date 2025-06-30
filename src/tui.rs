@@ -2355,6 +2355,9 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::PRIOR => {
+                    if modifiers == kbmod::CTRL {
+                        return false;
+                    }
                     let height = node_prev.inner.height() - 1;
 
                     // If the cursor was already on the first line,
@@ -2376,6 +2379,9 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::NEXT => {
+                    if modifiers == kbmod::CTRL {
+                        return false;
+                    }
                     let height = node_prev.inner.height() - 1;
 
                     // If the cursor was already on the last line,

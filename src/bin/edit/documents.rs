@@ -95,6 +95,24 @@ impl DocumentManager {
     }
 
     #[inline]
+    pub fn activate_next(&mut self) {
+        if self.list.len() > 1 {
+            if let Some(doc) = self.list.pop_front() {
+                self.list.push_back(doc);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn activate_prev(&mut self) {
+        if self.list.len() > 1 {
+            if let Some(doc) = self.list.pop_back() {
+                self.list.push_front(doc);
+            }
+        }
+    }
+
+    #[inline]
     pub fn update_active<F: FnMut(&Document) -> bool>(&mut self, mut func: F) -> bool {
         let mut cursor = self.list.cursor_front_mut();
         while let Some(doc) = cursor.current() {

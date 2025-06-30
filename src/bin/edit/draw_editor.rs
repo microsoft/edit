@@ -355,3 +355,13 @@ fn validate_goto_point(line: &str) -> Result<Point, ParseIntError> {
     }
     Ok(Point { x: coords[0], y: coords[1] })
 }
+
+pub fn goto_next_file(ctx: &mut Context, state: &mut State) {
+    state.documents.activate_next();
+    ctx.needs_rerender();
+}
+
+pub fn goto_prev_file(ctx: &mut Context, state: &mut State) {
+    state.documents.activate_prev();
+    ctx.needs_rerender();
+}
