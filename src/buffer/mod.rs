@@ -973,14 +973,15 @@ impl TextBuffer {
 
         loop {
             let chunk = self.read_forward(offset);
+            let (input_advance, output_advance) = c.convert(chunk, buf)?;
+            let chunk = unsafe { buf[..output_advance].assume_init_ref() };
+
+            file.write_all(chunk)?;
+            offset += input_advance;
+
             if chunk.is_empty() {
                 break;
             }
-
-            let (input_advance, output_advance) = c.convert(chunk, buf)?;
-            let chunk = unsafe { buf[..output_advance].assume_init_ref() };
-            file.write_all(chunk)?;
-            offset += input_advance;
         }
 
         Ok(())
