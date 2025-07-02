@@ -4,10 +4,13 @@ version = "1.2.1"
 edition = "2024"
 rust-version = "1.87"
 readme = "README.md"
-repository = "https://github.com/microsoft/edit"
-homepage = "https://github.com/microsoft/edit"
+repository = "https://github.com/sichy/edit"
+homepage = "https://github.com/sichy/edit"
 license = "MIT"
-categories = ["text-editors"]
+description = "Fast and efficient text editor CLI tool"
+keywords = ["text-editor", "cli", "editor"]
+categories = ["text-editors", "command-line-utilities"]
+exclude = ["npm/", "Formula/", ".github/", "target/", "*.log"]
 
 [[bench]]
 name = "lib"
@@ -34,6 +37,7 @@ codegen-units = 16          # Make compiling criterion faster (16 is the default
 lto = "thin"                # Similarly, speed up linking by a ton
 
 [dependencies]
+regex = "1.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

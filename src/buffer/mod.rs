@@ -45,7 +45,7 @@ use crate::helpers::*;
 use crate::oklab::oklab_blend;
 use crate::simd::memchr2;
 use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
-use crate::{apperr, icu, simd};
+use crate::{apperr, icu, simd, syntax};
 
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,
@@ -244,6 +244,7 @@ pub struct TextBuffer {
     insert_final_newline: bool,
     overtype: bool,
 
+    syntax_highlighter: syntax::SyntaxHighlighter,
     wants_cursor_visibility: bool,
 }
 
@@ -292,6 +293,7 @@ impl TextBuffer {
             insert_final_newline: false,
             overtype: false,
 
+            syntax_highlighter: syntax::SyntaxHighlighter::default(),
             wants_cursor_visibility: false,
         })
     }
@@ -345,6 +347,12 @@ impl TextBuffer {
             self.encoding = encoding;
             self.mark_as_dirty();
         }
+    }
+
+    /// Set the syntax highlighter based on a file extension
+    pub fn set_syntax_from_extension(&mut self, extension: &str) {
+        let language = syntax::Language::from_extension(extension);
+        self.syntax_highlighter = syntax::SyntaxHighlighter::new(language);
     }
 
     /// The newline type used in the document. LF or CRLF.
@@ -1952,6 +1960,28 @@ impl TextBuffer {
                             fb.blend_bg(visualizer_rect, bg);
                             fb.blend_fg(visualizer_rect, fg);
                         } else {
+                            // Apply syntax highlighting
+                            let char_offset = global_off;
+                            let line_text = String::from_utf8_lossy(chunk);
+                            let syntax_element = self.syntax_highlighter.get_syntax_element(&line_text, char_offset - (global_off - chunk_off));
+                            
+                            if syntax_element != syntax::SyntaxElement::None {
+                                // Get character position for color highlighting
+                                cursor_line = self.cursor_move_to_offset_internal(cursor_line, global_off);
+                                let highlight_rect = {
+                                    let left = destination.left + self.margin_width + cursor_line.visual_pos.x - origin.x;
+                                    let top = destination.top + cursor_line.visual_pos.y - origin.y;
+                                    Rect { left, top, right: left + 1, bottom: top + 1 }
+                                };
+                                
+                                // Handle both IndexedColor and RGB colors
+                                let color = match syntax_element.color() {
+                                    syntax::SyntaxColor::Indexed(indexed_color) => fb.indexed(indexed_color),
+                                    syntax::SyntaxColor::Rgb(rgb_color) => rgb_color,
+                                };
+                                fb.blend_fg(highlight_rect, color);
+                            }
+                            
                             line.push(ch);
                         }
                     }

@@ -30,7 +30,7 @@ const CACHE_TABLE_SIZE: usize = 1 << CACHE_TABLE_LOG2_SIZE;
 const CACHE_TABLE_SHIFT: usize = usize::BITS as usize - CACHE_TABLE_LOG2_SIZE;
 
 /// Standard 16 VT & default foreground/background colors.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexedColor {
     Black,
     Red,

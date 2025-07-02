@@ -1,6 +1,6 @@
 # ![Application Icon for Edit](./assets/edit.svg) Edit
 
-A simple editor for simple needs.
+A simple editor for simple needs. With my slight changes to add syntax highlighting and multifile edit. Old school MS-DOS TUI and nice dark theme. Work in progress and good relax in Rust.
 
 This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/wiki/MS-DOS_Editor), but with a modern interface and input controls similar to VS Code. The goal is to provide an accessible editor that even users largely unfamiliar with terminals can easily use.
 

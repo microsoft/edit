@@ -122,6 +122,15 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
             ctx.needs_rerender();
         }
     }
+    
+    // AI Assistant menu item
+    if !state.ai_dock_visible {
+        if ctx.menubar_menu_button("Open AI Assistant", 'I', kbmod::CTRL_ALT | vk::B) {
+            state.ai_dock_visible = true;
+            state.ai_dock_size = AiDockSize::Default;
+            ctx.needs_rerender();
+        }
+    }
 
     ctx.menubar_menu_end();
 }
@@ -159,6 +168,26 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
             ctx.label("copyright", "Copyright (c) Microsoft Corp 2025");
             ctx.attr_overflow(Overflow::TruncateTail);
             ctx.attr_position(Position::Center);
+
+            ctx.label("empty-line", "");
+            ctx.attr_overflow(Overflow::TruncateTail);
+            ctx.attr_position(Position::Center);
+
+            ctx.label("pavel-contributions", "Contributions by Pavel Sich:");
+            ctx.attr_overflow(Overflow::TruncateTail);
+            ctx.attr_position(Position::Left);
+
+            ctx.label("pavel-syntax", "• Syntax Highlighting");
+            ctx.attr_overflow(Overflow::TruncateTail);
+            ctx.attr_position(Position::Left);
+
+            ctx.label("pavel-multifile", "• Multiple File Edit with Tab Support");
+            ctx.attr_overflow(Overflow::TruncateTail);
+            ctx.attr_position(Position::Left);
+
+            ctx.label("pavel-theme", "• New Dark Color Theme");
+            ctx.attr_overflow(Overflow::TruncateTail);
+            ctx.attr_position(Position::Left);
 
             ctx.block_begin("choices");
             ctx.inherit_focus();
