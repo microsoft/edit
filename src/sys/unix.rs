@@ -60,7 +60,11 @@ extern "C" fn sigwinch_handler(_: libc::c_int) {
     }
 }
 
-pub fn init() -> apperr::Result<Deinit> {
+pub fn init() -> Deinit {
+    Deinit
+}
+
+pub fn switch_modes() -> apperr::Result<()> {
     unsafe {
         // Reopen stdin if it's redirected (= piped input).
         if libc::isatty(STATE.stdin) == 0 {
@@ -70,26 +74,6 @@ pub fn init() -> apperr::Result<Deinit> {
         // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
         STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
 
-        Ok(Deinit)
-    }
-}
-
-pub struct Deinit;
-
-impl Drop for Deinit {
-    fn drop(&mut self) {
-        unsafe {
-            #[allow(static_mut_refs)]
-            if let Some(termios) = STATE.stdout_initial_termios.take() {
-                // Restore the original terminal modes.
-                libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios);
-            }
-        }
-    }
-}
-
-pub fn switch_modes() -> apperr::Result<()> {
-    unsafe {
         // Set STATE.inject_resize to true whenever we get a SIGWINCH.
         let mut sigwinch_action: libc::sigaction = mem::zeroed();
         sigwinch_action.sa_sigaction = sigwinch_handler as libc::sighandler_t;
@@ -97,7 +81,7 @@ pub fn switch_modes() -> apperr::Result<()> {
 
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
-        check_int_return(libc::tcgetattr(STATE.stdin, termios.as_mut_ptr()))?;
+        check_int_return(libc::tcgetattr(STATE.stdout, termios.as_mut_ptr()))?;
         let mut termios = termios.assume_init();
         STATE.stdout_initial_termios = Some(termios);
 
@@ -146,9 +130,23 @@ pub fn switch_modes() -> apperr::Result<()> {
 
         // Set the terminal to raw mode.
         termios.c_lflag &= !(libc::ICANON | libc::ECHO);
-        check_int_return(libc::tcsetattr(STATE.stdin, libc::TCSANOW, &termios))?;
+        check_int_return(libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios))?;
 
         Ok(())
+    }
+}
+
+pub struct Deinit;
+
+impl Drop for Deinit {
+    fn drop(&mut self) {
+        unsafe {
+            #[allow(static_mut_refs)]
+            if let Some(termios) = STATE.stdout_initial_termios.take() {
+                // Restore the original terminal modes.
+                libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios);
+            }
+        }
     }
 }
 
