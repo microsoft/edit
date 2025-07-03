@@ -1,7 +1,6 @@
 #![allow(dead_code, unused_variables, unused_mut)]
 
 use std::fmt::Debug;
-use std::ops::Range;
 
 use crate::arena::{Arena, scratch_arena};
 use crate::document::ReadableDocument;
@@ -23,13 +22,13 @@ pub enum HighlightKind {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Higlight {
-    pub range: Range<usize>,
+    pub start: usize,
     pub kind: HighlightKind,
 }
 
 impl Debug for Higlight {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}..{}, {:?})", self.range.start, self.range.end, self.kind)
+        write!(f, "({}, {:?})", self.start, self.kind)
     }
 }
 
@@ -119,6 +118,7 @@ const POWERSHELL: Language = {
                 T { test: Prefix("'"), kind: String, state: Push(STRING_SINGLE) },
                 T { test: Prefix("\""), kind: String, state: Push(STRING_DOUBLE) },
                 // Variables
+                T { test: Prefix("$("), kind: Other, state: Push(VARIABLE_PAREN) },
                 T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
                 // Operators
                 T { test: Prefix("-"), kind: Operator, state: Push(PARAMETER) },
@@ -159,6 +159,7 @@ const POWERSHELL: Language = {
             // STRING_DOUBLE: "string"
             &[
                 T { test: Prefix("`"), kind: String, state: Push(STRING_ESCAPE) },
+                T { test: Prefix("$("), kind: Other, state: Push(VARIABLE_PAREN) },
                 T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
                 T { test: Prefix("\""), kind: String, state: Pop(1) },
             ],
@@ -167,7 +168,6 @@ const POWERSHELL: Language = {
             // VARIABLE: $variable
             &[
                 T { test: Prefix("{"), kind: Variable, state: Change(VARIABLE_BRACE) },
-                T { test: Prefix("("), kind: Variable, state: Change(VARIABLE_PAREN) },
                 T { test: Word, kind: Variable, state: Pop(1) },
             ],
             // VARIABLE_BRACE: ${variable}
@@ -175,6 +175,9 @@ const POWERSHELL: Language = {
             // VARIABLE_PAREN: $(command)
             // This is largely a copy of the ground state.
             &[
+                // Ground state Overrides
+                T { test: Prefix("("), kind: Other, state: Push(VARIABLE_PAREN) },
+                T { test: Prefix(")"), kind: Other, state: Pop(1) },
                 // Numbers
                 T { test: Digits, kind: Number, state: Pop(1) },
                 // Strings
@@ -211,9 +214,6 @@ const POWERSHELL: Language = {
                 T { test: Prefix("while"), kind: Keyword, state: Push(KEYWORD) },
                 // Methods
                 T { test: Word, kind: Method, state: Push(METHOD) },
-                // Exit
-                T { test: Prefix("("), kind: Variable, state: Push(VARIABLE_PAREN) },
-                T { test: Prefix(")"), kind: Variable, state: Pop(1) },
             ],
             // PARAMETER: -parameter
             &[
@@ -355,7 +355,7 @@ impl<'doc> Highlighter<'doc> {
         let mut off = 0;
 
         if self.kind != HighlightKind::Other {
-            res.push(Higlight { range: 0..line_buf.len(), kind: self.kind });
+            res.push(Higlight { start: 0, kind: self.kind });
         }
 
         loop {
@@ -413,11 +413,12 @@ impl<'doc> Highlighter<'doc> {
                 // we need to split the current run and add a new one.
                 if self.kind != t.kind {
                     if let Some(last) = res.last_mut()
-                        && last.range.end > start
+                        && last.start == start
                     {
-                        last.range.end = start;
+                        last.kind = t.kind;
+                    } else {
+                        res.push(Higlight { start, kind: t.kind });
                     }
-                    res.push(Higlight { range: start..line_buf.len(), kind: t.kind });
                 }
 
                 match t.state {
@@ -439,11 +440,12 @@ impl<'doc> Highlighter<'doc> {
 
                         // This may have changed the HighlightKind yet again.
                         if self.kind != t.kind {
-                            if let Some(last) = res.last_mut() {
-                                last.range.end = off;
-                            }
-                            if self.kind != HighlightKind::Other {
-                                res.push(Higlight { range: off..line_buf.len(), kind: self.kind });
+                            if let Some(last) = res.last_mut()
+                                && last.start == off
+                            {
+                                last.kind = self.kind;
+                            } else {
+                                res.push(Higlight { start: off, kind: self.kind });
                             }
                         }
                     }
@@ -458,10 +460,13 @@ impl<'doc> Highlighter<'doc> {
             }
         }
 
+        if res.last().is_some_and(|last| last.start != line_buf.len()) {
+            res.push(Higlight { start: line_buf.len(), kind: self.kind });
+        }
+
         // Adjust the range to account for the line offset.
         for h in &mut res {
-            h.range.start += line_beg;
-            h.range.end += line_beg;
+            h.start += line_beg;
         }
 
         res
@@ -483,12 +488,16 @@ mod tests {
         assert_eq!(
             tokens,
             &[
-                Higlight { range: 0..9, kind: HighlightKind::Variable },
-                Higlight { range: 10..11, kind: HighlightKind::Operator },
-                Higlight { range: 12..21, kind: HighlightKind::Method },
-                Higlight { range: 22..38, kind: HighlightKind::String },
-                Higlight { range: 38..45, kind: HighlightKind::Variable },
-                Higlight { range: 45..54, kind: HighlightKind::String },
+                Higlight { start: 0, kind: HighlightKind::Variable },
+                Higlight { start: 9, kind: HighlightKind::Other },
+                Higlight { start: 10, kind: HighlightKind::Operator },
+                Higlight { start: 11, kind: HighlightKind::Other },
+                Higlight { start: 12, kind: HighlightKind::Method },
+                Higlight { start: 21, kind: HighlightKind::Other },
+                Higlight { start: 22, kind: HighlightKind::String },
+                Higlight { start: 38, kind: HighlightKind::Variable },
+                Higlight { start: 45, kind: HighlightKind::String },
+                Higlight { start: 54, kind: HighlightKind::Other },
             ]
         );
     }
@@ -504,9 +513,27 @@ mod tests {
         assert_eq!(
             tokens,
             &[
-                Higlight { range: 0..1, kind: HighlightKind::String },
-                Higlight { range: 1..3, kind: HighlightKind::Variable },
-                Higlight { range: 3..4, kind: HighlightKind::String },
+                Higlight { start: 0, kind: HighlightKind::String },
+                Higlight { start: 1, kind: HighlightKind::Variable },
+                Higlight { start: 3, kind: HighlightKind::String },
+                Higlight { start: 4, kind: HighlightKind::Other },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_comment() {
+        let doc = r#"<#x#>"#;
+        let bytes = doc.as_bytes();
+        let scratch = scratch_arena(None);
+        let mut parser = Highlighter::new(&bytes);
+
+        let tokens = parser.parse_next_line(&scratch);
+        assert_eq!(
+            tokens,
+            &[
+                Higlight { start: 0, kind: HighlightKind::Comment },
+                Higlight { start: 5, kind: HighlightKind::Other },
             ]
         );
     }

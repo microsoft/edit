@@ -1967,39 +1967,44 @@ impl TextBuffer {
                 }
 
                 let highlights = highlighter.parse_next_line(&scratch);
-                let mut highlight_cursor = cursor_beg;
-                for h in highlights {
-                    let color = match h.kind {
-                        HighlightKind::Other => continue,
-                        HighlightKind::Comment => IndexedColor::Green,
-                        HighlightKind::Number => IndexedColor::BrightGreen,
-                        HighlightKind::String => IndexedColor::BrightRed,
-                        HighlightKind::Variable => IndexedColor::BrightBlue,
-                        HighlightKind::Operator => IndexedColor::White,
-                        HighlightKind::Keyword => IndexedColor::BrightMagenta,
-                        HighlightKind::Method => IndexedColor::BrightYellow,
-                    };
+                let mut highlights = highlights.iter();
 
-                    let highlight_beg =
-                        self.cursor_move_to_offset_internal(highlight_cursor, h.range.start);
-                    let highlight_end =
-                        self.cursor_move_to_offset_internal(highlight_beg, h.range.end);
-                    highlight_cursor = highlight_end;
+                if let Some(first) = highlights.next() {
+                    let mut highlight_kind = first.kind;
+                    let mut highlight_beg =
+                        self.cursor_move_to_offset_internal(cursor_beg, first.start);
 
-                    fb.blend_fg(
-                        Rect {
-                            left: destination.left + self.margin_width + highlight_beg.visual_pos.x
-                                - origin.x,
-                            top: destination.top + y,
-                            right: destination.left
-                                + self.margin_width
-                                + highlight_end.visual_pos.x
-                                - origin.x,
-                            bottom: destination.top + y + 1,
-                        },
-                        fb.indexed(color),
-                    );
-                }
+                    for next in highlights {
+                        let kind = highlight_kind;
+                        highlight_kind = next.kind;
+
+                        let beg = highlight_beg.visual_pos;
+                        highlight_beg =
+                            self.cursor_move_to_offset_internal(highlight_beg, next.start);
+                        let end = highlight_beg.visual_pos;
+
+                        let color = match kind {
+                            HighlightKind::Other => continue,
+                            HighlightKind::Comment => IndexedColor::Green,
+                            HighlightKind::Number => IndexedColor::BrightGreen,
+                            HighlightKind::String => IndexedColor::BrightRed,
+                            HighlightKind::Variable => IndexedColor::BrightBlue,
+                            HighlightKind::Operator => IndexedColor::White,
+                            HighlightKind::Keyword => IndexedColor::BrightMagenta,
+                            HighlightKind::Method => IndexedColor::BrightYellow,
+                        };
+
+                        fb.blend_fg(
+                            Rect {
+                                left: destination.left + self.margin_width + beg.x - origin.x,
+                                top: destination.top + y,
+                                right: destination.left + self.margin_width + end.x - origin.x,
+                                bottom: destination.top + y + 1,
+                            },
+                            fb.indexed(color),
+                        );
+                    }
+                };
 
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
