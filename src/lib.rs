@@ -5,7 +5,6 @@
     allocator_api,
     breakpoint,
     cold_path,
-    let_chains,
     linked_list_cursors,
     maybe_uninit_fill,
     maybe_uninit_slice,
