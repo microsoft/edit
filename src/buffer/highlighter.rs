@@ -44,12 +44,12 @@ enum CharClass {
     Numeric,
 }
 
-enum Test {
-    Consume(usize),
-    ConsumePrefix(&'static str),
-    ConsumeDigits,
-    ConsumeWord,
-    ConsumeLine,
+enum Consume {
+    Chars(usize),
+    Prefix(&'static str),
+    Digits,
+    Word,
+    Line,
 }
 
 struct Language {
@@ -64,16 +64,16 @@ enum StateStack {
 }
 
 struct Transition {
-    test: Test,
+    test: Consume,
     kind: HighlightKind,
     state: StateStack,
 }
 
 const POWERSHELL: Language = {
     type T = Transition;
+    use Consume::*;
     use HighlightKind::*;
     use StateStack::*;
-    use Test::*;
 
     const GROUND: u8 = 0;
 
@@ -111,83 +111,125 @@ const POWERSHELL: Language = {
             // GROUND
             &[
                 // Comments
-                T { test: ConsumePrefix("#"), kind: Comment, state: Push(LINE_COMMENT) },
-                T { test: ConsumePrefix("<#"), kind: Comment, state: Push(BLOCK_COMMENT) },
+                T { test: Prefix("#"), kind: Comment, state: Push(LINE_COMMENT) },
+                T { test: Prefix("<#"), kind: Comment, state: Push(BLOCK_COMMENT) },
                 // Numbers
-                T { test: ConsumeDigits, kind: Number, state: Pop(1) },
+                T { test: Digits, kind: Number, state: Pop(1) },
                 // Strings
-                T { test: ConsumePrefix("'"), kind: String, state: Push(STRING_SINGLE) },
-                T { test: ConsumePrefix("\""), kind: String, state: Push(STRING_DOUBLE) },
+                T { test: Prefix("'"), kind: String, state: Push(STRING_SINGLE) },
+                T { test: Prefix("\""), kind: String, state: Push(STRING_DOUBLE) },
                 // Variables
-                T { test: ConsumePrefix("$"), kind: Variable, state: Push(VARIABLE) },
+                T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
                 // Operators
-                T { test: ConsumePrefix("-"), kind: Operator, state: Push(PARAMETER) },
-                T { test: ConsumePrefix("*"), kind: Operator, state: Pop(1) },
-                T { test: ConsumePrefix("/"), kind: Operator, state: Pop(1) },
-                T { test: ConsumePrefix("%"), kind: Operator, state: Pop(1) },
-                T { test: ConsumePrefix("+"), kind: Operator, state: Pop(1) },
-                T { test: ConsumePrefix("<"), kind: Operator, state: Pop(1) },
-                T { test: ConsumePrefix("="), kind: Operator, state: Pop(1) },
-                T { test: ConsumePrefix(">"), kind: Operator, state: Pop(1) },
-                T { test: ConsumePrefix("|"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("-"), kind: Operator, state: Push(PARAMETER) },
+                T { test: Prefix("!"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("*"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("/"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("%"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("+"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("<"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("="), kind: Operator, state: Pop(1) },
+                T { test: Prefix(">"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("|"), kind: Operator, state: Pop(1) },
                 // Keywords
-                T { test: ConsumePrefix("break"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("catch"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("continue"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("do"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("else"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("finally"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("foreach"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("function"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("if"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("return"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("switch"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("throw"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("try"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("using"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: ConsumePrefix("while"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("break"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("catch"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("continue"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("do"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("else"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("finally"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("foreach"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("function"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("if"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("return"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("switch"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("throw"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("try"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("using"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("while"), kind: Keyword, state: Push(KEYWORD) },
                 // Methods
-                T { test: ConsumeWord, kind: Method, state: Push(METHOD) },
+                T { test: Word, kind: Method, state: Push(METHOD) },
             ],
             // LINE_COMMENT: # comment
-            &[T { test: ConsumeLine, kind: Comment, state: Pop(1) }],
+            &[T { test: Line, kind: Comment, state: Pop(1) }],
             // BLOCK_COMMENT: <# comment #>
-            &[T { test: ConsumePrefix("#>"), kind: Comment, state: Pop(1) }],
+            &[T { test: Prefix("#>"), kind: Comment, state: Pop(1) }],
             // STRING_SINGLE: 'string'
-            &[T { test: ConsumePrefix("'"), kind: String, state: Pop(1) }],
+            &[T { test: Prefix("'"), kind: String, state: Pop(1) }],
             // STRING_DOUBLE: "string"
             &[
-                T { test: ConsumePrefix("`"), kind: String, state: Push(STRING_ESCAPE) },
-                T { test: ConsumePrefix("$"), kind: Variable, state: Push(VARIABLE) },
-                T { test: ConsumePrefix("\""), kind: String, state: Pop(1) },
+                T { test: Prefix("`"), kind: String, state: Push(STRING_ESCAPE) },
+                T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
+                T { test: Prefix("\""), kind: String, state: Pop(1) },
             ],
             // STRING_ESCAPE: "`a"
-            &[T { test: Consume(1), kind: String, state: Pop(1) }],
+            &[T { test: Chars(1), kind: String, state: Pop(1) }],
             // VARIABLE: $variable
             &[
-                T { test: ConsumePrefix("{"), kind: Variable, state: Change(VARIABLE_BRACE) },
-                T { test: ConsumePrefix("("), kind: Variable, state: Change(VARIABLE_PAREN) },
-                T { test: ConsumeWord, kind: Variable, state: Pop(1) },
+                T { test: Prefix("{"), kind: Variable, state: Change(VARIABLE_BRACE) },
+                T { test: Prefix("("), kind: Variable, state: Change(VARIABLE_PAREN) },
+                T { test: Word, kind: Variable, state: Pop(1) },
             ],
             // VARIABLE_BRACE: ${variable}
-            &[T { test: ConsumePrefix("}"), kind: Variable, state: Pop(1) }],
+            &[T { test: Prefix("}"), kind: Variable, state: Pop(1) }],
             // VARIABLE_PAREN: $(command)
-            &[T { test: ConsumePrefix(")"), kind: Variable, state: Pop(1) }],
+            // This is largely a copy of the ground state.
+            &[
+                // Numbers
+                T { test: Digits, kind: Number, state: Pop(1) },
+                // Strings
+                T { test: Prefix("'"), kind: String, state: Push(STRING_SINGLE) },
+                T { test: Prefix("\""), kind: String, state: Push(STRING_DOUBLE) },
+                // Variables
+                T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
+                // Operators
+                T { test: Prefix("-"), kind: Operator, state: Push(PARAMETER) },
+                T { test: Prefix("!"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("*"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("/"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("%"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("+"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("<"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("="), kind: Operator, state: Pop(1) },
+                T { test: Prefix(">"), kind: Operator, state: Pop(1) },
+                T { test: Prefix("|"), kind: Operator, state: Pop(1) },
+                // Keywords
+                T { test: Prefix("break"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("catch"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("continue"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("do"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("else"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("finally"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("foreach"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("function"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("if"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("return"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("switch"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("throw"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("try"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("using"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: Prefix("while"), kind: Keyword, state: Push(KEYWORD) },
+                // Methods
+                T { test: Word, kind: Method, state: Push(METHOD) },
+                // Exit
+                T { test: Prefix("("), kind: Variable, state: Push(VARIABLE_PAREN) },
+                T { test: Prefix(")"), kind: Variable, state: Pop(1) },
+            ],
             // PARAMETER: -parameter
             &[
-                T { test: ConsumeWord, kind: Operator, state: Pop(1) },
-                T { test: Consume(0), kind: Operator, state: Pop(1) },
+                T { test: Word, kind: Operator, state: Pop(1) },
+                T { test: Chars(0), kind: Operator, state: Pop(1) },
             ],
             // KEYWORD: foreach, if, etc.
             &[
-                T { test: ConsumeWord, kind: Method, state: Change(METHOD) },
-                T { test: Consume(0), kind: Keyword, state: Pop(1) },
+                T { test: Word, kind: Method, state: Change(METHOD) },
+                T { test: Chars(0), kind: Keyword, state: Pop(1) },
             ],
             // METHOD: Foo-Bar
             &[
-                T { test: ConsumeWord, kind: Method, state: Change(METHOD) },
-                T { test: ConsumePrefix("-"), kind: Method, state: Change(METHOD) },
-                T { test: Consume(0), kind: Method, state: Pop(1) },
+                T { test: Word, kind: Method, state: Change(METHOD) },
+                T { test: Prefix("-"), kind: Method, state: Change(METHOD) },
+                T { test: Chars(0), kind: Method, state: Pop(1) },
             ],
         ],
     }
@@ -218,11 +260,11 @@ impl<'doc> Highlighter<'doc> {
             let mut starter = [false; 256];
             for t in transitions {
                 match t.test {
-                    Test::Consume(n) => starter.fill(true),
-                    Test::ConsumePrefix(prefix) => starter[prefix.as_bytes()[0] as usize] = true,
-                    Test::ConsumeDigits => starter[b'0' as usize..=b'9' as usize].fill(true),
-                    Test::ConsumeWord => Self::fill_word_chars(&mut starter, language.word_chars),
-                    Test::ConsumeLine => {}
+                    Consume::Chars(n) => starter.fill(true),
+                    Consume::Prefix(prefix) => starter[prefix.as_bytes()[0] as usize] = true,
+                    Consume::Digits => starter[b'0' as usize..=b'9' as usize].fill(true),
+                    Consume::Word => Self::fill_word_chars(&mut starter, language.word_chars),
+                    Consume::Line => {}
                 }
             }
             starter
@@ -326,19 +368,19 @@ impl<'doc> Highlighter<'doc> {
 
             for t in self.language.states[self.state] {
                 match t.test {
-                    Test::Consume(n) => {
+                    Consume::Chars(n) => {
                         off += n;
                         hit = Some(t);
                         break;
                     }
-                    Test::ConsumePrefix(str) => {
+                    Consume::Prefix(str) => {
                         if line_buf[off..].starts_with(str.as_bytes()) {
                             off += str.len();
                             hit = Some(t);
                             break;
                         }
                     }
-                    Test::ConsumeDigits => {
+                    Consume::Digits => {
                         if off < line_buf.len() && line_buf[off].is_ascii_digit() {
                             while {
                                 off += 1;
@@ -348,7 +390,7 @@ impl<'doc> Highlighter<'doc> {
                             break;
                         }
                     }
-                    Test::ConsumeWord => {
+                    Consume::Word => {
                         if off < line_buf.len() && self.word_chars[line_buf[off] as usize] {
                             while {
                                 off += 1;
@@ -358,7 +400,7 @@ impl<'doc> Highlighter<'doc> {
                             break;
                         }
                     }
-                    Test::ConsumeLine => {
+                    Consume::Line => {
                         off = line_buf.len();
                         hit = Some(t);
                         break;
@@ -367,8 +409,9 @@ impl<'doc> Highlighter<'doc> {
             }
 
             if let Some(t) = hit {
+                // If this transition changes the HighlightKind,
+                // we need to split the current run and add a new one.
                 if self.kind != t.kind {
-                    self.kind = t.kind;
                     if let Some(last) = res.last_mut()
                         && last.range.end > start
                     {
@@ -379,32 +422,30 @@ impl<'doc> Highlighter<'doc> {
 
                 match t.state {
                     StateStack::Change(to) => {
-                        if let Some(last) = self.state_stack.last_mut() {
-                            *last = (self.state, t.kind);
-                        }
-                        if let Some(last) = res.last_mut() {
-                            last.kind = t.kind;
-                        }
                         self.state = to as usize;
+                        self.kind = t.kind;
                     }
                     StateStack::Push(to) => {
-                        self.state_stack.push((self.state, t.kind));
+                        self.state_stack.push((self.state, self.kind));
                         self.state = to as usize;
+                        self.kind = t.kind;
                     }
                     StateStack::Pop(count) => {
-                        self.state_stack
-                            .truncate(self.state_stack.len().saturating_sub(count as usize));
+                        // Pop the last `count` states from the stack.
+                        let to = self.state_stack.len().saturating_sub(count as usize);
                         (self.state, self.kind) =
-                            self.state_stack.last().copied().unwrap_or_default();
-                    }
-                }
+                            self.state_stack.get(to).copied().unwrap_or_default();
+                        self.state_stack.truncate(to);
 
-                if self.kind != t.kind {
-                    if let Some(last) = res.last_mut() {
-                        last.range.end = off;
-                    }
-                    if self.kind != HighlightKind::Other {
-                        res.push(Higlight { range: off..line_buf.len(), kind: self.kind });
+                        // This may have changed the HighlightKind yet again.
+                        if self.kind != t.kind {
+                            if let Some(last) = res.last_mut() {
+                                last.range.end = off;
+                            }
+                            if self.kind != HighlightKind::Other {
+                                res.push(Higlight { range: off..line_buf.len(), kind: self.kind });
+                            }
+                        }
                     }
                 }
             } else {
@@ -448,6 +489,24 @@ mod tests {
                 Higlight { range: 22..38, kind: HighlightKind::String },
                 Higlight { range: 38..45, kind: HighlightKind::Variable },
                 Higlight { range: 45..54, kind: HighlightKind::String },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_string() {
+        let doc = r#""$x";"#;
+        let bytes = doc.as_bytes();
+        let scratch = scratch_arena(None);
+        let mut parser = Highlighter::new(&bytes);
+
+        let tokens = parser.parse_next_line(&scratch);
+        assert_eq!(
+            tokens,
+            &[
+                Higlight { range: 0..1, kind: HighlightKind::String },
+                Higlight { range: 1..3, kind: HighlightKind::Variable },
+                Higlight { range: 3..4, kind: HighlightKind::String },
             ]
         );
     }
