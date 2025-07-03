@@ -8,8 +8,10 @@ use crate::document::ReadableDocument;
 use crate::helpers::*;
 use crate::{simd, unicode};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HighlightKind {
+    #[default]
+    Other,
     Comment,
     Number,
     String,
@@ -109,17 +111,17 @@ const POWERSHELL: Language = {
             // GROUND
             &[
                 // Comments
-                T { test: ConsumePrefix("#"), kind: Comment, state: Change(LINE_COMMENT) },
-                T { test: ConsumePrefix("<#"), kind: Comment, state: Change(BLOCK_COMMENT) },
+                T { test: ConsumePrefix("#"), kind: Comment, state: Push(LINE_COMMENT) },
+                T { test: ConsumePrefix("<#"), kind: Comment, state: Push(BLOCK_COMMENT) },
                 // Numbers
                 T { test: ConsumeDigits, kind: Number, state: Pop(1) },
                 // Strings
-                T { test: ConsumePrefix("'"), kind: String, state: Change(STRING_SINGLE) },
-                T { test: ConsumePrefix("\""), kind: String, state: Change(STRING_DOUBLE) },
+                T { test: ConsumePrefix("'"), kind: String, state: Push(STRING_SINGLE) },
+                T { test: ConsumePrefix("\""), kind: String, state: Push(STRING_DOUBLE) },
                 // Variables
-                T { test: ConsumePrefix("$"), kind: Variable, state: Change(VARIABLE) },
+                T { test: ConsumePrefix("$"), kind: Variable, state: Push(VARIABLE) },
                 // Operators
-                T { test: ConsumePrefix("-"), kind: Operator, state: Change(PARAMETER) },
+                T { test: ConsumePrefix("-"), kind: Operator, state: Push(PARAMETER) },
                 T { test: ConsumePrefix("*"), kind: Operator, state: Pop(1) },
                 T { test: ConsumePrefix("/"), kind: Operator, state: Pop(1) },
                 T { test: ConsumePrefix("%"), kind: Operator, state: Pop(1) },
@@ -129,23 +131,23 @@ const POWERSHELL: Language = {
                 T { test: ConsumePrefix(">"), kind: Operator, state: Pop(1) },
                 T { test: ConsumePrefix("|"), kind: Operator, state: Pop(1) },
                 // Keywords
-                T { test: ConsumePrefix("break"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("catch"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("continue"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("do"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("else"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("finally"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("foreach"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("function"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("if"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("return"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("switch"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("throw"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("try"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("using"), kind: Keyword, state: Change(KEYWORD) },
-                T { test: ConsumePrefix("while"), kind: Keyword, state: Change(KEYWORD) },
+                T { test: ConsumePrefix("break"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("catch"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("continue"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("do"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("else"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("finally"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("foreach"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("function"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("if"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("return"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("switch"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("throw"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("try"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("using"), kind: Keyword, state: Push(KEYWORD) },
+                T { test: ConsumePrefix("while"), kind: Keyword, state: Push(KEYWORD) },
                 // Methods
-                T { test: ConsumeWord, kind: Method, state: Change(METHOD) },
+                T { test: ConsumeWord, kind: Method, state: Push(METHOD) },
             ],
             // LINE_COMMENT: # comment
             &[T { test: ConsumeLine, kind: Comment, state: Pop(1) }],
@@ -201,7 +203,7 @@ pub struct Highlighter<'a> {
     starter: Vec<[bool; 256]>,
 
     state: usize,
-    kind: Option<HighlightKind>,
+    kind: HighlightKind,
     state_stack: Vec<(usize, HighlightKind)>,
 }
 
@@ -236,8 +238,8 @@ impl<'doc> Highlighter<'doc> {
             starter,
 
             state: 0,
-            kind: None,
-            state_stack: Vec::new(),
+            kind: Default::default(),
+            state_stack: Default::default(),
         }
     }
 
@@ -310,8 +312,8 @@ impl<'doc> Highlighter<'doc> {
         let line_buf = unicode::strip_newline(&line_buf);
         let mut off = 0;
 
-        if let Some(kind) = self.kind {
-            res.push(Higlight { range: 0..line_buf.len(), kind });
+        if self.kind != HighlightKind::Other {
+            res.push(Higlight { range: 0..line_buf.len(), kind: self.kind });
         }
 
         loop {
@@ -365,15 +367,13 @@ impl<'doc> Highlighter<'doc> {
             }
 
             if let Some(t) = hit {
-                if self.kind != Some(t.kind) {
-                    self.kind = Some(t.kind);
-
+                if self.kind != t.kind {
+                    self.kind = t.kind;
                     if let Some(last) = res.last_mut()
                         && last.range.end > start
                     {
                         last.range.end = start;
                     }
-
                     res.push(Higlight { range: start..line_buf.len(), kind: t.kind });
                 }
 
@@ -395,16 +395,16 @@ impl<'doc> Highlighter<'doc> {
                         self.state_stack
                             .truncate(self.state_stack.len().saturating_sub(count as usize));
                         (self.state, self.kind) =
-                            self.state_stack.last().map_or((0, None), |s| (s.0, Some(s.1)));
+                            self.state_stack.last().copied().unwrap_or_default();
                     }
                 }
 
-                if self.kind != Some(t.kind) {
+                if self.kind != t.kind {
                     if let Some(last) = res.last_mut() {
                         last.range.end = off;
                     }
-                    if let Some(kind) = self.kind {
-                        res.push(Higlight { range: off..line_buf.len(), kind });
+                    if self.kind != HighlightKind::Other {
+                        res.push(Higlight { range: off..line_buf.len(), kind: self.kind });
                     }
                 }
             } else {

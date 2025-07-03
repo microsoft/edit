@@ -1970,6 +1970,7 @@ impl TextBuffer {
                 let mut highlight_cursor = cursor_beg;
                 for h in highlights {
                     let color = match h.kind {
+                        HighlightKind::Other => continue,
                         HighlightKind::Comment => IndexedColor::Green,
                         HighlightKind::Number => IndexedColor::BrightGreen,
                         HighlightKind::String => IndexedColor::BrightRed,
