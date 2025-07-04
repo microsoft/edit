@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
+use edit::highlighter::Language;
 use edit::{apperr, path, sys};
 
 use crate::state::DisplayablePathBuf;
@@ -61,15 +62,16 @@ impl Document {
     fn set_path(&mut self, path: PathBuf) {
         let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let dir = path.parent().map(ToOwned::to_owned).unwrap_or_default();
+
+        {
+            let mut tb = self.buffer.borrow_mut();
+            tb.set_language(Language::from_path(&path));
+            tb.set_ruler(if filename == "COMMIT_EDITMSG" { 72 } else { 0 });
+        }
+
         self.filename = filename;
         self.dir = Some(DisplayablePathBuf::from_path(dir));
         self.path = Some(path);
-        self.update_file_mode();
-    }
-
-    fn update_file_mode(&mut self) {
-        let mut tb = self.buffer.borrow_mut();
-        tb.set_ruler(if self.filename == "COMMIT_EDITMSG" { 72 } else { 0 });
     }
 }
 

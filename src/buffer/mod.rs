@@ -21,7 +21,6 @@
 //! There's no solution for the latter. However, there's a chance that the performance will still be sufficient.
 
 mod gap_buffer;
-mod highlighter;
 mod navigation;
 
 use std::borrow::Cow;
@@ -38,12 +37,12 @@ use std::str;
 pub use gap_buffer::GapBuffer;
 
 use crate::arena::{Arena, ArenaString, scratch_arena};
-use crate::buffer::highlighter::{HighlightKind, Highlighter};
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
+use crate::highlighter::{HighlightKind, Highlighter, Language};
 use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
 use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
@@ -240,6 +239,7 @@ pub struct TextBuffer {
     tab_size: CoordType,
     indent_with_tabs: bool,
     line_highlight_enabled: bool,
+    language: Option<&'static Language>,
     ruler: CoordType,
     encoding: &'static str,
     newlines_are_crlf: bool,
@@ -288,6 +288,7 @@ impl TextBuffer {
             tab_size: 4,
             indent_with_tabs: false,
             line_highlight_enabled: false,
+            language: None,
             ruler: 0,
             encoding: "UTF-8",
             newlines_are_crlf: cfg!(windows), // Windows users want CRLF
@@ -578,6 +579,10 @@ impl TextBuffer {
     /// Sets whether the line the cursor is on should be highlighted.
     pub fn set_line_highlight_enabled(&mut self, enabled: bool) {
         self.line_highlight_enabled = enabled;
+    }
+
+    pub fn set_language(&mut self, language: Option<&'static Language>) {
+        self.language = language;
     }
 
     /// Sets a ruler column, e.g. 80.
@@ -1722,7 +1727,7 @@ impl TextBuffer {
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut visual_pos_x_max = 0;
-        let mut highlighter = Highlighter::new(&self.buffer);
+        let mut highlighter = self.language.map(|l| Highlighter::new(&self.buffer, l));
 
         // Pick the cursor closer to the `origin.y`.
         let mut cursor = {
@@ -1961,50 +1966,52 @@ impl TextBuffer {
                     global_off += chunk.len();
                 }
 
-                while highlighter.logical_pos_y() < cursor_beg.logical_pos.y - 1 {
-                    let scratch_alt = scratch_arena(Some(&scratch));
-                    _ = highlighter.parse_next_line(&scratch_alt);
-                }
-
-                let highlights = highlighter.parse_next_line(&scratch);
-                let mut highlights = highlights.iter();
-
-                if let Some(first) = highlights.next() {
-                    let mut highlight_kind = first.kind;
-                    let mut highlight_beg =
-                        self.cursor_move_to_offset_internal(cursor_beg, first.start);
-
-                    for next in highlights {
-                        let kind = highlight_kind;
-                        highlight_kind = next.kind;
-
-                        let beg = highlight_beg.visual_pos;
-                        highlight_beg =
-                            self.cursor_move_to_offset_internal(highlight_beg, next.start);
-                        let end = highlight_beg.visual_pos;
-
-                        let color = match kind {
-                            HighlightKind::Other => continue,
-                            HighlightKind::Comment => IndexedColor::Green,
-                            HighlightKind::Number => IndexedColor::BrightGreen,
-                            HighlightKind::String => IndexedColor::BrightRed,
-                            HighlightKind::Variable => IndexedColor::BrightBlue,
-                            HighlightKind::Operator => IndexedColor::White,
-                            HighlightKind::Keyword => IndexedColor::BrightMagenta,
-                            HighlightKind::Method => IndexedColor::BrightYellow,
-                        };
-
-                        fb.blend_fg(
-                            Rect {
-                                left: destination.left + self.margin_width + beg.x - origin.x,
-                                top: destination.top + y,
-                                right: destination.left + self.margin_width + end.x - origin.x,
-                                bottom: destination.top + y + 1,
-                            },
-                            fb.indexed(color),
-                        );
+                if let Some(h) = &mut highlighter {
+                    while h.logical_pos_y() < cursor_beg.logical_pos.y - 1 {
+                        let scratch_alt = scratch_arena(Some(&scratch));
+                        _ = h.parse_next_line(&scratch_alt);
                     }
-                };
+
+                    let highlights = h.parse_next_line(&scratch);
+                    let mut highlights = highlights.iter();
+
+                    if let Some(first) = highlights.next() {
+                        let mut highlight_kind = first.kind;
+                        let mut highlight_beg =
+                            self.cursor_move_to_offset_internal(cursor_beg, first.start);
+
+                        for next in highlights {
+                            let kind = highlight_kind;
+                            highlight_kind = next.kind;
+
+                            let beg = highlight_beg.visual_pos;
+                            highlight_beg =
+                                self.cursor_move_to_offset_internal(highlight_beg, next.start);
+                            let end = highlight_beg.visual_pos;
+
+                            let color = match kind {
+                                HighlightKind::Other => continue,
+                                HighlightKind::Comment => IndexedColor::Green,
+                                HighlightKind::Number => IndexedColor::BrightGreen,
+                                HighlightKind::String => IndexedColor::BrightRed,
+                                HighlightKind::Variable => IndexedColor::BrightBlue,
+                                HighlightKind::Operator => IndexedColor::White,
+                                HighlightKind::Keyword => IndexedColor::BrightMagenta,
+                                HighlightKind::Method => IndexedColor::BrightYellow,
+                            };
+
+                            fb.blend_fg(
+                                Rect {
+                                    left: destination.left + self.margin_width + beg.x - origin.x,
+                                    top: destination.top + y,
+                                    right: destination.left + self.margin_width + end.x - origin.x,
+                                    bottom: destination.top + y + 1,
+                                },
+                                fb.indexed(color),
+                            );
+                        }
+                    }
+                }
 
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
