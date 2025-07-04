@@ -5,67 +5,89 @@ use super::*;
 
 type T = Transition;
 
+// NOTE: These are indices into the `LANG.charsets` array.
+const C_DIGITS: usize = 0;
+const C_VARIABLE: usize = 1;
+
 // NOTE: These are indices into the `LANG.states` array.
-const _GROUND: u8 = 0;
-const COMMENT: u8 = 1;
-const STRING: u8 = 2;
-const VARIABLE: u8 = 3;
+const _S_GROUND: u8 = 0;
+const S_COMMENT: u8 = 1;
+const S_STRING: u8 = 2;
+const S_VARIABLE: u8 = 3;
 
 pub const LANG: Language = Language {
     name: "Batch",
     extensions: &["bat", "cmd"],
-    word_chars: &[
-        // /.-,+*)('&%$#"!
-        0b_0000000000000000,
-        // ?>=<;:9876543210
-        0b_0000001111111111,
-        // ONMLKJIHGFEDCBA@
-        0b_1111111111111110,
-        // _^]\[ZYXWVUTSRQP
-        0b_1000000000000000,
-        // onmlkjihgfedcba`
-        0b_1111111111111111,
-        //  ~}|{zyxwvutsrqp
-        0b_0000000000000000,
+    charsets: &[
+        // C_DIGITS
+        &[
+            // /.-,+*)('&%$#"!
+            0b_0010100000000000,
+            // ?>=<;:9876543210
+            0b_0000001111111111,
+            // ONMLKJIHGFEDCBA@
+            0b_0000000000000000,
+            // _^]\[ZYXWVUTSRQP
+            0b_0000000000000000,
+            // onmlkjihgfedcba`
+            0b_0000000000000000,
+            //  ~}|{zyxwvutsrqp
+            0b_0000000000000000,
+        ],
+        // C_COMMAND
+        &[
+            // /.-,+*)('&%$#"!
+            0b_0000000000000000,
+            // ?>=<;:9876543210
+            0b_0000001111111111,
+            // ONMLKJIHGFEDCBA@
+            0b_1111111111111110,
+            // _^]\[ZYXWVUTSRQP
+            0b_1000011111111111,
+            // onmlkjihgfedcba`
+            0b_1111111111111111,
+            //  ~}|{zyxwvutsrqp
+            0b_0100011111111111,
+        ],
     ],
     states: &[
-        // GROUND
+        // S_GROUND
         &[
             // Comments (REM or ::)
-            T { test: Prefix("REM "), kind: Comment, state: Push(COMMENT) },
-            T { test: Prefix("::"), kind: Comment, state: Push(COMMENT) },
+            T { test: PrefixInsensitive("rem "), kind: Comment, state: Push(S_COMMENT) },
+            T { test: Prefix("::"), kind: Comment, state: Push(S_COMMENT) },
             // Strings (quoted)
-            T { test: Prefix("\""), kind: String, state: Push(STRING) },
+            T { test: Prefix("\""), kind: String, state: Push(S_STRING) },
             // Variables
-            T { test: Prefix("%"), kind: Variable, state: Push(VARIABLE) },
+            T { test: Prefix("%"), kind: Variable, state: Push(S_VARIABLE) },
             // Numbers
-            T { test: Digits, kind: Number, state: Pop(1) },
+            T { test: Charset(C_DIGITS), kind: Number, state: Pop(1) },
             // Operators
             T { test: Prefix("|"), kind: Operator, state: Pop(1) },
             T { test: Prefix("&"), kind: Operator, state: Pop(1) },
             T { test: Prefix("<"), kind: Operator, state: Pop(1) },
             T { test: Prefix(">"), kind: Operator, state: Pop(1) },
             // Keywords (common)
-            T { test: Prefix("if"), kind: Keyword, state: Pop(1) },
-            T { test: Prefix("else"), kind: Keyword, state: Pop(1) },
-            T { test: Prefix("for"), kind: Keyword, state: Pop(1) },
-            T { test: Prefix("in"), kind: Keyword, state: Pop(1) },
-            T { test: Prefix("do"), kind: Keyword, state: Pop(1) },
-            T { test: Prefix("not"), kind: Keyword, state: Pop(1) },
-            T { test: Prefix("exist"), kind: Keyword, state: Pop(1) },
-            T { test: Prefix("set"), kind: Keyword, state: Pop(1) },
-            T { test: Prefix("echo"), kind: Keyword, state: Pop(1) },
-            T { test: Prefix("goto"), kind: Keyword, state: Pop(1) },
-            T { test: Prefix("call"), kind: Keyword, state: Pop(1) },
+            T { test: PrefixInsensitive("if"), kind: Keyword, state: Pop(1) },
+            T { test: PrefixInsensitive("else"), kind: Keyword, state: Pop(1) },
+            T { test: PrefixInsensitive("for"), kind: Keyword, state: Pop(1) },
+            T { test: PrefixInsensitive("in"), kind: Keyword, state: Pop(1) },
+            T { test: PrefixInsensitive("do"), kind: Keyword, state: Pop(1) },
+            T { test: PrefixInsensitive("not"), kind: Keyword, state: Pop(1) },
+            T { test: PrefixInsensitive("exist"), kind: Keyword, state: Pop(1) },
+            T { test: PrefixInsensitive("set"), kind: Keyword, state: Pop(1) },
+            T { test: PrefixInsensitive("echo"), kind: Keyword, state: Pop(1) },
+            T { test: PrefixInsensitive("goto"), kind: Keyword, state: Pop(1) },
+            T { test: PrefixInsensitive("call"), kind: Keyword, state: Pop(1) },
         ],
-        // COMMENT
+        // S_COMMENT
         &[T { test: Line, kind: Comment, state: Pop(1) }],
-        // STRING
+        // S_STRING
         &[T { test: Prefix("\""), kind: String, state: Pop(1) }],
-        // VARIABLE
+        // S_VARIABLE
         &[
             T { test: Prefix("%"), kind: Variable, state: Pop(1) },
-            T { test: Word, kind: Variable, state: Pop(1) },
+            T { test: Charset(C_VARIABLE), kind: Variable, state: Pop(1) },
         ],
     ],
 };

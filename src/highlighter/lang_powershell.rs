@@ -5,53 +5,75 @@ use super::*;
 
 type T = Transition;
 
+// NOTE: These are indices into the `LANG.charsets` array.
+const C_DIGITS: usize = 0;
+const C_METHOD: usize = 1;
+
 // NOTE: These are indices into the `LANG.states` array.
-const _GROUND: u8 = 0;
-const LINE_COMMENT: u8 = 1;
-const BLOCK_COMMENT: u8 = 2;
-const STRING_SINGLE: u8 = 3;
-const STRING_DOUBLE: u8 = 4;
-const STRING_ESCAPE: u8 = 5;
-const VARIABLE: u8 = 6;
-const VARIABLE_BRACE: u8 = 7;
-const VARIABLE_PAREN: u8 = 8;
-const PARAMETER: u8 = 9;
-const KEYWORD: u8 = 10;
-const METHOD: u8 = 11;
+const _S_GROUND: u8 = 0;
+const S_LINE_COMMENT: u8 = 1;
+const S_BLOCK_COMMENT: u8 = 2;
+const S_STRING_SINGLE: u8 = 3;
+const S_STRING_DOUBLE: u8 = 4;
+const S_STRING_ESCAPE: u8 = 5;
+const S_VARIABLE: u8 = 6;
+const S_VARIABLE_BRACE: u8 = 7;
+const S_VARIABLE_PAREN: u8 = 8;
+const S_PARAMETER: u8 = 9;
+const S_KEYWORD: u8 = 10;
+const S_METHOD: u8 = 11;
 
 pub const LANG: Language = Language {
     name: "PowerShell",
     extensions: &["ps1", "psm1", "psd1"],
-    word_chars: &[
-        // /.-,+*)('&%$#"!
-        0b_1110110000101010,
-        // ?>=<;:9876543210
-        0b_1111011111111111,
-        // ONMLKJIHGFEDCBA@
-        0b_1111111111111110,
-        // _^]\[ZYXWVUTSRQP
-        0b_1111111111111111,
-        // onmlkjihgfedcba`
-        0b_1111111111111111,
-        //  ~}|{zyxwvutsrqp
-        0b_0100011111111111,
+    charsets: &[
+        // C_DIGITS
+        &[
+            // /.-,+*)('&%$#"!
+            0b_0110100000000000,
+            // ?>=<;:9876543210
+            0b_0000001111111111,
+            // ONMLKJIHGFEDCBA@
+            0b_0000000000100000,
+            // _^]\[ZYXWVUTSRQP
+            0b_0000000000000000,
+            // onmlkjihgfedcba`
+            0b_0000000000100000,
+            //  ~}|{zyxwvutsrqp
+            0b_0000000000000000,
+        ],
+        // C_METHOD
+        &[
+            // /.-,+*)('&%$#"!
+            0b_1110110000101010,
+            // ?>=<;:9876543210
+            0b_1111011111111111,
+            // ONMLKJIHGFEDCBA@
+            0b_1111111111111110,
+            // _^]\[ZYXWVUTSRQP
+            0b_1111111111111111,
+            // onmlkjihgfedcba`
+            0b_1111111111111111,
+            //  ~}|{zyxwvutsrqp
+            0b_0100011111111111,
+        ],
     ],
     states: &[
-        // GROUND
+        // S_GROUND
         &[
             // Comments
-            T { test: Prefix("#"), kind: Comment, state: Push(LINE_COMMENT) },
-            T { test: Prefix("<#"), kind: Comment, state: Push(BLOCK_COMMENT) },
+            T { test: Prefix("#"), kind: Comment, state: Push(S_LINE_COMMENT) },
+            T { test: Prefix("<#"), kind: Comment, state: Push(S_BLOCK_COMMENT) },
             // Numbers
-            T { test: Digits, kind: Number, state: Pop(1) },
+            T { test: Charset(C_DIGITS), kind: Number, state: Pop(1) },
             // Strings
-            T { test: Prefix("'"), kind: String, state: Push(STRING_SINGLE) },
-            T { test: Prefix("\""), kind: String, state: Push(STRING_DOUBLE) },
+            T { test: Prefix("'"), kind: String, state: Push(S_STRING_SINGLE) },
+            T { test: Prefix("\""), kind: String, state: Push(S_STRING_DOUBLE) },
             // Variables
-            T { test: Prefix("$("), kind: Other, state: Push(VARIABLE_PAREN) },
-            T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
+            T { test: Prefix("$("), kind: Other, state: Push(S_VARIABLE_PAREN) },
+            T { test: Prefix("$"), kind: Variable, state: Push(S_VARIABLE) },
             // Operators
-            T { test: Prefix("-"), kind: Operator, state: Push(PARAMETER) },
+            T { test: Prefix("-"), kind: Operator, state: Push(S_PARAMETER) },
             T { test: Prefix("!"), kind: Operator, state: Pop(1) },
             T { test: Prefix("*"), kind: Operator, state: Pop(1) },
             T { test: Prefix("/"), kind: Operator, state: Pop(1) },
@@ -62,61 +84,61 @@ pub const LANG: Language = Language {
             T { test: Prefix(">"), kind: Operator, state: Pop(1) },
             T { test: Prefix("|"), kind: Operator, state: Pop(1) },
             // Keywords
-            T { test: Prefix("break"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("catch"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("continue"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("do"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("else"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("finally"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("foreach"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("function"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("if"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("return"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("switch"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("throw"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("try"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("using"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("while"), kind: Keyword, state: Push(KEYWORD) },
+            T { test: PrefixInsensitive("break"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("catch"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("continue"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("do"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("else"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("finally"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("foreach"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("function"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("if"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("return"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("switch"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("throw"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("try"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("using"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("while"), kind: Keyword, state: Push(S_KEYWORD) },
             // Methods
-            T { test: Word, kind: Method, state: Push(METHOD) },
+            T { test: Charset(C_METHOD), kind: Method, state: Push(S_METHOD) },
         ],
-        // LINE_COMMENT: # comment
+        // S_LINE_COMMENT: # comment
         &[T { test: Line, kind: Comment, state: Pop(1) }],
-        // BLOCK_COMMENT: <# comment #>
+        // S_BLOCK_COMMENT: <# comment #>
         &[T { test: Prefix("#>"), kind: Comment, state: Pop(1) }],
-        // STRING_SINGLE: 'string'
+        // S_STRING_SINGLE: 'string'
         &[T { test: Prefix("'"), kind: String, state: Pop(1) }],
-        // STRING_DOUBLE: "string"
+        // S_STRING_DOUBLE: "string"
         &[
-            T { test: Prefix("`"), kind: String, state: Push(STRING_ESCAPE) },
-            T { test: Prefix("$("), kind: Other, state: Push(VARIABLE_PAREN) },
-            T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
+            T { test: Prefix("`"), kind: String, state: Push(S_STRING_ESCAPE) },
+            T { test: Prefix("$("), kind: Other, state: Push(S_VARIABLE_PAREN) },
+            T { test: Prefix("$"), kind: Variable, state: Push(S_VARIABLE) },
             T { test: Prefix("\""), kind: String, state: Pop(1) },
         ],
-        // STRING_ESCAPE: "`a"
+        // S_STRING_ESCAPE: "`a"
         &[T { test: Chars(1), kind: String, state: Pop(1) }],
-        // VARIABLE: $variable
+        // S_VARIABLE: $variable
         &[
-            T { test: Prefix("{"), kind: Variable, state: Change(VARIABLE_BRACE) },
-            T { test: Word, kind: Variable, state: Pop(1) },
+            T { test: Prefix("{"), kind: Variable, state: Change(S_VARIABLE_BRACE) },
+            T { test: Charset(C_METHOD), kind: Variable, state: Pop(1) },
         ],
-        // VARIABLE_BRACE: ${variable}
+        // S_VARIABLE_BRACE: ${variable}
         &[T { test: Prefix("}"), kind: Variable, state: Pop(1) }],
-        // VARIABLE_PAREN: $(command)
+        // S_VARIABLE_PAREN: $(command)
         // This is largely a copy of the ground state.
         &[
             // Ground state Overrides
-            T { test: Prefix("("), kind: Other, state: Push(VARIABLE_PAREN) },
+            T { test: Prefix("("), kind: Other, state: Push(S_VARIABLE_PAREN) },
             T { test: Prefix(")"), kind: Other, state: Pop(1) },
             // Numbers
-            T { test: Digits, kind: Number, state: Pop(1) },
+            T { test: Charset(C_DIGITS), kind: Number, state: Pop(1) },
             // Strings
-            T { test: Prefix("'"), kind: String, state: Push(STRING_SINGLE) },
-            T { test: Prefix("\""), kind: String, state: Push(STRING_DOUBLE) },
+            T { test: Prefix("'"), kind: String, state: Push(S_STRING_SINGLE) },
+            T { test: Prefix("\""), kind: String, state: Push(S_STRING_DOUBLE) },
             // Variables
-            T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
+            T { test: Prefix("$"), kind: Variable, state: Push(S_VARIABLE) },
             // Operators
-            T { test: Prefix("-"), kind: Operator, state: Push(PARAMETER) },
+            T { test: Prefix("-"), kind: Operator, state: Push(S_PARAMETER) },
             T { test: Prefix("!"), kind: Operator, state: Pop(1) },
             T { test: Prefix("*"), kind: Operator, state: Pop(1) },
             T { test: Prefix("/"), kind: Operator, state: Pop(1) },
@@ -127,38 +149,38 @@ pub const LANG: Language = Language {
             T { test: Prefix(">"), kind: Operator, state: Pop(1) },
             T { test: Prefix("|"), kind: Operator, state: Pop(1) },
             // Keywords
-            T { test: Prefix("break"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("catch"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("continue"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("do"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("else"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("finally"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("foreach"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("function"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("if"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("return"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("switch"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("throw"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("try"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("using"), kind: Keyword, state: Push(KEYWORD) },
-            T { test: Prefix("while"), kind: Keyword, state: Push(KEYWORD) },
+            T { test: PrefixInsensitive("break"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("catch"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("continue"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("do"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("else"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("finally"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("foreach"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("function"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("if"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("return"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("switch"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("throw"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("try"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("using"), kind: Keyword, state: Push(S_KEYWORD) },
+            T { test: PrefixInsensitive("while"), kind: Keyword, state: Push(S_KEYWORD) },
             // Methods
-            T { test: Word, kind: Method, state: Push(METHOD) },
+            T { test: Charset(C_METHOD), kind: Method, state: Push(S_METHOD) },
         ],
-        // PARAMETER: -parameter
+        // S_PARAMETER: -parameter
         &[
-            T { test: Word, kind: Operator, state: Pop(1) },
+            T { test: Charset(C_METHOD), kind: Operator, state: Pop(1) },
             T { test: Chars(0), kind: Operator, state: Pop(1) },
         ],
-        // KEYWORD: foreach, if, etc.
+        // S_KEYWORD: foreach, if, etc.
         &[
-            T { test: Word, kind: Method, state: Change(METHOD) },
+            T { test: Charset(C_METHOD), kind: Method, state: Change(S_METHOD) },
             T { test: Chars(0), kind: Keyword, state: Pop(1) },
         ],
-        // METHOD: Foo-Bar
+        // S_METHOD: Foo-Bar
         &[
-            T { test: Word, kind: Method, state: Change(METHOD) },
-            T { test: Prefix("-"), kind: Method, state: Change(METHOD) },
+            T { test: Charset(C_METHOD), kind: Method, state: Change(S_METHOD) },
+            T { test: Prefix("-"), kind: Method, state: Change(S_METHOD) },
             T { test: Chars(0), kind: Method, state: Pop(1) },
         ],
     ],
