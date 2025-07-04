@@ -10,7 +10,11 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "C:/Users/lhecker/projects/posh-git/src/GitPrompt.ps1"
+                "assets/highlighting-tests/bash.sh",
+                "assets/highlighting-tests/batch.bat",
+                "assets/highlighting-tests/powershell.ps1",
+                "assets/highlighting-tests/yaml.yml",
+                "assets/highlighting-tests/json.json",
             ],
         },
         {
