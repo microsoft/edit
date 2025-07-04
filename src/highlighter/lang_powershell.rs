@@ -5,19 +5,16 @@ use super::*;
 
 type T = Transition;
 
+// NOTE: These are indices into the `LANG.states` array.
 const _GROUND: u8 = 0;
-
 const LINE_COMMENT: u8 = 1;
 const BLOCK_COMMENT: u8 = 2;
-
 const STRING_SINGLE: u8 = 3;
 const STRING_DOUBLE: u8 = 4;
 const STRING_ESCAPE: u8 = 5;
-
 const VARIABLE: u8 = 6;
 const VARIABLE_BRACE: u8 = 7;
 const VARIABLE_PAREN: u8 = 8;
-
 const PARAMETER: u8 = 9;
 const KEYWORD: u8 = 10;
 const METHOD: u8 = 11;
