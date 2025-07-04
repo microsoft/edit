@@ -1,11 +1,54 @@
-#![allow(dead_code, unused_variables, unused_mut)]
+mod lang_bash;
+mod lang_batch;
+mod lang_json;
+mod lang_powershell;
+mod lang_yaml;
 
+const LANGUAGES: &[&Language] = &[
+    &lang_bash::LANG,
+    &lang_batch::LANG,
+    &lang_json::LANG,
+    &lang_powershell::LANG,
+    &lang_yaml::LANG,
+];
+
+use std::ffi::OsStr;
 use std::fmt::Debug;
+use std::path::Path;
 
 use crate::arena::{Arena, scratch_arena};
 use crate::document::ReadableDocument;
 use crate::helpers::*;
 use crate::{simd, unicode};
+
+pub struct Language {
+    #[allow(dead_code)]
+    name: &'static str,
+    extensions: &'static [&'static str],
+    word_chars: &'static [u16; 6],
+    states: &'static [&'static [Transition]],
+}
+
+impl Language {
+    pub fn from_path(path: &Path) -> Option<&'static Language> {
+        let ext = path.extension()?;
+        LANGUAGES.iter().copied().find(|lang| lang.extensions.iter().any(|&e| OsStr::new(e) == ext))
+    }
+}
+
+struct Transition {
+    test: Consume,
+    kind: HighlightKind,
+    state: StateStack,
+}
+
+enum Consume {
+    Chars(usize),
+    Prefix(&'static str),
+    Digits,
+    Word,
+    Line,
+}
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HighlightKind {
@@ -18,6 +61,12 @@ pub enum HighlightKind {
     Operator,
     Keyword,
     Method,
+}
+
+enum StateStack {
+    Change(u8), // to
+    Push(u8),   // to
+    Pop(u8),    // count
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -35,206 +84,6 @@ impl Debug for Higlight {
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub struct State {}
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CharClass {
-    Other,
-    Whitespace,
-    Alpha,
-    Numeric,
-}
-
-enum Consume {
-    Chars(usize),
-    Prefix(&'static str),
-    Digits,
-    Word,
-    Line,
-}
-
-struct Language {
-    word_chars: &'static [u16; 6],
-    states: &'static [&'static [Transition]],
-}
-
-enum StateStack {
-    Change(u8), // to
-    Push(u8),   // to
-    Pop(u8),    // count
-}
-
-struct Transition {
-    test: Consume,
-    kind: HighlightKind,
-    state: StateStack,
-}
-
-const POWERSHELL: Language = {
-    type T = Transition;
-    use Consume::*;
-    use HighlightKind::*;
-    use StateStack::*;
-
-    const GROUND: u8 = 0;
-
-    const LINE_COMMENT: u8 = 1;
-    const BLOCK_COMMENT: u8 = 2;
-
-    const STRING_SINGLE: u8 = 3;
-    const STRING_DOUBLE: u8 = 4;
-    const STRING_ESCAPE: u8 = 5;
-
-    const VARIABLE: u8 = 6;
-    const VARIABLE_BRACE: u8 = 7;
-    const VARIABLE_PAREN: u8 = 8;
-
-    const PARAMETER: u8 = 9;
-    const KEYWORD: u8 = 10;
-    const METHOD: u8 = 11;
-
-    Language {
-        word_chars: &[
-            // /.-,+*)('&%$#"!
-            0b_1110110000101010,
-            // ?>=<;:9876543210
-            0b_1111011111111111,
-            // ONMLKJIHGFEDCBA@
-            0b_1111111111111110,
-            // _^]\[ZYXWVUTSRQP
-            0b_1111111111111111,
-            // onmlkjihgfedcba`
-            0b_1111111111111111,
-            //  ~}|{zyxwvutsrqp
-            0b_0100011111111111,
-        ],
-        states: &[
-            // GROUND
-            &[
-                // Comments
-                T { test: Prefix("#"), kind: Comment, state: Push(LINE_COMMENT) },
-                T { test: Prefix("<#"), kind: Comment, state: Push(BLOCK_COMMENT) },
-                // Numbers
-                T { test: Digits, kind: Number, state: Pop(1) },
-                // Strings
-                T { test: Prefix("'"), kind: String, state: Push(STRING_SINGLE) },
-                T { test: Prefix("\""), kind: String, state: Push(STRING_DOUBLE) },
-                // Variables
-                T { test: Prefix("$("), kind: Other, state: Push(VARIABLE_PAREN) },
-                T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
-                // Operators
-                T { test: Prefix("-"), kind: Operator, state: Push(PARAMETER) },
-                T { test: Prefix("!"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("*"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("/"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("%"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("+"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("<"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("="), kind: Operator, state: Pop(1) },
-                T { test: Prefix(">"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("|"), kind: Operator, state: Pop(1) },
-                // Keywords
-                T { test: Prefix("break"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("catch"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("continue"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("do"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("else"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("finally"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("foreach"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("function"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("if"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("return"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("switch"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("throw"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("try"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("using"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("while"), kind: Keyword, state: Push(KEYWORD) },
-                // Methods
-                T { test: Word, kind: Method, state: Push(METHOD) },
-            ],
-            // LINE_COMMENT: # comment
-            &[T { test: Line, kind: Comment, state: Pop(1) }],
-            // BLOCK_COMMENT: <# comment #>
-            &[T { test: Prefix("#>"), kind: Comment, state: Pop(1) }],
-            // STRING_SINGLE: 'string'
-            &[T { test: Prefix("'"), kind: String, state: Pop(1) }],
-            // STRING_DOUBLE: "string"
-            &[
-                T { test: Prefix("`"), kind: String, state: Push(STRING_ESCAPE) },
-                T { test: Prefix("$("), kind: Other, state: Push(VARIABLE_PAREN) },
-                T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
-                T { test: Prefix("\""), kind: String, state: Pop(1) },
-            ],
-            // STRING_ESCAPE: "`a"
-            &[T { test: Chars(1), kind: String, state: Pop(1) }],
-            // VARIABLE: $variable
-            &[
-                T { test: Prefix("{"), kind: Variable, state: Change(VARIABLE_BRACE) },
-                T { test: Word, kind: Variable, state: Pop(1) },
-            ],
-            // VARIABLE_BRACE: ${variable}
-            &[T { test: Prefix("}"), kind: Variable, state: Pop(1) }],
-            // VARIABLE_PAREN: $(command)
-            // This is largely a copy of the ground state.
-            &[
-                // Ground state Overrides
-                T { test: Prefix("("), kind: Other, state: Push(VARIABLE_PAREN) },
-                T { test: Prefix(")"), kind: Other, state: Pop(1) },
-                // Numbers
-                T { test: Digits, kind: Number, state: Pop(1) },
-                // Strings
-                T { test: Prefix("'"), kind: String, state: Push(STRING_SINGLE) },
-                T { test: Prefix("\""), kind: String, state: Push(STRING_DOUBLE) },
-                // Variables
-                T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
-                // Operators
-                T { test: Prefix("-"), kind: Operator, state: Push(PARAMETER) },
-                T { test: Prefix("!"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("*"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("/"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("%"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("+"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("<"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("="), kind: Operator, state: Pop(1) },
-                T { test: Prefix(">"), kind: Operator, state: Pop(1) },
-                T { test: Prefix("|"), kind: Operator, state: Pop(1) },
-                // Keywords
-                T { test: Prefix("break"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("catch"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("continue"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("do"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("else"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("finally"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("foreach"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("function"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("if"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("return"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("switch"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("throw"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("try"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("using"), kind: Keyword, state: Push(KEYWORD) },
-                T { test: Prefix("while"), kind: Keyword, state: Push(KEYWORD) },
-                // Methods
-                T { test: Word, kind: Method, state: Push(METHOD) },
-            ],
-            // PARAMETER: -parameter
-            &[
-                T { test: Word, kind: Operator, state: Pop(1) },
-                T { test: Chars(0), kind: Operator, state: Pop(1) },
-            ],
-            // KEYWORD: foreach, if, etc.
-            &[
-                T { test: Word, kind: Method, state: Change(METHOD) },
-                T { test: Chars(0), kind: Keyword, state: Pop(1) },
-            ],
-            // METHOD: Foo-Bar
-            &[
-                T { test: Word, kind: Method, state: Change(METHOD) },
-                T { test: Prefix("-"), kind: Method, state: Change(METHOD) },
-                T { test: Chars(0), kind: Method, state: Pop(1) },
-            ],
-        ],
-    }
-};
-
 pub struct Highlighter<'a> {
     doc: &'a dyn ReadableDocument,
     offset: usize,
@@ -250,9 +99,7 @@ pub struct Highlighter<'a> {
 }
 
 impl<'doc> Highlighter<'doc> {
-    pub fn new(doc: &'doc dyn ReadableDocument) -> Self {
-        let language = &POWERSHELL;
-
+    pub fn new(doc: &'doc dyn ReadableDocument, language: &'static Language) -> Self {
         let mut word_chars = [false; 256];
         Self::fill_word_chars(&mut word_chars, language.word_chars);
 
@@ -260,7 +107,7 @@ impl<'doc> Highlighter<'doc> {
             let mut starter = [false; 256];
             for t in transitions {
                 match t.test {
-                    Consume::Chars(n) => starter.fill(true),
+                    Consume::Chars(_) => starter.fill(true),
                     Consume::Prefix(prefix) => starter[prefix.as_bytes()[0] as usize] = true,
                     Consume::Digits => starter[b'0' as usize..=b'9' as usize].fill(true),
                     Consume::Word => Self::fill_word_chars(&mut starter, language.word_chars),
@@ -482,7 +329,7 @@ mod tests {
         let doc = r#"$response = Read-Host "Delete branch '$branch'? [y/N]""#;
         let bytes = doc.as_bytes();
         let scratch = scratch_arena(None);
-        let mut parser = Highlighter::new(&bytes);
+        let mut parser = Highlighter::new(&bytes, &lang_powershell::LANG);
 
         let tokens = parser.parse_next_line(&scratch);
         assert_eq!(
@@ -507,7 +354,7 @@ mod tests {
         let doc = r#""$x";"#;
         let bytes = doc.as_bytes();
         let scratch = scratch_arena(None);
-        let mut parser = Highlighter::new(&bytes);
+        let mut parser = Highlighter::new(&bytes, &lang_powershell::LANG);
 
         let tokens = parser.parse_next_line(&scratch);
         assert_eq!(
@@ -526,7 +373,7 @@ mod tests {
         let doc = r#"<#x#>"#;
         let bytes = doc.as_bytes();
         let scratch = scratch_arena(None);
-        let mut parser = Highlighter::new(&bytes);
+        let mut parser = Highlighter::new(&bytes, &lang_powershell::LANG);
 
         let tokens = parser.parse_next_line(&scratch);
         assert_eq!(
