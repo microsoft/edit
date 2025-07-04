@@ -5,44 +5,66 @@ use super::*;
 
 type T = Transition;
 
+// NOTE: These are indices into the `LANG.charsets` array.
+const C_DIGITS: usize = 0;
+const C_VARIABLE: usize = 1;
+
 // NOTE: These are indices into the `LANG.states` array.
-const _GROUND: u8 = 0;
-const COMMENT: u8 = 1;
-const STRING_SINGLE: u8 = 2;
-const STRING_DOUBLE: u8 = 3;
-const STRING_ESCAPE: u8 = 4;
-const VARIABLE: u8 = 5;
+const _S_GROUND: u8 = 0;
+const S_COMMENT: u8 = 1;
+const S_STRING_SINGLE: u8 = 2;
+const S_STRING_DOUBLE: u8 = 3;
+const S_STRING_ESCAPE: u8 = 4;
+const S_VARIABLE: u8 = 5;
 
 pub const LANG: Language = Language {
     name: "Bash",
     extensions: &["sh", "bash", "zsh", "ksh", "csh", "tcsh"],
-    word_chars: &[
-        // /.-,+*)('&%$#"!
-        0b_0000110000000000,
-        // ?>=<;:9876543210
-        0b_0000001111111111,
-        // ONMLKJIHGFEDCBA@
-        0b_1111111111111110,
-        // _^]\[ZYXWVUTSRQP
-        0b_1000000000000000,
-        // onmlkjihgfedcba`
-        0b_1111111111111111,
-        //  ~}|{zyxwvutsrqp
-        0b_0000000000000000,
+    charsets: &[
+        // C_DIGITS
+        &[
+            // /.-,+*)('&%$#"!
+            0b_0010100000000000,
+            // ?>=<;:9876543210
+            0b_0000001111111111,
+            // ONMLKJIHGFEDCBA@
+            0b_0000000000000000,
+            // _^]\[ZYXWVUTSRQP
+            0b_0000000000000000,
+            // onmlkjihgfedcba`
+            0b_0000000000000000,
+            //  ~}|{zyxwvutsrqp
+            0b_0000000000000000,
+        ],
+        // C_VARIABLE
+        &[
+            // /.-,+*)('&%$#"!
+            0b_0000110000000000,
+            // ?>=<;:9876543210
+            0b_0000001111111111,
+            // ONMLKJIHGFEDCBA@
+            0b_1111111111111110,
+            // _^]\[ZYXWVUTSRQP
+            0b_1000000000000000,
+            // onmlkjihgfedcba`
+            0b_1111111111111111,
+            //  ~}|{zyxwvutsrqp
+            0b_0000000000000000,
+        ],
     ],
     states: &[
-        // GROUND
+        // S_GROUND
         &[
             // Comments
-            T { test: Prefix("#"), kind: Comment, state: Push(COMMENT) },
-            T { test: Prefix("<#"), kind: Comment, state: Push(COMMENT) },
+            T { test: Prefix("#"), kind: Comment, state: Push(S_COMMENT) },
+            T { test: Prefix("<#"), kind: Comment, state: Push(S_COMMENT) },
             // Strings
-            T { test: Prefix("'"), kind: String, state: Push(STRING_SINGLE) },
-            T { test: Prefix("\""), kind: String, state: Push(STRING_DOUBLE) },
+            T { test: Prefix("'"), kind: String, state: Push(S_STRING_SINGLE) },
+            T { test: Prefix("\""), kind: String, state: Push(S_STRING_DOUBLE) },
             // Variables
-            T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
+            T { test: Prefix("$"), kind: Variable, state: Push(S_VARIABLE) },
             // Numbers
-            T { test: Digits, kind: Number, state: Pop(1) },
+            T { test: Charset(C_DIGITS), kind: Number, state: Pop(1) },
             // Operators
             T { test: Prefix("|"), kind: Operator, state: Pop(1) },
             T { test: Prefix("&"), kind: Operator, state: Pop(1) },
@@ -63,19 +85,19 @@ pub const LANG: Language = Language {
             T { test: Prefix("esac"), kind: Keyword, state: Pop(1) },
             T { test: Prefix("function"), kind: Keyword, state: Pop(1) },
         ],
-        // COMMENT
+        // S_COMMENT
         &[T { test: Line, kind: Comment, state: Pop(1) }],
-        // STRING_SINGLE
+        // S_STRING_SINGLE
         &[T { test: Prefix("'"), kind: String, state: Pop(1) }],
-        // STRING_DOUBLE
+        // S_STRING_DOUBLE
         &[
-            T { test: Prefix("\\"), kind: String, state: Push(STRING_ESCAPE) },
-            T { test: Prefix("$"), kind: Variable, state: Push(VARIABLE) },
+            T { test: Prefix("\\"), kind: String, state: Push(S_STRING_ESCAPE) },
+            T { test: Prefix("$"), kind: Variable, state: Push(S_VARIABLE) },
             T { test: Prefix("\""), kind: String, state: Pop(1) },
         ],
-        // STRING_ESCAPE
+        // S_STRING_ESCAPE
         &[T { test: Chars(1), kind: String, state: Pop(1) }],
-        // VARIABLE
-        &[T { test: Word, kind: Variable, state: Pop(1) }],
+        // S_VARIABLE
+        &[T { test: Charset(C_VARIABLE), kind: Variable, state: Pop(1) }],
     ],
 };

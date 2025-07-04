@@ -291,3 +291,13 @@ impl AsciiStringHelpers for str {
         p.len() <= s.len() && s[..p.len()].eq_ignore_ascii_case(p)
     }
 }
+
+impl AsciiStringHelpers for [u8] {
+    fn starts_with_ignore_ascii_case(&self, prefix: &str) -> bool {
+        // Casting to bytes first ensures we skip any UTF8 boundary checks.
+        // Since the comparison is ASCII, we don't need to worry about that.
+        let s = self;
+        let p = prefix.as_bytes();
+        p.len() <= s.len() && s[..p.len()].eq_ignore_ascii_case(p)
+    }
+}
