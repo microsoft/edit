@@ -25,13 +25,13 @@ pub struct Language {
     #[allow(dead_code)]
     name: &'static str,
     extensions: &'static [&'static str],
-    word_chars: &'static [u16; 6],
+    charsets: &'static [&'static [u16; 6]],
     states: &'static [&'static [Transition]],
 }
 
 impl Language {
     pub fn from_path(path: &Path) -> Option<&'static Language> {
-        let ext = path.extension()?;
+        let ext = path.extension().unwrap();
         LANGUAGES.iter().copied().find(|lang| lang.extensions.iter().any(|&e| OsStr::new(e) == ext))
     }
 }
@@ -45,8 +45,8 @@ struct Transition {
 enum Consume {
     Chars(usize),
     Prefix(&'static str),
-    Digits,
-    Word,
+    PrefixInsensitive(&'static str),
+    Charset(usize),
     Line,
 }
 
@@ -90,7 +90,7 @@ pub struct Highlighter<'a> {
     logical_pos_y: CoordType,
 
     language: &'static Language,
-    word_chars: [bool; 256],
+    charsets: Vec<[bool; 256]>,
     starter: Vec<[bool; 256]>,
 
     state: usize,
@@ -100,31 +100,46 @@ pub struct Highlighter<'a> {
 
 impl<'doc> Highlighter<'doc> {
     pub fn new(doc: &'doc dyn ReadableDocument, language: &'static Language) -> Self {
-        let mut word_chars = [false; 256];
-        Self::fill_word_chars(&mut word_chars, language.word_chars);
-
-        let starter = Vec::from_iter(language.states.iter().map(|&transitions| {
-            let mut starter = [false; 256];
-            for t in transitions {
-                match t.test {
-                    Consume::Chars(_) => starter.fill(true),
-                    Consume::Prefix(prefix) => starter[prefix.as_bytes()[0] as usize] = true,
-                    Consume::Digits => starter[b'0' as usize..=b'9' as usize].fill(true),
-                    Consume::Word => Self::fill_word_chars(&mut starter, language.word_chars),
-                    Consume::Line => {}
-                }
-            }
-            starter
-        }));
-
         Self {
             doc,
             offset: 0,
             logical_pos_y: 0,
 
             language,
-            word_chars,
-            starter,
+            charsets: language
+                .charsets
+                .iter()
+                .map(|&charset| {
+                    let mut word_chars = [false; 256];
+                    Self::fill_word_chars(&mut word_chars, charset);
+                    word_chars
+                })
+                .collect(),
+            starter: language
+                .states
+                .iter()
+                .map(|&transitions| {
+                    let mut starter = [false; 256];
+                    for t in transitions {
+                        match t.test {
+                            Consume::Chars(_) => starter.fill(true),
+                            Consume::Prefix(prefix) => {
+                                starter[prefix.as_bytes()[0] as usize] = true;
+                            }
+                            Consume::PrefixInsensitive(prefix) => {
+                                let ch = prefix.as_bytes()[0];
+                                starter[ch.to_ascii_lowercase() as usize] = true;
+                                starter[ch.to_ascii_uppercase() as usize] = true;
+                            }
+                            Consume::Charset(i) => {
+                                Self::fill_word_chars(&mut starter, language.charsets[i]);
+                            }
+                            Consume::Line => {}
+                        }
+                    }
+                    starter
+                })
+                .collect(),
 
             state: 0,
             kind: Default::default(),
@@ -227,21 +242,19 @@ impl<'doc> Highlighter<'doc> {
                             break;
                         }
                     }
-                    Consume::Digits => {
-                        if off < line_buf.len() && line_buf[off].is_ascii_digit() {
-                            while {
-                                off += 1;
-                                off < line_buf.len() && line_buf[off].is_ascii_digit()
-                            } {}
+                    Consume::PrefixInsensitive(str) => {
+                        if line_buf[off..].starts_with_ignore_ascii_case(str) {
+                            off += str.len();
                             hit = Some(t);
                             break;
                         }
                     }
-                    Consume::Word => {
-                        if off < line_buf.len() && self.word_chars[line_buf[off] as usize] {
+                    Consume::Charset(i) => {
+                        let charset = &self.charsets[i];
+                        if off < line_buf.len() && charset[line_buf[off] as usize] {
                             while {
                                 off += 1;
-                                off < line_buf.len() && self.word_chars[line_buf[off] as usize]
+                                off < line_buf.len() && charset[line_buf[off] as usize]
                             } {}
                             hit = Some(t);
                             break;
@@ -270,6 +283,9 @@ impl<'doc> Highlighter<'doc> {
 
                 match t.state {
                     StateStack::Change(to) => {
+                        if let Some(last) = res.last_mut() {
+                            last.kind = t.kind;
+                        }
                         self.state = to as usize;
                         self.kind = t.kind;
                     }
