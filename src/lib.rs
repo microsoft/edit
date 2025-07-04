@@ -31,6 +31,7 @@ pub mod framebuffer;
 pub mod fuzzy;
 pub mod hash;
 pub mod helpers;
+pub mod highlighter;
 pub mod icu;
 pub mod input;
 pub mod oklab;

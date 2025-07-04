@@ -1,0 +1,47 @@
+# This is a comment
+---
+string: "Hello, world!"
+single_quoted: "Single quoted string"
+plain: plainValue
+multiline: |
+  This is a
+  multiline string.
+folded: >
+  This is a
+  folded string.
+number_int: 42
+number_float: 3.1415
+number_scientific: 1e6
+number_negative: -7
+boolean_true: true
+boolean_false: false
+null_value: null
+explicit_null: ~
+date: 2024-06-01
+timestamp: 2024-06-01T12:34:56Z
+sequence:
+  - item1
+  - item2
+  - 3
+  - true
+mapping:
+  key1: value1
+  key2: value2
+nested:
+  - name: Alice
+    age: 30
+    married: false
+  - name: Bob
+    age: 25
+    married: true
+anchors:
+  &anchor_name anchored_value: 123
+alias:
+  <<: *anchor_name
+complex_key:
+  [a, b, c]: complex value
+empty_sequence: []
+empty_mapping: {}
+literal_colon: "value:with:colons"
+literal_dash: "-not-a-sequence"
+special_chars: "Tab:\t Newline:\n Unicode:\u2713"
