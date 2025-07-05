@@ -82,16 +82,8 @@ fn run() -> apperr::Result<()> {
 
     let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
 
-    state.menubar_color_bg = oklab_blend(
-        tui.indexed(IndexedColor::Background),
-        tui.indexed_alpha(IndexedColor::BrightBlue, 1, 2),
-    );
-    state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
-    let floater_bg = oklab_blend(
-        tui.indexed_alpha(IndexedColor::Background, 2, 3),
-        tui.indexed_alpha(IndexedColor::Foreground, 1, 3),
-    );
-    let floater_fg = tui.contrasted(floater_bg);
+    let floater_bg = 0xFFFFFFFF; // Pure white background for dialogs/menus
+    let floater_fg = 0xFF222222; // Very dark gray text for dialogs/menus
     tui.setup_modifier_translations(ModifierTranslations {
         ctrl: loc(LocId::Ctrl),
         alt: loc(LocId::Alt),

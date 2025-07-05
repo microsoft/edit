@@ -10,9 +10,15 @@ use crate::localization::*;
 use crate::state::*;
 
 pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
+    // Modern soft accent color (very light blue)
+    let accent_bg = 0xFFFFFFFF; // Soft light blue
+    let accent_fg = 0xFF222222; // Very dark gray (almost black)
+    // let border_color = 0xFFD0E3F0; // Slightly darker blue for border (not used)
+
     ctx.menubar_begin();
-    ctx.attr_background_rgba(state.menubar_color_bg);
-    ctx.attr_foreground_rgba(state.menubar_color_fg);
+    ctx.attr_background_rgba(accent_bg);
+    ctx.attr_foreground_rgba(accent_fg);
+    ctx.attr_padding(Rect::two(0, 1)); // Only horizontal padding, no vertical
     {
         let contains_focus = ctx.contains_focus();
 
@@ -35,6 +41,7 @@ pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
         }
     }
     ctx.menubar_end();
+    // No border drawing (not supported)
 }
 
 fn draw_menu_file(ctx: &mut Context, state: &mut State) {

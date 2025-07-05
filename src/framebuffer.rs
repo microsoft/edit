@@ -58,25 +58,25 @@ pub const INDEXED_COLORS_COUNT: usize = 18;
 
 /// Fallback theme. Matches Windows Terminal's Ottosson theme.
 pub const DEFAULT_THEME: [u32; INDEXED_COLORS_COUNT] = [
-    0xff000000, // Black
-    0xff212cbe, // Red
-    0xff3aae3f, // Green
-    0xff4a9abe, // Yellow
-    0xffbe4d20, // Blue
-    0xffbe54bb, // Magenta
-    0xffb2a700, // Cyan
-    0xffbebebe, // White
-    0xff808080, // BrightBlack
-    0xff303eff, // BrightRed
-    0xff51ea58, // BrightGreen
-    0xff44c9ff, // BrightYellow
-    0xffff6a2f, // BrightBlue
-    0xffff74fc, // BrightMagenta
-    0xfff0e100, // BrightCyan
-    0xffffffff, // BrightWhite
+    0xFF000000, // Black (text)
+    0xFFEA4335, // Red (soft red)
+    0xFF34A853, // Green (soft green)
+    0xFFFBBC05, // Yellow (soft yellow)
+    0xFF4285F4, // Blue (modern blue)
+    0xFFAA66CC, // Magenta (soft purple)
+    0xFF00B8D4, // Cyan (soft cyan)
+    0xFFB0B0B0, // White (light gray for less contrast)
+    0xFF808080, // BrightBlack (gray)
+    0xFFFF6F61, // BrightRed (accent red)
+    0xFF81C784, // BrightGreen (accent green)
+    0xFFFFF176, // BrightYellow (accent yellow)
+    0xFF90CAF9, // BrightBlue (accent blue)
+    0xFFD1C4E9, // BrightMagenta (accent purple)
+    0xFF80DEEA, // BrightCyan (accent cyan)
+    0xFFFFFFFF, // BrightWhite (pure white)
     // --------
-    0xff000000, // Background
-    0xffbebebe, // Foreground
+    0xFFFFFFFF, // Background (pure white)
+    0xFF000000, // Foreground (black text)
 ];
 
 /// A shoddy framebuffer for terminal applications.
