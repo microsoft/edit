@@ -188,7 +188,7 @@ pub fn draw_keyboard_shortcuts_list(ctx: &mut Context, state: &mut State) {
         {
             ctx.attr_position(Position::Center);
 
-            let shortcuts = [
+            let shortcuts: [(&'static str, &'static str); 35] = [
                 // File/Edit actions (use existing LocId)
                 (loc(LocId::EditCopy), "Ctrl+C"),
                 (loc(LocId::EditCut), "Ctrl+X"),
