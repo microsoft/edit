@@ -188,56 +188,31 @@ pub fn draw_keyboard_shortcuts_list(ctx: &mut Context, state: &mut State) {
         {
             ctx.attr_position(Position::Center);
 
-            let shortcuts: [(&'static str, &'static str); 35] = [
-                // File/Edit actions (use existing LocId)
-                (loc(LocId::EditCopy), "Ctrl+C"),
-                (loc(LocId::EditCut), "Ctrl+X"),
-                (loc(LocId::EditPaste), "Ctrl+V"),
-                (loc(LocId::EditUndo), "Ctrl+Z"),
-                (loc(LocId::EditRedo), "Ctrl+Y"),
-                (loc(LocId::EditRedo), "Ctrl+Shift+Z"),
-                (loc(LocId::EditFind), "Ctrl+F"),
-                (loc(LocId::EditReplace), "Ctrl+R"),
-                (loc(LocId::EditSelectAll), "Ctrl+A"),
-                (loc(LocId::FileNew), "Ctrl+N"),
-                (loc(LocId::FileOpen), "Ctrl+O"),
-                (loc(LocId::FileSave), "Ctrl+S"),
-                (loc(LocId::FileSaveAs), "Ctrl+Shift+S"),
-                (loc(LocId::FileClose), "Ctrl+W"),
-                (loc(LocId::FileExit), "Ctrl+Q"),
-                (loc(LocId::FileGoto), "Ctrl+G"),
-                // Navigation and selection
-                (loc(LocId::ShortcutMoveCursorLeftWord), "Ctrl+Left Arrow"),
-                (loc(LocId::ShortcutMoveCursorRightWord), "Ctrl+Right Arrow"),
-                (loc(LocId::ShortcutMoveToDocStart), "Ctrl+Home"),
-                (loc(LocId::ShortcutMoveToDocEnd), "Ctrl+End"),
-                (loc(LocId::ShortcutSelectLeftWord), "Ctrl+Shift+Left Arrow"),
-                (loc(LocId::ShortcutSelectRightWord), "Ctrl+Shift+Right Arrow"),
-                (loc(LocId::ShortcutSelectLineStart), "Shift+Home"),
-                (loc(LocId::ShortcutSelectLineEnd), "Shift+End"),
-                (loc(LocId::ShortcutSelectDocStart), "Ctrl+Shift+Home"),
-                (loc(LocId::ShortcutSelectDocEnd), "Ctrl+Shift+End"),
-                (loc(LocId::ShortcutSelectLine), "Ctrl+L"),
-                // Editing
-                (loc(LocId::ShortcutDeletePrevWord), "Ctrl+Backspace"),
-                (loc(LocId::ShortcutDeleteNextWord), "Ctrl+Delete"),
-                (loc(LocId::ShortcutPasteShiftInsert), "Shift+Insert"),
-                (loc(LocId::ShortcutCopyCtrlInsert), "Ctrl+Insert"),
-                (loc(LocId::ShortcutCutShiftDelete), "Shift+Delete"),
-                // Word wrap
-                (loc(LocId::ViewWordWrap), "Alt+Z"),
-                // macOS word navigation
-                (loc(LocId::ShortcutMoveCursorLeftWordMac), "Alt+B"),
-                (loc(LocId::ShortcutMoveCursorRightWordMac), "Alt+F"),
-            ];
+            let shortcuts: [(&'static str, &'static str); 15] = [
+                (loc(LocId::EditCopy), "Ctrl + C"),
+                (loc(LocId::EditCut), "Ctrl + X"),
+                (loc(LocId::EditPaste), "Ctrl + V"),
+                (loc(LocId::EditUndo), "Ctrl + Z"),
+                (loc(LocId::EditRedo), "Ctrl + Y"),
+                (loc(LocId::EditFind), "Ctrl + F"),
+                (loc(LocId::EditReplace), "Ctrl + R"),
+                (loc(LocId::EditSelectAll), "Ctrl + A"),
+                (loc(LocId::FileNew), "Ctrl + N"),
+                (loc(LocId::FileOpen), "Ctrl + O"),
+                (loc(LocId::FileSave), "Ctrl + S"),
+                (loc(LocId::FileClose), "Ctrl + W"),
+                (loc(LocId::FileExit), "Ctrl + Q"),
+                (loc(LocId::FileGoto), "Ctrl + G"),
+                (loc(LocId::ShortcutSelectLine), "Ctrl + L"),            ];
 
-            // Render each shortcut as a row
+            ctx.table_begin("shortcuts_table");
+            ctx.table_set_cell_gap(Size { width: (5), height: (0) });
             for (desc, key) in shortcuts.iter() {
-                ctx.block_begin("shortcut_row");
+                ctx.table_next_row();
                 ctx.label("shortcut_desc", desc);
                 ctx.label("shortcut_key", key);
-                ctx.block_end();
             }
+            ctx.table_end();
 
             ctx.block_begin("choices");
             ctx.inherit_focus();
