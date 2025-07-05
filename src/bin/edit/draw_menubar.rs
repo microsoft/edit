@@ -11,7 +11,7 @@ use crate::state::*;
 
 pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
     // Modern soft accent color (very light blue)
-    let accent_bg = 0xFFFFFFFF; // Soft light blue
+    let accent_bg = 0xFFFFFFFF; // Pure white
     let accent_fg = 0xFF222222; // Very dark gray (almost black)
     // let border_color = 0xFFD0E3F0; // Slightly darker blue for border (not used)
 
