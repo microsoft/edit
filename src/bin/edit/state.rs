@@ -164,6 +164,7 @@ pub struct State {
     pub wants_close: bool,
     pub wants_exit: bool,
     pub wants_goto: bool,
+    pub wants_shortcuts_list: bool,
     pub goto_target: String,
     pub goto_invalid: bool,
 
@@ -209,6 +210,7 @@ impl State {
             wants_indentation_picker: false,
             wants_go_to_file: false,
             wants_about: false,
+            wants_shortcuts_list:false,
             wants_close: false,
             wants_exit: false,
             wants_goto: false,

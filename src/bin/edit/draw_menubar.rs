@@ -178,3 +178,60 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
         state.wants_about = false;
     }
 }
+
+pub fn draw_keyboard_shortcuts_list(ctx: &mut Context, state: &mut State) {
+    ctx.modal_begin("Shortcuts", loc(LocId::KeyboardShortcutDialogTitle));
+    {
+        ctx.block_begin("content");
+        ctx.inherit_focus();
+        ctx.attr_padding(Rect::three(1, 2, 1));
+        {
+            ctx.label("title", "Keyboard Shortcuts");
+            ctx.attr_position(Position::Center);
+
+            // Define your shortcuts here: (description, shortcut)
+            let shortcuts = [
+                ("New File", "Ctrl+N"),
+                ("Open File", "Ctrl+O"),
+                ("Save File", "Ctrl+S"),
+                ("Save As", "Ctrl+Shift+S"),
+                ("Close File", "Ctrl+W"),
+                ("Exit", "Ctrl+Q"),
+                ("Undo", "Ctrl+Z"),
+                ("Redo", "Ctrl+Y"),
+                ("Cut", "Ctrl+X"),
+                ("Copy", "Ctrl+C"),
+                ("Paste", "Ctrl+V"),
+                ("Find", "Ctrl+F"),
+                ("Replace", "Ctrl+R"),
+                ("Go To Line", "Ctrl+G"),
+                ("Select All", "Ctrl+A"),
+                // Add more as needed
+            ];
+
+            // Render each shortcut as a row
+            for (desc, key) in shortcuts.iter() {
+                ctx.block_begin("shortcut_row");
+                ctx.label("shortcut_desc", desc);
+                ctx.label("shortcut_key", key);
+                ctx.block_end();
+            }
+
+            ctx.block_begin("choices");
+            ctx.inherit_focus();
+            ctx.attr_padding(Rect::three(1, 2, 0));
+            ctx.attr_position(Position::Center);
+            {
+                if ctx.button("ok", loc(LocId::Ok), ButtonStyle::default()) {
+                    state.wants_shortcuts_list = false;
+                }
+                ctx.inherit_focus();
+            }
+            ctx.block_end();
+        }
+        ctx.block_end();
+    }
+    if ctx.modal_end() {
+        state.wants_shortcuts_list = false;
+    }
+}

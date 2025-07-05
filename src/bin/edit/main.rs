@@ -317,6 +317,9 @@ fn draw(ctx: &mut Context, state: &mut State) {
     if state.error_log_count != 0 {
         draw_error_log(ctx, state);
     }
+    if state.wants_shortcuts_list {
+        draw_keyboard_shortcuts_list(ctx, state);
+    }
 
     if let Some(key) = ctx.keyboard_input() {
         // Shortcuts that are not handled as part of the textarea, etc.
@@ -347,7 +350,10 @@ fn draw(ctx: &mut Context, state: &mut State) {
             state.wants_search.focus = true;
         } else if key == vk::F3 {
             search_execute(ctx, state, SearchAction::Search);
-        } else {
+        } else if key == vk:: F1 {
+            state.wants_shortcuts_list=true;
+        } 
+        else {
             return;
         }
 
