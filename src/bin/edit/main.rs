@@ -351,7 +351,7 @@ fn draw(ctx: &mut Context, state: &mut State) {
         } else if key == vk::F3 {
             search_execute(ctx, state, SearchAction::Search);
         } else if key == vk:: F1 {
-            state.wants_shortcuts_list=true;
+            state.wants_shortcuts_list = true;
         } 
         else {
             return;

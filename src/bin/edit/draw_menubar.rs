@@ -188,7 +188,7 @@ pub fn draw_dialog_shortcuts(ctx: &mut Context, state: &mut State) {
         {
             ctx.attr_position(Position::Center);
 
-            let shortcuts: [(&'static str, &'static str); 15] = [
+            let shortcuts = [
                 (loc(LocId::EditCopy), "Ctrl + C"),
                 (loc(LocId::EditCut), "Ctrl + X"),
                 (loc(LocId::EditPaste), "Ctrl + V"),
@@ -203,7 +203,8 @@ pub fn draw_dialog_shortcuts(ctx: &mut Context, state: &mut State) {
                 (loc(LocId::FileClose), "Ctrl + W"),
                 (loc(LocId::FileExit), "Ctrl + Q"),
                 (loc(LocId::FileGoto), "Ctrl + G"),
-                (loc(LocId::ShortcutSelectLine), "Ctrl + L"),            ];
+                (loc(LocId::ShortcutSelectLine), "Ctrl + L"),
+            ];
 
             ctx.table_begin("shortcuts_table");
             ctx.table_set_cell_gap(Size { width: (5), height: (0) });
