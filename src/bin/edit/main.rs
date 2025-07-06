@@ -168,13 +168,7 @@ fn run() -> apperr::Result<()> {
             let scratch = scratch_arena(None);
             let mut output = tui.render(&scratch);
 
-            {
-                let filename = state.documents.active().map_or("", |d| &d.filename);
-                if filename != state.osc_title_filename {
-                    write_terminal_title(&mut output, filename);
-                    state.osc_title_filename = filename.to_string();
-                }
-            }
+            write_terminal_title(&mut output, &mut state);
 
             if state.osc_clipboard_sync {
                 write_osc_clipboard(&mut tui, &mut state, &mut output);
@@ -377,16 +371,30 @@ fn draw_handle_wants_exit(_ctx: &mut Context, state: &mut State) {
     }
 }
 
-#[cold]
-fn write_terminal_title(output: &mut ArenaString, filename: &str) {
-    output.push_str("\x1b]0;");
+fn write_terminal_title(output: &mut ArenaString, state: &mut State) {
+    let (filename, dirty) = state
+        .documents
+        .active()
+        .map_or(("", false), |d| (&d.filename, d.buffer.borrow().is_dirty()));
 
+    if filename == state.osc_title_file_status.filename
+        && dirty == state.osc_title_file_status.dirty
+    {
+        return;
+    }
+
+    output.push_str("\x1b]0;");
     if !filename.is_empty() {
+        if dirty {
+            output.push_str("● ");
+        }
         output.push_str(&sanitize_control_chars(filename));
         output.push_str(" - ");
     }
-
     output.push_str("edit\x1b\\");
+
+    state.osc_title_file_status.filename = filename.to_string();
+    state.osc_title_file_status.dirty = dirty;
 }
 
 const LARGE_CLIPBOARD_THRESHOLD: usize = 128 * KIBI;

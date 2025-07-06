@@ -32,7 +32,7 @@ unsafe fn lines_fwd_raw(
     line: CoordType,
     line_stop: CoordType,
 ) -> (*const u8, CoordType) {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", target_arch = "loongarch64"))]
     return unsafe { LINES_FWD_DISPATCH(beg, end, line, line_stop) };
 
     #[cfg(target_arch = "aarch64")]
@@ -65,7 +65,7 @@ unsafe fn lines_fwd_fallback(
     }
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "loongarch64"))]
 static mut LINES_FWD_DISPATCH: unsafe fn(
     beg: *const u8,
     end: *const u8,
@@ -109,12 +109,15 @@ unsafe fn lines_fwd_avx2(
         }
 
         let lf = _mm256_set1_epi8(b'\n' as i8);
-        let mut remaining = end.offset_from_unsigned(beg);
+        let off = beg.align_offset(32);
+        if off != 0 && off < end.offset_from_unsigned(beg) {
+            (beg, line) = lines_fwd_fallback(beg, beg.add(off), line, line_stop);
+        }
 
         if line < line_stop {
             // Unrolling the loop by 4x speeds things up by >3x.
             // It allows us to accumulate matches before doing a single `vpsadbw`.
-            while remaining >= 128 {
+            while end.offset_from_unsigned(beg) >= 128 {
                 let v1 = _mm256_loadu_si256(beg.add(0) as *const _);
                 let v2 = _mm256_loadu_si256(beg.add(32) as *const _);
                 let v3 = _mm256_loadu_si256(beg.add(64) as *const _);
@@ -138,11 +141,10 @@ unsafe fn lines_fwd_avx2(
                 }
 
                 beg = beg.add(128);
-                remaining -= 128;
                 line = line_next;
             }
 
-            while remaining >= 32 {
+            while end.offset_from_unsigned(beg) >= 32 {
                 let v = _mm256_loadu_si256(beg as *const _);
                 let c = _mm256_cmpeq_epi8(v, lf);
 
@@ -159,7 +161,174 @@ unsafe fn lines_fwd_avx2(
                 }
 
                 beg = beg.add(32);
-                remaining -= 32;
+                line = line_next;
+            }
+        }
+
+        lines_fwd_fallback(beg, end, line, line_stop)
+    }
+}
+
+#[cfg(target_arch = "loongarch64")]
+unsafe fn lines_fwd_dispatch(
+    beg: *const u8,
+    end: *const u8,
+    line: CoordType,
+    line_stop: CoordType,
+) -> (*const u8, CoordType) {
+    use std::arch::is_loongarch_feature_detected;
+
+    let func = if is_loongarch_feature_detected!("lasx") {
+        lines_fwd_lasx
+    } else if is_loongarch_feature_detected!("lsx") {
+        lines_fwd_lsx
+    } else {
+        lines_fwd_fallback
+    };
+    unsafe { LINES_FWD_DISPATCH = func };
+    unsafe { func(beg, end, line, line_stop) }
+}
+
+#[cfg(target_arch = "loongarch64")]
+#[target_feature(enable = "lasx")]
+unsafe fn lines_fwd_lasx(
+    mut beg: *const u8,
+    end: *const u8,
+    mut line: CoordType,
+    line_stop: CoordType,
+) -> (*const u8, CoordType) {
+    unsafe {
+        use std::arch::loongarch64::*;
+        use std::mem::transmute as T;
+
+        #[inline(always)]
+        unsafe fn horizontal_sum(sum: v32i8) -> u32 {
+            unsafe {
+                let sum = lasx_xvhaddw_h_b(sum, sum);
+                let sum = lasx_xvhaddw_w_h(sum, sum);
+                let sum = lasx_xvhaddw_d_w(sum, sum);
+                let sum = lasx_xvhaddw_q_d(sum, sum);
+                let tmp = lasx_xvpermi_q::<1>(T(sum), T(sum));
+                let sum = lasx_xvadd_w(T(sum), T(tmp));
+                lasx_xvpickve2gr_wu::<0>(sum)
+            }
+        }
+
+        let lf = lasx_xvrepli_b(b'\n' as i32);
+        let off = beg.align_offset(32);
+        if off != 0 && off < end.offset_from_unsigned(beg) {
+            (beg, line) = lines_fwd_fallback(beg, beg.add(off), line, line_stop);
+        }
+
+        if line < line_stop {
+            while end.offset_from_unsigned(beg) >= 128 {
+                let v1 = lasx_xvld::<0>(beg as *const _);
+                let v2 = lasx_xvld::<32>(beg as *const _);
+                let v3 = lasx_xvld::<64>(beg as *const _);
+                let v4 = lasx_xvld::<96>(beg as *const _);
+
+                let mut sum = lasx_xvrepli_b(0);
+                sum = lasx_xvsub_b(sum, lasx_xvseq_b(v1, lf));
+                sum = lasx_xvsub_b(sum, lasx_xvseq_b(v2, lf));
+                sum = lasx_xvsub_b(sum, lasx_xvseq_b(v3, lf));
+                sum = lasx_xvsub_b(sum, lasx_xvseq_b(v4, lf));
+                let sum = horizontal_sum(sum);
+
+                let line_next = line + sum as CoordType;
+                if line_next >= line_stop {
+                    break;
+                }
+
+                beg = beg.add(128);
+                line = line_next;
+            }
+
+            while end.offset_from_unsigned(beg) >= 32 {
+                let v = lasx_xvld::<0>(beg as *const _);
+                let c = lasx_xvseq_b(v, lf);
+
+                let ones = lasx_xvand_v(T(c), T(lasx_xvrepli_b(1)));
+                let sum = horizontal_sum(T(ones));
+
+                let line_next = line + sum as CoordType;
+                if line_next >= line_stop {
+                    break;
+                }
+
+                beg = beg.add(32);
+                line = line_next;
+            }
+        }
+
+        lines_fwd_fallback(beg, end, line, line_stop)
+    }
+}
+
+#[cfg(target_arch = "loongarch64")]
+#[target_feature(enable = "lsx")]
+unsafe fn lines_fwd_lsx(
+    mut beg: *const u8,
+    end: *const u8,
+    mut line: CoordType,
+    line_stop: CoordType,
+) -> (*const u8, CoordType) {
+    unsafe {
+        use std::arch::loongarch64::*;
+        use std::mem::transmute as T;
+
+        #[inline(always)]
+        unsafe fn horizontal_sum(sum: v16i8) -> u32 {
+            unsafe {
+                let sum = lsx_vhaddw_h_b(sum, sum);
+                let sum = lsx_vhaddw_w_h(sum, sum);
+                let sum = lsx_vhaddw_d_w(sum, sum);
+                let sum = lsx_vhaddw_q_d(sum, sum);
+                lsx_vpickve2gr_wu::<0>(T(sum))
+            }
+        }
+
+        let lf = lsx_vrepli_b(b'\n' as i32);
+        let off = beg.align_offset(16);
+        if off != 0 && off < end.offset_from_unsigned(beg) {
+            (beg, line) = lines_fwd_fallback(beg, beg.add(off), line, line_stop);
+        }
+
+        if line < line_stop {
+            while end.offset_from_unsigned(beg) >= 64 {
+                let v1 = lsx_vld::<0>(beg as *const _);
+                let v2 = lsx_vld::<16>(beg as *const _);
+                let v3 = lsx_vld::<32>(beg as *const _);
+                let v4 = lsx_vld::<48>(beg as *const _);
+
+                let mut sum = lsx_vrepli_b(0);
+                sum = lsx_vsub_b(sum, lsx_vseq_b(v1, lf));
+                sum = lsx_vsub_b(sum, lsx_vseq_b(v2, lf));
+                sum = lsx_vsub_b(sum, lsx_vseq_b(v3, lf));
+                sum = lsx_vsub_b(sum, lsx_vseq_b(v4, lf));
+                let sum = horizontal_sum(sum);
+
+                let line_next = line + sum as CoordType;
+                if line_next >= line_stop {
+                    break;
+                }
+
+                beg = beg.add(64);
+                line = line_next;
+            }
+
+            while end.offset_from_unsigned(beg) >= 16 {
+                let v = lsx_vld::<0>(beg as *const _);
+                let c = lsx_vseq_b(v, lf);
+
+                let ones = lsx_vand_v(T(c), T(lsx_vrepli_b(1)));
+                let sum = horizontal_sum(T(ones));
+
+                let line_next = line + sum as CoordType;
+                if line_next >= line_stop {
+                    break;
+                }
+
+                beg = beg.add(16);
                 line = line_next;
             }
         }
@@ -179,10 +348,13 @@ unsafe fn lines_fwd_neon(
         use std::arch::aarch64::*;
 
         let lf = vdupq_n_u8(b'\n');
-        let mut remaining = end.offset_from_unsigned(beg);
+        let off = beg.align_offset(16);
+        if off != 0 && off < end.offset_from_unsigned(beg) {
+            (beg, line) = lines_fwd_fallback(beg, beg.add(off), line, line_stop);
+        }
 
         if line < line_stop {
-            while remaining >= 64 {
+            while end.offset_from_unsigned(beg) >= 64 {
                 let v1 = vld1q_u8(beg.add(0));
                 let v2 = vld1q_u8(beg.add(16));
                 let v3 = vld1q_u8(beg.add(32));
@@ -204,11 +376,10 @@ unsafe fn lines_fwd_neon(
                 }
 
                 beg = beg.add(64);
-                remaining -= 64;
                 line = line_next;
             }
 
-            while remaining >= 16 {
+            while end.offset_from_unsigned(beg) >= 16 {
                 let v = vld1q_u8(beg);
                 let c = vceqq_u8(v, lf);
                 let c = vandq_u8(c, vdupq_n_u8(0x01));
@@ -220,7 +391,6 @@ unsafe fn lines_fwd_neon(
                 }
 
                 beg = beg.add(16);
-                remaining -= 16;
                 line = line_next;
             }
         }

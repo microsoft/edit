@@ -120,6 +120,12 @@ pub enum StateEncodingChange {
     Reopen,
 }
 
+#[derive(Default)]
+pub struct OscTitleFileStatus {
+    pub filename: String,
+    pub dirty: bool,
+}
+
 pub struct State {
     pub menubar_color_bg: u32,
     pub menubar_color_fg: u32,
@@ -161,7 +167,7 @@ pub struct State {
     pub goto_target: String,
     pub goto_invalid: bool,
 
-    pub osc_title_filename: String,
+    pub osc_title_file_status: OscTitleFileStatus,
     pub osc_clipboard_sync: bool,
     pub osc_clipboard_always_send: bool,
     pub exit: bool,
@@ -209,7 +215,7 @@ impl State {
             goto_target: Default::default(),
             goto_invalid: false,
 
-            osc_title_filename: Default::default(),
+            osc_title_file_status: Default::default(),
             osc_clipboard_sync: false,
             osc_clipboard_always_send: false,
             exit: false,
