@@ -215,7 +215,7 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* de      */ "Abbrechen",
         /* es      */ "Cancelar",
         /* fr      */ "Annuler",
-        /* hu      */ "Mégsem",
+        /* hu      */ "Mégse",
         /* it      */ "Annulla",
         /* ja      */ "キャンセル",
         /* ko      */ "취소",
