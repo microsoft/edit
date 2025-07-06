@@ -318,7 +318,7 @@ fn draw(ctx: &mut Context, state: &mut State) {
         draw_error_log(ctx, state);
     }
     if state.wants_shortcuts_list {
-        draw_keyboard_shortcuts_list(ctx, state);
+        draw_dialog_shortcuts(ctx, state);
     }
 
     if let Some(key) = ctx.keyboard_input() {

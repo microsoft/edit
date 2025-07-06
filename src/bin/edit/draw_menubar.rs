@@ -179,7 +179,7 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
     }
 }
 
-pub fn draw_keyboard_shortcuts_list(ctx: &mut Context, state: &mut State) {
+pub fn draw_dialog_shortcuts(ctx: &mut Context, state: &mut State) {
     ctx.modal_begin("Shortcuts", loc(LocId::KeyboardShortcutDialogTitle));
     {
         ctx.block_begin("content");
