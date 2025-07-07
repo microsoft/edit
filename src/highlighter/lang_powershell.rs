@@ -1,9 +1,9 @@
+use super::Action::*;
 use super::Consume::*;
 use super::HighlightKind::*;
-use super::StateStack::*;
 use super::*;
 
-type T = Transition;
+type T = Transition<'static>;
 
 // NOTE: These are indices into the `LANG.charsets` array.
 const C_DIGITS: usize = 0;

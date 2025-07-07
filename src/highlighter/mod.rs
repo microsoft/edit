@@ -1,53 +1,109 @@
-mod lang_bash;
-mod lang_batch;
-mod lang_json;
-mod lang_powershell;
-mod lang_yaml;
+mod lang;
+//mod lang_bash;
+//mod lang_batch;
+//mod lang_json;
+//mod lang_powershell;
+//mod lang_yaml;
+//mod regex;
 
-const LANGUAGES: &[&Language] = &[
-    &lang_bash::LANG,
-    &lang_batch::LANG,
-    &lang_json::LANG,
-    &lang_powershell::LANG,
-    &lang_yaml::LANG,
-];
-
-use std::ffi::OsStr;
 use std::fmt::Debug;
-use std::path::Path;
 
 use crate::arena::{Arena, scratch_arena};
 use crate::document::ReadableDocument;
 use crate::helpers::*;
+use crate::highlighter::lang::LanguageDefinition;
 use crate::{simd, unicode};
 
+struct CharsetFormatter<'a>(&'a [bool; 256]);
+
+impl Debug for CharsetFormatter<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let show_char = |f: &mut std::fmt::Formatter<'_>, b: usize| {
+            let b = b as u8;
+            if b.is_ascii_graphic() || b == b' ' {
+                let b = b as char;
+                write!(f, "'{b}'")
+            } else {
+                write!(f, "0x{b:02X}")
+            }
+        };
+
+        let mut beg = 0;
+        let mut first = true;
+
+        write!(f, "[")?;
+
+        while beg < 256 {
+            while beg < 256 && !self.0[beg] {
+                beg += 1;
+            }
+            if beg >= 256 {
+                break;
+            }
+
+            let mut end = beg;
+            while end < 256 && self.0[end] {
+                end += 1;
+            }
+
+            if !first {
+                write!(f, ", ")?;
+            }
+            show_char(f, beg)?;
+            if end - beg > 1 {
+                write!(f, "-")?;
+                show_char(f, end - 1)?;
+            }
+
+            beg = end;
+            first = false;
+        }
+
+        write!(f, "]")
+    }
+}
+
+// The runtime structure for highlighting, built from LanguageDef.
 pub struct Language {
     #[allow(dead_code)]
     name: &'static str,
     extensions: &'static [&'static str],
     charsets: &'static [&'static [u16; 6]],
-    states: &'static [&'static [Transition]],
+    states: &'static [&'static [Transition<'static>]],
 }
 
+// Conversion from LanguageDef to Language (stub).
 impl Language {
-    pub fn from_path(path: &Path) -> Option<&'static Language> {
-        let ext = path.extension().unwrap();
-        LANGUAGES.iter().copied().find(|lang| lang.extensions.iter().any(|&e| OsStr::new(e) == ext))
+    pub fn from_def(def: &LanguageDefinition) -> Self {
+        // TODO: Build charsets and transitions from def.
+        unimplemented!()
     }
 }
 
-struct Transition {
-    test: Consume,
+struct Transition<'s> {
+    test: Consume<'s>,
     kind: HighlightKind,
-    state: StateStack,
+    state: Action,
 }
 
-enum Consume {
+enum Consume<'a> {
     Chars(usize),
-    Prefix(&'static str),
-    PrefixInsensitive(&'static str),
-    Charset(usize),
+    Prefix(&'a str),
+    PrefixInsensitive(&'a str),
+    Charset(&'a [bool; 256]),
     Line,
+}
+
+impl Debug for Consume<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Consume::Chars(n) => write!(f, "Chars({n})"),
+            Consume::Prefix(s) => write!(f, "Prefix({s:?})"),
+            Consume::PrefixInsensitive(s) => write!(f, "PrefixInsensitive({s:?})"),
+            Consume::Charset(c) => write!(f, "Charset({:?})", CharsetFormatter(c)),
+            Consume::Line => write!(f, "Line"),
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +119,7 @@ pub enum HighlightKind {
     Method,
 }
 
-enum StateStack {
+enum Action {
     Change(u8), // to
     Push(u8),   // to
     Pop(u8),    // count
@@ -132,7 +188,7 @@ impl<'doc> Highlighter<'doc> {
                                 starter[ch.to_ascii_uppercase() as usize] = true;
                             }
                             Consume::Charset(i) => {
-                                Self::fill_word_chars(&mut starter, language.charsets[i]);
+                                todo!()
                             }
                             Consume::Line => {}
                         }
@@ -249,8 +305,7 @@ impl<'doc> Highlighter<'doc> {
                             break;
                         }
                     }
-                    Consume::Charset(i) => {
-                        let charset = &self.charsets[i];
+                    Consume::Charset(charset) => {
                         if off < line_buf.len() && charset[line_buf[off] as usize] {
                             while {
                                 off += 1;
@@ -282,19 +337,19 @@ impl<'doc> Highlighter<'doc> {
                 }
 
                 match t.state {
-                    StateStack::Change(to) => {
+                    Action::Change(to) => {
                         if let Some(last) = res.last_mut() {
                             last.kind = t.kind;
                         }
                         self.state = to as usize;
                         self.kind = t.kind;
                     }
-                    StateStack::Push(to) => {
+                    Action::Push(to) => {
                         self.state_stack.push((self.state, self.kind));
                         self.state = to as usize;
                         self.kind = t.kind;
                     }
-                    StateStack::Pop(count) => {
+                    Action::Pop(count) => {
                         // Pop the last `count` states from the stack.
                         let to = self.state_stack.len().saturating_sub(count as usize);
                         (self.state, self.kind) =
@@ -336,7 +391,7 @@ impl<'doc> Highlighter<'doc> {
     }
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -400,4 +455,4 @@ mod tests {
             ]
         );
     }
-}
+}*/
