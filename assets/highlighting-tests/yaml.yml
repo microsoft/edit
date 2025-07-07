@@ -11,7 +11,7 @@ folded: >
   folded string.
 number_int: 42
 number_float: 3.1415
-number_scientific: 1e6
+number_scientific: 1.23e45
 number_negative: -7
 boolean_true: true
 boolean_false: false
@@ -19,6 +19,7 @@ null_value: null
 explicit_null: ~
 date: 2024-06-01
 timestamp: 2024-06-01T12:34:56Z
+confusable_string_number: 1.23e45 1.23e45 # This is a comment
 sequence:
   - item1
   - item2
@@ -34,10 +35,6 @@ nested:
   - name: Bob
     age: 25
     married: true
-anchors:
-  &anchor_name anchored_value: 123
-alias:
-  <<: *anchor_name
 complex_key:
   [a, b, c]: complex value
 empty_sequence: []

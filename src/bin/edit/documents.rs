@@ -65,7 +65,7 @@ impl Document {
 
         {
             let mut tb = self.buffer.borrow_mut();
-            tb.set_language(Language::from_path(&path));
+            //tb.set_language(Language::from_path(&path));
             tb.set_ruler(if filename == "COMMIT_EDITMSG" { 72 } else { 0 });
         }
 
