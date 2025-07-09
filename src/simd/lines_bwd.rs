@@ -109,7 +109,6 @@ unsafe fn lines_bwd_avx2(
         }
 
         let lf = _mm256_set1_epi8(b'\n' as i8);
-        let line_stop = line_stop.min(line);
         let off = end.addr() & 31;
         if off != 0 && off < end.offset_from_unsigned(beg) {
             (end, line) = lines_bwd_fallback(end.sub(off), end, line, line_stop);
@@ -414,7 +413,7 @@ mod test {
         for _ in 0..1000 {
             let offset = offset_rng() % (text.len() + 1);
             let line_stop = line_distance_rng() % (lines + 1);
-            let line = line_stop + line_rng() % 100;
+            let line = (line_stop + line_rng() % 100).saturating_sub(5);
 
             let line = line as CoordType;
             let line_stop = line_stop as CoordType;
@@ -432,20 +431,19 @@ mod test {
         mut line: CoordType,
         line_stop: CoordType,
     ) -> (usize, CoordType) {
-        if line >= line_stop {
-            while offset > 0 {
-                let c = haystack[offset - 1];
-                if c == b'\n' {
-                    if line == line_stop {
-                        break;
-                    }
-                    line -= 1;
+        while offset > 0 {
+            let c = haystack[offset - 1];
+            if c == b'\n' {
+                if line <= line_stop {
+                    break;
                 }
-                offset -= 1;
+                line -= 1;
             }
+            offset -= 1;
         }
         (offset, line)
     }
+
     #[test]
     fn seeks_to_start() {
         for i in 6..=11 {
