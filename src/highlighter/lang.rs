@@ -59,7 +59,6 @@ pub const JSON: LanguageDefinition = {
 };
 
 struct Node<'a> {
-    parent: Option<&'a NodeCell<'a>>,
     child_first: Option<&'a NodeCell<'a>>,
     child_last: Option<&'a NodeCell<'a>>,
     sibling_next: Option<&'a NodeCell<'a>>,
@@ -72,7 +71,6 @@ struct Node<'a> {
 impl Default for Node<'_> {
     fn default() -> Self {
         Self {
-            parent: None,
             child_first: None,
             child_last: None,
             sibling_next: None,
@@ -96,7 +94,7 @@ impl<'a> Node<'a> {
     }
 }
 
-struct Visitor<'a> {
+struct GraphBuilder<'a> {
     arena: &'a Arena,
     root: &'a NodeCell<'a>,
     current: &'a NodeCell<'a>,
@@ -104,7 +102,7 @@ struct Visitor<'a> {
     repeating_class: bool,
 }
 
-impl<'a> Visitor<'a> {
+impl<'a> GraphBuilder<'a> {
     fn new(arena: &'a Arena, root: &'a NodeCell<'a>) -> Self {
         Self { arena, root, current: root, repeating_class: false }
     }
@@ -121,8 +119,8 @@ impl<'a> Visitor<'a> {
         }
 
         {
-            let mut child = child.borrow_mut();
-            child.parent = Some(parent);
+            //let mut child = child.borrow_mut();
+            //child.parent = Some(parent);
         }
 
         self.current = child;
@@ -134,22 +132,16 @@ impl<'a> Visitor<'a> {
         let mut charset = self.arena.alloc_uninit().write([false; 256]);
 
         for r in class.iter() {
-            let beg = r.start();
-            let end = r.end();
-            charset[beg as usize..=end as usize].fill(true);
+            charset[r.start() as usize..=r.end() as usize].fill(true);
         }
 
         // If the class includes \w, we also set any non-ASCII characters.
         // That's not how Unicode works, but it simplifies the implementation.
-        if class
-            == &ClassBytes::new([
-                ClassBytesRange::new(b'0', b'9'),
-                ClassBytesRange::new(b'A', b'Z'),
-                ClassBytesRange::new(b'_', b'_'),
-                ClassBytesRange::new(b'a', b'z'),
-            ])
+        if [(b'0', b'9'), (b'A', b'Z'), (b'_', b'_'), (b'a', b'z')]
+            .iter()
+            .all(|&(beg, end)| charset[beg as usize..=end as usize].iter().all(|&b| b))
         {
-            charset[0x80..].fill(true);
+            charset[0x80..=0xFF].fill(true);
         }
 
         charset
@@ -163,7 +155,7 @@ impl<'a> Visitor<'a> {
     }
 }
 
-impl regex_syntax::hir::Visitor for Visitor<'_> {
+impl regex_syntax::hir::Visitor for GraphBuilder<'_> {
     type Output = ();
     type Err = ();
 
@@ -299,16 +291,7 @@ impl regex_syntax::hir::Visitor for Visitor<'_> {
                 // [a-z]* | [a-z]+
                 (0 | 1, None, HirKind::Class(Class::Bytes(class))) => {} // Handled above.
                 // .?
-                (0, Some(1), sub) => {
-                    let parent = self.current.borrow().parent.unwrap();
-                    self.node_add_child(
-                        parent,
-                        Node::copy_in(
-                            self.arena,
-                            Node { test: Consume::Chars(0), ..Default::default() },
-                        ),
-                    );
-                }
+                (0, Some(1), sub) => {}
                 _ => {} // Handled above.
             },
             _ => {}
@@ -343,36 +326,26 @@ pub fn parse_language_definition(def: &LanguageDefinition) {
                 .parse(pattern)
                 .unwrap();
 
-            regex_syntax::hir::visit(&hir, Visitor::new(&scratch, root)).unwrap();
+            regex_syntax::hir::visit(&hir, GraphBuilder::new(&scratch, root)).unwrap();
         }
 
         // Print the tree starting at `root`.
-        let mut depth = 0;
-        let mut current = Some(root);
+        let mut stack = Vec::new();
+        stack.push((root, 0));
 
-        while let Some(node) = current {
-            if depth > 10 {
-                println!("{}... (depth limit reached)", "  ".repeat(depth));
-                break;
-            }
-
+        while let Some((node, depth)) = stack.pop() {
             let node = node.borrow();
             println!("{}Node: {:?}", "  ".repeat(depth), node.test);
 
-            if let Some(child) = node.child_first {
-                current = Some(child);
-                depth += 1;
-            } else {
-                current = node.sibling_next;
-                if current.is_none() {
-                    while let Some(parent) = current.and_then(|n| n.borrow().parent) {
-                        depth -= 1;
-                        current = parent.borrow().sibling_next;
-                        if current.is_some() {
-                            break;
-                        }
-                    }
-                }
+            // Push children onto the stack in reverse order to maintain order when popping
+            let mut children = Vec::new();
+            let mut child = node.child_first;
+            while let Some(c) = child {
+                children.push(c);
+                child = c.borrow().sibling_next;
+            }
+            for c in children.into_iter().rev() {
+                stack.push((c, depth + 1));
             }
         }
     }
@@ -384,6 +357,6 @@ mod tests {
 
     #[test]
     fn test_json_language_definition() {
-        let json = parse_language_definition(&JSON);
+        parse_language_definition(&JSON);
     }
 }
