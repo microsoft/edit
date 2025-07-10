@@ -16,7 +16,13 @@
     feature(stdarch_loongarch, stdarch_loongarch_feature_detection, loongarch_target_feature),
     allow(clippy::incompatible_msrv)
 )]
-#![allow(clippy::missing_transmute_annotations, clippy::new_without_default, stable_features)]
+#![allow(
+    clippy::missing_transmute_annotations,
+    clippy::new_without_default,
+    stable_features,
+    unused,
+    unused_imports
+)]
 
 #[macro_use]
 pub mod arena;

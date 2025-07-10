@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
-use edit::highlighter::Language;
 use edit::{apperr, path, sys};
 
 use crate::state::DisplayablePathBuf;
