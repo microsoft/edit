@@ -178,3 +178,58 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
         state.wants_about = false;
     }
 }
+
+pub fn draw_dialog_shortcuts(ctx: &mut Context, state: &mut State) {
+    ctx.modal_begin("Shortcuts", loc(LocId::KeyboardShortcutDialogTitle));
+    {
+        ctx.block_begin("content");
+        ctx.inherit_focus();
+        ctx.attr_padding(Rect::three(1, 2, 1));
+        {
+            ctx.attr_position(Position::Center);
+
+            let shortcuts = [
+                (loc(LocId::EditCopy), "Ctrl + C"),
+                (loc(LocId::EditCut), "Ctrl + X"),
+                (loc(LocId::EditPaste), "Ctrl + V"),
+                (loc(LocId::EditUndo), "Ctrl + Z"),
+                (loc(LocId::EditRedo), "Ctrl + Y"),
+                (loc(LocId::EditFind), "Ctrl + F"),
+                (loc(LocId::EditReplace), "Ctrl + R"),
+                (loc(LocId::EditSelectAll), "Ctrl + A"),
+                (loc(LocId::FileNew), "Ctrl + N"),
+                (loc(LocId::FileOpen), "Ctrl + O"),
+                (loc(LocId::FileSave), "Ctrl + S"),
+                (loc(LocId::FileClose), "Ctrl + W"),
+                (loc(LocId::FileExit), "Ctrl + Q"),
+                (loc(LocId::FileGoto), "Ctrl + G"),
+                (loc(LocId::ShortcutSelectLine), "Ctrl + L"),
+            ];
+
+            ctx.table_begin("shortcuts_table");
+            ctx.table_set_cell_gap(Size { width: (5), height: (0) });
+            for (desc, key) in shortcuts.iter() {
+                ctx.table_next_row();
+                ctx.label("shortcut_desc", desc);
+                ctx.label("shortcut_key", key);
+            }
+            ctx.table_end();
+
+            ctx.block_begin("choices");
+            ctx.inherit_focus();
+            ctx.attr_padding(Rect::three(1, 2, 0));
+            ctx.attr_position(Position::Center);
+            {
+                if ctx.button("ok", loc(LocId::Ok), ButtonStyle::default()) {
+                    state.wants_shortcuts_list = false;
+                }
+                ctx.inherit_focus();
+            }
+            ctx.block_end();
+        }
+        ctx.block_end();
+    }
+    if ctx.modal_end() {
+        state.wants_shortcuts_list = false;
+    }
+}

@@ -91,6 +91,9 @@ pub enum LocId {
     FileOverwriteWarning,
     FileOverwriteWarningDescription,
 
+    // Keyboard shortcuts dialog
+    KeyboardShortcutDialogTitle,
+    ShortcutSelectLine,
     Count,
 }
 
@@ -958,6 +961,34 @@ const S_LANG_LUT: [[&str; LangId::Count as usize]; LocId::Count as usize] = [
         /* ru      */ "Файл уже существует. Перезаписать?",
         /* zh_hans */ "文件已存在。要覆盖它吗？",
         /* zh_hant */ "檔案已存在。要覆蓋它嗎？",
+    ],
+    //KeyboardShortcutsDialogTitle
+    [
+        /* en      */ "Keyboard Shortcuts",
+        /* de      */ "Tastenkürzel",
+        /* es      */ "Atajos de teclado",
+        /* fr      */ "Raccourcis clavier",
+        /* it      */ "Scorciatoie da tastiera",
+        /* ja      */ "キーボードショートカット",
+        /* ko      */ "키보드 단축키",
+        /* pt_br   */ "Atalhos de teclado",
+        /* ru      */ "Сочетания клавиш",
+        /* zh_hans */ "键盘快捷键",
+        /* zh_hant */ "鍵盤快速鍵",
+    ],
+    // ShortcutSelectLine
+    [
+        /* en      */ "Select line",
+        /* de      */ "Zeile auswählen",
+        /* es      */ "Seleccionar línea",
+        /* fr      */ "Sélectionner la ligne",
+        /* it      */ "Seleziona riga",
+        /* ja      */ "行を選択",
+        /* ko      */ "줄 선택",
+        /* pt_br   */ "Selecionar linha",
+        /* ru      */ "Выделить строку",
+        /* zh_hans */ "选择行",
+        /* zh_hant */ "選取行",
     ],
 ];
 

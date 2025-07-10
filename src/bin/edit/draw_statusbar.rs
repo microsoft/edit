@@ -25,6 +25,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
         let mut tb = doc.buffer.borrow_mut();
 
         ctx.table_next_row();
+        ctx.label("help-hint", "[F1=Help]");
 
         if ctx.button("newline", if tb.is_crlf() { "CRLF" } else { "LF" }, ButtonStyle::default()) {
             let is_crlf = tb.is_crlf();
@@ -121,7 +122,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                     }
                 }
                 ctx.list_end();
-
+                
                 ctx.list_begin("width");
                 ctx.attr_padding(Rect::two(0, 2));
                 {
@@ -171,7 +172,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
         if tb.is_dirty() {
             ctx.label("dirty", "*");
         }
-
+        
         ctx.block_begin("filename-container");
         ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
         {
