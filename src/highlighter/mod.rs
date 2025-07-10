@@ -86,6 +86,7 @@ struct Transition<'s> {
     state: Action,
 }
 
+#[derive(PartialEq, Eq)]
 enum Consume<'a> {
     Chars(usize),
     Prefix(&'a str),
