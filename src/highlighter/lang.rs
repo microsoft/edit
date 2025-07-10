@@ -1,5 +1,6 @@
 #![allow(dead_code, unused)]
 
+use std::collections::VecDeque;
 use std::{mem, slice};
 
 use super::{Action, Consume, HighlightKind};
@@ -58,31 +59,20 @@ pub const JSON: LanguageDefinition = {
     }
 };
 
+type NodeCell<'a> = SemiRefCell<Node<'a>>;
+
+// Nodes form a DFA graph which is mostly shaped like a tree.
+// Each group of sibling nodes represent the edges coming out of a DFA state.
 struct Node<'a> {
-    child_first: Option<&'a NodeCell<'a>>,
-    child_last: Option<&'a NodeCell<'a>>,
-    sibling_next: Option<&'a NodeCell<'a>>,
-
-    string: Option<ArenaString<'a>>,
-
-    test: Consume<'a>,
+    edge_first: Option<&'a EdgeCell<'a>>,
+    edge_last: Option<&'a EdgeCell<'a>>,
 }
 
 impl Default for Node<'_> {
     fn default() -> Self {
-        Self {
-            child_first: None,
-            child_last: None,
-            sibling_next: None,
-
-            string: None,
-
-            test: Consume::Line,
-        }
+        Self { edge_first: None, edge_last: None }
     }
 }
-
-type NodeCell<'a> = SemiRefCell<Node<'a>>;
 
 impl<'a> Node<'a> {
     fn copy_in(arena: &'a Arena, val: Node<'a>) -> &'a NodeCell<'a> {
@@ -94,10 +84,28 @@ impl<'a> Node<'a> {
     }
 }
 
+type EdgeCell<'a> = SemiRefCell<Edge<'a>>;
+
+struct Edge<'a> {
+    edge_next: Option<&'a EdgeCell<'a>>,
+
+    destination: &'a NodeCell<'a>,
+    // The condition for leaving the current node along this edge.
+    test: Consume<'a>,
+    // Some scratch space for building up strings for `test`.
+    string: Option<ArenaString<'a>>,
+}
+
+impl<'a> Edge<'a> {
+    fn copy_in(arena: &'a Arena, val: Edge<'a>) -> &'a EdgeCell<'a> {
+        arena.alloc_uninit().write(EdgeCell::new(val))
+    }
+}
+
 struct GraphBuilder<'a> {
     arena: &'a Arena,
     root: &'a NodeCell<'a>,
-    current: &'a NodeCell<'a>,
+    current: Vec<NodeCell<'a>, &'a Arena>,
 
     repeating_class: bool,
 }
@@ -166,83 +174,52 @@ impl regex_syntax::hir::Visitor for GraphBuilder<'_> {
     fn visit_pre(&mut self, hir: &regex_syntax::hir::Hir) -> Result<(), Self::Err> {
         use regex_syntax::hir::{Class, Dot, Hir, HirKind, Literal, Look};
 
+        let scratch = scratch_arena(Some(self.arena));
+        let tests = Vec::new_in(&*scratch);
+
         match hir.kind() {
             HirKind::Literal(Literal(lit)) => {
-                let prefix = str::from_utf8(
-                    self.arena.alloc_uninit_slice(lit.len()).write_clone_of_slice(lit),
-                )
-                .unwrap();
-
-                self.node_add_child(
-                    self.current,
-                    Node::copy_in(
-                        self.arena,
-                        Node { test: Consume::Prefix(prefix), ..Default::default() },
-                    ),
-                );
+                tests.push(Consume::Prefix(
+                    str::from_utf8(
+                        self.arena.alloc_uninit_slice(lit.len()).write_clone_of_slice(lit),
+                    )
+                    .unwrap(),
+                ));
             }
             HirKind::Class(Class::Bytes(class)) => {
-                let ranges = class.ranges();
+                // For cases such as [aA], we can use a prefix insensitive match.
+                // And for [aA][bB][cC], we want to optimize this to PrefixInsensitive("abc").
+                /*let ranges = class.ranges();
                 if ranges.len() == 2
                     && ranges[0].len() == 1
                     && ranges[1].len() == 1
                     && let lower_a = ranges[0].start().to_ascii_lowercase()
                     && let lower_b = ranges[1].start().to_ascii_lowercase()
-                    && lower_a == lower_b
-                {
-                    // For cases such as [aA], we can use a prefix insensitive match.
-                    // And for [aA][bB][cC], we want to optimize this to PrefixInsensitive("abc").
-                    if !matches!(self.current.borrow().test, Consume::PrefixInsensitive(_)) {
-                        self.node_add_child(
-                            self.current,
-                            Node::copy_in(self.arena, Default::default()),
-                        );
-                    }
-                    self.node_append_prefix_insensitive(lower_a);
-                } else if self.repeating_class {
-                    self.node_add_child(
-                        self.current,
-                        Node::copy_in(
-                            self.arena,
-                            Node {
-                                test: Consume::Charset(self.class_to_charset(class)),
-                                ..Default::default()
-                            },
-                        ),
-                    );
+                    && lower_a == lower_b*/
+                let charset = self.class_to_charset(class);
+
+                if self.repeating_class {
+                    tests.push(Consume::Charset(charset));
                 } else {
-                    let charset = self.class_to_charset(class);
+                    let parent = self.current;
 
-                    if self.repeating_class {
-                        self.node_add_child(
-                            self.current,
-                            Node::copy_in(
-                                self.arena,
-                                Node {
-                                    test: Consume::Charset(self.class_to_charset(class)),
-                                    ..Default::default()
-                                },
-                            ),
-                        );
-                    } else {
-                        let parent = self.current;
+                    for i in 0..256 {
+                        if !charset[i] {
+                            continue;
+                        }
 
-                        for i in 0..256 {
-                            if !charset[i] {
-                                continue;
-                            }
+                        let ch = i as u8;
+                        let copy = str::from_utf8(
+                            self.arena
+                                .alloc_uninit_slice(1)
+                                .write_clone_of_slice(slice::from_ref(&ch)),
+                        )
+                        .unwrap();
 
-                            let ch = i as u8;
-                            let copy = str::from_utf8(
-                                self.arena
-                                    .alloc_uninit_slice(1)
-                                    .write_clone_of_slice(slice::from_ref(&ch)),
-                            )
-                            .unwrap();
-
-                            // NOTE: Uppercase chars have a lower numeric value than lowercase chars.
-                            // As such, we need to test for `is_ascii_uppercase`.
-                            let test = if ch.is_ascii_uppercase()
+                        // NOTE: Uppercase chars have a lower numeric value than lowercase chars.
+                        // As such, we need to test for `is_ascii_uppercase`.
+                        tests.push(
+                            if ch.is_ascii_uppercase()
                                 && let upper = ch.to_ascii_lowercase() as usize
                                 && charset[upper]
                             {
@@ -250,23 +227,17 @@ impl regex_syntax::hir::Visitor for GraphBuilder<'_> {
                                 Consume::PrefixInsensitive(copy)
                             } else {
                                 Consume::Prefix(copy)
-                            };
-
-                            self.node_add_child(
-                                parent,
-                                Node::copy_in(self.arena, Node { test, ..Default::default() }),
-                            );
-                        }
+                            },
+                        );
                     }
                 }
             }
             HirKind::Look(Look::WordAscii) => {}
             HirKind::Repetition(r) => match (r.min, r.max, r.sub.kind()) {
                 // .*
-                (0, None, _) if *r.sub == Hir::dot(Dot::AnyByte) => self.node_add_child(
-                    self.current,
-                    Node::copy_in(self.arena, Node { test: Consume::Line, ..Default::default() }),
-                ),
+                (0, None, _) if *r.sub == Hir::dot(Dot::AnyByte) => {
+                    tests.push(Consume::Line);
+                }
                 // [a-z]* | [a-z]+
                 (0 | 1, None, HirKind::Class(Class::Bytes(_))) => self.repeating_class = true,
                 // .?
@@ -275,6 +246,18 @@ impl regex_syntax::hir::Visitor for GraphBuilder<'_> {
             },
             HirKind::Concat(_) => {} // The visitor will descend into the children.
             _ => panic!("Unsupported HIR: {hir:?}"),
+        }
+
+        for test in tests {
+            let mut it = self.current.borrow().edge_first;
+            while let Some(e) = it {
+                let e = e.borrow();
+                if e.test == edge.test {
+                    self.current = e.destination;
+                    return Ok(());
+                }
+                it = e.edge_next;
+            }
         }
 
         Ok(())
@@ -331,18 +314,25 @@ pub fn parse_language_definition(def: &LanguageDefinition) {
 
         // Print the tree starting at `root`.
         let mut stack = Vec::new();
-        stack.push((root, 0));
+        {
+            let mut edge = root.borrow().edge_first;
+            while let Some(e) = edge {
+                stack.push((e, 0));
+                edge = e.borrow().edge_next;
+            }
+        }
 
-        while let Some((node, depth)) = stack.pop() {
-            let node = node.borrow();
-            println!("{}Node: {:?}", "  ".repeat(depth), node.test);
+        while let Some((edge, depth)) = stack.pop() {
+            let edge = edge.borrow();
+            let node = edge.destination.borrow();
+            println!("{}Node: {:?}", "  ".repeat(depth), edge.test);
 
             // Push children onto the stack in reverse order to maintain order when popping
             let mut children = Vec::new();
-            let mut child = node.child_first;
+            let mut child = node.edge_first;
             while let Some(c) = child {
                 children.push(c);
-                child = c.borrow().sibling_next;
+                child = c.borrow().edge_next;
             }
             for c in children.into_iter().rev() {
                 stack.push((c, depth + 1));
