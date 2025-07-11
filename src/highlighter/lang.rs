@@ -1,7 +1,12 @@
 #![allow(dead_code, unused)]
 
-use std::collections::VecDeque;
-use std::{mem, slice};
+use core::panic;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::mem::{ManuallyDrop, forget};
+use std::{mem, ptr, slice};
+
+use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind, Look};
 
 use super::{Action, Consume, HighlightKind};
 use crate::arena::{Arena, ArenaString, scratch_arena};
@@ -38,23 +43,24 @@ pub const JSON: LanguageDefinition = {
                 name: "ground",
                 rules: &[
                     // Comments (jsonc)
-                    //(r#"//.*"#, Comment, Pop(1)),
-                    //(r#"/\*.*?\*/"#, Comment, Pop(1)),
+                    (r#"//.*"#, Comment, Pop(1)),
+                    (r#"/\*"#, Comment, Push("comment")),
                     // Strings
-                    //(r#"""#, String, Push("string")),
+                    (r#"""#, String, Push("string")),
                     // Numbers (start: minus or digit)
                     (r#"-?\d*(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Number, Pop(1)),
                     // Booleans/null
-                    //(r#"true\b"#, Keyword, Pop(1)),
-                    //(r#"false\b"#, Keyword, Pop(1)),
-                    //(r#"null\b"#, Keyword, Pop(1)),
+                    (r#"true\b"#, Keyword, Pop(1)),
+                    (r#"false\b"#, Keyword, Pop(1)),
+                    (r#"null\b"#, Keyword, Pop(1)),
                 ],
             },
-            /*StateDefinition {
+            StateDefinition { name: "comment", rules: &[(r#"\*/"#, Comment, Pop(1))] },
+            StateDefinition {
                 name: "string",
                 rules: &[(r#"\\"#, String, Push("string_escape")), (r#"""#, String, Pop(1))],
             },
-            StateDefinition { name: "string_escape", rules: &[(r#"[\x00-\xff]"#, String, Pop(1))] },*/
+            StateDefinition { name: "string_escape", rules: &[(r#"."#, String, Pop(1))] },
         ],
     }
 };
@@ -68,19 +74,9 @@ struct Node<'a> {
     edge_last: Option<&'a EdgeCell<'a>>,
 }
 
-impl Default for Node<'_> {
-    fn default() -> Self {
-        Self { edge_first: None, edge_last: None }
-    }
-}
-
 impl<'a> Node<'a> {
-    fn copy_in(arena: &'a Arena, val: Node<'a>) -> &'a NodeCell<'a> {
-        arena.alloc_uninit().write(NodeCell::new(val))
-    }
-
-    fn default_in(arena: &'a Arena) -> &'a NodeCell<'a> {
-        Self::copy_in(arena, Default::default())
+    fn new_in(arena: &'a Arena) -> &'a mut NodeCell<'a> {
+        arena.alloc_uninit().write(NodeCell::new(Node { edge_first: None, edge_last: None }))
     }
 }
 
@@ -88,218 +84,328 @@ type EdgeCell<'a> = SemiRefCell<Edge<'a>>;
 
 struct Edge<'a> {
     edge_next: Option<&'a EdgeCell<'a>>,
-
-    destination: &'a NodeCell<'a>,
-    // The condition for leaving the current node along this edge.
+    dst: &'a NodeCell<'a>,
     test: Consume<'a>,
-    // Some scratch space for building up strings for `test`.
-    string: Option<ArenaString<'a>>,
 }
 
-impl<'a> Edge<'a> {
-    fn copy_in(arena: &'a Arena, val: Edge<'a>) -> &'a EdgeCell<'a> {
-        arena.alloc_uninit().write(EdgeCell::new(val))
-    }
-}
-
-struct GraphBuilder<'a> {
+fn add_edge<'a>(
     arena: &'a Arena,
-    root: &'a NodeCell<'a>,
-    current: Vec<NodeCell<'a>, &'a Arena>,
+    src: &'a NodeCell<'a>,
+    dst: &'a NodeCell<'a>,
+    test: Consume<'a>,
+) -> &'a NodeCell<'a> {
+    let mut src = src.borrow_mut();
 
-    repeating_class: bool,
+    // Check if the edge already exists.
+    {
+        let mut edge = src.edge_first;
+        while let Some(e) = edge {
+            let e = e.borrow();
+            if e.test == test {
+                return e.dst;
+            }
+            edge = e.edge_next;
+        }
+    }
+
+    let edge = arena.alloc_uninit().write(EdgeCell::new(Edge { edge_next: None, dst, test }));
+
+    if let Some(last) = src.edge_last {
+        last.borrow_mut().edge_next = Some(edge);
+    } else {
+        src.edge_first = Some(edge);
+    }
+
+    src.edge_last = Some(edge);
+    dst
 }
 
-impl<'a> GraphBuilder<'a> {
-    fn new(arena: &'a Arena, root: &'a NodeCell<'a>) -> Self {
-        Self { arena, root, current: root, repeating_class: false }
+fn transform<'a>(
+    arena: &'a Arena,
+    src: &'a NodeCell<'a>,
+    dst: &'a NodeCell<'a>,
+    hir: &Hir,
+) -> &'a NodeCell<'a> {
+    fn is_any_class(class: &ClassBytes) -> bool {
+        class.ranges() == [ClassBytesRange::new(0, 255)]
     }
 
-    fn node_add_child(&mut self, parent: &'a NodeCell<'a>, child: &'a NodeCell<'a>) {
-        {
-            let mut parent = parent.borrow_mut();
-            if let Some(last) = parent.child_last {
-                last.borrow_mut().sibling_next = Some(child);
-            } else {
-                parent.child_first = Some(child);
+    match hir.kind() {
+        HirKind::Literal(lit) => transform_literal(arena, src, dst, &lit.0),
+        HirKind::Class(Class::Bytes(class)) if is_any_class(class) => {
+            transform_any(arena, src, dst)
+        }
+        HirKind::Class(Class::Bytes(class)) => transform_class(arena, src, dst, class),
+        HirKind::Look(Look::WordAscii) => dst,
+        HirKind::Repetition(rep) => match (rep.min, rep.max, rep.sub.kind()) {
+            (0, None, HirKind::Class(Class::Bytes(class))) if is_any_class(class) => {
+                transform_any_star(arena, src, dst)
             }
-            parent.child_last = Some(child);
-        }
-
-        {
-            //let mut child = child.borrow_mut();
-            //child.parent = Some(parent);
-        }
-
-        self.current = child;
-    }
-
-    fn class_to_charset(&self, class: &regex_syntax::hir::ClassBytes) -> &'a mut [bool; 256] {
-        use regex_syntax::hir::{ClassBytes, ClassBytesRange};
-
-        let mut charset = self.arena.alloc_uninit().write([false; 256]);
-
-        for r in class.iter() {
-            charset[r.start() as usize..=r.end() as usize].fill(true);
-        }
-
-        // If the class includes \w, we also set any non-ASCII characters.
-        // That's not how Unicode works, but it simplifies the implementation.
-        if [(b'0', b'9'), (b'A', b'Z'), (b'_', b'_'), (b'a', b'z')]
-            .iter()
-            .all(|&(beg, end)| charset[beg as usize..=end as usize].iter().all(|&b| b))
-        {
-            charset[0x80..=0xFF].fill(true);
-        }
-
-        charset
-    }
-
-    fn node_append_prefix_insensitive(&mut self, ch: u8) {
-        let mut current = self.current.borrow_mut();
-        let mut string = current.string.get_or_insert_with(|| ArenaString::new_in(self.arena));
-        string.push(ch as char);
-        current.test = Consume::PrefixInsensitive(unsafe { mem::transmute(string.as_str()) });
-    }
-}
-
-impl regex_syntax::hir::Visitor for GraphBuilder<'_> {
-    type Output = ();
-    type Err = ();
-
-    fn finish(self) -> Result<Self::Output, Self::Err> {
-        Ok(())
-    }
-
-    fn visit_pre(&mut self, hir: &regex_syntax::hir::Hir) -> Result<(), Self::Err> {
-        use regex_syntax::hir::{Class, Dot, Hir, HirKind, Literal, Look};
-
-        let scratch = scratch_arena(Some(self.arena));
-        let tests = Vec::new_in(&*scratch);
-
-        match hir.kind() {
-            HirKind::Literal(Literal(lit)) => {
-                tests.push(Consume::Prefix(
-                    str::from_utf8(
-                        self.arena.alloc_uninit_slice(lit.len()).write_clone_of_slice(lit),
-                    )
-                    .unwrap(),
-                ));
+            (0, None, HirKind::Class(Class::Bytes(class))) => {
+                let dst = transform_class_plus(arena, src, dst, class);
+                transform_option(arena, src, dst);
+                dst
             }
-            HirKind::Class(Class::Bytes(class)) => {
-                // For cases such as [aA], we can use a prefix insensitive match.
-                // And for [aA][bB][cC], we want to optimize this to PrefixInsensitive("abc").
-                /*let ranges = class.ranges();
-                if ranges.len() == 2
-                    && ranges[0].len() == 1
-                    && ranges[1].len() == 1
-                    && let lower_a = ranges[0].start().to_ascii_lowercase()
-                    && let lower_b = ranges[1].start().to_ascii_lowercase()
-                    && lower_a == lower_b*/
-                let charset = self.class_to_charset(class);
-
-                if self.repeating_class {
-                    tests.push(Consume::Charset(charset));
-                } else {
-                    let parent = self.current;
-
-                    for i in 0..256 {
-                        if !charset[i] {
-                            continue;
-                        }
-
-                        let ch = i as u8;
-                        let copy = str::from_utf8(
-                            self.arena
-                                .alloc_uninit_slice(1)
-                                .write_clone_of_slice(slice::from_ref(&ch)),
-                        )
-                        .unwrap();
-
-                        // NOTE: Uppercase chars have a lower numeric value than lowercase chars.
-                        // As such, we need to test for `is_ascii_uppercase`.
-                        tests.push(
-                            if ch.is_ascii_uppercase()
-                                && let upper = ch.to_ascii_lowercase() as usize
-                                && charset[upper]
-                            {
-                                charset[upper] = false;
-                                Consume::PrefixInsensitive(copy)
-                            } else {
-                                Consume::Prefix(copy)
-                            },
-                        );
-                    }
-                }
+            (0, Some(1), _) => {
+                let dst = transform(arena, src, dst, &rep.sub);
+                transform_option(arena, src, dst);
+                dst
             }
-            HirKind::Look(Look::WordAscii) => {}
-            HirKind::Repetition(r) => match (r.min, r.max, r.sub.kind()) {
-                // .*
-                (0, None, _) if *r.sub == Hir::dot(Dot::AnyByte) => {
-                    tests.push(Consume::Line);
-                }
-                // [a-z]* | [a-z]+
-                (0 | 1, None, HirKind::Class(Class::Bytes(_))) => self.repeating_class = true,
-                // .?
-                (0, Some(1), sub) => {}
-                _ => panic!("Unsupported HIR: {hir:?}"),
-            },
-            HirKind::Concat(_) => {} // The visitor will descend into the children.
+            (1, None, HirKind::Class(Class::Bytes(class))) => {
+                transform_class_plus(arena, src, dst, class)
+            }
             _ => panic!("Unsupported HIR: {hir:?}"),
+        },
+        HirKind::Concat(hirs) if hirs.len() >= 2 => transform_concat(arena, src, dst, hirs),
+        HirKind::Alternation(hirs) if hirs.len() >= 2 => transform_alt(arena, src, dst, hirs),
+        _ => panic!("Unsupported HIR: {hir:?}"),
+    }
+}
+
+// string
+fn transform_literal<'a>(
+    arena: &'a Arena,
+    src: &'a NodeCell<'a>,
+    dst: &'a NodeCell<'a>,
+    lit: &[u8],
+) -> &'a NodeCell<'a> {
+    let copy = arena.alloc_uninit_slice(lit.len()).write_clone_of_slice(lit);
+    let copy = str::from_utf8(copy).unwrap();
+    add_edge(arena, src, dst, Consume::Prefix(copy))
+}
+
+// [a-z]+
+fn transform_class_plus<'a>(
+    arena: &'a Arena,
+    src: &'a NodeCell<'a>,
+    dst: &'a NodeCell<'a>,
+    class: &ClassBytes,
+) -> &'a NodeCell<'a> {
+    let charset = class_to_charset(arena, class);
+    add_edge(arena, src, dst, Consume::Charset(charset))
+}
+
+// [eE]
+fn transform_class<'a>(
+    arena: &'a Arena,
+    src: &'a NodeCell<'a>,
+    dst: &'a NodeCell<'a>,
+    class: &ClassBytes,
+) -> &'a NodeCell<'a> {
+    let charset = class_to_charset(arena, class);
+    let mut actual_dst = None;
+
+    for i in 0..256 {
+        if !charset[i] {
+            continue;
         }
 
-        for test in tests {
-            let mut it = self.current.borrow().edge_first;
-            while let Some(e) = it {
-                let e = e.borrow();
-                if e.test == edge.test {
-                    self.current = e.destination;
-                    return Ok(());
+        if i >= 128 {
+            panic!("Invalid non-ASCII class character {i}");
+        }
+
+        let ch = i as u8;
+        let copy = arena.alloc_uninit().write(ch.to_ascii_lowercase());
+        let copy = str::from_utf8(slice::from_ref(copy)).unwrap();
+
+        // NOTE: Uppercase chars have a lower numeric value than lowercase chars.
+        // As such, we need to test for `is_ascii_uppercase`.
+        let test = if ch.is_ascii_uppercase()
+            && let upper = ch.to_ascii_lowercase() as usize
+            && charset[upper]
+        {
+            charset[upper] = false;
+            Consume::PrefixInsensitive(copy)
+        } else {
+            Consume::Prefix(copy)
+        };
+
+        let node = add_edge(arena, src, dst, test);
+        if !ptr::eq(node, *actual_dst.get_or_insert(node)) {
+            panic!("Diverging destinations for class transformer: {class:?}");
+        }
+    }
+
+    actual_dst.unwrap_or(dst)
+}
+
+// .?
+fn transform_option<'a>(
+    arena: &'a Arena,
+    src: &'a NodeCell<'a>,
+    dst: &'a NodeCell<'a>,
+) -> &'a NodeCell<'a> {
+    add_edge(arena, src, dst, Consume::Chars(0))
+}
+
+// .*
+fn transform_any_star<'a>(
+    arena: &'a Arena,
+    src: &'a NodeCell<'a>,
+    dst: &'a NodeCell<'a>,
+) -> &'a NodeCell<'a> {
+    add_edge(arena, src, dst, Consume::Line)
+}
+
+// .
+fn transform_any<'a>(
+    arena: &'a Arena,
+    src: &'a NodeCell<'a>,
+    dst: &'a NodeCell<'a>,
+) -> &'a NodeCell<'a> {
+    add_edge(arena, src, dst, Consume::Chars(1))
+}
+
+fn transform_concat<'a>(
+    arena: &'a Arena,
+    mut src: &'a NodeCell<'a>,
+    dst: &'a NodeCell<'a>,
+    hirs: &[Hir],
+) -> &'a NodeCell<'a> {
+    fn check_lowercase_literal(hir: &Hir) -> Option<u8> {
+        if let HirKind::Class(Class::Bytes(class)) = hir.kind()
+            && let ranges = class.ranges()
+            && ranges.len() == 2
+            && ranges[0].len() == 1
+            && ranges[1].len() == 1
+            && let lower_a = ranges[0].start().to_ascii_lowercase()
+            && let lower_b = ranges[1].start().to_ascii_lowercase()
+            && lower_a == lower_b
+        {
+            Some(lower_a)
+        } else {
+            None
+        }
+    }
+
+    let mut it = hirs.iter().peekable();
+
+    while let Some(mut hir) = it.next() {
+        if let Some(ch) = check_lowercase_literal(hir) {
+            // Transform [aA][bB][cC] into PrefixInsensitive("abc")
+            let mut str = ManuallyDrop::new(ArenaString::new_in(arena));
+            str.push(ch as char);
+
+            while let Some(next_hir) = it.peek() {
+                if let Some(next_ch) = check_lowercase_literal(next_hir) {
+                    str.push(next_ch as char);
+                    it.next();
+                } else {
+                    break;
                 }
-                it = e.edge_next;
             }
+
+            let next = if it.peek().is_some() { Node::new_in(arena) } else { dst };
+            let str: &'a str = unsafe { mem::transmute(str.as_str()) };
+            src = add_edge(arena, src, next, Consume::PrefixInsensitive(str));
+        } else {
+            let next = if it.peek().is_some() { Node::new_in(arena) } else { dst };
+            src = transform(arena, src, next, hir);
         }
-
-        Ok(())
     }
 
-    fn visit_post(&mut self, hir: &regex_syntax::hir::Hir) -> Result<(), Self::Err> {
-        use regex_syntax::hir::{Class, Dot, Hir, HirKind, Literal, Look};
+    src
+}
 
-        #[allow(clippy::single_match)]
-        match hir.kind() {
-            HirKind::Repetition(r) => match (r.min, r.max, r.sub.kind()) {
-                // .*
-                (0, None, _) if *r.sub == Hir::dot(Dot::AnyByte) => {} // Handled above.
-                // [a-z]* | [a-z]+
-                (0 | 1, None, HirKind::Class(Class::Bytes(class))) => {} // Handled above.
-                // .?
-                (0, Some(1), sub) => {}
-                _ => {} // Handled above.
-            },
-            _ => {}
+fn transform_alt<'a>(
+    arena: &'a Arena,
+    src: &'a NodeCell<'a>,
+    dst: &'a NodeCell<'a>,
+    hirs: &[Hir],
+) -> &'a NodeCell<'a> {
+    let mut actual_dst = None;
+
+    for hir in hirs {
+        let node = transform(arena, src, dst, hir);
+        if !ptr::eq(node, *actual_dst.get_or_insert(node)) {
+            panic!("Diverging destinations for alternation transformer: {hirs:?}");
         }
-
-        self.repeating_class = false;
-        Ok(())
     }
 
-    fn visit_alternation_in(&mut self) -> Result<(), Self::Err> {
-        Ok(())
+    actual_dst.unwrap_or(dst)
+}
+
+fn class_to_charset<'a>(arena: &'a Arena, class: &ClassBytes) -> &'a mut [bool; 256] {
+    let mut charset = arena.alloc_uninit().write([false; 256]);
+
+    for r in class.iter() {
+        charset[r.start() as usize..=r.end() as usize].fill(true);
     }
 
-    fn visit_concat_in(&mut self) -> Result<(), Self::Err> {
-        Ok(())
+    // If the class includes \w, we also set any non-ASCII characters.
+    // That's not how Unicode works, but it simplifies the implementation.
+    if [(b'0', b'9'), (b'A', b'Z'), (b'_', b'_'), (b'a', b'z')]
+        .iter()
+        .all(|&(beg, end)| charset[beg as usize..=end as usize].iter().all(|&b| b))
+    {
+        charset[0x80..=0xFF].fill(true);
     }
+
+    charset
+}
+
+fn print_mermaid<'a>(root: &'a NodeCell<'a>) {
+    fn node_id<'a, 'v>(
+        visited: &'v mut HashMap<*const NodeCell<'a>, (usize, bool)>,
+        ptr: &'a NodeCell<'a>,
+    ) -> &'v mut (usize, bool) {
+        let num = visited.len();
+        match visited.entry(ptr as *const _) {
+            Entry::Occupied(mut e) => e.into_mut(),
+            Entry::Vacant(mut e) => e.insert((num, false)),
+        }
+    }
+
+    fn walk<'a>(
+        node: &'a NodeCell<'a>,
+        visited: &mut HashMap<*const NodeCell<'a>, (usize, bool)>,
+        out: &mut String,
+    ) {
+        let node_ptr = node as *const _;
+        let src_id = match node_id(visited, node) {
+            (num, visited) if !*visited => {
+                *visited = true;
+                *num
+            }
+            _ => return, // Already visited
+        };
+
+        let node_ref = node.borrow();
+        let mut edge = node_ref.edge_first;
+
+        while let Some(edge_cell) = edge {
+            let edge_ref = edge_cell.borrow();
+            let &mut (dst_id, _) = node_id(visited, edge_ref.dst);
+            let label = match &edge_ref.test {
+                Consume::Prefix(s) => format!("Prefix({s})"),
+                Consume::PrefixInsensitive(s) => format!("PrefixInsensitive({s})"),
+                Consume::Charset(c) => format!("Charset({:?})", CharsetFormatter(c)),
+                Consume::Chars(n) => format!("Chars({n})"),
+                Consume::Line => "Line".to_string(),
+            };
+            let label = label.replace('"', "&quot;");
+            out.push_str(&format!("    {src_id} -->|\"{label}\"| {dst_id}\n"));
+
+            walk(edge_ref.dst, visited, out);
+
+            edge = edge_ref.edge_next;
+        }
+    }
+
+    let mut out = String::from(
+        "%%{init:{'fontFamily':'monospace','flowchart':{'defaultRenderer':'elk'}}}%%\ngraph TD\n",
+    );
+    let mut visited = HashMap::new();
+    walk(root, &mut visited, &mut out);
+    println!("{out}");
 }
 
 #[allow(dead_code)]
 pub fn parse_language_definition(def: &LanguageDefinition) {
     let scratch = scratch_arena(None);
+    let root = Node::new_in(&scratch);
 
     for state in def.states {
-        let root = Node::default_in(&scratch);
-
         for (pattern, kind, action) in state.rules {
             let hir = regex_syntax::ParserBuilder::new()
                 .utf8(false)
@@ -308,37 +414,11 @@ pub fn parse_language_definition(def: &LanguageDefinition) {
                 .build()
                 .parse(pattern)
                 .unwrap();
-
-            regex_syntax::hir::visit(&hir, GraphBuilder::new(&scratch, root)).unwrap();
-        }
-
-        // Print the tree starting at `root`.
-        let mut stack = Vec::new();
-        {
-            let mut edge = root.borrow().edge_first;
-            while let Some(e) = edge {
-                stack.push((e, 0));
-                edge = e.borrow().edge_next;
-            }
-        }
-
-        while let Some((edge, depth)) = stack.pop() {
-            let edge = edge.borrow();
-            let node = edge.destination.borrow();
-            println!("{}Node: {:?}", "  ".repeat(depth), edge.test);
-
-            // Push children onto the stack in reverse order to maintain order when popping
-            let mut children = Vec::new();
-            let mut child = node.edge_first;
-            while let Some(c) = child {
-                children.push(c);
-                child = c.borrow().edge_next;
-            }
-            for c in children.into_iter().rev() {
-                stack.push((c, depth + 1));
-            }
+            transform(&scratch, root, root, &hir);
         }
     }
+
+    print_mermaid(root);
 }
 
 #[cfg(test)]
