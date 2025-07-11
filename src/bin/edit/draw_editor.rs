@@ -60,6 +60,10 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         if let Some(selection) = doc.buffer.borrow_mut().extract_user_selection(false) {
             state.search_needle = String::from_utf8_lossy_owned(selection);
             focus = state.wants_search.kind;
+            // If we have text and this is a search (not replace), immediately perform the search
+            if state.wants_search.kind == StateSearchKind::Search {
+                action = Some(SearchAction::Search);
+            }
         }
     }
 
@@ -354,4 +358,19 @@ fn validate_goto_point(line: &str) -> Result<Point, ParseIntError> {
         coords[i] = s.parse::<CoordType>()?.saturating_sub(1);
     }
     Ok(Point { x: coords[0], y: coords[1] })
+}
+
+pub fn quick_search_execute(ctx: &mut Context, state: &mut State) {
+    let Some(doc) = state.documents.active_mut() else {
+        return;
+    };
+
+    // Extract the current selection and use it as search needle
+    if let Some(selection) = doc.buffer.borrow_mut().extract_user_selection(false) {
+        state.search_needle = String::from_utf8_lossy_owned(selection);
+        state.search_success = doc.buffer.borrow_mut()
+            .find_and_select(&state.search_needle, state.search_options)
+            .is_ok();
+        ctx.needs_rerender();
+    }
 }

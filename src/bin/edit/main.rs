@@ -348,6 +348,8 @@ fn draw(ctx: &mut Context, state: &mut State) {
             state.wants_search.focus = true;
         } else if key == vk::F3 {
             search_execute(ctx, state, SearchAction::Search);
+        } else if key == kbmod::CTRL | vk::F3 {
+            quick_search_execute(ctx, state);
         } else {
             return;
         }
