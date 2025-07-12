@@ -83,7 +83,7 @@ impl Language {
 struct Transition<'s> {
     test: Consume<'s>,
     kind: HighlightKind,
-    state: Action,
+    action: Action,
 }
 
 #[derive(PartialEq, Eq)]
@@ -337,7 +337,7 @@ impl<'doc> Highlighter<'doc> {
                     }
                 }
 
-                match t.state {
+                match t.action {
                     Action::Change(to) => {
                         if let Some(last) = res.last_mut() {
                             last.kind = t.kind;
