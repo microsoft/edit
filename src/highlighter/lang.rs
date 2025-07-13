@@ -1,3 +1,18 @@
+//! Work in Progress!
+//!
+//! This file takes a [`LanguageDefinition`] which describes syntax highlighting rules
+//! for a language via a list of regular expressions that result in
+//! * a highlight kind (comment, string, number, etc.)
+//! * a push/pop action of another state (allows for nesting languages, such as in Markdown)
+//!
+//! It then transforms the definition into a list of [`WipState`], which are directions
+//! to our custom DFA engine. The engine is very simple to reduce binary size.
+//! Each defined state represents a root. Each additional state represents one step in
+//! the regular expression. The difference between the two is that the root states will
+//! seek to the next possible occurrence of any of the defined regular expressions,
+//! whereas the additional states will try to match the next character without seeking.
+//! If it doesn't match, it will fall back to the next possible defined regular expression.
+
 #![allow(dead_code, unused)]
 
 use core::panic;
@@ -6,10 +21,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem::{ManuallyDrop, forget};
 use std::{mem, ptr, slice};
 
-use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind, Look};
+use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Dot, Hir, HirKind, Look};
 
 use super::{Action, Consume, HighlightKind};
 use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::helpers::AsciiStringHelpers;
 use crate::highlighter::{CharsetFormatter, Transition};
 
 pub struct LanguageDefinition {
@@ -41,18 +57,11 @@ pub const JSON: LanguageDefinition = {
             StateDefinition {
                 name: "ground",
                 rules: &[
-                    // Comments (jsonc)
                     (r#"//.*"#, Comment, Pop(1)),
                     (r#"/\*"#, Comment, Push("comment")),
-                    // Strings
                     (r#"""#, String, Push("string")),
-                    // Numbers (start: minus or digit)
-                    (r#"-\d*(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Number, Pop(1)),
-                    (r#"\d*(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Number, Pop(1)),
-                    // Booleans/null
-                    (r#"true\b"#, Keyword, Pop(1)),
-                    (r#"false\b"#, Keyword, Pop(1)),
-                    (r#"null\b"#, Keyword, Pop(1)),
+                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?\b"#, Number, Pop(1)),
+                    (r#"(?:true|false|null)\b"#, Keyword, Pop(1)),
                 ],
             },
             StateDefinition { name: "comment", rules: &[(r#"\*/"#, Comment, Pop(1))] },
@@ -71,18 +80,34 @@ struct WipState {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WipAction {
+    // Same as super::Action
     Change(usize),
     Push(usize),
     Pop(usize),
+
+    /// An indicator that this transition between states is not yet final
+    /// and will be later resolved to fall back to another state.
+    ///
+    /// Example:
+    /// * `[eE]\d+` -> [`HighlightKind::Number`] (here: just the exponent suffix)
+    /// * `\w+`     -> [`HighlightKind::Keyword`]
+    ///
+    /// If after the `[eE]` we fail to find a digit, we should "fall back"
+    /// to the next best rule that encompasses the `[eE]` so far: `\w+`.
+    ResolveFallback,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 enum WipConsume {
+    // Same as super::Consume
     Chars(usize),
     Prefix(String),
     PrefixInsensitive(String),
     Charset(Box<[bool; 256]>),
     Line,
+
+    /// A special case for transitions that are not yet finalized.
+    Never,
 }
 
 struct WipTransition {
@@ -103,10 +128,10 @@ impl WipContext<'_> {
     }
 
     fn add_transition(&mut self, src: usize, dst: WipAction, test: WipConsume) -> WipAction {
-        let src = &mut self.states[src].transitions;
+        let transitions = &mut self.states[src].transitions;
 
         // Check if the edge already exists.
-        for t in src.iter() {
+        for t in transitions.iter() {
             if t.test == test {
                 match t.action {
                     WipAction::Change(_) => return t.action,
@@ -115,7 +140,31 @@ impl WipContext<'_> {
             }
         }
 
-        src.push(WipTransition { test, kind: self.kind, action: dst });
+        // Check for plausibility: if any prior test encompasses the new test, panic.
+        for t in transitions.iter() {
+            use WipConsume::*;
+
+            if match (&t.test, &test) {
+                (Prefix(p), Prefix(s)) => s.starts_with(p),
+                (PrefixInsensitive(p), Prefix(s) | PrefixInsensitive(s)) => {
+                    s.starts_with_ignore_ascii_case(p)
+                }
+                (Charset(p), Charset(n)) => {
+                    // If all the bits in `n` are also true in `p`
+                    n.iter().zip(p.iter()).all(|(&n, &p)| !n || p)
+                }
+                (Chars(_), _) => true,
+                (Line, _) => true,
+                _ => false,
+            } {
+                panic!(
+                    "Attempted to add unreachable test: {:?} is encompassed by {:?}",
+                    test, t.test
+                );
+            }
+        }
+
+        transitions.push(WipTransition { test, kind: self.kind, action: dst });
         dst
     }
 
@@ -130,7 +179,11 @@ impl WipContext<'_> {
                 self.transform_any(src, dst)
             }
             HirKind::Class(Class::Bytes(class)) => self.transform_class(src, dst, class),
-            HirKind::Look(Look::WordAscii) => dst,
+            HirKind::Look(Look::WordAscii) => {
+                self.add_transition(src, WipAction::ResolveFallback, WipConsume::Never);
+                self.transform_option(src, dst);
+                dst
+            }
             HirKind::Repetition(rep) => match (rep.min, rep.max, rep.sub.kind()) {
                 (0, None, HirKind::Class(Class::Bytes(class))) if is_any_class(class) => {
                     self.transform_any_star(src, dst)
@@ -314,44 +367,86 @@ impl WipContext<'_> {
 
 fn print_mermaid(def_states: &[StateDefinition], states: &[WipState]) {
     // Print header for Mermaid graph
-    println!("%%{{init:{{'fontFamily':'monospace','flowchart':{{'defaultRenderer':'elk'}}}}}}%%");
-    println!("graph TD");
+    println!("---");
+    println!("config:");
+    println!("  layout: elk");
+    println!("  elk:");
+    println!("    nodePlacementStrategy: NETWORK_SIMPLEX");
+    println!("---");
+    println!("flowchart TD");
 
-    // Print nodes (states)
-    for (idx, _state) in states.iter().enumerate() {
-        println!(
-            "    {idx}[\"{}\"]",
-            match def_states.get(idx) {
-                Some(state) => state.name,
-                None => &format!("{idx}"),
+    fn print_transition(def_states: &[StateDefinition], src_idx: usize, t: &WipTransition) {
+        let dst = match t.action {
+            WipAction::Change(idx) => format!("{idx}"),
+            WipAction::Push(idx) => {
+                format!("push{}[/\"Push({})\"/]", src_idx << 16 | idx, def_states[idx].name)
             }
-        );
+            WipAction::Pop(count) => {
+                format!("pop{}[/\"Pop({count})\"/]", src_idx << 16 | count)
+            }
+            WipAction::ResolveFallback => {
+                format!("pending{}[/Pending/]", src_idx << 16)
+            }
+        };
+        let label = match &t.test {
+            WipConsume::Prefix(s) => format!("Prefix({s})"),
+            WipConsume::PrefixInsensitive(s) => format!("PrefixInsensitive({s})"),
+            WipConsume::Charset(c) => format!("Charset({:?})", CharsetFormatter(c)),
+            WipConsume::Chars(n) => format!("Chars({n})"),
+            WipConsume::Line => "Line".to_string(),
+            WipConsume::Never => "Never".to_string(),
+        };
+        let label = label.replace('"', "&quot;");
+        let label = label.replace('\\', r#"\\"#);
+        println!("    {src_idx} -->|\"{label}\"| {dst}");
     }
 
-    // Print edges (transitions)
-    for (src_idx, state) in states.iter().enumerate() {
-        for t in &state.transitions {
-            let dst = match t.action {
-                WipAction::Change(idx) => format!("{idx}"),
-                WipAction::Push(idx) => {
-                    format!("push{}[/\"Push({})\"/]", src_idx << 16 | idx, def_states[idx].name)
-                }
-                WipAction::Pop(count) => {
-                    format!("pop{}[/\"Pop({count})\"/]", src_idx << 16 | count)
-                }
-            };
-            let label = match &t.test {
-                WipConsume::Prefix(s) => format!("Prefix({s})"),
-                WipConsume::PrefixInsensitive(s) => format!("PrefixInsensitive({s})"),
-                WipConsume::Charset(c) => format!("Charset({:?})", CharsetFormatter(c)),
-                WipConsume::Chars(n) => format!("Chars({n})"),
-                WipConsume::Line => "Line".to_string(),
-            };
-            let label = label.replace('"', "&quot;");
-            let label = label.replace('\\', r#"\\"#);
-            println!("    {src_idx} -->|\"{label}\"| {dst}");
+    fn print_state_bfs(
+        visited: &mut HashSet<usize>,
+        def_states: &[StateDefinition],
+        states: &[WipState],
+        src_idx: usize,
+    ) {
+        if !visited.insert(src_idx) {
+            return;
+        }
+        for t in &states[src_idx].transitions {
+            print_transition(def_states, src_idx, t);
+        }
+        for t in &states[src_idx].transitions {
+            if let WipAction::Change(idx) = t.action {
+                print_state_bfs(visited, def_states, states, idx);
+            }
         }
     }
+
+    fn print_state_dfs(
+        visited: &mut HashSet<usize>,
+        def_states: &[StateDefinition],
+        states: &[WipState],
+        src_idx: usize,
+    ) {
+        if !visited.insert(src_idx) {
+            return;
+        }
+        for t in &states[src_idx].transitions {
+            print_transition(def_states, src_idx, t);
+            if let WipAction::Change(idx) = t.action {
+                print_state_bfs(visited, def_states, states, idx);
+            }
+        }
+    }
+
+    let mut visited = HashSet::with_capacity(states.len());
+
+    for (idx, s) in def_states.iter().enumerate() {
+        println!("    {idx}[\"{}\"]", s.name);
+    }
+    for src_idx in 0..def_states.len() {
+        print_state_dfs(&mut visited, def_states, states, src_idx);
+    }
+
+    assert_eq!(visited.len(), states.len(), "Not all states were visited");
 }
 
 #[allow(dead_code)]
