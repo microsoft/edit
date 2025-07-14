@@ -98,7 +98,7 @@ enum WipAction {
     ResolveFallback,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 enum WipConsume {
     // Same as super::Consume
     Chars(usize),
@@ -111,6 +111,7 @@ enum WipConsume {
     Never,
 }
 
+#[derive(Clone)]
 struct WipTransition {
     test: WipConsume,
     kind: HighlightKind,
@@ -172,6 +173,85 @@ pub fn parse_language_definition(def: &LanguageDefinition) {
             });
         }
     }
+
+    // --- Begin fallback resolution logic ---
+    // Collect all (state_idx, transition_idx) pairs that need fallback resolution
+    let mut fallbacks = Vec::new();
+    for (state_idx, state) in states.iter().enumerate() {
+        for (t_idx, t) in state.transitions.iter().enumerate() {
+            if t.action == WipAction::ResolveFallback {
+                fallbacks.push((state_idx, t_idx));
+            }
+        }
+    }
+    // Now resolve them
+    for (state_idx, t_idx) in fallbacks {
+        // Find the parent state and the transition in the parent that led to this state_idx
+        let parent_idx_and_transition =
+            states.iter().enumerate().take(state_idx).find_map(|(i, s)| {
+                s.transitions.iter().enumerate().find_map(|(j, t)| {
+                    if let WipAction::Change(idx) = t.action {
+                        if idx == state_idx { Some((i, j, t)) } else { None }
+                    } else {
+                        None
+                    }
+                })
+            });
+        let (parent_idx, parent_transition_idx, parent_transition) = match parent_idx_and_transition
+        {
+            Some(x) => x,
+            None => panic!("Could not find parent state for state {state_idx}"),
+        };
+        let parent_transition_test = parent_transition.test.clone();
+        // Use split_at_mut to get non-overlapping mutable references
+        assert!(parent_idx < state_idx, "parent_idx must be less than state_idx");
+        let (left, right) = states.split_at_mut(state_idx);
+        let parent = &mut left[parent_idx];
+        let child = &mut right[0];
+        // Find the next sibling transition in the parent that wholly contains the test of the parent transition
+        let parent_transitions = &parent.transitions;
+        let mut found = false;
+        for sibling_t in parent_transitions.iter().skip(parent_transition_idx + 1) {
+            // Check if sibling_t.test overlaps with parent_transition.test
+            let overlaps = match (&sibling_t.test, &parent_transition_test) {
+                (WipConsume::Charset(sib), WipConsume::Charset(orig)) => {
+                    sib.iter().zip(orig.iter()).any(|(&s, &o)| s && o)
+                }
+                (WipConsume::Prefix(sib), WipConsume::Prefix(orig)) => {
+                    sib.starts_with(orig) || orig.starts_with(sib)
+                }
+                (WipConsume::PrefixInsensitive(sib), WipConsume::Prefix(orig)) => {
+                    let sib = sib.to_ascii_lowercase();
+                    let orig = orig.to_ascii_lowercase();
+                    sib.starts_with(&orig) || orig.starts_with(&sib)
+                }
+                (WipConsume::PrefixInsensitive(sib), WipConsume::PrefixInsensitive(orig)) => {
+                    let sib = sib.to_ascii_lowercase();
+                    let orig = orig.to_ascii_lowercase();
+                    sib.starts_with(&orig) || orig.starts_with(&sib)
+                }
+                (WipConsume::Chars(_), WipConsume::Chars(_)) => true,
+                (WipConsume::Line, _) => true,
+                _ => false,
+            };
+            if overlaps && sibling_t.test != WipConsume::Never {
+                let t = &mut child.transitions[t_idx];
+                t.test = sibling_t.test.clone();
+                t.kind = sibling_t.kind;
+                t.action = sibling_t.action;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            // If no suitable sibling found, set fallback to always match, pop 1, and use HighlightKind::Other
+            let t = &mut child.transitions[t_idx];
+            t.test = WipConsume::Chars(12345); // TODO
+            t.kind = HighlightKind::Other;
+            t.action = WipAction::Pop(1);
+        }
+    }
+    // --- End fallback resolution logic ---
 
     print!("{}", format_as_mermaid(def.states, &states));
 }
@@ -495,18 +575,7 @@ fn format_as_mermaid(def_states: &[StateDefinition], states: &[WipState]) -> Str
         output: String::new(),
     };
 
-    _ = write!(
-        &mut ctx.output,
-        concat!(
-            "---\n",
-            "config:\n",
-            "  layout: elk\n",
-            "  elk:\n",
-            "    nodePlacementStrategy: NETWORK_SIMPLEX\n",
-            "---\n",
-            "flowchart TD\n",
-        )
-    );
+    _ = write!(&mut ctx.output, "---\nconfig:\n  layout: elk\n---\nflowchart TD\n");
     for (idx, s) in def_states.iter().enumerate() {
         _ = writeln!(&mut ctx.output, "    {idx}[\"{}\"]", s.name);
     }
