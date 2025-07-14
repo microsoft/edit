@@ -147,6 +147,32 @@ pub fn parse_language_definition(def: &LanguageDefinition) {
         }
     }
 
+    // Add ResolveFallback transitions to non-root states that don't fully cover all input bytes
+    for state in states.iter_mut().skip(def.states.len()) {
+        let mut covered = [false; 256];
+        for t in &state.transitions {
+            match &t.test {
+                WipConsume::Charset(charset) => {
+                    for (cov, &c) in covered.iter_mut().zip(charset.iter()) {
+                        *cov |= c;
+                    }
+                }
+                WipConsume::Chars(_) | WipConsume::Line => {
+                    covered.fill(true);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if covered.iter().any(|&c| !c) {
+            state.transitions.push(WipTransition {
+                test: WipConsume::Never,
+                kind: HighlightKind::Comment, // Kind is arbitrary, not used for fallback
+                action: WipAction::ResolveFallback,
+            });
+        }
+    }
+
     print!("{}", format_as_mermaid(def.states, &states));
 }
 
