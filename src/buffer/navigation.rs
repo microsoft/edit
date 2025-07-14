@@ -49,13 +49,10 @@ pub fn word_backward(doc: &dyn ReadableDocument, offset: usize) -> usize {
 
 /// Word navigation implementation. Matches the behavior of VS Code.
 fn word_navigation<T: WordNavigation>(mut nav: T) -> usize {
-    // First, fill `self.chunk` with at least 1 grapheme.
-    nav.read();
-
     // Skip one newline, if any.
     nav.skip_newline();
 
-    // Skip any whitespace.
+    // Skip whitespace, if any.
     nav.skip_class(CharClass::Whitespace);
 
     // Skip one word or separator and take note of the class.
@@ -68,9 +65,14 @@ fn word_navigation<T: WordNavigation>(mut nav: T) -> usize {
         // Continue skipping the same class.
         nav.skip_class(class);
 
-        // If the class was a separator and we only moved one character,
-        // continue skipping characters of the word class.
-        if off == nav.offset() && class == CharClass::Separator {
+        // If the class was a separator and...
+        // we only moved one character and...
+        // the previous class was NOT a separator,
+        // skip the next word.
+        if class == CharClass::Separator
+            && off == nav.offset()
+            && nav.backtrack(CharClass::Whitespace) != CharClass::Separator
+        {
             nav.skip_class(CharClass::Word);
         }
     }
@@ -79,7 +81,7 @@ fn word_navigation<T: WordNavigation>(mut nav: T) -> usize {
 }
 
 trait WordNavigation {
-    fn read(&mut self);
+    fn backtrack(&mut self, default: CharClass) -> CharClass;
     fn skip_newline(&mut self);
     fn skip_class(&mut self, class: CharClass);
     fn peek(&self, default: CharClass) -> CharClass;
@@ -95,9 +97,8 @@ struct WordForward<'a> {
 }
 
 impl WordNavigation for WordForward<'_> {
-    fn read(&mut self) {
-        self.chunk = self.doc.read_forward(self.offset);
-        self.chunk_off = 0;
+    fn backtrack(&mut self, default: CharClass) -> CharClass {
+        self.doc.read_backward(self.offset).last().map_or(default, |&c| WORD_CLASSIFIER[c as usize])
     }
 
     fn skip_newline(&mut self) {
@@ -105,6 +106,10 @@ impl WordNavigation for WordForward<'_> {
         // = If there's a newline it's wholly contained in this chunk.
         // Unlike with `WordBackward`, we can't check for CR and LF separately as only a CR followed
         // by a LF is a newline. A lone CR in the document is just a regular control character.
+        if self.chunk_off >= self.chunk.len() {
+            self.chunk = self.doc.read_forward(self.offset);
+            self.chunk_off = 0;
+        }
         self.chunk_off += match self.chunk.get(self.chunk_off) {
             Some(&b'\n') => 1,
             Some(&b'\r') if self.chunk.get(self.chunk_off + 1) == Some(&b'\n') => 2,
@@ -152,14 +157,17 @@ struct WordBackward<'a> {
 }
 
 impl WordNavigation for WordBackward<'_> {
-    fn read(&mut self) {
-        self.chunk = self.doc.read_backward(self.offset);
-        self.chunk_off = self.chunk.len();
+    fn backtrack(&mut self, default: CharClass) -> CharClass {
+        self.doc.read_forward(self.offset).first().map_or(default, |&c| WORD_CLASSIFIER[c as usize])
     }
 
     fn skip_newline(&mut self) {
         // We can rely on the fact that the document does not split graphemes across chunks.
         // = If there's a newline it's wholly contained in this chunk.
+        if self.chunk_off == 0 {
+            self.chunk = self.doc.read_backward(self.offset);
+            self.chunk_off = self.chunk.len();
+        }
         if self.chunk_off > 0 && self.chunk[self.chunk_off - 1] == b'\n' {
             self.chunk_off -= 1;
         }
