@@ -18,6 +18,7 @@
 use core::panic;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::Write;
 use std::mem::{ManuallyDrop, forget};
 use std::{mem, ptr, slice};
 
@@ -114,6 +115,39 @@ struct WipTransition {
     test: WipConsume,
     kind: HighlightKind,
     action: WipAction,
+}
+
+pub fn parse_language_definition(def: &LanguageDefinition) {
+    let mut state_names = HashMap::new();
+    let mut states = Vec::new();
+
+    for state in def.states {
+        state_names.insert(state.name, states.len());
+        states.push(WipState { transitions: Vec::new() });
+    }
+
+    for (ground_idx, state) in def.states.iter().enumerate() {
+        for (pattern, kind, action) in state.rules {
+            let mut ctx = WipContext { states: &mut states, kind: *kind };
+            let dst = match action {
+                ActionDefinition::Push(name) => match state_names.get(name) {
+                    Some(&idx) => WipAction::Push(idx),
+                    None => panic!("Unknown state name: {name}"),
+                },
+                ActionDefinition::Pop(count) => WipAction::Pop(*count),
+            };
+            let hir = regex_syntax::ParserBuilder::new()
+                .utf8(false)
+                .unicode(false)
+                .dot_matches_new_line(true)
+                .build()
+                .parse(pattern)
+                .unwrap();
+            ctx.transform(ground_idx, dst, &hir);
+        }
+    }
+
+    print!("{}", format_as_mermaid(def.states, &states));
 }
 
 struct WipContext<'a> {
@@ -278,6 +312,7 @@ impl WipContext<'_> {
         self.add_transition(src, dst, WipConsume::Chars(1))
     }
 
+    // (a)(b)
     fn transform_concat(&mut self, src: usize, dst: WipAction, hirs: &[Hir]) -> WipAction {
         fn check_lowercase_literal(hir: &Hir) -> Option<u8> {
             if let HirKind::Class(Class::Bytes(class)) = hir.kind()
@@ -332,6 +367,7 @@ impl WipContext<'_> {
         src
     }
 
+    // (a|b)
     fn transform_alt(&mut self, src: usize, dst: WipAction, hirs: &[Hir]) -> WipAction {
         let mut actual_dst = None;
 
@@ -345,6 +381,7 @@ impl WipContext<'_> {
         actual_dst.unwrap_or(dst)
     }
 
+    // [a-z] -> 256-ary LUT
     fn class_to_charset(&mut self, class: &ClassBytes) -> Box<[bool; 256]> {
         let mut charset = Box::new([false; 256]);
 
@@ -365,21 +402,19 @@ impl WipContext<'_> {
     }
 }
 
-fn print_mermaid(def_states: &[StateDefinition], states: &[WipState]) {
-    // Print header for Mermaid graph
-    println!("---");
-    println!("config:");
-    println!("  layout: elk");
-    println!("  elk:");
-    println!("    nodePlacementStrategy: NETWORK_SIMPLEX");
-    println!("---");
-    println!("flowchart TD");
+fn format_as_mermaid(def_states: &[StateDefinition], states: &[WipState]) -> String {
+    struct Context<'a> {
+        def_states: &'a [StateDefinition],
+        states: &'a [WipState],
+        visited: HashSet<usize>,
+        output: String,
+    }
 
-    fn print_transition(def_states: &[StateDefinition], src_idx: usize, t: &WipTransition) {
+    fn print_transition(ctx: &mut Context, src_idx: usize, t: &WipTransition) {
         let dst = match t.action {
             WipAction::Change(idx) => format!("{idx}"),
             WipAction::Push(idx) => {
-                format!("push{}[/\"Push({})\"/]", src_idx << 16 | idx, def_states[idx].name)
+                format!("push{}[/\"Push({})\"/]", src_idx << 16 | idx, ctx.def_states[idx].name)
             }
             WipAction::Pop(count) => {
                 format!("pop{}[/\"Pop({count})\"/]", src_idx << 16 | count)
@@ -398,89 +433,64 @@ fn print_mermaid(def_states: &[StateDefinition], states: &[WipState]) {
         };
         let label = label.replace('"', "&quot;");
         let label = label.replace('\\', r#"\\"#);
-        println!("    {src_idx} -->|\"{label}\"| {dst}");
+        _ = writeln!(&mut ctx.output, "    {src_idx} -->|\"{label}\"| {dst}");
     }
 
-    fn print_state_bfs(
-        visited: &mut HashSet<usize>,
-        def_states: &[StateDefinition],
-        states: &[WipState],
-        src_idx: usize,
-    ) {
-        if !visited.insert(src_idx) {
+    fn print_state_bfs(ctx: &mut Context, src_idx: usize) {
+        if !ctx.visited.insert(src_idx) {
             return;
         }
-        for t in &states[src_idx].transitions {
-            print_transition(def_states, src_idx, t);
+        for t in &ctx.states[src_idx].transitions {
+            print_transition(ctx, src_idx, t);
         }
-        for t in &states[src_idx].transitions {
+        for t in &ctx.states[src_idx].transitions {
             if let WipAction::Change(idx) = t.action {
-                print_state_bfs(visited, def_states, states, idx);
+                print_state_bfs(ctx, idx);
             }
         }
     }
 
-    fn print_state_dfs(
-        visited: &mut HashSet<usize>,
-        def_states: &[StateDefinition],
-        states: &[WipState],
-        src_idx: usize,
-    ) {
-        if !visited.insert(src_idx) {
+    fn print_state_dfs(ctx: &mut Context, src_idx: usize) {
+        if !ctx.visited.insert(src_idx) {
             return;
         }
-        for t in &states[src_idx].transitions {
-            print_transition(def_states, src_idx, t);
+        for t in &ctx.states[src_idx].transitions {
+            print_transition(ctx, src_idx, t);
             if let WipAction::Change(idx) = t.action {
-                print_state_bfs(visited, def_states, states, idx);
+                print_state_bfs(ctx, idx);
             }
         }
     }
 
-    let mut visited = HashSet::with_capacity(states.len());
+    let mut ctx = Context {
+        def_states,
+        states,
+        visited: HashSet::with_capacity(states.len()),
+        output: String::new(),
+    };
 
+    _ = write!(
+        &mut ctx.output,
+        concat!(
+            "---\n",
+            "config:\n",
+            "  layout: elk\n",
+            "  elk:\n",
+            "    nodePlacementStrategy: NETWORK_SIMPLEX\n",
+            "---\n",
+            "flowchart TD\n",
+        )
+    );
     for (idx, s) in def_states.iter().enumerate() {
-        println!("    {idx}[\"{}\"]", s.name);
+        _ = writeln!(&mut ctx.output, "    {idx}[\"{}\"]", s.name);
     }
     for src_idx in 0..def_states.len() {
-        print_state_dfs(&mut visited, def_states, states, src_idx);
+        print_state_dfs(&mut ctx, src_idx);
     }
 
-    assert_eq!(visited.len(), states.len(), "Not all states were visited");
-}
+    assert_eq!(ctx.visited.len(), states.len(), "Not all states were visited");
 
-#[allow(dead_code)]
-pub fn parse_language_definition(def: &LanguageDefinition) {
-    let mut state_names = HashMap::new();
-    let mut states = Vec::new();
-
-    for state in def.states {
-        state_names.insert(state.name, states.len());
-        states.push(WipState { transitions: Vec::new() });
-    }
-
-    for (ground_idx, state) in def.states.iter().enumerate() {
-        for (pattern, kind, action) in state.rules {
-            let mut ctx = WipContext { states: &mut states, kind: *kind };
-            let dst = match action {
-                ActionDefinition::Push(name) => match state_names.get(name) {
-                    Some(&idx) => WipAction::Push(idx),
-                    None => panic!("Unknown state name: {name}"),
-                },
-                ActionDefinition::Pop(count) => WipAction::Pop(*count),
-            };
-            let hir = regex_syntax::ParserBuilder::new()
-                .utf8(false)
-                .unicode(false)
-                .dot_matches_new_line(true)
-                .build()
-                .parse(pattern)
-                .unwrap();
-            ctx.transform(ground_idx, dst, &hir);
-        }
-    }
-
-    print_mermaid(def.states, &states);
+    ctx.output
 }
 
 #[cfg(test)]
