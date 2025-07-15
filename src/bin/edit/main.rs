@@ -239,15 +239,14 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
             paths.clear();
             break;
         }
-        
+
         let p = cwd.join(Path::new(&arg));
         let p = path::normalize(&p);
         if p.is_dir() {
-            state.wants_file_picker=StateFilePicker::Open;
+            state.wants_file_picker = StateFilePicker::Open;
             state.file_picker_pending_dir = DisplayablePathBuf::from_path(p);
             return Ok(false);
-        }
-        else {
+        } else {
             paths.push(p);
         }
     }
