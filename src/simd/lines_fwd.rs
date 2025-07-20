@@ -416,7 +416,7 @@ mod test {
         for _ in 0..1000 {
             let offset = offset_rng() % (text.len() + 1);
             let line = line_rng() % 100;
-            let line_stop = line + line_distance_rng() % (lines + 1);
+            let line_stop = (line + line_distance_rng() % (lines + 1)).saturating_sub(5);
 
             let line = line as CoordType;
             let line_stop = line_stop as CoordType;

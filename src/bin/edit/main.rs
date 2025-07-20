@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![feature(allocator_api, let_chains, linked_list_cursors, string_from_utf8_lossy_owned)]
+#![feature(allocator_api, linked_list_cursors, string_from_utf8_lossy_owned)]
 
 mod documents;
 mod draw_editor;
@@ -51,7 +51,7 @@ fn main() -> process::ExitCode {
     match run() {
         Ok(()) => process::ExitCode::SUCCESS,
         Err(err) => {
-            sys::write_stdout(&format!("{}\r\n", FormatApperr::from(err)));
+            sys::write_stdout(&format!("{}\n", FormatApperr::from(err)));
             process::ExitCode::FAILURE
         }
     }
@@ -59,7 +59,7 @@ fn main() -> process::ExitCode {
 
 fn run() -> apperr::Result<()> {
     // Init `sys` first, as everything else may depend on its functionality (IO, function pointers, etc.).
-    let _sys_deinit = sys::init()?;
+    let _sys_deinit = sys::init();
     // Next init `arena`, so that `scratch_arena` works. `loc` depends on it.
     arena::init(SCRATCH_ARENA_CAPACITY)?;
     // Init the `loc` module, so that error messages are localized.
@@ -70,10 +70,11 @@ fn run() -> apperr::Result<()> {
         return Ok(());
     }
 
-    // sys::init() will switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
-    // Since the `read_file` call may hang for some reason, we must only call this afterwards.
-    // `set_modes()` will enable mouse mode which is equally annoying to switch out for users
-    // and so we do it afterwards, for similar reasons.
+    // This will reopen stdin if it's redirected (which may fail) and switch
+    // the terminal to raw mode which prevents the user from pressing Ctrl+C.
+    // `handle_args` may want to print a help message (must not fail),
+    // and reads files (may hang; should be cancelable with Ctrl+C).
+    // As such, we call this after `handle_args`.
     sys::switch_modes()?;
 
     let mut vt_parser = vt::Parser::new();
@@ -268,18 +269,18 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
 
 fn print_help() {
     sys::write_stdout(concat!(
-        "Usage: edit [OPTIONS] [FILE[:LINE[:COLUMN]]]\r\n",
-        "Options:\r\n",
-        "    -h, --help       Print this help message\r\n",
-        "    -v, --version    Print the version number\r\n",
-        "\r\n",
-        "Arguments:\r\n",
-        "    FILE[:LINE[:COLUMN]]    The file to open, optionally with line and column (e.g., foo.txt:123:45)\r\n",
+        "Usage: edit [OPTIONS] [FILE[:LINE[:COLUMN]]]\n",
+        "Options:\n",
+        "    -h, --help       Print this help message\n",
+        "    -v, --version    Print the version number\n",
+        "\n",
+        "Arguments:\n",
+        "    FILE[:LINE[:COLUMN]]    The file to open, optionally with line and column (e.g., foo.txt:123:45)\n",
     ));
 }
 
 fn print_version() {
-    sys::write_stdout(concat!("edit version ", env!("CARGO_PKG_VERSION"), "\r\n"));
+    sys::write_stdout(concat!("edit version ", env!("CARGO_PKG_VERSION"), "\n"));
 }
 
 fn draw(ctx: &mut Context, state: &mut State) {
