@@ -227,11 +227,19 @@ impl fmt::Debug for ArenaString<'_> {
     }
 }
 
+impl PartialEq<ArenaString<'_>> for ArenaString<'_> {
+    fn eq(&self, other: &ArenaString) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
 impl PartialEq<&str> for ArenaString<'_> {
     fn eq(&self, other: &&str) -> bool {
         self.as_str() == *other
     }
 }
+
+impl Eq for ArenaString<'_> {}
 
 impl Deref for ArenaString<'_> {
     type Target = str;
