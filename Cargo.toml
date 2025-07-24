@@ -34,7 +34,6 @@ codegen-units = 16          # Make compiling criterion faster (16 is the default
 lto = "thin"                # Similarly, speed up linking by a ton
 
 [dependencies]
-regex-syntax = { version = "0.8", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
