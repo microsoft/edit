@@ -17,17 +17,19 @@
 
 use core::panic;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::fmt::Write;
+use std::collections::{HashMap, HashSet, LinkedList, VecDeque};
+use std::fmt::{Debug, Write};
 use std::mem::{ManuallyDrop, forget};
+use std::ops::{Index, IndexMut};
 use std::{mem, ptr, slice};
 
 use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Dot, Hir, HirKind, Look};
 
 use super::{Action, Consume, HighlightKind};
 use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::cell::SemiRefCell;
 use crate::helpers::AsciiStringHelpers;
-use crate::highlighter::{CharsetFormatter, Transition};
+use crate::highlighter::{CharsetFormatter, State, Transition};
 
 pub struct LanguageDefinition {
     #[allow(dead_code)]
@@ -44,7 +46,7 @@ pub struct StateDefinition {
 #[derive(Debug, Clone, Copy)]
 enum ActionDefinition {
     Push(&'static str), // state name to push
-    Pop(usize),         // count
+    Pop,
 }
 
 pub const JSON: LanguageDefinition = {
@@ -58,84 +60,172 @@ pub const JSON: LanguageDefinition = {
             StateDefinition {
                 name: "ground",
                 rules: &[
-                    (r#"//.*"#, Comment, Pop(1)),
+                    (r#"//.*"#, Comment, Pop),
                     (r#"/\*"#, Comment, Push("comment")),
                     (r#"""#, String, Push("string")),
-                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?\b"#, Number, Pop(1)),
-                    (r#"(?:true|false|null)\b"#, Keyword, Pop(1)),
+                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Number, Pop),
+                    (r#"(?:true|false|null)"#, Keyword, Pop),
                 ],
             },
-            StateDefinition { name: "comment", rules: &[(r#"\*/"#, Comment, Pop(1))] },
+            StateDefinition { name: "comment", rules: &[(r#"\*/"#, Comment, Pop)] },
             StateDefinition {
                 name: "string",
-                rules: &[(r#"\\"#, String, Push("string_escape")), (r#"""#, String, Pop(1))],
+                rules: &[(r#"\\"#, String, Push("string_escape")), (r#"""#, String, Pop)],
             },
-            StateDefinition { name: "string_escape", rules: &[(r#"."#, String, Pop(1))] },
+            StateDefinition { name: "string_escape", rules: &[(r#"."#, String, Pop)] },
         ],
     }
 };
 
-struct WipState {
-    transitions: Vec<WipTransition>,
+#[derive(Clone, PartialEq, Eq)]
+struct Charset([bool; 256]);
+
+impl Charset {
+    pub fn fill(&mut self, value: bool) {
+        self.0.fill(value);
+    }
+
+    pub fn merge(&mut self, other: &Charset) {
+        for (a, b) in self.0.iter_mut().zip(other.0.iter()) {
+            *a |= *b;
+        }
+    }
+
+    pub fn merge_str(&mut self, s: &str) {
+        for b in s.as_bytes() {
+            self.0[*b as usize] = true;
+        }
+    }
+
+    pub fn merge_str_insensitive(&mut self, s: &str) {
+        for b in s.as_bytes() {
+            self.0[b.to_ascii_uppercase() as usize] = true;
+            self.0[b.to_ascii_lowercase() as usize] = true;
+        }
+    }
+
+    pub fn is_any(&self) -> bool {
+        self.0.iter().all(|&b| b)
+    }
+
+    pub fn is_superset(&self, other: &Charset) -> bool {
+        for (a, b) in self.0.iter().zip(other.0.iter()) {
+            if *b && !*a {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = bool> + '_ {
+        self.0.iter().copied()
+    }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum WipAction {
+impl Default for Charset {
+    fn default() -> Self {
+        Charset([false; 256])
+    }
+}
+
+impl Debug for Charset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", CharsetFormatter(&self.0))
+    }
+}
+
+impl<I> Index<I> for Charset
+where
+    [bool]: Index<I>,
+{
+    type Output = <[bool] as Index<I>>::Output;
+
+    #[inline]
+    fn index(&self, index: I) -> &Self::Output {
+        self.0.index(index)
+    }
+}
+
+impl<I> IndexMut<I> for Charset
+where
+    [bool]: IndexMut<I>,
+{
+    #[inline]
+    fn index_mut(&mut self, index: I) -> &mut Self::Output {
+        self.0.index_mut(index)
+    }
+}
+
+#[derive(Debug)]
+struct WipState<'a> {
+    name: Option<&'static str>,
+
+    /// The transitions leading away from this state.
+    transitions: LinkedList<WipTransition<'a>, &'a Arena>,
+
+    // All of these members are used to find fallback states.
+    // The idea is that we find the shallowest (closest to the root) state
+    // that has a superset of the characters that led to this state.
+    /// Depth of this node.
+    depth: usize,
+    shallowest_parent: Option<&'a WipStateCell<'a>>,
+    /// A fallback state must be a superset of this charset.
+    required_charset: Charset,
+    fallback_done: bool,
+}
+
+type WipStateCell<'a> = SemiRefCell<WipState<'a>>;
+
+#[derive(Debug, Clone, Copy)]
+enum WipAction<'a> {
     // Same as super::Action
-    Change(usize),
-    Push(usize),
-    Pop(usize),
-
-    /// An indicator that this transition between states is not yet final
-    /// and will be later resolved to fall back to another state.
-    ///
-    /// Example:
-    /// * `[eE]\d+` -> [`HighlightKind::Number`] (here: just the exponent suffix)
-    /// * `\w+`     -> [`HighlightKind::Keyword`]
-    ///
-    /// If after the `[eE]` we fail to find a digit, we should "fall back"
-    /// to the next best rule that encompasses the `[eE]` so far: `\w+`.
-    ResolveFallback,
+    Change(&'a WipStateCell<'a>),
+    Push(&'a WipStateCell<'a>),
+    Pop,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-enum WipConsume {
+impl PartialEq for WipAction<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        use WipAction::*;
+        match (self, other) {
+            (Change(a), Change(b)) => ptr::eq(a.as_ptr(), b.as_ptr()),
+            (Push(a), Push(b)) => ptr::eq(a.as_ptr(), b.as_ptr()),
+            (Pop, Pop) => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WipConsume<'a> {
     // Same as super::Consume
     Chars(usize),
-    Prefix(String),
-    PrefixInsensitive(String),
-    Charset(Box<[bool; 256]>),
-    Line,
-
-    /// A special case for transitions that are not yet finalized.
-    Never,
+    Prefix(ArenaString<'a>),
+    PrefixInsensitive(ArenaString<'a>),
+    Charset(&'a Charset),
 }
 
-#[derive(Clone)]
-struct WipTransition {
-    test: WipConsume,
+#[derive(Debug, Clone)]
+struct WipTransition<'a> {
+    test: WipConsume<'a>,
     kind: HighlightKind,
-    action: WipAction,
+    action: WipAction<'a>,
 }
 
 pub fn parse_language_definition(def: &LanguageDefinition) {
-    let mut state_names = HashMap::new();
-    let mut states = Vec::new();
+    let scratch = scratch_arena(None);
+    let mut ctx = WipContext::new(&scratch);
 
-    for state in def.states {
-        state_names.insert(state.name, states.len());
-        states.push(WipState { transitions: Vec::new() });
+    for s in def.states {
+        ctx.add_root(s.name);
     }
 
     for (ground_idx, state) in def.states.iter().enumerate() {
         for (pattern, kind, action) in state.rules {
-            let mut ctx = WipContext { states: &mut states, kind: *kind };
+            let src = ctx.get_root(ground_idx);
             let dst = match action {
-                ActionDefinition::Push(name) => match state_names.get(name) {
-                    Some(&idx) => WipAction::Push(idx),
-                    None => panic!("Unknown state name: {name}"),
-                },
-                ActionDefinition::Pop(count) => WipAction::Pop(*count),
+                ActionDefinition::Push(name) => WipAction::Push(ctx.get_root_by_name(name)),
+                ActionDefinition::Pop => WipAction::Pop,
             };
             let hir = regex_syntax::ParserBuilder::new()
                 .utf8(false)
@@ -144,171 +234,55 @@ pub fn parse_language_definition(def: &LanguageDefinition) {
                 .build()
                 .parse(pattern)
                 .unwrap();
-            ctx.transform(ground_idx, dst, &hir);
+            ctx.transform(src, dst, &hir);
         }
     }
 
-    // Add ResolveFallback transitions to non-root states that don't fully cover all input bytes
-    for state in states.iter_mut().skip(def.states.len()) {
-        let mut covered = [false; 256];
-        for t in &state.transitions {
-            match &t.test {
-                WipConsume::Charset(charset) => {
-                    for (cov, &c) in covered.iter_mut().zip(charset.iter()) {
-                        *cov |= c;
-                    }
-                }
-                WipConsume::Chars(_) | WipConsume::Line => {
-                    covered.fill(true);
-                    break;
-                }
-                _ => {}
-            }
-        }
-        if covered.iter().any(|&c| !c) {
-            state.transitions.push(WipTransition {
-                test: WipConsume::Never,
-                kind: HighlightKind::Comment, // Kind is arbitrary, not used for fallback
-                action: WipAction::ResolveFallback,
-            });
-        }
-    }
-
-    // --- Begin fallback resolution logic ---
-    // Collect all (state_idx, transition_idx) pairs that need fallback resolution
-    let mut fallbacks = Vec::new();
-    for (state_idx, state) in states.iter().enumerate() {
-        for (t_idx, t) in state.transitions.iter().enumerate() {
-            if t.action == WipAction::ResolveFallback {
-                fallbacks.push((state_idx, t_idx));
-            }
-        }
-    }
-    // Now resolve them
-    for (state_idx, t_idx) in fallbacks {
-        // Find the parent state and the transition in the parent that led to this state_idx
-        let parent_idx_and_transition =
-            states.iter().enumerate().take(state_idx).find_map(|(i, s)| {
-                s.transitions.iter().enumerate().find_map(|(j, t)| {
-                    if let WipAction::Change(idx) = t.action {
-                        if idx == state_idx { Some((i, j, t)) } else { None }
-                    } else {
-                        None
-                    }
-                })
-            });
-        let (parent_idx, parent_transition_idx, parent_transition) = match parent_idx_and_transition
-        {
-            Some(x) => x,
-            None => panic!("Could not find parent state for state {state_idx}"),
-        };
-        let parent_transition_test = parent_transition.test.clone();
-        // Use split_at_mut to get non-overlapping mutable references
-        assert!(parent_idx < state_idx, "parent_idx must be less than state_idx");
-        let (left, right) = states.split_at_mut(state_idx);
-        let parent = &mut left[parent_idx];
-        let child = &mut right[0];
-        // Find the next sibling transition in the parent that wholly contains the test of the parent transition
-        let parent_transitions = &parent.transitions;
-        let mut found = false;
-        for sibling_t in parent_transitions.iter().skip(parent_transition_idx + 1) {
-            // Check if sibling_t.test overlaps with parent_transition.test
-            let overlaps = match (&sibling_t.test, &parent_transition_test) {
-                (WipConsume::Charset(sib), WipConsume::Charset(orig)) => {
-                    sib.iter().zip(orig.iter()).any(|(&s, &o)| s && o)
-                }
-                (WipConsume::Prefix(sib), WipConsume::Prefix(orig)) => {
-                    sib.starts_with(orig) || orig.starts_with(sib)
-                }
-                (WipConsume::PrefixInsensitive(sib), WipConsume::Prefix(orig)) => {
-                    let sib = sib.to_ascii_lowercase();
-                    let orig = orig.to_ascii_lowercase();
-                    sib.starts_with(&orig) || orig.starts_with(&sib)
-                }
-                (WipConsume::PrefixInsensitive(sib), WipConsume::PrefixInsensitive(orig)) => {
-                    let sib = sib.to_ascii_lowercase();
-                    let orig = orig.to_ascii_lowercase();
-                    sib.starts_with(&orig) || orig.starts_with(&sib)
-                }
-                (WipConsume::Chars(_), WipConsume::Chars(_)) => true,
-                (WipConsume::Line, _) => true,
-                _ => false,
-            };
-            if overlaps && sibling_t.test != WipConsume::Never {
-                let t = &mut child.transitions[t_idx];
-                t.test = sibling_t.test.clone();
-                t.kind = sibling_t.kind;
-                t.action = sibling_t.action;
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            // If no suitable sibling found, set fallback to always match, pop 1, and use HighlightKind::Other
-            let t = &mut child.transitions[t_idx];
-            t.test = WipConsume::Chars(12345); // TODO
-            t.kind = HighlightKind::Other;
-            t.action = WipAction::Pop(1);
-        }
-    }
-    // --- End fallback resolution logic ---
-
-    print!("{}", format_as_mermaid(def.states, &states));
+    ctx.compute_required_charsets();
+    ctx.connect_fallbacks();
+    print!("{}", ctx.format_as_mermaid(&scratch));
 }
 
 struct WipContext<'a> {
-    states: &'a mut Vec<WipState>,
+    arena: &'a Arena,
+    roots: Vec<&'a WipStateCell<'a>, &'a Arena>,
     kind: HighlightKind,
 }
 
-impl WipContext<'_> {
-    fn add_state(&mut self) -> usize {
-        self.states.push(WipState { transitions: Vec::new() });
-        self.states.len() - 1
+impl<'a> WipContext<'a> {
+    fn new(arena: &'a Arena) -> Self {
+        WipContext { arena, roots: Vec::with_capacity_in(16, arena), kind: HighlightKind::Other }
     }
 
-    fn add_transition(&mut self, src: usize, dst: WipAction, test: WipConsume) -> WipAction {
-        let transitions = &mut self.states[src].transitions;
-
-        // Check if the edge already exists.
-        for t in transitions.iter() {
-            if t.test == test {
-                match t.action {
-                    WipAction::Change(_) => return t.action,
-                    _ => panic!("Existing edge with non-change action"),
-                }
-            }
+    fn add_root(&mut self, name: &'static str) {
+        let s = self.add_state(0);
+        {
+            let mut s = s.borrow_mut();
+            s.name = Some(name);
+            s.fallback_done = true;
         }
-
-        // Check for plausibility: if any prior test encompasses the new test, panic.
-        for t in transitions.iter() {
-            use WipConsume::*;
-
-            if match (&t.test, &test) {
-                (Prefix(p), Prefix(s)) => s.starts_with(p),
-                (PrefixInsensitive(p), Prefix(s) | PrefixInsensitive(s)) => {
-                    s.starts_with_ignore_ascii_case(p)
-                }
-                (Charset(p), Charset(n)) => {
-                    // If all the bits in `n` are also true in `p`
-                    n.iter().zip(p.iter()).all(|(&n, &p)| !n || p)
-                }
-                (Chars(_), _) => true,
-                (Line, _) => true,
-                _ => false,
-            } {
-                panic!(
-                    "Attempted to add unreachable test: {:?} is encompassed by {:?}",
-                    test, t.test
-                );
-            }
-        }
-
-        transitions.push(WipTransition { test, kind: self.kind, action: dst });
-        dst
+        self.roots.push(s);
     }
 
-    fn transform(&mut self, src: usize, dst: WipAction, hir: &Hir) -> WipAction {
+    fn get_root(&self, idx: usize) -> &'a WipStateCell<'a> {
+        self.roots[idx]
+    }
+
+    fn get_root_by_name(&self, name: &str) -> &'a WipStateCell<'a> {
+        for s in &self.roots {
+            if s.borrow().name == Some(name) {
+                return s;
+            }
+        }
+        panic!("Unknown state name: {name}")
+    }
+
+    fn transform(
+        &mut self,
+        src: &'a WipStateCell<'a>,
+        dst: WipAction<'a>,
+        hir: &Hir,
+    ) -> WipAction<'a> {
         fn is_any_class(class: &ClassBytes) -> bool {
             class.ranges() == [ClassBytesRange::new(0, 255)]
         }
@@ -319,11 +293,6 @@ impl WipContext<'_> {
                 self.transform_any(src, dst)
             }
             HirKind::Class(Class::Bytes(class)) => self.transform_class(src, dst, class),
-            HirKind::Look(Look::WordAscii) => {
-                self.add_transition(src, WipAction::ResolveFallback, WipConsume::Never);
-                self.transform_option(src, dst);
-                dst
-            }
             HirKind::Repetition(rep) => match (rep.min, rep.max, rep.sub.kind()) {
                 (0, None, HirKind::Class(Class::Bytes(class))) if is_any_class(class) => {
                     self.transform_any_star(src, dst)
@@ -350,23 +319,42 @@ impl WipContext<'_> {
     }
 
     // string
-    fn transform_literal(&mut self, src: usize, dst: WipAction, lit: &[u8]) -> WipAction {
-        self.add_transition(src, dst, WipConsume::Prefix(String::from_utf8(lit.to_vec()).unwrap()))
+    fn transform_literal(
+        &mut self,
+        src: &'a WipStateCell<'a>,
+        dst: WipAction<'a>,
+        lit: &[u8],
+    ) -> WipAction<'a> {
+        self.add_transition(
+            src,
+            dst,
+            WipConsume::Prefix(ArenaString::from_utf8_lossy_owned({
+                let mut v = Vec::new_in(self.arena);
+                v.extend_from_slice(lit);
+                v
+            })),
+        )
     }
 
     // [a-z]+
     fn transform_class_plus(
         &mut self,
-        src: usize,
-        dst: WipAction,
+        src: &'a WipStateCell<'a>,
+        dst: WipAction<'a>,
         class: &ClassBytes,
-    ) -> WipAction {
-        let charset = self.class_to_charset(class);
-        self.add_transition(src, dst, WipConsume::Charset(charset))
+    ) -> WipAction<'a> {
+        let c = self.arena.alloc_uninit();
+        let c = c.write(self.class_to_charset(class));
+        self.add_transition(src, dst, WipConsume::Charset(c))
     }
 
     // [eE]
-    fn transform_class(&mut self, src: usize, dst: WipAction, class: &ClassBytes) -> WipAction {
+    fn transform_class(
+        &mut self,
+        src: &'a WipStateCell<'a>,
+        dst: WipAction<'a>,
+        class: &ClassBytes,
+    ) -> WipAction<'a> {
         let mut charset = self.class_to_charset(class);
         let mut actual_dst = None;
 
@@ -380,7 +368,8 @@ impl WipContext<'_> {
             }
 
             let ch = i as u8;
-            let str = String::from_utf8(slice::from_ref(&ch).to_vec()).unwrap();
+            let mut str = ArenaString::new_in(self.arena);
+            str.push(ch as char);
 
             // NOTE: Uppercase chars have a lower numeric value than lowercase chars.
             // As such, we need to test for `is_ascii_uppercase`.
@@ -404,22 +393,31 @@ impl WipContext<'_> {
     }
 
     // .?
-    fn transform_option(&mut self, src: usize, dst: WipAction) -> WipAction {
+    fn transform_option(&mut self, src: &'a WipStateCell<'a>, dst: WipAction<'a>) -> WipAction<'a> {
         self.add_transition(src, dst, WipConsume::Chars(0))
     }
 
     // .*
-    fn transform_any_star(&mut self, src: usize, dst: WipAction) -> WipAction {
-        self.add_transition(src, dst, WipConsume::Line)
+    fn transform_any_star(
+        &mut self,
+        src: &'a WipStateCell<'a>,
+        dst: WipAction<'a>,
+    ) -> WipAction<'a> {
+        self.add_transition(src, dst, WipConsume::Chars(usize::MAX))
     }
 
     // .
-    fn transform_any(&mut self, src: usize, dst: WipAction) -> WipAction {
+    fn transform_any(&mut self, src: &'a WipStateCell<'a>, dst: WipAction<'a>) -> WipAction<'a> {
         self.add_transition(src, dst, WipConsume::Chars(1))
     }
 
     // (a)(b)
-    fn transform_concat(&mut self, src: usize, dst: WipAction, hirs: &[Hir]) -> WipAction {
+    fn transform_concat(
+        &mut self,
+        src: &'a WipStateCell<'a>,
+        dst: WipAction<'a>,
+        hirs: &[Hir],
+    ) -> WipAction<'a> {
         fn check_lowercase_literal(hir: &Hir) -> Option<u8> {
             if let HirKind::Class(Class::Bytes(class)) = hir.kind()
                 && let ranges = class.ranges()
@@ -436,6 +434,7 @@ impl WipContext<'_> {
             }
         }
 
+        let depth = src.borrow().depth + 1;
         let mut it = hirs.iter().peekable();
         let mut src = WipAction::Change(src);
 
@@ -447,7 +446,7 @@ impl WipContext<'_> {
 
             if let Some(ch) = check_lowercase_literal(hir) {
                 // Transform [aA][bB][cC] into PrefixInsensitive("abc").
-                let mut str = String::new();
+                let mut str = ArenaString::new_in(self.arena);
                 str.push(ch as char);
 
                 while let Some(next_hir) = it.peek() {
@@ -459,13 +458,19 @@ impl WipContext<'_> {
                     }
                 }
 
-                let next =
-                    if it.peek().is_some() { WipAction::Change(self.add_state()) } else { dst };
+                let next = if it.peek().is_some() {
+                    WipAction::Change(self.add_state(depth))
+                } else {
+                    dst
+                };
                 src = self.add_transition(src_idx, next, WipConsume::PrefixInsensitive(str));
             } else {
                 // Any other sequence is simply concatenated.
-                let next =
-                    if it.peek().is_some() { WipAction::Change(self.add_state()) } else { dst };
+                let next = if it.peek().is_some() {
+                    WipAction::Change(self.add_state(depth))
+                } else {
+                    dst
+                };
                 src = self.transform(src_idx, next, hir);
             }
         }
@@ -474,7 +479,12 @@ impl WipContext<'_> {
     }
 
     // (a|b)
-    fn transform_alt(&mut self, src: usize, dst: WipAction, hirs: &[Hir]) -> WipAction {
+    fn transform_alt(
+        &mut self,
+        src: &'a WipStateCell<'a>,
+        dst: WipAction<'a>,
+        hirs: &[Hir],
+    ) -> WipAction<'a> {
         let mut actual_dst = None;
 
         for hir in hirs {
@@ -488,8 +498,8 @@ impl WipContext<'_> {
     }
 
     // [a-z] -> 256-ary LUT
-    fn class_to_charset(&mut self, class: &ClassBytes) -> Box<[bool; 256]> {
-        let mut charset = Box::new([false; 256]);
+    fn class_to_charset(&mut self, class: &ClassBytes) -> Charset {
+        let mut charset = Charset::default();
 
         for r in class.iter() {
             charset[r.start() as usize..=r.end() as usize].fill(true);
@@ -506,86 +516,270 @@ impl WipContext<'_> {
 
         charset
     }
-}
 
-fn format_as_mermaid(def_states: &[StateDefinition], states: &[WipState]) -> String {
-    struct Context<'a> {
-        def_states: &'a [StateDefinition],
-        states: &'a [WipState],
-        visited: HashSet<usize>,
-        output: String,
+    fn add_state(&mut self, depth: usize) -> &'a WipStateCell<'a> {
+        self.arena.alloc_uninit().write(WipStateCell::new(WipState {
+            name: None,
+
+            transitions: LinkedList::new_in(self.arena),
+
+            depth,
+            shallowest_parent: None,
+            required_charset: Charset::default(),
+            fallback_done: false,
+        }))
     }
 
-    fn print_transition(ctx: &mut Context, src_idx: usize, t: &WipTransition) {
-        let dst = match t.action {
-            WipAction::Change(idx) => format!("{idx}"),
-            WipAction::Push(idx) => {
-                format!("push{}[/\"Push({})\"/]", src_idx << 16 | idx, ctx.def_states[idx].name)
-            }
-            WipAction::Pop(count) => {
-                format!("pop{}[/\"Pop({count})\"/]", src_idx << 16 | count)
-            }
-            WipAction::ResolveFallback => {
-                format!("pending{}[/Pending/]", src_idx << 16)
-            }
-        };
-        let label = match &t.test {
-            WipConsume::Prefix(s) => format!("Prefix({s})"),
-            WipConsume::PrefixInsensitive(s) => format!("PrefixInsensitive({s})"),
-            WipConsume::Charset(c) => format!("Charset({:?})", CharsetFormatter(c)),
-            WipConsume::Chars(n) => format!("Chars({n})"),
-            WipConsume::Line => "Line".to_string(),
-            WipConsume::Never => "Never".to_string(),
-        };
-        let label = label.replace('"', "&quot;");
-        let label = label.replace('\\', r#"\\"#);
-        _ = writeln!(&mut ctx.output, "    {src_idx} -->|\"{label}\"| {dst}");
-    }
+    fn add_transition(
+        &mut self,
+        src: &'a WipStateCell<'a>,
+        dst: WipAction<'a>,
+        test: WipConsume<'a>,
+    ) -> WipAction<'a> {
+        let mut s = src.borrow_mut();
 
-    fn print_state_bfs(ctx: &mut Context, src_idx: usize) {
-        if !ctx.visited.insert(src_idx) {
-            return;
-        }
-        for t in &ctx.states[src_idx].transitions {
-            print_transition(ctx, src_idx, t);
-        }
-        for t in &ctx.states[src_idx].transitions {
-            if let WipAction::Change(idx) = t.action {
-                print_state_bfs(ctx, idx);
+        // Check if the edge already exists.
+        for t in s.transitions.iter() {
+            if t.test == test {
+                if mem::discriminant(&t.action) != mem::discriminant(&dst) {
+                    panic!(
+                        "Diverging actions for the same test: {:?} -> {:?} vs {:?}",
+                        test, t.action, dst
+                    );
+                }
+                return t.action;
             }
         }
-    }
 
-    fn print_state_dfs(ctx: &mut Context, src_idx: usize) {
-        if !ctx.visited.insert(src_idx) {
-            return;
-        }
-        for t in &ctx.states[src_idx].transitions {
-            print_transition(ctx, src_idx, t);
-            if let WipAction::Change(idx) = t.action {
-                print_state_bfs(ctx, idx);
+        // Check for plausibility: if any prior test encompasses the new test, panic.
+        for t in s.transitions.iter() {
+            use WipConsume::*;
+
+            if match (&t.test, &test) {
+                (Chars(_), _) => true,
+                (Prefix(p), Prefix(s)) => s.starts_with(p.as_str()),
+                (PrefixInsensitive(p), Prefix(s) | PrefixInsensitive(s)) => {
+                    s.starts_with_ignore_ascii_case(p)
+                }
+                (Charset(p), Charset(n)) => {
+                    // If all the bits in `n` are also true in `p`
+                    n.iter().zip(p.iter()).all(|(n, p)| !n || p)
+                }
+                _ => false,
+            } {
+                panic!(
+                    "Attempted to add unreachable test: {:?} is encompassed by {:?}",
+                    test, t.test
+                );
             }
         }
+
+        // Remember the shallowest parent for the state.
+        if let WipAction::Change(dst) = dst {
+            let mut dst = dst.borrow_mut();
+            if dst
+                .shallowest_parent
+                .is_none_or(|p| !ptr::eq(p.as_ptr(), &*s) && p.borrow().depth > s.depth)
+            {
+                dst.shallowest_parent = Some(src);
+            }
+        }
+
+        s.transitions.push_back(WipTransition { test, kind: self.kind, action: dst });
+        dst
     }
 
-    let mut ctx = Context {
-        def_states,
-        states,
-        visited: HashSet::with_capacity(states.len()),
-        output: String::new(),
-    };
+    fn compute_required_charsets(&self) {
+        fn run(state: &WipStateCell) {
+            let src = state.borrow();
 
-    _ = write!(&mut ctx.output, "---\nconfig:\n  layout: elk\n---\nflowchart TD\n");
-    for (idx, s) in def_states.iter().enumerate() {
-        _ = writeln!(&mut ctx.output, "    {idx}[\"{}\"]", s.name);
+            let scratch = scratch_arena(None);
+            let mut dsts = Vec::with_capacity_in(src.transitions.len(), &*scratch);
+            dsts.extend(src.transitions.iter().filter_map(|t| match t.action {
+                WipAction::Change(s) => Some((&t.test, s)),
+                _ => None,
+            }));
+
+            for &(test, dst) in &dsts {
+                let mut cs = dst.borrow_mut();
+                let cs = &mut cs.required_charset;
+
+                match test {
+                    WipConsume::Chars(_) => cs.fill(true),
+                    WipConsume::Prefix(s) => cs.merge_str(s),
+                    WipConsume::PrefixInsensitive(s) => cs.merge_str_insensitive(s),
+                    WipConsume::Charset(c) => cs.merge(c),
+                }
+
+                cs.merge(&src.required_charset);
+            }
+
+            for (test, dst) in &dsts {
+                run(dst);
+            }
+        }
+
+        for root in &self.roots {
+            run(root);
+        }
     }
-    for src_idx in 0..def_states.len() {
-        print_state_dfs(&mut ctx, src_idx);
+
+    fn connect_fallbacks(&self) {
+        fn run(state: &WipStateCell) {
+            {
+                let src = state.borrow();
+
+                for t in &src.transitions {
+                    if let WipAction::Change(dst) = t.action
+                        && !dst.borrow().fallback_done
+                    {
+                        run(dst);
+                    }
+                }
+
+                if src.fallback_done {
+                    return;
+                }
+            }
+
+            let mut src = state.borrow_mut();
+            let required_charset = &src.required_charset;
+            if required_charset.is_any() {
+                return;
+            }
+
+            let mut parent = src.shallowest_parent;
+            let mut found = None;
+            while let Some(p) = parent {
+                let p_borrow = p.borrow();
+                if p_borrow.required_charset.is_superset(required_charset) {
+                    found = Some(p);
+                    break;
+                }
+                parent = p_borrow.shallowest_parent;
+            }
+
+            src.transitions.push_back(WipTransition {
+                test: WipConsume::Chars(0),
+                kind: HighlightKind::Other,
+                action: if let Some(parent) = found {
+                    WipAction::Change(parent)
+                } else {
+                    WipAction::Pop
+                },
+            });
+            src.fallback_done = true;
+        }
+
+        for root in &self.roots {
+            run(root);
+        }
     }
 
-    assert_eq!(ctx.visited.len(), states.len(), "Not all states were visited");
+    fn format_as_mermaid<'o>(&self, arena: &'o Arena) -> ArenaString<'o> {
+        struct Visitor<'a, 'o> {
+            node_ids: HashMap<*const WipState<'a>, (usize, bool)>,
+            output: ArenaString<'o>,
+        }
 
-    ctx.output
+        fn create_node_id<'v>(
+            visitor: &'v mut Visitor,
+            node: &WipStateCell,
+        ) -> &'v mut (usize, bool) {
+            let ptr = node.as_ptr() as *const _;
+            let id = visitor.node_ids.len();
+
+            match visitor.node_ids.entry(ptr) {
+                Entry::Vacant(e) => e.insert((id, false)),
+                Entry::Occupied(mut e) => e.into_mut(),
+            }
+        }
+
+        fn visit(visitor: &mut Visitor, src: &WipStateCell) -> Option<usize> {
+            let (src_id, visited) = create_node_id(visitor, src);
+            if *visited {
+                None
+            } else {
+                *visited = true;
+                Some(*src_id)
+            }
+        }
+
+        fn print_transition(
+            visitor: &mut Visitor,
+            src_id: usize,
+            src: &WipStateCell,
+            t: &WipTransition,
+        ) {
+            let dst = match t.action {
+                WipAction::Change(dst) => {
+                    format!("{}", create_node_id(visitor, dst).0)
+                }
+                WipAction::Push(dst) => {
+                    let s = dst.borrow();
+                    let dst_id = create_node_id(visitor, dst).0;
+                    format!("push{}[/\"Push({})\"/]", src_id << 16 | dst_id, s.name.unwrap())
+                }
+                WipAction::Pop => {
+                    format!("pop{}[/\"Pop\"/]", src_id << 16)
+                }
+            };
+            let label = match &t.test {
+                WipConsume::Chars(usize::MAX) => "Chars(Line)".to_string(),
+                WipConsume::Chars(n) => format!("Chars({n})"),
+                WipConsume::Prefix(s) => format!("Prefix({s})"),
+                WipConsume::PrefixInsensitive(s) => format!("PrefixInsensitive({s})"),
+                WipConsume::Charset(c) => format!("Charset({c:?})"),
+            };
+            let label = label.replace('"', "&quot;");
+            let label = label.replace('\\', r#"\\"#);
+            _ = writeln!(&mut visitor.output, "    {src_id} -->|\"{label}\"| {dst}");
+        }
+
+        fn print_state_bfs(visitor: &mut Visitor, src: &WipStateCell) {
+            let Some(src_id) = visit(visitor, src) else {
+                return;
+            };
+            for t in &src.borrow().transitions {
+                print_transition(visitor, src_id, src, t);
+            }
+            for t in &src.borrow().transitions {
+                if let WipAction::Change(idx) = t.action {
+                    print_state_bfs(visitor, idx);
+                }
+            }
+        }
+
+        fn print_state_dfs(visitor: &mut Visitor, src: &WipStateCell) {
+            let Some(src_id) = visit(visitor, src) else {
+                return;
+            };
+            for t in &src.borrow().transitions {
+                print_transition(visitor, src_id, src, t);
+                if let WipAction::Change(idx) = t.action {
+                    print_state_bfs(visitor, idx);
+                }
+            }
+        }
+
+        let mut visitor = Visitor { node_ids: HashMap::new(), output: ArenaString::new_in(arena) };
+
+        _ = write!(&mut visitor.output, "---\nconfig:\n  layout: elk\n---\nflowchart TD\n");
+        for s in &self.roots {
+            _ = writeln!(
+                &mut visitor.output,
+                "    {}[\"{}\"]",
+                visitor.node_ids.len(),
+                s.borrow().name.unwrap()
+            );
+            create_node_id(&mut visitor, s);
+        }
+        for s in &self.roots {
+            print_state_dfs(&mut visitor, s);
+        }
+
+        visitor.output
+    }
 }
 
 #[cfg(test)]

@@ -1,12 +1,12 @@
 [package]
 name = "grapheme-table-gen"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-anyhow = "1.0.95"
-chrono = "0.4.39"
-indoc = "2.0.5"
-pico-args = { version = "0.5.0", features = ["eq-separator"] }
-rayon = "1.10.0"
-roxmltree = { version = "0.20.0", default-features = false, features = ["std"] }
+anyhow = "1.0"
+chrono = "0.4"
+indoc = "2.0"
+pico-args = { version = "0.5", features = ["eq-separator"] }
+rayon = "1.10"
+roxmltree = { version = "0.20", default-features = false, features = ["std"] }
