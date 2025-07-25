@@ -3,20 +3,27 @@ use std::collections::HashSet;
 use std::fmt::{Debug, Write as _};
 use std::mem;
 use std::ops::{Index, IndexMut};
+use std::rc::{Rc, Weak};
 
 use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind};
 
-use crate::types::*;
+use crate::definitions::*;
 
 pub struct GraphBuilder {
     states: Vec<WipStateCell>,
+    charsets: Vec<Weak<Charset>>,
     root_count: usize,
     kind: HighlightKind,
 }
 
 impl GraphBuilder {
     pub fn new() -> Self {
-        GraphBuilder { states: Vec::with_capacity(16), root_count: 0, kind: HighlightKind::Other }
+        GraphBuilder {
+            states: Vec::with_capacity(16),
+            charsets: Vec::with_capacity(16),
+            root_count: 0,
+            kind: HighlightKind::Other,
+        }
     }
 
     pub fn add_root(&mut self, name: &'static str) {
@@ -110,7 +117,8 @@ impl GraphBuilder {
         dst: GraphAction,
         class: &ClassBytes,
     ) -> GraphAction {
-        let c = Box::new(self.class_to_charset(class));
+        let c = self.class_to_charset(class);
+        let c = self.intern_charset(c);
         self.add_transition(src, dst, GraphConsume::Charset(c))
     }
 
@@ -264,6 +272,19 @@ impl GraphBuilder {
         charset
     }
 
+    fn intern_charset(&mut self, mut charset: Charset) -> Rc<Charset> {
+        if let Some(rc) = self.charsets.iter().filter_map(|w| w.upgrade()).find(|c| **c == charset)
+        {
+            return rc;
+        }
+
+        charset.id = self.charsets.len();
+
+        let rc = Rc::new(charset);
+        self.charsets.push(Rc::downgrade(&rc));
+        rc
+    }
+
     fn add_state(&mut self, depth: usize) -> usize {
         let idx = self.states.len();
         self.states.push(WipStateCell::new(WipState {
@@ -335,9 +356,15 @@ impl GraphBuilder {
         dst
     }
 
-    pub fn compute_required_charsets(&self) {
+    pub fn finalize(&mut self) {
+        if self.states.last().is_some_and(|s| s.borrow().transitions.is_empty()) {
+            self.states.pop();
+        }
         for src in 0..self.root_count {
             self.compute_required_charsets_impl(src);
+        }
+        for src in 0..self.root_count {
+            self.connect_fallbacks_impl(src);
         }
     }
 
@@ -367,12 +394,6 @@ impl GraphBuilder {
                 continue;
             };
             self.compute_required_charsets_impl(dst);
-        }
-    }
-
-    pub fn connect_fallbacks(&self) {
-        for src in 0..self.root_count {
-            self.connect_fallbacks_impl(src);
         }
     }
 
@@ -427,56 +448,100 @@ impl GraphBuilder {
             output: String,
         }
 
-        fn print_transition(visitor: &mut Visitor, src_id: usize, t: &GraphTransition) {
-            let dst = match &t.action {
-                GraphAction::Change(dst) => {
-                    format!("{dst}")
+        fn escape(s: &str) -> String {
+            let mut res = String::with_capacity(s.len());
+            for c in s.chars() {
+                match c {
+                    '"' => res.push_str("&quot;"),
+                    '\\' => res.push_str(r#"\\"#),
+                    _ => res.push(c),
                 }
-                GraphAction::Push(dst) => {
-                    format!(
-                        "push{}[/\"Push({})\"/]",
-                        src_id << 16 | dst,
-                        visitor.states[*dst].borrow().name.unwrap()
-                    )
-                }
-                GraphAction::Pop => {
-                    format!("pop{}[/\"Pop\"/]", src_id << 16)
-                }
-            };
-            let label = match &t.test {
-                GraphConsume::Chars(usize::MAX) => "Chars(Line)".to_string(),
-                GraphConsume::Chars(n) => format!("Chars({n})"),
-                GraphConsume::Prefix(s) => format!("Prefix({s})"),
-                GraphConsume::PrefixInsensitive(s) => format!("PrefixInsensitive({s})"),
-                GraphConsume::Charset(c) => format!("Charset({c:?})"),
-            };
-            let label = label.replace('"', "&quot;");
-            let label = label.replace('\\', r#"\\"#);
-            _ = writeln!(&mut visitor.output, "    {src_id} -->|\"{label}\"| {dst}");
+            }
+            res
         }
 
-        fn print_state_bfs(visitor: &mut Visitor, src: usize) {
+        fn print_state(visitor: &mut Visitor, src: usize) {
             if !visitor.visited.insert(src) {
                 return;
             }
-            for t in &visitor.states[src].borrow().transitions {
-                print_transition(visitor, src, t);
-            }
-            for t in &visitor.states[src].borrow().transitions {
-                if let GraphAction::Change(idx) = &t.action {
-                    print_state_bfs(visitor, *idx);
-                }
-            }
-        }
 
-        fn print_state_dfs(visitor: &mut Visitor, src: usize) {
-            if !visitor.visited.insert(src) {
-                return;
+            let transitions = &visitor.states[src].borrow().transitions;
+            let mut iter = transitions.iter().peekable();
+
+            while let Some(t) = iter.next() {
+                let label = match &t.test {
+                    GraphConsume::Chars(usize::MAX) => "Chars(Line)".to_string(),
+                    GraphConsume::Chars(n) => format!("Chars({n})"),
+                    GraphConsume::Prefix(s) => {
+                        let mut label = String::new();
+                        _ = write!(label, "Prefix({s}");
+
+                        loop {
+                            let Some(next) = iter.peek() else {
+                                break;
+                            };
+                            let GraphConsume::Prefix(next_s) = &next.test else {
+                                break;
+                            };
+                            if next.action != t.action {
+                                break;
+                            }
+
+                            _ = write!(label, ", {next_s}");
+                            iter.next();
+                        }
+
+                        label.push(')');
+                        label
+                    }
+                    GraphConsume::PrefixInsensitive(s) => {
+                        let mut label = String::new();
+                        _ = write!(label, "PrefixInsensitive({s}");
+
+                        loop {
+                            let Some(next) = iter.peek() else {
+                                break;
+                            };
+                            let GraphConsume::PrefixInsensitive(next_s) = &next.test else {
+                                break;
+                            };
+                            if next.action != t.action {
+                                break;
+                            }
+
+                            _ = write!(label, ", {next_s}");
+                            iter.next();
+                        }
+
+                        label.push(')');
+                        label
+                    }
+                    GraphConsume::Charset(c) => format!("Charset({c:?})"),
+                };
+
+                let dst = match &t.action {
+                    GraphAction::Change(dst) => {
+                        format!("{dst}")
+                    }
+                    GraphAction::Push(dst) => {
+                        format!(
+                            "push{}[/\"{}\"/]",
+                            src << 16 | dst,
+                            visitor.states[*dst].borrow().name.unwrap()
+                        )
+                    }
+                    GraphAction::Pop => {
+                        format!("pop{}@{{ shape: stop }}", src << 16)
+                    }
+                };
+
+                let label = escape(&label);
+                _ = writeln!(&mut visitor.output, "    {src} -->|\"{label}\"| {dst}");
             }
-            for t in &visitor.states[src].borrow().transitions {
-                print_transition(visitor, src, t);
+
+            for t in transitions {
                 if let GraphAction::Change(idx) = &t.action {
-                    print_state_bfs(visitor, *idx);
+                    print_state(visitor, *idx);
                 }
             }
         }
@@ -494,18 +559,26 @@ impl GraphBuilder {
             );
         }
         for src in 0..self.root_count {
-            print_state_dfs(&mut visitor, src);
+            print_state(&mut visitor, src);
         }
 
         visitor.output
     }
+
+    pub fn charsets(&self) -> Vec<Rc<Charset>> {
+        self.charsets.iter().filter_map(Weak::upgrade).collect()
+    }
+
+    pub fn states(&self) -> &[WipStateCell] {
+        &self.states
+    }
 }
 
 #[derive(Default)]
-struct WipState {
+pub struct WipState {
     name: Option<&'static str>,
 
-    transitions: Vec<GraphTransition>,
+    pub transitions: Vec<GraphTransition>,
 
     depth: usize,
     shallowest_parent: Option<usize>,
@@ -513,10 +586,10 @@ struct WipState {
     fallback_done: bool,
 }
 
-type WipStateCell = RefCell<WipState>;
+pub type WipStateCell = RefCell<WipState>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GraphAction {
+pub enum GraphAction {
     // Same as super::Action
     Change(usize),
     Push(usize),
@@ -524,53 +597,64 @@ enum GraphAction {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum GraphConsume {
+pub enum GraphConsume {
     // Same as super::Consume
     Chars(usize),
     Prefix(String),
     PrefixInsensitive(String),
-    Charset(Box<Charset>),
+    Charset(Rc<Charset>),
 }
 
-struct GraphTransition {
-    test: GraphConsume,
-    kind: HighlightKind,
-    action: GraphAction,
+pub struct GraphTransition {
+    pub test: GraphConsume,
+    pub kind: HighlightKind,
+    pub action: GraphAction,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct Charset([bool; 256]);
+#[derive(Clone)]
+pub struct Charset {
+    id: usize,
+    bits: [bool; 256],
+}
 
 impl Charset {
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    pub fn bits(&self) -> &[bool; 256] {
+        &self.bits
+    }
+
     pub fn fill(&mut self, value: bool) {
-        self.0.fill(value);
+        self.bits.fill(value);
     }
 
     pub fn merge(&mut self, other: &Charset) {
-        for (a, b) in self.0.iter_mut().zip(other.0.iter()) {
+        for (a, b) in self.bits.iter_mut().zip(other.bits.iter()) {
             *a |= *b;
         }
     }
 
     pub fn merge_str(&mut self, s: &str) {
         for b in s.as_bytes() {
-            self.0[*b as usize] = true;
+            self.bits[*b as usize] = true;
         }
     }
 
     pub fn merge_str_insensitive(&mut self, s: &str) {
         for b in s.as_bytes() {
-            self.0[b.to_ascii_uppercase() as usize] = true;
-            self.0[b.to_ascii_lowercase() as usize] = true;
+            self.bits[b.to_ascii_uppercase() as usize] = true;
+            self.bits[b.to_ascii_lowercase() as usize] = true;
         }
     }
 
     pub fn covers_all(&self) -> bool {
-        self.0.iter().all(|&b| b)
+        self.bits.iter().all(|&b| b)
     }
 
     pub fn is_superset(&self, other: &Charset) -> bool {
-        for (a, b) in self.0.iter().zip(other.0.iter()) {
+        for (a, b) in self.bits.iter().zip(other.bits.iter()) {
             if *b && !*a {
                 return false;
             }
@@ -579,13 +663,13 @@ impl Charset {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = bool> + '_ {
-        self.0.iter().copied()
+        self.bits.iter().copied()
     }
 }
 
 impl Default for Charset {
     fn default() -> Self {
-        Charset([false; 256])
+        Charset { id: 0, bits: [false; 256] }
     }
 }
 
@@ -595,7 +679,7 @@ impl Debug for Charset {
             let b = b as u8;
             if b.is_ascii_graphic() || b == b' ' {
                 let b = b as char;
-                write!(f, "'{b}'")
+                write!(f, "{b}")
             } else {
                 write!(f, "0x{b:02X}")
             }
@@ -607,7 +691,7 @@ impl Debug for Charset {
         write!(f, "[")?;
 
         while beg < 256 {
-            while beg < 256 && !self.0[beg] {
+            while beg < 256 && !self.bits[beg] {
                 beg += 1;
             }
             if beg >= 256 {
@@ -615,7 +699,7 @@ impl Debug for Charset {
             }
 
             let mut end = beg;
-            while end < 256 && self.0[end] {
+            while end < 256 && self.bits[end] {
                 end += 1;
             }
 
@@ -636,6 +720,14 @@ impl Debug for Charset {
     }
 }
 
+impl PartialEq for Charset {
+    fn eq(&self, other: &Self) -> bool {
+        self.bits == other.bits
+    }
+}
+
+impl Eq for Charset {}
+
 impl<I> Index<I> for Charset
 where
     [bool]: Index<I>,
@@ -644,7 +736,7 @@ where
 
     #[inline]
     fn index(&self, index: I) -> &Self::Output {
-        self.0.index(index)
+        self.bits.index(index)
     }
 }
 
@@ -654,6 +746,6 @@ where
 {
     #[inline]
     fn index_mut(&mut self, index: I) -> &mut Self::Output {
-        self.0.index_mut(index)
+        self.bits.index_mut(index)
     }
 }
