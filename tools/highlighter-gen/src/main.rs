@@ -11,50 +11,104 @@
 //! whereas the additional states will try to match the next character without seeking.
 //! If it doesn't match, it will fall back to the next possible defined regular expression.
 
-mod languages;
 mod transformer;
 mod types;
 
-use crate::transformer::parse_language_definition;
+use ActionDefinition::*;
+use HighlightKind::*;
 
-/**
----
-config:
-  layout: elk
----
-flowchart TD
-    0["ground"]
-    1["comment"]
-    2["string"]
-    3["string_escape"]
-    0 -->|"Prefix(//)"| 4
-    4 -->|"Chars(Line)"| pop262144[/"Pop"/]
-    4 -->|"Chars(0)"| pop262144[/"Pop"/]
-    0 -->|"Prefix(/*)"| push1[/"Push(comment)"/]
-    0 -->|"Prefix(&quot;)"| push2[/"Push(string)"/]
-    0 -->|"Prefix(-)"| 5
-    5 -->|"Charset(['0'-'9'])"| 6
-    5 -->|"Chars(0)"| pop327680[/"Pop"/]
-    6 -->|"Prefix(.)"| 7
-    6 -->|"Chars(0)"| 8
-    6 -->|"Chars(0)"| pop393216[/"Pop"/]
-    7 -->|"Charset(['0'-'9'])"| 8
-    7 -->|"Chars(0)"| pop458752[/"Pop"/]
-    8 -->|"PrefixInsensitive(e)"| 9
-    8 -->|"Chars(0)"| pop524288[/"Pop"/]
-    9 -->|"Prefix(+)"| 10
-    9 -->|"Prefix(-)"| 10
-    9 -->|"Chars(0)"| 10
-    10 -->|"Charset(['0'-'9'])"| pop655360[/"Pop"/]
-    0 -->|"Charset(['0'-'9'])"| 6
-    0 -->|"Prefix(true)"| pop0[/"Pop"/]
-    0 -->|"Prefix(false)"| pop0[/"Pop"/]
-    0 -->|"Prefix(null)"| pop0[/"Pop"/]
-    1 -->|"Prefix(*/)"| pop65536[/"Pop"/]
-    2 -->|"Prefix(\\)"| push131075[/"Push(string_escape)"/]
-    2 -->|"Prefix(&quot;)"| pop131072[/"Pop"/]
-    3 -->|"Chars(1)"| pop196608[/"Pop"/]
-**/
+use crate::transformer::GraphBuilder;
+use crate::types::*;
+
+pub const LANGUAGES: &[Language] = &[
+    Language {
+        name: "JSON",
+        extensions: &["json", "jsonc"],
+        states: &[
+            State {
+                name: "ground",
+                rules: &[
+                    (r#"//.*"#, Comment, Pop),
+                    (r#"/\*"#, Comment, Push("comment")),
+                    (r#"""#, String, Push("string")),
+                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Number, Pop),
+                    (r#"(?:true|false|null)"#, Keyword, Pop),
+                ],
+            },
+            State { name: "comment", rules: &[(r#"\*/"#, Comment, Pop)] },
+            State {
+                name: "string",
+                rules: &[(r#"\\"#, String, Push("string_escape")), (r#"""#, String, Pop)],
+            },
+            State { name: "string_escape", rules: &[(r#"."#, String, Pop)] },
+        ],
+    },
+    Language {
+        name: "PowerShell",
+        extensions: &["ps1", "psm1", "psd1"],
+        states: &[
+            State {
+                name: "ground",
+                rules: &[
+                    (r#"#.*"#, Comment, Pop),
+                    (r#"<#"#, Comment, Push("comment")),
+                    (r#"'"#, String, Push("string_single")),
+                    (r#"\""#, String, Push("string_double")),
+                    (r#"\$"#, Variable, Push("variable")),
+                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Number, Pop),
+                    (r#"-\w+"#, Operator, Pop),
+                    (r#"[!*/%+<=>|]"#, Operator, Pop),
+                    // TODO: Add [\w-]+ suffix which results in kind=Other
+                    (
+                        r#"(?i:break|catch|continue|do|else|finally|foreach|function|if|return|switch|throw|try|using|while)"#,
+                        Keyword,
+                        Pop,
+                    ),
+                    (r#"[\w-]+"#, Method, Pop),
+                ],
+            },
+            State { name: "comment", rules: &[(r#"#>"#, Comment, Pop)] },
+            State {
+                name: "string_single",
+                rules: &[(r#"'"#, String, Pop), (r#"`"#, String, Push("string_escape"))],
+            },
+            State {
+                name: "string_double",
+                rules: &[
+                    (r#"""#, String, Pop),
+                    (r#"`"#, String, Push("string_escape")),
+                    (r#"\$"#, Other, Push("variable")),
+                ],
+            },
+            State { name: "string_escape", rules: &[(r#"."#, String, Pop)] },
+            State {
+                name: "variable",
+                rules: &[
+                    (r#"\("#, Other, Pop), // TODO: subexpression
+                    (r#"\w+"#, Variable, Pop),
+                    (r#""#, Other, Pop),
+                ],
+            },
+        ],
+    },
+];
+
 fn main() {
-    parse_language_definition(&languages::JSON);
+    for lang in LANGUAGES {
+        let mut builder = GraphBuilder::new();
+
+        for s in lang.states {
+            builder.add_root(s.name);
+        }
+
+        for (root, state) in lang.states.iter().enumerate() {
+            for rule in state.rules {
+                builder.parse(root, rule);
+            }
+        }
+
+        builder.compute_required_charsets();
+        builder.connect_fallbacks();
+        println!("{}", builder.format_as_mermaid());
+    }
 }
