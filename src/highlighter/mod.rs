@@ -1,129 +1,21 @@
-mod lang;
-//mod lang_bash;
-//mod lang_batch;
-//mod lang_json;
-//mod lang_powershell;
-//mod lang_yaml;
-//mod regex;
+mod definitions;
 
+use std::ffi::OsStr;
 use std::fmt::Debug;
+use std::ops::RangeInclusive;
+use std::path::Path;
+
+pub use definitions::{HighlightKind, Language};
 
 use crate::arena::{Arena, scratch_arena};
 use crate::document::ReadableDocument;
 use crate::helpers::*;
-use crate::highlighter::lang::LanguageDefinition;
+use crate::highlighter::definitions::*;
 use crate::{simd, unicode};
 
-struct CharsetFormatter<'a>(&'a [bool; 256]);
-
-impl Debug for CharsetFormatter<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let show_char = |f: &mut std::fmt::Formatter<'_>, b: usize| {
-            let b = b as u8;
-            if b.is_ascii_graphic() || b == b' ' {
-                let b = b as char;
-                write!(f, "'{b}'")
-            } else {
-                write!(f, "0x{b:02X}")
-            }
-        };
-
-        let mut beg = 0;
-        let mut first = true;
-
-        write!(f, "[")?;
-
-        while beg < 256 {
-            while beg < 256 && !self.0[beg] {
-                beg += 1;
-            }
-            if beg >= 256 {
-                break;
-            }
-
-            let mut end = beg;
-            while end < 256 && self.0[end] {
-                end += 1;
-            }
-
-            if !first {
-                write!(f, ", ")?;
-            }
-            show_char(f, beg)?;
-            if end - beg > 1 {
-                write!(f, "-")?;
-                show_char(f, end - 1)?;
-            }
-
-            beg = end;
-            first = false;
-        }
-
-        write!(f, "]")
-    }
-}
-
-// The runtime structure for highlighting, built from LanguageDef.
-pub struct Language {
-    #[allow(dead_code)]
-    name: &'static str,
-    extensions: &'static [&'static str],
-    charsets: &'static [&'static [u16; 6]],
-    states: &'static [&'static [Transition<'static>]],
-}
-
-// Conversion from LanguageDef to Language (stub).
-impl Language {
-    pub fn from_def(def: &LanguageDefinition) -> Self {
-        // TODO: Build charsets and transitions from def.
-        unimplemented!()
-    }
-}
-
-struct Transition<'s> {
-    test: Consume<'s>,
-    kind: HighlightKind,
-    action: Action,
-}
-
-#[derive(PartialEq, Eq)]
-enum Consume<'a> {
-    Chars(usize),
-    Prefix(&'a str),
-    PrefixInsensitive(&'a str),
-    Charset(&'a [bool; 256]),
-    Line,
-}
-
-impl Debug for Consume<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Consume::Chars(n) => write!(f, "Chars({n})"),
-            Consume::Prefix(s) => write!(f, "Prefix({s:?})"),
-            Consume::PrefixInsensitive(s) => write!(f, "PrefixInsensitive({s:?})"),
-            Consume::Charset(c) => write!(f, "Charset({:?})", CharsetFormatter(c)),
-            Consume::Line => write!(f, "Line"),
-        }
-    }
-}
-
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HighlightKind {
-    #[default]
-    Other,
-    Comment,
-    Number,
-    String,
-    Variable,
-    Operator,
-    Keyword,
-    Method,
-}
-
-enum Action {
-    Change(u8), // to
-    Push(u8),   // to
-    Pop(u8),    // count
+pub fn language_from_path(path: &Path) -> Option<&'static Language> {
+    let ext = path.extension()?;
+    LANGUAGES.iter().copied().find(|lang| lang.extensions.iter().any(|&e| OsStr::new(e) == ext))
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -147,8 +39,7 @@ pub struct Highlighter<'a> {
     logical_pos_y: CoordType,
 
     language: &'static Language,
-    charsets: Vec<[bool; 256]>,
-    starter: Vec<[bool; 256]>,
+    starter: Vec<[u8; 256]>,
 
     state: usize,
     kind: HighlightKind,
@@ -163,35 +54,27 @@ impl<'doc> Highlighter<'doc> {
             logical_pos_y: 0,
 
             language,
-            charsets: language
-                .charsets
-                .iter()
-                .map(|&charset| {
-                    let mut word_chars = [false; 256];
-                    Self::fill_word_chars(&mut word_chars, charset);
-                    word_chars
-                })
-                .collect(),
             starter: language
                 .states
                 .iter()
                 .map(|&transitions| {
-                    let mut starter = [false; 256];
+                    let mut starter = [0; 256];
                     for t in transitions {
-                        match t.test {
-                            Consume::Chars(_) => starter.fill(true),
+                        match t.0 {
+                            Consume::Chars(_) => starter.fill(1),
                             Consume::Prefix(prefix) => {
-                                starter[prefix.as_bytes()[0] as usize] = true;
+                                starter[prefix.as_bytes()[0] as usize] = 1;
                             }
                             Consume::PrefixInsensitive(prefix) => {
                                 let ch = prefix.as_bytes()[0];
-                                starter[ch.to_ascii_lowercase() as usize] = true;
-                                starter[ch.to_ascii_uppercase() as usize] = true;
+                                starter[ch.to_ascii_uppercase() as usize] = 1;
+                                starter[ch.to_ascii_lowercase() as usize] = 1;
                             }
-                            Consume::Charset(i) => {
-                                todo!()
+                            Consume::Charset(cs) => {
+                                for (a, b) in starter.iter_mut().zip(cs.iter()) {
+                                    *a |= *b;
+                                }
                             }
-                            Consume::Line => {}
                         }
                     }
                     starter
@@ -202,18 +85,6 @@ impl<'doc> Highlighter<'doc> {
             kind: Default::default(),
             state_stack: Default::default(),
         }
-    }
-
-    fn fill_word_chars(dst: &mut [bool; 256], src: &[u16; 6]) {
-        for y in 0..src.len() {
-            let mut r = src[y];
-            while r != 0 {
-                let bit = r.trailing_zeros() as usize;
-                r &= !(1 << bit);
-                dst[32 + y * 16 + bit] = true;
-            }
-        }
-        dst[0x80..].fill(true);
     }
 
     pub fn logical_pos_y(&self) -> CoordType {
@@ -278,7 +149,8 @@ impl<'doc> Highlighter<'doc> {
         }
 
         loop {
-            while off < line_buf.len() && !self.starter[self.state][line_buf[off] as usize] {
+            let starter = &self.starter[self.state];
+            while off < line_buf.len() && starter[line_buf[off] as usize] == 0 {
                 off += 1;
             }
 
@@ -286,9 +158,9 @@ impl<'doc> Highlighter<'doc> {
             let mut hit = None;
 
             for t in self.language.states[self.state] {
-                match t.test {
+                match t.0 {
                     Consume::Chars(n) => {
-                        off += n;
+                        off = off.saturating_add(n);
                         hit = Some(t);
                         break;
                     }
@@ -306,20 +178,15 @@ impl<'doc> Highlighter<'doc> {
                             break;
                         }
                     }
-                    Consume::Charset(charset) => {
-                        if off < line_buf.len() && charset[line_buf[off] as usize] {
+                    Consume::Charset(cs) => {
+                        if off < line_buf.len() && cs[line_buf[off] as usize] != 0 {
                             while {
                                 off += 1;
-                                off < line_buf.len() && charset[line_buf[off] as usize]
+                                off < line_buf.len() && cs[line_buf[off] as usize] != 0
                             } {}
                             hit = Some(t);
                             break;
                         }
-                    }
-                    Consume::Line => {
-                        off = line_buf.len();
-                        hit = Some(t);
-                        break;
                     }
                 };
             }
@@ -327,38 +194,36 @@ impl<'doc> Highlighter<'doc> {
             if let Some(t) = hit {
                 // If this transition changes the HighlightKind,
                 // we need to split the current run and add a new one.
-                if self.kind != t.kind {
+                if self.kind != t.1 {
                     if let Some(last) = res.last_mut()
                         && last.start == start
                     {
-                        last.kind = t.kind;
+                        last.kind = t.1;
                     } else {
-                        res.push(Higlight { start, kind: t.kind });
+                        res.push(Higlight { start, kind: t.1 });
                     }
                 }
 
-                match t.action {
+                match t.2 {
                     Action::Change(to) => {
                         if let Some(last) = res.last_mut() {
-                            last.kind = t.kind;
+                            last.kind = t.1;
                         }
                         self.state = to as usize;
-                        self.kind = t.kind;
+                        self.kind = t.1;
                     }
                     Action::Push(to) => {
                         self.state_stack.push((self.state, self.kind));
                         self.state = to as usize;
-                        self.kind = t.kind;
+                        self.kind = t.1;
                     }
-                    Action::Pop(count) => {
-                        // Pop the last `count` states from the stack.
-                        let to = self.state_stack.len().saturating_sub(count as usize);
+                    Action::Pop => {
+                        self.state_stack.pop();
                         (self.state, self.kind) =
-                            self.state_stack.get(to).copied().unwrap_or_default();
-                        self.state_stack.truncate(to);
+                            self.state_stack.last().copied().unwrap_or_default();
 
                         // This may have changed the HighlightKind yet again.
-                        if self.kind != t.kind {
+                        if self.kind != t.1 {
                             if let Some(last) = res.last_mut()
                                 && last.start == off
                             {
@@ -385,7 +250,7 @@ impl<'doc> Highlighter<'doc> {
 
         // Adjust the range to account for the line offset.
         for h in &mut res {
-            h.start += line_beg;
+            h.start = line_beg + h.start.min(line_buf.len());
         }
 
         res
