@@ -14,6 +14,21 @@ pub enum HighlightKind {
     Method,
 }
 
+impl HighlightKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Other => "Other",
+            Comment => "Comment",
+            Number => "Number",
+            String => "String",
+            Variable => "Variable",
+            Operator => "Operator",
+            Keyword => "Keyword",
+            Method => "Method",
+        }
+    }
+}
+
 pub struct Language {
     #[allow(dead_code)]
     pub name: &'static str,
@@ -183,12 +198,14 @@ pub const LANGUAGES: &[Language] = &[
             State {
                 name: "ground",
                 rules: &[
-                    (r#"(?::: |::\t).*"#, Comment, Pop),
-                    (r#"(?i:rem |rem\t).*"#, Comment, Pop),
+                    (r#"rem\S+"#, Other, Pop),
+                    (r#"rem.*"#, Comment, Pop),
+                    (r#"::.*"#, Comment, Pop),
                     (r#"""#, String, Push("string")),
                     (r#"[!*/%+<=>|]"#, Operator, Pop),
+                    // TODO: Should fall back to \w+ Method but doesn't because it doesn't check siblings.
                     (
-                        r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)",
+                        r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)\d+",
                         Keyword,
                         Pop,
                     ),
