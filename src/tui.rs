@@ -508,13 +508,24 @@ impl Tui {
 
         // In the input handler below we transformed a mouse up into a release event.
         // Now, a frame later, we must reset it back to none, to stop it from triggering things.
-        // Same for Scroll events.
+        // Same for Scroll events, unless there is an active drag happening.
         if self.mouse_state > InputMouseState::Right {
-            self.mouse_down_position = Point::MIN;
-            self.mouse_down_node_path.clear();
-            self.left_mouse_down_target = 0;
-            self.mouse_state = InputMouseState::None;
-            self.mouse_is_drag = false;
+            let is_scroll_event = self.mouse_state == InputMouseState::Scroll;
+            let selection_in_progress = self.left_mouse_down_target != 0 && self.mouse_is_drag;
+
+            // If we are both, actively receiving a scroll event and a selection is in progress at the same time,
+            // that means we are currently scrolling the screen while actively drag-selecting.
+            // This means we are just receiving the Release event of the scroll wheel,
+            // so we need to preserve the current drag instead of resetting it.
+            if is_scroll_event && selection_in_progress {
+                self.mouse_state = InputMouseState::Left;
+            } else {
+                self.mouse_down_position = Point::MIN;
+                self.mouse_down_node_path.clear();
+                self.left_mouse_down_target = 0;
+                self.mouse_state = InputMouseState::None;
+                self.mouse_is_drag = false;
+            }
         }
 
         let now = std::time::Instant::now();
