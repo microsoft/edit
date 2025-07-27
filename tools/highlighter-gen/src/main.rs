@@ -140,8 +140,8 @@ fn main() {
                     }
                 };
                 let action = match &t.action {
-                    GraphAction::Change(next) => format!("Action::Change({next})"),
-                    GraphAction::Push(next) => format!("Action::Push({next})"),
+                    GraphAction::Change(next) => format!("Action::Change({})", next.borrow().id),
+                    GraphAction::Push(next) => format!("Action::Push({})", next.borrow().id),
                     GraphAction::Pop => "Action::Pop".to_string(),
                 };
                 _ = writeln!(

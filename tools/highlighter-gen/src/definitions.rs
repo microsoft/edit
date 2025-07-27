@@ -1,7 +1,7 @@
 use ActionDefinition::*;
 use HighlightKind::*;
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum HighlightKind {
     #[default]
     Other,
@@ -203,14 +203,12 @@ pub const LANGUAGES: &[Language] = &[
                     (r#"::.*"#, Comment, Pop),
                     (r#"""#, String, Push("string")),
                     (r#"[!*/%+<=>|]"#, Operator, Pop),
-                    // TODO: Should fall back to \w+ Method but doesn't because it doesn't check siblings.
                     (
-                        r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)\d+",
+                        r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)",
                         Keyword,
                         Pop,
                     ),
                     (r#"\d+"#, Number, Pop),
-                    (r#"\w+"#, Method, Pop),
                 ],
             },
             State {

@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt::{Debug, Write as _};
-use std::mem;
+use std::mem::{self, MaybeUninit};
 use std::ops::{Index, IndexMut};
 use std::rc::{Rc, Weak};
 
@@ -10,39 +10,41 @@ use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind};
 use crate::definitions::*;
 
 pub struct GraphBuilder {
-    states: Vec<WipStateCell>,
+    roots: Vec<Rc<WipStateCell>>,
+    states: Vec<Weak<WipStateCell>>,
     charsets: Vec<Weak<Charset>>,
-    root_count: usize,
+
+    origin: i32,
     kind: HighlightKind,
 }
 
 impl GraphBuilder {
     pub fn new() -> Self {
         GraphBuilder {
+            roots: Vec::with_capacity(16),
             states: Vec::with_capacity(16),
             charsets: Vec::with_capacity(16),
-            root_count: 0,
+
+            origin: -1,
             kind: HighlightKind::Other,
         }
     }
 
     pub fn add_root(&mut self, name: &'static str) {
-        let idx = self.add_state(0);
+        let s = self.add_state(0);
         {
-            let mut s = self.states[idx].borrow_mut();
+            let mut s = s.borrow_mut();
             s.name = Some(name);
-            s.fallback_done = true;
         }
-        self.root_count += 1;
+        self.roots.push(s);
     }
 
-    fn get_root_by_name(&self, name: &str) -> usize {
-        for (idx, s) in self.states.iter().enumerate().take(self.root_count) {
-            if s.borrow().name == Some(name) {
-                return idx;
-            }
-        }
-        panic!("Unknown state name: {name}")
+    fn get_root_by_name(&self, name: &str) -> Rc<WipStateCell> {
+        self.roots
+            .iter()
+            .find(|s| s.borrow().name == Some(name))
+            .cloned()
+            .expect("Unknown state name")
     }
 
     pub fn parse(&mut self, root: usize, rule: &Rule) {
@@ -53,15 +55,16 @@ impl GraphBuilder {
             .build()
             .parse(rule.0)
             .unwrap();
-        self.kind = rule.1;
         let dst = match rule.2 {
             ActionDefinition::Push(name) => GraphAction::Push(self.get_root_by_name(name)),
             ActionDefinition::Pop => GraphAction::Pop,
         };
-        self.transform(root, dst, &hir);
+        self.origin += 1;
+        self.kind = rule.1;
+        self.transform(self.roots[root].clone(), dst, &hir);
     }
 
-    fn transform(&mut self, src: usize, dst: GraphAction, hir: &Hir) -> GraphAction {
+    fn transform(&mut self, src: Rc<WipStateCell>, dst: GraphAction, hir: &Hir) -> GraphAction {
         fn is_any_class(class: &ClassBytes) -> bool {
             class.ranges() == [ClassBytesRange::new(0, 255)]
         }
@@ -81,13 +84,13 @@ impl GraphBuilder {
                     self.transform_any_star(src, dst)
                 }
                 (0, None, HirKind::Class(Class::Bytes(class))) => {
-                    let dst = self.transform_class_plus(src, dst, class);
-                    self.transform_option(src, dst);
+                    let dst = self.transform_class_plus(src.clone(), dst.clone(), class);
+                    self.transform_option(src, dst.clone());
                     dst
                 }
                 (0, Some(1), _) => {
-                    let dst = self.transform(src, dst, &rep.sub);
-                    self.transform_option(src, dst);
+                    let dst = self.transform(src.clone(), dst.clone(), &rep.sub);
+                    self.transform_option(src, dst.clone());
                     dst
                 }
                 (1, None, HirKind::Class(Class::Bytes(class))) => {
@@ -102,7 +105,12 @@ impl GraphBuilder {
     }
 
     // string
-    fn transform_literal(&mut self, src: usize, dst: GraphAction, lit: &[u8]) -> GraphAction {
+    fn transform_literal(
+        &mut self,
+        src: Rc<WipStateCell>,
+        dst: GraphAction,
+        lit: &[u8],
+    ) -> GraphAction {
         self.add_transition(
             src,
             dst,
@@ -113,7 +121,7 @@ impl GraphBuilder {
     // [a-z]+
     fn transform_class_plus(
         &mut self,
-        src: usize,
+        src: Rc<WipStateCell>,
         dst: GraphAction,
         class: &ClassBytes,
     ) -> GraphAction {
@@ -123,7 +131,12 @@ impl GraphBuilder {
     }
 
     // [eE]
-    fn transform_class(&mut self, src: usize, dst: GraphAction, class: &ClassBytes) -> GraphAction {
+    fn transform_class(
+        &mut self,
+        src: Rc<WipStateCell>,
+        dst: GraphAction,
+        class: &ClassBytes,
+    ) -> GraphAction {
         let mut charset = self.class_to_charset(class);
         let mut actual_dst = None;
 
@@ -152,8 +165,8 @@ impl GraphBuilder {
                 GraphConsume::Prefix(str)
             };
 
-            let d = self.add_transition(src, dst, test);
-            if d != *actual_dst.get_or_insert(d) {
+            let d = self.add_transition(src.clone(), dst.clone(), test);
+            if d != *actual_dst.get_or_insert(d.clone()) {
                 panic!("Diverging destinations for class transformer: {class:?}");
             }
         }
@@ -162,22 +175,27 @@ impl GraphBuilder {
     }
 
     // .?
-    fn transform_option(&mut self, src: usize, dst: GraphAction) -> GraphAction {
+    fn transform_option(&mut self, src: Rc<WipStateCell>, dst: GraphAction) -> GraphAction {
         self.add_transition(src, dst, GraphConsume::Chars(0))
     }
 
     // .*
-    fn transform_any_star(&mut self, src: usize, dst: GraphAction) -> GraphAction {
+    fn transform_any_star(&mut self, src: Rc<WipStateCell>, dst: GraphAction) -> GraphAction {
         self.add_transition(src, dst, GraphConsume::Chars(usize::MAX))
     }
 
     // .
-    fn transform_any(&mut self, src: usize, dst: GraphAction) -> GraphAction {
+    fn transform_any(&mut self, src: Rc<WipStateCell>, dst: GraphAction) -> GraphAction {
         self.add_transition(src, dst, GraphConsume::Chars(1))
     }
 
     // (a)(b)
-    fn transform_concat(&mut self, src: usize, dst: GraphAction, hirs: &[Hir]) -> GraphAction {
+    fn transform_concat(
+        &mut self,
+        src: Rc<WipStateCell>,
+        dst: GraphAction,
+        hirs: &[Hir],
+    ) -> GraphAction {
         fn check_lowercase_literal(hir: &Hir) -> Option<u8> {
             if let HirKind::Class(Class::Bytes(class)) = hir.kind()
                 && let ranges = class.ranges()
@@ -194,7 +212,7 @@ impl GraphBuilder {
             }
         }
 
-        let depth = self.states[src].borrow().depth + 1;
+        let depth = src.borrow().depth + 1;
         let mut it = hirs.iter().peekable();
         let mut src = GraphAction::Change(src);
 
@@ -221,7 +239,7 @@ impl GraphBuilder {
                 let next = if it.peek().is_some() {
                     GraphAction::Change(self.add_state(depth))
                 } else {
-                    dst
+                    dst.clone()
                 };
                 src = self.add_transition(src_idx, next, GraphConsume::PrefixInsensitive(str));
             } else {
@@ -229,7 +247,7 @@ impl GraphBuilder {
                 let next = if it.peek().is_some() {
                     GraphAction::Change(self.add_state(depth))
                 } else {
-                    dst
+                    dst.clone()
                 };
                 src = self.transform(src_idx, next, hir);
             }
@@ -239,12 +257,17 @@ impl GraphBuilder {
     }
 
     // (a|b)
-    fn transform_alt(&mut self, src: usize, dst: GraphAction, hirs: &[Hir]) -> GraphAction {
+    fn transform_alt(
+        &mut self,
+        src: Rc<WipStateCell>,
+        dst: GraphAction,
+        hirs: &[Hir],
+    ) -> GraphAction {
         let mut actual_dst = None;
 
         for hir in hirs {
-            let d = self.transform(src, dst, hir);
-            if d != *actual_dst.get_or_insert(d) {
+            let d = self.transform(src.clone(), dst.clone(), hir);
+            if d != *actual_dst.get_or_insert(d.clone()) {
                 panic!("Diverging destinations for alternation transformer: {hirs:?}");
             }
         }
@@ -285,23 +308,26 @@ impl GraphBuilder {
         rc
     }
 
-    fn add_state(&mut self, depth: usize) -> usize {
-        let idx = self.states.len();
-        self.states.push(WipStateCell::new(WipState {
-            name: None,
-
+    fn add_state(&mut self, depth: usize) -> Rc<WipStateCell> {
+        let s = Rc::new(WipStateCell::new(GraphState {
+            id: 0,
             transitions: Vec::new(),
 
+            name: None,
             depth,
-            shallowest_parent: None,
-            required_charset: Charset::default(),
-            fallback_done: false,
+            coverage: Charset::default(),
         }));
-        idx
+        self.states.push(Rc::downgrade(&s));
+        s
     }
 
-    fn add_transition(&mut self, src: usize, dst: GraphAction, test: GraphConsume) -> GraphAction {
-        let mut s = self.states[src].borrow_mut();
+    fn add_transition(
+        &mut self,
+        src: Rc<WipStateCell>,
+        dst: GraphAction,
+        test: GraphConsume,
+    ) -> GraphAction {
+        let mut s = src.borrow_mut();
 
         // Check if the edge already exists.
         for t in &s.transitions {
@@ -312,7 +338,7 @@ impl GraphBuilder {
                         test, t.action, dst
                     );
                 }
-                return t.action;
+                return t.action.clone();
             }
         }
 
@@ -341,110 +367,139 @@ impl GraphBuilder {
             }
         }
 
-        // Remember the shallowest parent for the state.
-        if let GraphAction::Change(dst) = dst {
-            let mut dst = self.states[dst].borrow_mut();
-            if dst
-                .shallowest_parent
-                .is_none_or(|p| p != src && self.states[p].borrow().depth > s.depth)
-            {
-                dst.shallowest_parent = Some(src);
-            }
-        }
-
-        s.transitions.push(GraphTransition { test, kind: self.kind, action: dst });
+        s.transitions.push(GraphTransition {
+            origin: self.origin,
+            test,
+            kind: self.kind,
+            action: dst.clone(),
+        });
         dst
     }
 
     pub fn finalize(&mut self) {
-        if self.states.last().is_some_and(|s| s.borrow().transitions.is_empty()) {
-            self.states.pop();
+        for s in &self.roots {
+            let mut s = s.borrow_mut();
+            s.coverage.fill(true);
         }
-        for src in 0..self.root_count {
-            self.compute_required_charsets_impl(src);
-        }
-        for src in 0..self.root_count {
-            self.connect_fallbacks_impl(src);
-        }
-    }
 
-    fn compute_required_charsets_impl(&self, src: usize) {
-        let src = self.states[src].borrow();
-
-        for t in &src.transitions {
-            let GraphAction::Change(dst) = t.action else {
+        for s in &self.states[self.roots.len()..] {
+            let Some(s) = s.upgrade() else {
                 continue;
             };
 
-            let mut dst = self.states[dst].borrow_mut();
-            let cs = &mut dst.required_charset;
+            let mut s = s.borrow_mut();
+            let s = &mut *s;
 
-            match &t.test {
-                GraphConsume::Chars(_) => cs.fill(true),
-                GraphConsume::Prefix(s) => cs.merge_str(s),
-                GraphConsume::PrefixInsensitive(s) => cs.merge_str_insensitive(s),
-                GraphConsume::Charset(c) => cs.merge(c),
-            }
-
-            cs.merge(&src.required_charset);
-        }
-
-        for t in &src.transitions {
-            let GraphAction::Change(dst) = t.action else {
-                continue;
-            };
-            self.compute_required_charsets_impl(dst);
-        }
-    }
-
-    fn connect_fallbacks_impl(&self, src: usize) {
-        {
-            let src = self.states[src].borrow();
-
-            for t in &src.transitions {
-                if let GraphAction::Change(dst) = t.action
-                    && !self.states[dst].borrow().fallback_done
-                {
-                    self.connect_fallbacks_impl(dst);
-                }
-            }
-
-            if src.fallback_done {
-                return;
-            }
-        }
-
-        let mut src = self.states[src].borrow_mut();
-
-        if !src.transitions.iter().any(|t| matches!(t.test, GraphConsume::Chars(_))) {
-            let action = 'res: {
-                if !src.required_charset.covers_all() {
-                    let mut parent = src.shallowest_parent;
-                    while let Some(p) = parent {
-                        let pb = self.states[p].borrow();
-                        if pb.required_charset.is_superset(&src.required_charset) {
-                            break 'res GraphAction::Change(p);
-                        }
-                        parent = pb.shallowest_parent;
+            for t in &s.transitions {
+                match &t.test {
+                    GraphConsume::Chars(_) => {
+                        s.coverage.fill(true);
+                        break;
                     }
+                    GraphConsume::Charset(c) => {
+                        s.coverage.merge(c);
+                    }
+                    _ => {}
                 }
-                GraphAction::Pop
-            };
-
-            src.transitions.push(GraphTransition {
-                test: GraphConsume::Chars(0),
-                kind: HighlightKind::Other,
-                action,
-            });
+            }
         }
 
-        src.fallback_done = true;
+        for root in &self.roots {
+            Self::fallback_find(root.clone());
+        }
+
+        for s in &self.states[self.roots.len()..] {
+            let Some(s) = s.upgrade() else {
+                continue;
+            };
+
+            let mut s = s.borrow_mut();
+            if !s.coverage.covers_all() {
+                s.transitions.push(GraphTransition {
+                    origin: -1,
+                    test: GraphConsume::Chars(0),
+                    kind: HighlightKind::Other,
+                    action: GraphAction::Pop,
+                });
+            }
+        }
+
+        let mut id = 0;
+        for s in &self.states {
+            let Some(s) = s.upgrade() else {
+                continue;
+            };
+
+            let mut s = s.borrow_mut();
+            s.id = id;
+            id += 1;
+        }
+    }
+
+    fn fallback_find(src: Rc<WipStateCell>) {
+        let s = src.borrow();
+        let mut has_children = false;
+
+        for t in &s.transitions {
+            if let GraphAction::Change(dst) = &t.action {
+                Self::fallback_find(dst.clone());
+                has_children = true;
+            }
+        }
+
+        if !has_children {
+            return;
+        }
+
+        for t in &s.transitions {
+            if !matches!(t.test, GraphConsume::Chars(_) | GraphConsume::Charset(_)) {
+                continue;
+            }
+
+            for t_dst in &s.transitions {
+                if t_dst.origin >= t.origin {
+                    break;
+                }
+                if let GraphAction::Change(dst) = &t_dst.action {
+                    Self::fallback_add(dst.clone(), t_dst.origin, t);
+                }
+            }
+        }
+    }
+
+    fn fallback_add(src: Rc<WipStateCell>, filter_origin: i32, fallback: &GraphTransition) {
+        let Ok(mut s) = src.try_borrow_mut() else {
+            return; // TODO
+        };
+
+        for t in &s.transitions {
+            if let GraphAction::Change(dst) = &t.action
+                && t.origin == filter_origin
+            {
+                Self::fallback_add(dst.clone(), filter_origin, fallback);
+            }
+        }
+
+        let mut cs_buf = MaybeUninit::uninit();
+        let cs = match &fallback.test {
+            GraphConsume::Chars(_) => cs_buf.write(Charset::yes()),
+            GraphConsume::Charset(c) => &**c,
+            _ => unreachable!(),
+        };
+
+        if !cs.is_strict_superset(&s.coverage) {
+            return;
+        }
+
+        let mut f = fallback.clone();
+        f.origin = -1;
+        s.transitions.push(f);
+        s.coverage.merge(cs);
     }
 
     pub fn format_as_mermaid(&self) -> String {
-        struct Visitor<'a> {
-            states: &'a [WipStateCell],
-            visited: HashSet<usize>,
+        struct Visitor {
+            visited: HashSet<*const WipStateCell>,
             output: String,
         }
 
@@ -461,12 +516,12 @@ impl GraphBuilder {
             res
         }
 
-        fn print_state(visitor: &mut Visitor, src: usize) {
-            if !visitor.visited.insert(src) {
+        fn print_state(visitor: &mut Visitor, src: Rc<WipStateCell>) {
+            if !visitor.visited.insert(&*src) {
                 return;
             }
 
-            let transitions = &visitor.states[src].borrow().transitions;
+            let transitions = &src.borrow().transitions;
             let mut iter = transitions.iter().peekable();
 
             while let Some(t) = iter.next() {
@@ -522,17 +577,17 @@ impl GraphBuilder {
 
                 let dst = match &t.action {
                     GraphAction::Change(dst) => {
-                        format!("{dst}")
+                        format!("{}", dst.borrow().id)
                     }
                     GraphAction::Push(dst) => {
                         format!(
                             "push{}[/\"{}\"/]",
-                            src << 16 | dst,
-                            visitor.states[*dst].borrow().name.unwrap()
+                            src.borrow().id << 16 | dst.borrow().id,
+                            dst.borrow().name.unwrap()
                         )
                     }
                     GraphAction::Pop => {
-                        format!("pop{}@{{ shape: stop }}", src << 16)
+                        format!("pop{}@{{ shape: stop }}", src.borrow().id << 16)
                     }
                 };
 
@@ -540,29 +595,29 @@ impl GraphBuilder {
                 _ = writeln!(
                     &mut visitor.output,
                     "    {src} -->|\"{label}<br/>{kind}\"| {dst}",
+                    src = src.borrow().id,
                     kind = t.kind.as_str()
                 );
 
-                if let GraphAction::Change(idx) = &t.action {
-                    print_state(visitor, *idx);
+                if let GraphAction::Change(dst) = &t.action {
+                    print_state(visitor, dst.clone());
                 }
             }
         }
 
-        let mut visitor =
-            Visitor { states: &self.states, visited: HashSet::new(), output: String::new() };
+        let mut visitor = Visitor { visited: HashSet::new(), output: String::new() };
 
         _ = write!(&mut visitor.output, "---\nconfig:\n  layout: elk\n---\nflowchart TD\n");
-        for src in 0..self.root_count {
+        for src in &self.roots {
             _ = writeln!(
                 &mut visitor.output,
                 "    {}[\"{}\"]",
-                src,
-                self.states[src].borrow().name.unwrap()
+                src.borrow().id,
+                src.borrow().name.unwrap()
             );
         }
-        for src in 0..self.root_count {
-            print_state(&mut visitor, src);
+        for src in &self.roots {
+            print_state(&mut visitor, src.clone());
         }
 
         visitor.output
@@ -572,34 +627,45 @@ impl GraphBuilder {
         self.charsets.iter().filter_map(Weak::upgrade).collect()
     }
 
-    pub fn states(&self) -> &[WipStateCell] {
-        &self.states
+    pub fn states(&self) -> Vec<Rc<WipStateCell>> {
+        self.states.iter().filter_map(Weak::upgrade).collect()
     }
 }
 
-#[derive(Default)]
-pub struct WipState {
-    name: Option<&'static str>,
-
+#[derive(Debug, Default)]
+pub struct GraphState {
+    pub id: usize,
     pub transitions: Vec<GraphTransition>,
 
+    name: Option<&'static str>,
     depth: usize,
-    shallowest_parent: Option<usize>,
-    required_charset: Charset,
-    fallback_done: bool,
+    coverage: Charset,
 }
 
-pub type WipStateCell = RefCell<WipState>;
+pub type WipStateCell = RefCell<GraphState>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum GraphAction {
     // Same as super::Action
-    Change(usize),
-    Push(usize),
+    Change(Rc<WipStateCell>),
+    Push(Rc<WipStateCell>),
     Pop,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+impl PartialEq for GraphAction {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (GraphAction::Change(a), GraphAction::Change(b)) => Rc::ptr_eq(a, b),
+            (GraphAction::Push(a), GraphAction::Push(b)) => Rc::ptr_eq(a, b),
+            (GraphAction::Pop, GraphAction::Pop) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for GraphAction {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GraphConsume {
     // Same as super::Consume
     Chars(usize),
@@ -608,7 +674,9 @@ pub enum GraphConsume {
     Charset(Rc<Charset>),
 }
 
+#[derive(Debug, Clone)]
 pub struct GraphTransition {
+    origin: i32,
     pub test: GraphConsume,
     pub kind: HighlightKind,
     pub action: GraphAction,
@@ -621,6 +689,14 @@ pub struct Charset {
 }
 
 impl Charset {
+    pub fn no() -> Self {
+        Charset { id: 0, bits: [false; 256] }
+    }
+
+    pub fn yes() -> Self {
+        Charset { id: 0, bits: [true; 256] }
+    }
+
     pub fn id(&self) -> usize {
         self.id
     }
@@ -639,30 +715,19 @@ impl Charset {
         }
     }
 
-    pub fn merge_str(&mut self, s: &str) {
-        for b in s.as_bytes() {
-            self.bits[*b as usize] = true;
-        }
-    }
-
-    pub fn merge_str_insensitive(&mut self, s: &str) {
-        for b in s.as_bytes() {
-            self.bits[b.to_ascii_uppercase() as usize] = true;
-            self.bits[b.to_ascii_lowercase() as usize] = true;
-        }
-    }
-
     pub fn covers_all(&self) -> bool {
         self.bits.iter().all(|&b| b)
     }
 
-    pub fn is_superset(&self, other: &Charset) -> bool {
-        for (a, b) in self.bits.iter().zip(other.bits.iter()) {
-            if *b && !*a {
+    pub fn is_strict_superset(&self, other: &Charset) -> bool {
+        let mut has_extra = false;
+        for (&s, &o) in self.bits.iter().zip(other.bits.iter()) {
+            if !s && o {
                 return false;
             }
+            has_extra |= s && !o;
         }
-        true
+        has_extra
     }
 
     pub fn iter(&self) -> impl Iterator<Item = bool> + '_ {
@@ -672,7 +737,7 @@ impl Charset {
 
 impl Default for Charset {
     fn default() -> Self {
-        Charset { id: 0, bits: [false; 256] }
+        Self::no()
     }
 }
 
