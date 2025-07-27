@@ -157,7 +157,11 @@ pub const LANGUAGES: &[Language] = &[
                     (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Number, Pop),
                     (r#"-\w+"#, Operator, Pop),
                     (r#"[!*/%+<=>|]"#, Operator, Pop),
-                    // TODO: Add [\w-]+ suffix which results in kind=Other
+                    (
+                        r#"(?i:break|catch|continue|do|else|finally|foreach|function|if|return|switch|throw|try|using|while)[\w-]+"#,
+                        Method,
+                        Pop,
+                    ),
                     (
                         r#"(?i:break|catch|continue|do|else|finally|foreach|function|if|return|switch|throw|try|using|while)"#,
                         Keyword,
@@ -203,6 +207,11 @@ pub const LANGUAGES: &[Language] = &[
                     (r#"::.*"#, Comment, Pop),
                     (r#"""#, String, Push("string")),
                     (r#"[!*/%+<=>|]"#, Operator, Pop),
+                    (
+                        r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)\w+",
+                        Other,
+                        Pop,
+                    ),
                     (
                         r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)",
                         Keyword,
