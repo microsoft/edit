@@ -574,12 +574,17 @@ impl Tui {
                     && next_state != InputMouseState::None;
                 let mouse_up = self.mouse_state != InputMouseState::None
                     && next_state == InputMouseState::None;
-                let is_drag = self.mouse_state == InputMouseState::Left
-                    && next_state == InputMouseState::Left;
-                let is_scroll_drag = self.mouse_state == InputMouseState::Left
-                    && next_state == InputMouseState::Scroll;
 
-                self.mouse_is_drag = is_drag || is_scroll_drag;
+                // At the time of writing this, ::Release should not happen here.
+                // But it would break functionality, so we should check for it.
+                let all_buttons_released =
+                    next_state == InputMouseState::None || next_state == InputMouseState::Release;
+
+                // As long as the last state was ::Left, and the next event is neither ::None nor ::Release,
+                // we could not have possibly let go of the button yet, so we must be either long-clicking or dragging.
+                // In our case both scenarios may start a drag.
+                self.mouse_is_drag =
+                    self.mouse_state == InputMouseState::Left && !all_buttons_released;
 
                 let mut hovered_node = None; // Needed for `mouse_down`
                 let mut focused_node = None; // Needed for `mouse_down` and `is_click`
