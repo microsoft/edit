@@ -91,8 +91,7 @@ fn main() {
                 output,
                 "
                 #[rustfmt::skip]
-                const LANG_{}_CHARSET_{}: &[u8; 256] = &[
-                ",
+                const LANG_{}_CHARSET_{}: &[u8; 256] = &[",
                 name_uppercase,
                 cs.id()
             );
@@ -140,22 +139,16 @@ fn main() {
                         format!("Consume::Charset(LANG_{}_CHARSET_{})", name_uppercase, cs.id())
                     }
                 };
-                let kind = match t.kind {
-                    HighlightKind::Other => "HighlightKind::Other",
-                    HighlightKind::Comment => "HighlightKind::Comment",
-                    HighlightKind::Number => "HighlightKind::Number",
-                    HighlightKind::String => "HighlightKind::String",
-                    HighlightKind::Variable => "HighlightKind::Variable",
-                    HighlightKind::Operator => "HighlightKind::Operator",
-                    HighlightKind::Keyword => "HighlightKind::Keyword",
-                    HighlightKind::Method => "HighlightKind::Method",
-                };
                 let action = match &t.action {
                     GraphAction::Change(next) => format!("Action::Change({next})"),
                     GraphAction::Push(next) => format!("Action::Push({next})"),
                     GraphAction::Pop => "Action::Pop".to_string(),
                 };
-                _ = writeln!(output, r#"            ({test}, {kind}, {action}),"#);
+                _ = writeln!(
+                    output,
+                    r#"            ({test}, HighlightKind::{kind}, {action}),"#,
+                    kind = t.kind.as_str()
+                );
             }
 
             _ = writeln!(output, r#"        ],"#);

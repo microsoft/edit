@@ -452,6 +452,7 @@ impl GraphBuilder {
             let mut res = String::with_capacity(s.len());
             for c in s.chars() {
                 match c {
+                    '\t' => res.push_str(r#"\\t"#),
                     '"' => res.push_str("&quot;"),
                     '\\' => res.push_str(r#"\\"#),
                     _ => res.push(c),
@@ -536,10 +537,12 @@ impl GraphBuilder {
                 };
 
                 let label = escape(&label);
-                _ = writeln!(&mut visitor.output, "    {src} -->|\"{label}\"| {dst}");
-            }
+                _ = writeln!(
+                    &mut visitor.output,
+                    "    {src} -->|\"{label}<br/>{kind}\"| {dst}",
+                    kind = t.kind.as_str()
+                );
 
-            for t in transitions {
                 if let GraphAction::Change(idx) = &t.action {
                     print_state(visitor, *idx);
                 }
