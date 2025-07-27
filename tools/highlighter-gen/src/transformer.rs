@@ -331,15 +331,25 @@ impl GraphBuilder {
 
         // Check if the edge already exists.
         for t in &s.transitions {
-            if t.test == test {
-                if mem::discriminant(&t.action) != mem::discriminant(&dst) {
-                    panic!(
-                        "Diverging actions for the same test: {:?} -> {:?} vs {:?}",
-                        test, t.action, dst
-                    );
-                }
+            if t.test != test {
+                continue;
+            }
+
+            if mem::discriminant(&t.action) == mem::discriminant(&dst) {
                 return t.action.clone();
             }
+
+            if let GraphAction::Change(d) = &t.action
+                && matches!(dst, GraphAction::Pop)
+            {
+                self.add_transition(d.clone(), GraphAction::Pop, GraphConsume::Chars(0));
+                return GraphAction::Pop;
+            }
+
+            panic!(
+                "Diverging actions for the same test: {:?} -> {:?} vs {:?}",
+                t.test, t.action, dst
+            );
         }
 
         // Check for plausibility: if any prior test encompasses the new test, panic.
@@ -644,12 +654,22 @@ pub struct GraphState {
 
 pub type WipStateCell = RefCell<GraphState>;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum GraphAction {
     // Same as super::Action
     Change(Rc<WipStateCell>),
     Push(Rc<WipStateCell>),
     Pop,
+}
+
+impl Debug for GraphAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GraphAction::Change(s) => write!(f, "Change({:p})", Rc::as_ptr(s)),
+            GraphAction::Push(s) => write!(f, "Push({:p})", Rc::as_ptr(s)),
+            GraphAction::Pop => write!(f, "Pop"),
+        }
+    }
 }
 
 impl PartialEq for GraphAction {

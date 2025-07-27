@@ -401,7 +401,9 @@ flowchart TD
     8 -->|"Chars(0)<br/>Other"| pop524288@{ shape: stop }
     0 -->|"Charset([0-9])<br/>Number"| 7
     0 -->|"Prefix(!, %, *, +, /, <, =, >, |)<br/>Operator"| pop0@{ shape: stop }
-    0 -->|"PrefixInsensitive(break, catch, continue, do, else, finally, foreach, function, if, return, switch, throw, try, using, while)<br/>Keyword"| pop0@{ shape: stop }
+    0 -->|"PrefixInsensitive(break, catch, continue, do, else, finally, foreach, function, if, return, switch, throw, try, using, while)<br/>Method"| 13
+    13 -->|"Charset([-, 0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Method"| pop851968@{ shape: stop }
+    13 -->|"Chars(0)<br/>Keyword"| pop851968@{ shape: stop }
     0 -->|"Charset([-, 0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Method"| pop0@{ shape: stop }
     1 -->|"Prefix(#>)<br/>Comment"| pop65536@{ shape: stop }
     2 -->|"Prefix(')<br/>String"| pop131072@{ shape: stop }
@@ -411,12 +413,12 @@ flowchart TD
     3 -->|"Prefix($)<br/>Other"| push196613[/"variable"/]
     4 -->|"Chars(1)<br/>String"| pop262144@{ shape: stop }
     5 -->|"Prefix((, $, ?, ^)<br/>Other"| pop327680@{ shape: stop }
-    5 -->|"Prefix({)<br/>Variable"| 13
-    13 -->|"Charset([0x00-|, ~-0xFF])<br/>Variable"| 14
-    14 -->|"Prefix(})<br/>Variable"| pop917504@{ shape: stop }
-    14 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Variable"| pop917504@{ shape: stop }
-    14 -->|"Chars(0)<br/>Other"| pop917504@{ shape: stop }
-    13 -->|"Chars(0)<br/>Variable"| 14
+    5 -->|"Prefix({)<br/>Variable"| 14
+    14 -->|"Charset([0x00-|, ~-0xFF])<br/>Variable"| 15
+    15 -->|"Prefix(})<br/>Variable"| pop983040@{ shape: stop }
+    15 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Variable"| pop983040@{ shape: stop }
+    15 -->|"Chars(0)<br/>Other"| pop983040@{ shape: stop }
+    14 -->|"Chars(0)<br/>Variable"| 15
     5 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Variable"| pop327680@{ shape: stop }
 **/
 #[rustfmt::skip]
@@ -449,21 +451,21 @@ pub const LANG_POWERSHELL: &Language = &Language {
             (Consume::Prefix(r#"="#), HighlightKind::Operator, Action::Pop),
             (Consume::Prefix(r#">"#), HighlightKind::Operator, Action::Pop),
             (Consume::Prefix(r#"|"#), HighlightKind::Operator, Action::Pop),
-            (Consume::PrefixInsensitive(r#"break"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"catch"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"continue"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"do"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"else"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"finally"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"foreach"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"function"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"if"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"return"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"switch"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"throw"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"try"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"using"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"while"#), HighlightKind::Keyword, Action::Pop),
+            (Consume::PrefixInsensitive(r#"break"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"catch"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"continue"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"do"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"else"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"finally"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"foreach"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"function"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"if"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"return"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"switch"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"throw"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"try"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"using"#), HighlightKind::Method, Action::Change(13)),
+            (Consume::PrefixInsensitive(r#"while"#), HighlightKind::Method, Action::Change(13)),
             (Consume::Charset(LANG_POWERSHELL_CHARSET_2), HighlightKind::Method, Action::Pop),
         ],
         &[
@@ -486,7 +488,7 @@ pub const LANG_POWERSHELL: &Language = &Language {
             (Consume::Prefix(r#"$"#), HighlightKind::Variable, Action::Pop),
             (Consume::Prefix(r#"?"#), HighlightKind::Variable, Action::Pop),
             (Consume::Prefix(r#"^"#), HighlightKind::Variable, Action::Pop),
-            (Consume::Prefix(r#"{"#), HighlightKind::Variable, Action::Change(13)),
+            (Consume::Prefix(r#"{"#), HighlightKind::Variable, Action::Change(14)),
             (Consume::Charset(LANG_POWERSHELL_CHARSET_1), HighlightKind::Variable, Action::Pop),
         ],
         &[
@@ -524,8 +526,12 @@ pub const LANG_POWERSHELL: &Language = &Language {
             (Consume::Chars(0), HighlightKind::Other, Action::Pop),
         ],
         &[
-            (Consume::Charset(LANG_POWERSHELL_CHARSET_3), HighlightKind::Variable, Action::Change(14)),
-            (Consume::Chars(0), HighlightKind::Variable, Action::Change(14)),
+            (Consume::Charset(LANG_POWERSHELL_CHARSET_2), HighlightKind::Method, Action::Pop),
+            (Consume::Chars(0), HighlightKind::Keyword, Action::Pop),
+        ],
+        &[
+            (Consume::Charset(LANG_POWERSHELL_CHARSET_3), HighlightKind::Variable, Action::Change(15)),
+            (Consume::Chars(0), HighlightKind::Variable, Action::Change(15)),
         ],
         &[
             (Consume::Prefix(r#"}"#), HighlightKind::Variable, Action::Pop),
@@ -551,7 +557,9 @@ flowchart TD
     4 -->|"Chars(Line)<br/>Comment"| pop262144@{ shape: stop }
     0 -->|"Prefix(&quot;)<br/>String"| push1[/"string"/]
     0 -->|"Prefix(!, %, *, +, /, <, =, >, |)<br/>Operator"| pop0@{ shape: stop }
-    0 -->|"PrefixInsensitive(break, call, cd, chdir, cls, copy, del, dir, echo, exit, for, goto, if, md, mkdir, move, pause, ren, set)<br/>Keyword"| pop0@{ shape: stop }
+    0 -->|"PrefixInsensitive(break, call, cd, chdir, cls, copy, del, dir, echo, exit, for, goto, if, md, mkdir, move, pause, ren, set)<br/>Other"| 5
+    5 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Other"| pop327680@{ shape: stop }
+    5 -->|"Chars(0)<br/>Keyword"| pop327680@{ shape: stop }
     0 -->|"Charset([0-9])<br/>Number"| pop0@{ shape: stop }
     1 -->|"Prefix(&quot;)<br/>String"| pop65536@{ shape: stop }
     1 -->|"Prefix(\\)<br/>String"| push65538[/"string_escape"/]
@@ -560,7 +568,9 @@ flowchart TD
 #[rustfmt::skip]
 const LANG_BATCH_CHARSET_0: &[u8; 256] = &[1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
 #[rustfmt::skip]
-const LANG_BATCH_CHARSET_1: &[u8; 256] = &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const LANG_BATCH_CHARSET_1: &[u8; 256] = &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+#[rustfmt::skip]
+const LANG_BATCH_CHARSET_2: &[u8; 256] = &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 #[rustfmt::skip]
 pub const LANG_BATCH: &Language = &Language {
     name: "Batch",
@@ -579,26 +589,26 @@ pub const LANG_BATCH: &Language = &Language {
             (Consume::Prefix(r#"="#), HighlightKind::Operator, Action::Pop),
             (Consume::Prefix(r#">"#), HighlightKind::Operator, Action::Pop),
             (Consume::Prefix(r#"|"#), HighlightKind::Operator, Action::Pop),
-            (Consume::PrefixInsensitive(r#"break"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"call"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"cd"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"chdir"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"cls"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"copy"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"del"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"dir"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"echo"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"exit"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"for"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"goto"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"if"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"md"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"mkdir"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"move"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"pause"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"ren"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::PrefixInsensitive(r#"set"#), HighlightKind::Keyword, Action::Pop),
-            (Consume::Charset(LANG_BATCH_CHARSET_1), HighlightKind::Number, Action::Pop),
+            (Consume::PrefixInsensitive(r#"break"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"call"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"cd"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"chdir"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"cls"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"copy"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"del"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"dir"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"echo"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"exit"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"for"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"goto"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"if"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"md"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"mkdir"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"move"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"pause"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"ren"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::PrefixInsensitive(r#"set"#), HighlightKind::Other, Action::Change(5)),
+            (Consume::Charset(LANG_BATCH_CHARSET_2), HighlightKind::Number, Action::Pop),
         ],
         &[
             (Consume::Prefix(r#"""#), HighlightKind::String, Action::Pop),
@@ -613,6 +623,10 @@ pub const LANG_BATCH: &Language = &Language {
         ],
         &[
             (Consume::Chars(usize::MAX), HighlightKind::Comment, Action::Pop),
+        ],
+        &[
+            (Consume::Charset(LANG_BATCH_CHARSET_1), HighlightKind::Other, Action::Pop),
+            (Consume::Chars(0), HighlightKind::Keyword, Action::Pop),
         ],
     ],
 };
