@@ -1,0 +1,30 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Debug (Windows)",
+            "preLaunchTask": "rust: cargo build",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "console": "externalTerminal",
+            "program": "${workspaceFolder}/target/debug/highlighter-gen",
+            "cwd": "${workspaceFolder}",
+        },
+        {
+            "name": "Launch Debug (GDB/LLDB)",
+            "preLaunchTask": "rust: cargo build",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/target/debug/highlighter-gen",
+            "cwd": "${workspaceFolder}",
+        },
+        {
+            "name": "Launch Debug (LLDB)",
+            "preLaunchTask": "rust: cargo build",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/target/debug/highlighter-gen",
+            "cwd": "${workspaceFolder}",
+        }
+    ]
+}
