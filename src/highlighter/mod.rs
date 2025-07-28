@@ -142,101 +142,68 @@ impl<'doc> Highlighter<'doc> {
         }
 
         let line_buf = unicode::strip_newline(&line_buf);
-        let mut off = 0;
-
-        if self.kind != HighlightKind::Other {
-            res.push(Higlight { start: 0, kind: self.kind });
-        }
+        let mut off = 0usize;
+        let mut start = 0usize;
+        let mut state = self.state;
+        let mut kind = self.kind;
 
         loop {
-            let starter = &self.starter[self.state];
-            while off < line_buf.len() && starter[line_buf[off] as usize] == 0 {
-                off += 1;
-            }
+            let mut end = off;
 
-            let start = off;
-            let mut hit = None;
-
-            for t in self.language.states[self.state] {
+            for t in self.language.states[state] {
                 match t.0 {
                     Consume::Chars(n) => {
-                        off = off.saturating_add(n);
-                        hit = Some(t);
-                        break;
+                        end = end.saturating_add(n);
                     }
                     Consume::Prefix(str) => {
-                        if line_buf[off..].starts_with(str.as_bytes()) {
-                            off += str.len();
-                            hit = Some(t);
-                            break;
+                        if !line_buf[end..].starts_with(str.as_bytes()) {
+                            continue;
                         }
+                        end += str.len();
                     }
                     Consume::PrefixInsensitive(str) => {
-                        if line_buf[off..].starts_with_ignore_ascii_case(str) {
-                            off += str.len();
-                            hit = Some(t);
-                            break;
+                        if !line_buf[end..].starts_with_ignore_ascii_case(str) {
+                            continue;
                         }
+                        end += str.len();
                     }
                     Consume::Charset(cs) => {
-                        if off < line_buf.len() && cs[line_buf[off] as usize] != 0 {
-                            while {
-                                off += 1;
-                                off < line_buf.len() && cs[line_buf[off] as usize] != 0
-                            } {}
-                            hit = Some(t);
-                            break;
+                        // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
+                        if end >= line_buf.len() || cs[line_buf[end] as usize] == 0 {
+                            continue;
                         }
-                    }
-                };
-            }
-
-            if let Some(t) = hit {
-                // If this transition changes the HighlightKind,
-                // we need to split the current run and add a new one.
-                if self.kind != t.1 {
-                    if let Some(last) = res.last_mut()
-                        && last.start == start
-                    {
-                        last.kind = t.1;
-                    } else {
-                        res.push(Higlight { start, kind: t.1 });
+                        while {
+                            end += 1;
+                            end < line_buf.len() && cs[line_buf[end] as usize] != 0
+                        } {}
                     }
                 }
 
                 match t.2 {
                     Action::Change(to) => {
-                        if let Some(last) = res.last_mut() {
-                            last.kind = t.1;
-                        }
-                        self.state = to as usize;
-                        self.kind = t.1;
+                        state = to as usize;
+                        kind = t.1.unwrap_or(kind);
                     }
                     Action::Push(to) => {
-                        self.state_stack.push((self.state, self.kind));
-                        self.state = to as usize;
-                        self.kind = t.1;
+                        res.push(Higlight { start, kind });
+
+                        self.state_stack.push((state, kind));
+                        start = off;
+                        state = to as usize;
+                        kind = t.1.unwrap_or(kind);
                     }
                     Action::Pop => {
-                        self.state_stack.pop();
-                        (self.state, self.kind) =
-                            self.state_stack.last().copied().unwrap_or_default();
+                        kind = t.1.unwrap_or(kind);
+                        res.push(Higlight { start, kind });
 
-                        // This may have changed the HighlightKind yet again.
-                        if self.kind != t.1 {
-                            if let Some(last) = res.last_mut()
-                                && last.start == off
-                            {
-                                last.kind = self.kind;
-                            } else {
-                                res.push(Higlight { start: off, kind: self.kind });
-                            }
-                        }
+                        start = end;
+                        (state, kind) = self.state_stack.last().copied().unwrap_or_default();
+                        self.state_stack.pop();
                     }
                 }
-            } else {
-                // False starter hit.
-                off += 1;
+
+                off = end;
+                break;
             }
 
             if off >= line_buf.len() {
@@ -244,15 +211,16 @@ impl<'doc> Highlighter<'doc> {
             }
         }
 
-        if res.last().is_some_and(|last| last.start != line_buf.len()) {
-            res.push(Higlight { start: line_buf.len(), kind: self.kind });
-        }
+        res.push(Higlight { start, kind });
+        res.push(Higlight { start: line_buf.len(), kind });
 
         // Adjust the range to account for the line offset.
         for h in &mut res {
             h.start = line_beg + h.start.min(line_buf.len());
         }
 
+        self.state = state;
+        self.kind = kind;
         res
     }
 }

@@ -14,21 +14,6 @@ pub enum HighlightKind {
     Method,
 }
 
-impl HighlightKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Other => "Other",
-            Comment => "Comment",
-            Number => "Number",
-            String => "String",
-            Variable => "Variable",
-            Operator => "Operator",
-            Keyword => "Keyword",
-            Method => "Method",
-        }
-    }
-}
-
 pub struct Language {
     #[allow(dead_code)]
     pub name: &'static str,
@@ -60,7 +45,9 @@ pub const LANGUAGES: &[Language] = &[
                     (r#"//.*"#, Comment, Pop),
                     (r#"/\*"#, Comment, Push("comment")),
                     (r#"""#, String, Push("string")),
+                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?\w+"#, Other, Pop),
                     (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Number, Pop),
+                    (r#"(?:true|false|null)\w+"#, Other, Pop),
                     (r#"(?:true|false|null)"#, Keyword, Pop),
                 ],
             },
@@ -158,12 +145,12 @@ pub const LANGUAGES: &[Language] = &[
                     (r#"-\w+"#, Operator, Pop),
                     (r#"[!*/%+<=>|]"#, Operator, Pop),
                     (
-                        r#"(?i:break|catch|continue|do|else|finally|foreach|function|if|return|switch|throw|try|using|while)[\w-]+"#,
+                        r#"(?i:break|catch|continue|do|elseif|else|finally|foreach|function|if|return|switch|throw|try|using|while)[\w-]+"#,
                         Method,
                         Pop,
                     ),
                     (
-                        r#"(?i:break|catch|continue|do|else|finally|foreach|function|if|return|switch|throw|try|using|while)"#,
+                        r#"(?i:break|catch|continue|do|elseif|else|finally|foreach|function|if|return|switch|throw|try|using|while)"#,
                         Keyword,
                         Pop,
                     ),
@@ -202,11 +189,13 @@ pub const LANGUAGES: &[Language] = &[
             State {
                 name: "ground",
                 rules: &[
-                    (r#"rem\S+"#, Other, Pop),
-                    (r#"rem.*"#, Comment, Pop),
+                    (r#"(?i:rem)\S+"#, Other, Pop),
+                    (r#"(?i:rem).*"#, Comment, Pop),
                     (r#"::.*"#, Comment, Pop),
                     (r#"""#, String, Push("string")),
-                    (r#"[!*/%+<=>|]"#, Operator, Pop),
+                    (r#"%%"#, Other, Pop),
+                    (r#"%"#, Variable, Push("variable")),
+                    (r#"[!*/+<=>|]"#, Operator, Pop),
                     (
                         r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)\w+",
                         Other,
@@ -225,6 +214,7 @@ pub const LANGUAGES: &[Language] = &[
                 rules: &[(r#"""#, String, Pop), (r#"\\"#, String, Push("string_escape"))],
             },
             State { name: "string_escape", rules: &[(r#"."#, String, Pop)] },
+            State { name: "variable", rules: &[(r#"%"#, Variable, Pop)] },
         ],
     },
 ];
