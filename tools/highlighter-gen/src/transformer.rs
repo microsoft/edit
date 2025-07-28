@@ -12,7 +12,7 @@ use crate::definitions::*;
 pub struct GraphBuilder {
     roots: Vec<Rc<WipStateCell>>,
     states: Vec<Weak<WipStateCell>>,
-    charsets: Vec<Weak<Charset>>,
+    charsets: CharsetInterner,
 
     origin: i32,
     kind: HighlightKind,
@@ -23,7 +23,7 @@ impl GraphBuilder {
         GraphBuilder {
             roots: Vec::with_capacity(16),
             states: Vec::with_capacity(16),
-            charsets: Vec::with_capacity(16),
+            charsets: CharsetInterner { charsets: Vec::with_capacity(16) },
 
             origin: -1,
             kind: HighlightKind::Other,
@@ -126,7 +126,7 @@ impl GraphBuilder {
         class: &ClassBytes,
     ) -> GraphAction {
         let c = self.class_to_charset(class);
-        let c = self.intern_charset(c);
+        let c = self.charsets.intern(c);
         self.add_transition(src, dst, GraphConsume::Charset(c))
     }
 
@@ -295,19 +295,6 @@ impl GraphBuilder {
         charset
     }
 
-    fn intern_charset(&mut self, mut charset: Charset) -> Rc<Charset> {
-        if let Some(rc) = self.charsets.iter().filter_map(|w| w.upgrade()).find(|c| **c == charset)
-        {
-            return rc;
-        }
-
-        charset.id = self.charsets.len();
-
-        let rc = Rc::new(charset);
-        self.charsets.push(Rc::downgrade(&rc));
-        rc
-    }
-
     fn add_state(&mut self, depth: usize) -> Rc<WipStateCell> {
         let s = Rc::new(WipStateCell::new(GraphState {
             id: 0,
@@ -358,15 +345,15 @@ impl GraphBuilder {
 
             if match (&t.test, &test) {
                 (Chars(_), _) => true,
+                (Charset(p), Charset(n)) => {
+                    // If all the bits in `n` are also true in `p`
+                    n.iter().zip(p.iter()).all(|(n, p)| !n || p)
+                }
                 (Prefix(p), Prefix(s)) => s.starts_with(p.as_str()),
                 (PrefixInsensitive(p), Prefix(s) | PrefixInsensitive(s)) => {
                     let s = s.as_bytes();
                     let p = p.as_bytes();
                     p.len() <= s.len() && s[..p.len()].eq_ignore_ascii_case(p)
-                }
-                (Charset(p), Charset(n)) => {
-                    // If all the bits in `n` are also true in `p`
-                    n.iter().zip(p.iter()).all(|(n, p)| !n || p)
                 }
                 _ => false,
             } {
@@ -380,18 +367,19 @@ impl GraphBuilder {
         s.transitions.push(GraphTransition {
             origin: self.origin,
             test,
-            kind: self.kind,
+            kind: Some(self.kind),
             action: dst.clone(),
         });
         dst
     }
 
     pub fn finalize(&mut self) {
+        // Compute existing charset coverage.
+        // Technically we don't need to do that for the root states.
         for s in &self.roots {
             let mut s = s.borrow_mut();
             s.coverage.fill(true);
         }
-
         for s in &self.states[self.roots.len()..] {
             let Some(s) = s.upgrade() else {
                 continue;
@@ -414,10 +402,12 @@ impl GraphBuilder {
             }
         }
 
+        // Add fallbacks from earlier regexes to later regexes that cover them.
         for root in &self.roots {
             Self::fallback_find(root.clone());
         }
 
+        // Add always-matching fallbacks to all remaining ones.
         for s in &self.states[self.roots.len()..] {
             let Some(s) = s.upgrade() else {
                 continue;
@@ -428,12 +418,63 @@ impl GraphBuilder {
                 s.transitions.push(GraphTransition {
                     origin: -1,
                     test: GraphConsume::Chars(0),
-                    kind: HighlightKind::Other,
+                    kind: Some(HighlightKind::Other),
                     action: GraphAction::Pop,
                 });
             }
         }
 
+        // Compute fast skips for root states & fallback to 1 byte skip.
+        // This is different from coverage computation above, because here
+        // we want to "skip" any character that can never be matched.
+        for root in &self.roots {
+            let mut s = root.borrow_mut();
+            let mut cs = Charset::no();
+
+            for t in &s.transitions {
+                match &t.test {
+                    GraphConsume::Chars(_) => {
+                        cs.fill(true);
+                        break;
+                    }
+                    GraphConsume::Charset(c) => {
+                        cs.merge(c);
+                    }
+                    GraphConsume::Prefix(s) => {
+                        let ch = s.as_bytes()[0];
+                        cs.set(ch, true);
+                    }
+                    GraphConsume::PrefixInsensitive(s) => {
+                        let ch = s.as_bytes()[0];
+                        cs.set(ch.to_ascii_uppercase(), true);
+                        cs.set(ch.to_ascii_lowercase(), true);
+                    }
+                }
+            }
+
+            if !cs.covers_all() {
+                cs.invert();
+                let cs = self.charsets.intern(cs);
+
+                s.transitions.insert(
+                    0,
+                    GraphTransition {
+                        origin: -1,
+                        test: GraphConsume::Charset(cs),
+                        kind: None,
+                        action: GraphAction::Change(root.clone()),
+                    },
+                );
+                s.transitions.push(GraphTransition {
+                    origin: -1,
+                    test: GraphConsume::Chars(1),
+                    kind: None,
+                    action: GraphAction::Pop,
+                });
+            }
+        }
+
+        // Assign IDs to states.
         let mut id = 0;
         for s in &self.states {
             let Some(s) = s.upgrade() else {
@@ -538,6 +579,7 @@ impl GraphBuilder {
                 let label = match &t.test {
                     GraphConsume::Chars(usize::MAX) => "Chars(Line)".to_string(),
                     GraphConsume::Chars(n) => format!("Chars({n})"),
+                    GraphConsume::Charset(c) => format!("Charset({c:?})"),
                     GraphConsume::Prefix(s) => {
                         let mut label = String::new();
                         _ = write!(label, "Prefix({s}");
@@ -582,7 +624,6 @@ impl GraphBuilder {
                         label.push(')');
                         label
                     }
-                    GraphConsume::Charset(c) => format!("Charset({c:?})"),
                 };
 
                 let dst = match &t.action {
@@ -604,9 +645,9 @@ impl GraphBuilder {
                 let label = escape(&label);
                 _ = writeln!(
                     &mut visitor.output,
-                    "    {src} -->|\"{label}<br/>{kind}\"| {dst}",
+                    "    {src} -->|\"{label}<br/>{kind:?}\"| {dst}",
                     src = src.borrow().id,
-                    kind = t.kind.as_str()
+                    kind = t.kind,
                 );
 
                 if let GraphAction::Change(dst) = &t.action {
@@ -634,11 +675,34 @@ impl GraphBuilder {
     }
 
     pub fn charsets(&self) -> Vec<Rc<Charset>> {
-        self.charsets.iter().filter_map(Weak::upgrade).collect()
+        self.charsets.extract()
     }
 
     pub fn states(&self) -> Vec<Rc<WipStateCell>> {
         self.states.iter().filter_map(Weak::upgrade).collect()
+    }
+}
+
+struct CharsetInterner {
+    charsets: Vec<Weak<Charset>>,
+}
+
+impl CharsetInterner {
+    pub fn intern(&mut self, mut charset: Charset) -> Rc<Charset> {
+        if let Some(rc) = self.charsets.iter().filter_map(|w| w.upgrade()).find(|c| **c == charset)
+        {
+            return rc;
+        }
+
+        charset.id = self.charsets.len();
+
+        let rc = Rc::new(charset);
+        self.charsets.push(Rc::downgrade(&rc));
+        rc
+    }
+
+    pub fn extract(&self) -> Vec<Rc<Charset>> {
+        self.charsets.iter().filter_map(Weak::upgrade).collect()
     }
 }
 
@@ -689,16 +753,16 @@ impl Eq for GraphAction {}
 pub enum GraphConsume {
     // Same as super::Consume
     Chars(usize),
+    Charset(Rc<Charset>),
     Prefix(String),
     PrefixInsensitive(String),
-    Charset(Rc<Charset>),
 }
 
 #[derive(Debug, Clone)]
 pub struct GraphTransition {
     origin: i32,
     pub test: GraphConsume,
-    pub kind: HighlightKind,
+    pub kind: Option<HighlightKind>,
     pub action: GraphAction,
 }
 
@@ -727,6 +791,16 @@ impl Charset {
 
     pub fn fill(&mut self, value: bool) {
         self.bits.fill(value);
+    }
+
+    pub fn invert(&mut self) {
+        for b in &mut self.bits {
+            *b = !*b;
+        }
+    }
+
+    pub fn set(&mut self, index: u8, value: bool) {
+        self.bits[index as usize] = value;
     }
 
     pub fn merge(&mut self, other: &Charset) {

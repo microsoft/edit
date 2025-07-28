@@ -31,19 +31,23 @@ fn main() {
 
         use std::ops::RangeInclusive;
 
+        use Action::*;
+        use Consume::*;
+        use HighlightKind::*;
+
         pub struct Language {
             pub name: &'static str,
             pub extensions: &'static [&'static str],
             pub states: &'static [&'static [Transition<'static>]],
         }
 
-        pub type Transition<'a> = (Consume<'a>, HighlightKind, Action);
+        pub type Transition<'a> = (Consume<'a>, Option<HighlightKind>, Action);
 
         pub enum Consume<'a> {
             Chars(usize),
+            Charset(&'a [u8; 256]),
             Prefix(&'a str),
             PrefixInsensitive(&'a str),
-            Charset(&'a [u8; 256]),
         }
 
         #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -125,30 +129,26 @@ fn main() {
 
             for t in &state.transitions {
                 let test = match &t.test {
-                    GraphConsume::Chars(usize::MAX) => "Consume::Chars(usize::MAX)".to_string(),
+                    GraphConsume::Chars(usize::MAX) => "Chars(usize::MAX)".to_string(),
                     GraphConsume::Chars(n) => {
-                        format!("Consume::Chars({n})")
-                    }
-                    GraphConsume::Prefix(s) => {
-                        format!("Consume::Prefix(r#\"{s}\"#)")
-                    }
-                    GraphConsume::PrefixInsensitive(s) => {
-                        format!("Consume::PrefixInsensitive(r#\"{s}\"#)")
+                        format!("Chars({n})")
                     }
                     GraphConsume::Charset(cs) => {
-                        format!("Consume::Charset(LANG_{}_CHARSET_{})", name_uppercase, cs.id())
+                        format!("Charset(LANG_{}_CHARSET_{})", name_uppercase, cs.id())
+                    }
+                    GraphConsume::Prefix(s) => {
+                        format!("Prefix(r#\"{s}\"#)")
+                    }
+                    GraphConsume::PrefixInsensitive(s) => {
+                        format!("PrefixInsensitive(r#\"{s}\"#)")
                     }
                 };
                 let action = match &t.action {
-                    GraphAction::Change(next) => format!("Action::Change({})", next.borrow().id),
-                    GraphAction::Push(next) => format!("Action::Push({})", next.borrow().id),
-                    GraphAction::Pop => "Action::Pop".to_string(),
+                    GraphAction::Change(next) => format!("Change({})", next.borrow().id),
+                    GraphAction::Push(next) => format!("Push({})", next.borrow().id),
+                    GraphAction::Pop => "Pop".to_string(),
                 };
-                _ = writeln!(
-                    output,
-                    r#"            ({test}, HighlightKind::{kind}, {action}),"#,
-                    kind = t.kind.as_str()
-                );
+                _ = writeln!(output, r#"            ({test}, {kind:?}, {action}),"#, kind = t.kind);
             }
 
             _ = writeln!(output, r#"        ],"#);
