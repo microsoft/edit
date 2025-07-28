@@ -506,18 +506,34 @@ impl Tui {
         mem::swap(&mut self.arena_prev, &mut self.arena_next);
         unsafe { self.arena_next.reset(0) };
 
-        // In the input handler below we transformed a mouse up into a release event.
-        // Now, a frame later, we must reset it back to none, to stop it from triggering things.
-        // Same for Scroll events, unless there is an active drag happening.
-        if self.mouse_state > InputMouseState::Right {
-            if self.mouse_is_drag {
-                // Maintain drag state
-                self.mouse_state = InputMouseState::Left;
-            } else {
-                // Reset the drag operation
+        // After a drag is initiated, this outer condition will always be
+        // one input cycle behind the inner condition.
+        // They were deliberately kept separate to show the
+        // importance of the nested statement being here.
+        if !self.mouse_is_drag {
+            // Drag is currently only started by ::Left.
+            // We don't know which button triggered ::Release, so mouse-buttons
+            // will interrupt each others drag operations.
+            if self.mouse_state == InputMouseState::Release
+                || self.mouse_state == InputMouseState::None
+            {
                 self.mouse_down_position = Point::MIN;
                 self.mouse_down_node_path.clear();
                 self.left_mouse_down_target = 0;
+            }
+        }
+
+        // Dangling state cleanup
+        {
+            // Scroll does not receive a mouse up event by default.
+            // So we need to manually reset it, because it will never call ::Release
+            if self.mouse_state == InputMouseState::Scroll {
+                self.mouse_state = InputMouseState::None;
+            }
+
+            // In the input handler below we transformed a mouse up into a release event.
+            // Now, a frame later, we must reset it back to none, to stop it from triggering things.
+            if self.mouse_state == InputMouseState::Release {
                 self.mouse_state = InputMouseState::None;
             }
         }
@@ -575,16 +591,16 @@ impl Tui {
                 let mouse_up = self.mouse_state != InputMouseState::None
                     && next_state == InputMouseState::None;
 
-                // At the time of writing this, ::Release should not happen here.
-                // But it would break functionality, so we should check for it.
-                let all_buttons_released =
+                // InputMouseState::Release should not happen here.
+                // But it would break functionality, so we best include it.
+                let buttons_will_release =
                     next_state == InputMouseState::None || next_state == InputMouseState::Release;
 
-                // As long as the last state was ::Left, and the next event is neither ::None nor ::Release,
-                // we could not have possibly let go of the button yet, so we must be either long-clicking or dragging.
-                // In our case both scenarios may start a drag.
-                self.mouse_is_drag =
-                    self.mouse_state == InputMouseState::Left && !all_buttons_released;
+                let start_drag = !self.mouse_is_drag
+                    && self.mouse_state == InputMouseState::Left
+                    && !buttons_will_release;
+                let maintain_drag = self.mouse_is_drag && !buttons_will_release;
+                self.mouse_is_drag = start_drag || maintain_drag;
 
                 let mut hovered_node = None; // Needed for `mouse_down`
                 let mut focused_node = None; // Needed for `mouse_down` and `is_click`
