@@ -26,7 +26,7 @@ pub struct State {
     pub rules: &'static [Rule],
 }
 
-pub type Rule = (&'static str, HighlightKind, ActionDefinition);
+pub type Rule = (&'static str, Option<HighlightKind>, ActionDefinition);
 
 #[derive(Debug, Clone, Copy)]
 pub enum ActionDefinition {
@@ -42,21 +42,24 @@ pub const LANGUAGES: &[Language] = &[
             State {
                 name: "ground",
                 rules: &[
-                    (r#"//.*"#, Comment, Pop),
-                    (r#"/\*"#, Comment, Push("comment")),
-                    (r#"""#, String, Push("string")),
-                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?\w+"#, Other, Pop),
-                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Number, Pop),
-                    (r#"(?:true|false|null)\w+"#, Other, Pop),
-                    (r#"(?:true|false|null)"#, Keyword, Pop),
+                    (r#"//.*"#, Some(Comment), Pop),
+                    (r#"/\*"#, Some(Comment), Push("comment")),
+                    (r#"""#, Some(String), Push("string")),
+                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?\w+"#, Some(Other), Pop),
+                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Some(Number), Pop),
+                    (r#"(?:true|false|null)\w+"#, Some(Other), Pop),
+                    (r#"(?:true|false|null)"#, Some(Keyword), Pop),
                 ],
             },
-            State { name: "comment", rules: &[(r#"\*/"#, Comment, Pop)] },
+            State { name: "comment", rules: &[(r#"\*/"#, Some(Comment), Pop)] },
             State {
                 name: "string",
-                rules: &[(r#"\\"#, String, Push("string_escape")), (r#"""#, String, Pop)],
+                rules: &[
+                    (r#"\\"#, Some(String), Push("string_escape")),
+                    (r#"""#, Some(String), Pop),
+                ],
             },
-            State { name: "string_escape", rules: &[(r#"."#, String, Pop)] },
+            State { name: "string_escape", rules: &[(r#"."#, Some(String), Pop)] },
         ],
     },
     Language {
@@ -66,23 +69,36 @@ pub const LANGUAGES: &[Language] = &[
             State {
                 name: "ground",
                 rules: &[
-                    (r#"#.*"#, Comment, Pop),
-                    (r#"""#, String, Push("string_double")),
-                    (r#"'"#, String, Push("string_single")),
-                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Number, Push("string_resolve")),
-                    (r#"(?:true|false|null)"#, Keyword, Push("string_resolve")),
+                    (r#"#.*"#, Some(Comment), Pop),
+                    (r#"""#, Some(String), Push("string_double")),
+                    (r#"'"#, Some(String), Push("string_single")),
+                    (
+                        r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#,
+                        Some(Number),
+                        Push("string_resolve"),
+                    ),
+                    (r#"(?:true|false|null)"#, Some(Keyword), Push("string_resolve")),
                 ],
             },
             State {
                 name: "string_double",
-                rules: &[(r#"""#, String, Pop), (r#"\\"#, String, Push("string_escape"))],
+                rules: &[
+                    (r#"""#, Some(String), Pop),
+                    (r#"\\"#, Some(String), Push("string_escape")),
+                ],
             },
             State {
                 name: "string_single",
-                rules: &[(r#"'"#, String, Pop), (r#"\\"#, String, Push("string_escape"))],
+                rules: &[
+                    (r#"'"#, Some(String), Pop),
+                    (r#"\\"#, Some(String), Push("string_escape")),
+                ],
             },
-            State { name: "string_escape", rules: &[(r#"."#, String, Pop)] },
-            State { name: "string_resolve", rules: &[(r#"\s*\S+[^#]+"#, String, Pop)] },
+            State { name: "string_escape", rules: &[(r#"."#, Some(String), Pop)] },
+            State {
+                name: "string_resolve",
+                rules: &[(r#"\s*\S+[^#]*"#, Some(String), Pop), (r#""#, None, Pop)],
+            },
         ],
     },
     Language {
@@ -92,39 +108,42 @@ pub const LANGUAGES: &[Language] = &[
             State {
                 name: "ground",
                 rules: &[
-                    (r#"#.*"#, Comment, Pop),
-                    (r#"'"#, String, Push("string_single")),
-                    (r#"""#, String, Push("string_double")),
-                    (r#"\$"#, Variable, Push("variable")),
-                    (r#"[!*/%+<=>|]"#, Operator, Pop),
+                    (r#"#.*"#, Some(Comment), Pop),
+                    (r#"'"#, Some(String), Push("string_single")),
+                    (r#"""#, Some(String), Push("string_double")),
+                    (r#"\$"#, Some(Variable), Push("variable")),
+                    (r#"[!*/%+<=>|]"#, Some(Operator), Pop),
                     (
                         r"(?i:break|case|continue|done|do|elif|else|esac|fi|for|function|if|in|return|select|then|until|while)",
-                        Keyword,
+                        Some(Keyword),
                         Pop,
                     ),
-                    (r#"\d+"#, Number, Pop),
-                    (r"\w+", Method, Pop),
+                    (r#"\d+"#, Some(Number), Pop),
+                    (r"\w+", Some(Method), Pop),
                 ],
             },
             State {
                 name: "string_single",
-                rules: &[(r#"'"#, String, Pop), (r#"\\"#, String, Push("string_escape"))],
+                rules: &[
+                    (r#"'"#, Some(String), Pop),
+                    (r#"\\"#, Some(String), Push("string_escape")),
+                ],
             },
             State {
                 name: "string_double",
                 rules: &[
-                    (r#"""#, String, Pop),
-                    (r#"\\"#, String, Push("string_escape")),
-                    (r#"\$"#, Other, Push("variable")),
+                    (r#"""#, Some(String), Pop),
+                    (r#"\\"#, Some(String), Push("string_escape")),
+                    (r#"\$"#, Some(Other), Push("variable")),
                 ],
             },
-            State { name: "string_escape", rules: &[(r#"."#, String, Pop)] },
+            State { name: "string_escape", rules: &[(r#"."#, Some(String), Pop)] },
             State {
                 name: "variable",
                 rules: &[
-                    (r#"[#?]"#, Variable, Pop),
-                    (r#"\{[^}]*\}"#, Variable, Pop),
-                    (r#"\w+"#, Variable, Pop),
+                    (r#"[#?]"#, Some(Variable), Pop),
+                    (r#"\{[^}]*\}"#, Some(Variable), Pop),
+                    (r#"\w+"#, Some(Variable), Pop),
                 ],
             },
         ],
@@ -136,48 +155,51 @@ pub const LANGUAGES: &[Language] = &[
             State {
                 name: "ground",
                 rules: &[
-                    (r#"#.*"#, Comment, Pop),
-                    (r#"<#"#, Comment, Push("comment")),
-                    (r#"'"#, String, Push("string_single")),
-                    (r#"\""#, String, Push("string_double")),
-                    (r#"\$"#, Variable, Push("variable")),
-                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Number, Pop),
-                    (r#"-\w+"#, Operator, Pop),
-                    (r#"[!*/%+<=>|]"#, Operator, Pop),
+                    (r#"#.*"#, Some(Comment), Pop),
+                    (r#"<#"#, Some(Comment), Push("comment")),
+                    (r#"'"#, Some(String), Push("string_single")),
+                    (r#"\""#, Some(String), Push("string_double")),
+                    (r#"\$"#, Some(Variable), Push("variable")),
+                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Some(Number), Pop),
+                    (r#"-\w+"#, Some(Operator), Pop),
+                    (r#"[!*/%+<=>|]"#, Some(Operator), Pop),
                     (
                         r#"(?i:break|catch|continue|do|elseif|else|finally|foreach|function|if|return|switch|throw|try|using|while)[\w-]+"#,
-                        Method,
+                        Some(Method),
                         Pop,
                     ),
                     (
                         r#"(?i:break|catch|continue|do|elseif|else|finally|foreach|function|if|return|switch|throw|try|using|while)"#,
-                        Keyword,
+                        Some(Keyword),
                         Pop,
                     ),
-                    (r#"[\w-]+"#, Method, Pop),
+                    (r#"[\w-]+"#, Some(Method), Pop),
                 ],
             },
-            State { name: "comment", rules: &[(r#"#>"#, Comment, Pop)] },
+            State { name: "comment", rules: &[(r#"#>"#, Some(Comment), Pop)] },
             State {
                 name: "string_single",
-                rules: &[(r#"'"#, String, Pop), (r#"`"#, String, Push("string_escape"))],
+                rules: &[
+                    (r#"'"#, Some(String), Pop),
+                    (r#"`"#, Some(String), Push("string_escape")),
+                ],
             },
             State {
                 name: "string_double",
                 rules: &[
-                    (r#"""#, String, Pop),
-                    (r#"`"#, String, Push("string_escape")),
-                    (r#"\$"#, Other, Push("variable")),
+                    (r#"""#, Some(String), Pop),
+                    (r#"`"#, Some(String), Push("string_escape")),
+                    (r#"\$"#, Some(Other), Push("variable")),
                 ],
             },
-            State { name: "string_escape", rules: &[(r#"."#, String, Pop)] },
+            State { name: "string_escape", rules: &[(r#"."#, Some(String), Pop)] },
             State {
                 name: "variable",
                 rules: &[
-                    (r#"\("#, Other, Pop), // TODO: subexpression
-                    (r#"[$^?]"#, Variable, Pop),
-                    (r#"\{[^}]*\}"#, Variable, Pop),
-                    (r#"\w+"#, Variable, Pop),
+                    (r#"\("#, Some(Other), Pop), // TODO: subexpression
+                    (r#"[$^?]"#, Some(Variable), Pop),
+                    (r#"\{[^}]*\}"#, Some(Variable), Pop),
+                    (r#"\w+"#, Some(Variable), Pop),
                 ],
             },
         ],
@@ -189,32 +211,35 @@ pub const LANGUAGES: &[Language] = &[
             State {
                 name: "ground",
                 rules: &[
-                    (r#"(?i:rem)\S+"#, Other, Pop),
-                    (r#"(?i:rem).*"#, Comment, Pop),
-                    (r#"::.*"#, Comment, Pop),
-                    (r#"""#, String, Push("string")),
-                    (r#"%%"#, Other, Pop),
-                    (r#"%"#, Variable, Push("variable")),
-                    (r#"[!*/+<=>|]"#, Operator, Pop),
+                    (r#"(?i:rem)\S+"#, Some(Other), Pop),
+                    (r#"(?i:rem).*"#, Some(Comment), Pop),
+                    (r#"::.*"#, Some(Comment), Pop),
+                    (r#"""#, Some(String), Push("string")),
+                    (r#"%%"#, Some(Other), Pop),
+                    (r#"%"#, Some(Variable), Push("variable")),
+                    (r#"[!*/+<=>|]"#, Some(Operator), Pop),
                     (
                         r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)\w+",
-                        Other,
+                        Some(Other),
                         Pop,
                     ),
                     (
                         r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)",
-                        Keyword,
+                        Some(Keyword),
                         Pop,
                     ),
-                    (r#"\d+"#, Number, Pop),
+                    (r#"\d+"#, Some(Number), Pop),
                 ],
             },
             State {
                 name: "string",
-                rules: &[(r#"""#, String, Pop), (r#"\\"#, String, Push("string_escape"))],
+                rules: &[
+                    (r#"""#, Some(String), Pop),
+                    (r#"\\"#, Some(String), Push("string_escape")),
+                ],
             },
-            State { name: "string_escape", rules: &[(r#"."#, String, Pop)] },
-            State { name: "variable", rules: &[(r#"%"#, Variable, Pop)] },
+            State { name: "string_escape", rules: &[(r#"."#, Some(String), Pop)] },
+            State { name: "variable", rules: &[(r#"%"#, Some(Variable), Pop)] },
         ],
     },
 ];

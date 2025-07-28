@@ -144,10 +144,16 @@ impl<'doc> Highlighter<'doc> {
         let line_buf = unicode::strip_newline(&line_buf);
         let mut off = 0usize;
         let mut start = 0usize;
+
+        let mut root_state = self.state;
+        let mut root_kind = self.kind;
+
         let mut state = self.state;
         let mut kind = self.kind;
 
-        loop {
+        res.push(Higlight { start, kind });
+
+        'outer: loop {
             let mut end = off;
 
             for t in self.language.states[state] {
@@ -187,18 +193,25 @@ impl<'doc> Highlighter<'doc> {
                     Action::Push(to) => {
                         res.push(Higlight { start, kind });
 
-                        self.state_stack.push((state, kind));
+                        self.state_stack.push((root_state, root_kind));
+                        root_state = to as usize;
+                        root_kind = t.1.unwrap_or(kind);
+                        state = root_state;
+                        kind = root_kind;
+
                         start = off;
-                        state = to as usize;
-                        kind = t.1.unwrap_or(kind);
                     }
                     Action::Pop => {
                         kind = t.1.unwrap_or(kind);
                         res.push(Higlight { start, kind });
 
-                        start = end;
-                        (state, kind) = self.state_stack.last().copied().unwrap_or_default();
+                        (root_state, root_kind) =
+                            self.state_stack.last().copied().unwrap_or_default();
                         self.state_stack.pop();
+                        state = root_state;
+                        kind = root_kind;
+
+                        start = end;
                     }
                 }
 
@@ -207,7 +220,7 @@ impl<'doc> Highlighter<'doc> {
             }
 
             if off >= line_buf.len() {
-                break;
+                break 'outer;
             }
         }
 
