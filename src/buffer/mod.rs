@@ -2555,8 +2555,7 @@ impl TextBuffer {
         self.set_cursor_internal(cursor);
 
         // If both the last and this are a Write/Delete operation, we skip allocating a new undo history item.
-        if cursor_before.offset != cursor.offset
-            || history_type != self.last_history_type
+        if history_type != self.last_history_type
             || !matches!(history_type, HistoryType::Write | HistoryType::Delete)
         {
             self.redo_stack.clear();
