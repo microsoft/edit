@@ -23,6 +23,7 @@ fn main() {
 
     compile_i18n();
     configure_icu(target_os);
+    #[cfg(windows)]
     configure_windows_binary(target_os);
 }
 
@@ -254,21 +255,21 @@ fn configure_icu(target_os: TargetOs) {
     }
 }
 
+#[cfg(windows)]
 fn configure_windows_binary(target_os: TargetOs) {
-    #[cfg(windows)]
-    if target_os == TargetOs::Windows {
-        const PATH: &str = "src/bin/edit/edit.exe.manifest";
-
-        println!("cargo::rerun-if-changed={PATH}");
-
-        winresource::WindowsResource::new()
-            .set_manifest_file(PATH)
-            .set("FileDescription", "Microsoft Edit")
-            .set("LegalCopyright", "© Microsoft Corporation. All rights reserved.")
-            .set_icon("assets/edit.ico")
-            .compile()
-            .unwrap();
+    if target_os != TargetOs::Windows {
+        return;
     }
+
+    const PATH: &str = "src/bin/edit/edit.exe.manifest";
+    println!("cargo::rerun-if-changed={PATH}");
+    winresource::WindowsResource::new()
+        .set_manifest_file(PATH)
+        .set("FileDescription", "Microsoft Edit")
+        .set("LegalCopyright", "© Microsoft Corporation. All rights reserved.")
+        .set_icon("assets/edit.ico")
+        .compile()
+        .unwrap();
 }
 
 fn env_opt(name: &str) -> String {
