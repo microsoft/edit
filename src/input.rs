@@ -232,6 +232,9 @@ pub enum InputMouseState {
 
     // These 2 get reset to None on the next frame.
     Release,
+    // Compared to the other mouse-buttons, vt::Token::Csi does not receive
+    // an up event for ::Scroll, so is unable to send a ::None value.
+    // That is why it never triggers a ::Release itself and needs to be reset as well.
     Scroll,
 }
 
