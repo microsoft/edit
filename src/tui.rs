@@ -158,6 +158,7 @@ use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedC
 use crate::hash::*;
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
+use crate::oklab::StraightRgba;
 use crate::{apperr, arena_format, input, simd, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
@@ -315,10 +316,10 @@ pub struct Tui {
     framebuffer: Framebuffer,
 
     modifier_translations: ModifierTranslations,
-    floater_default_bg: u32,
-    floater_default_fg: u32,
-    modal_default_bg: u32,
-    modal_default_fg: u32,
+    floater_default_bg: StraightRgba,
+    floater_default_fg: StraightRgba,
+    modal_default_bg: StraightRgba,
+    modal_default_fg: StraightRgba,
 
     /// Last known terminal size.
     ///
@@ -391,10 +392,10 @@ impl Tui {
                 alt: "Alt",
                 shift: "Shift",
             },
-            floater_default_bg: 0,
-            floater_default_fg: 0,
-            modal_default_bg: 0,
-            modal_default_fg: 0,
+            floater_default_bg: StraightRgba::from_le(0),
+            floater_default_fg: StraightRgba::from_le(0),
+            modal_default_bg: StraightRgba::from_le(0),
+            modal_default_fg: StraightRgba::from_le(0),
 
             size: Size { width: 0, height: 0 },
             mouse_position: Point::MIN,
@@ -425,7 +426,7 @@ impl Tui {
     }
 
     /// Sets up the framebuffer's color palette.
-    pub fn setup_indexed_colors(&mut self, colors: [u32; INDEXED_COLORS_COUNT]) {
+    pub fn setup_indexed_colors(&mut self, colors: [StraightRgba; INDEXED_COLORS_COUNT]) {
         self.framebuffer.set_indexed_colors(colors);
     }
 
@@ -435,22 +436,22 @@ impl Tui {
     }
 
     /// Set the default background color for floaters (dropdowns, etc.).
-    pub fn set_floater_default_bg(&mut self, color: u32) {
+    pub fn set_floater_default_bg(&mut self, color: StraightRgba) {
         self.floater_default_bg = color;
     }
 
     /// Set the default foreground color for floaters (dropdowns, etc.).
-    pub fn set_floater_default_fg(&mut self, color: u32) {
+    pub fn set_floater_default_fg(&mut self, color: StraightRgba) {
         self.floater_default_fg = color;
     }
 
     /// Set the default background color for modals.
-    pub fn set_modal_default_bg(&mut self, color: u32) {
+    pub fn set_modal_default_bg(&mut self, color: StraightRgba) {
         self.modal_default_bg = color;
     }
 
     /// Set the default foreground color for modals.
-    pub fn set_modal_default_fg(&mut self, color: u32) {
+    pub fn set_modal_default_fg(&mut self, color: StraightRgba) {
         self.modal_default_fg = color;
     }
 
@@ -469,20 +470,25 @@ impl Tui {
 
     /// Returns an indexed color from the framebuffer.
     #[inline]
-    pub fn indexed(&self, index: IndexedColor) -> u32 {
+    pub fn indexed(&self, index: IndexedColor) -> StraightRgba {
         self.framebuffer.indexed(index)
     }
 
     /// Returns an indexed color from the framebuffer with the given alpha.
     /// See [`Framebuffer::indexed_alpha()`].
     #[inline]
-    pub fn indexed_alpha(&self, index: IndexedColor, numerator: u32, denominator: u32) -> u32 {
+    pub fn indexed_alpha(
+        &self,
+        index: IndexedColor,
+        numerator: u32,
+        denominator: u32,
+    ) -> StraightRgba {
         self.framebuffer.indexed_alpha(index, numerator, denominator)
     }
 
     /// Returns a color in contrast with the given color.
     /// See [`Framebuffer::contrasted()`].
-    pub fn contrasted(&self, color: u32) -> u32 {
+    pub fn contrasted(&self, color: StraightRgba) -> StraightRgba {
         self.framebuffer.contrasted(color)
     }
 
@@ -1172,14 +1178,14 @@ impl Tui {
                     result.push_str("  bordered:     true\r\n");
                 }
 
-                if node.attributes.bg != 0 {
+                if node.attributes.bg.to_ne() != 0 {
                     result.push_repeat(' ', depth * 2);
-                    _ = write!(result, "  bg:           #{:08x}\r\n", node.attributes.bg);
+                    _ = write!(result, "  bg:           {:?}\r\n", node.attributes.bg);
                 }
 
-                if node.attributes.fg != 0 {
+                if node.attributes.fg.to_ne() != 0 {
                     result.push_repeat(' ', depth * 2);
-                    _ = write!(result, "  fg:           #{:08x}\r\n", node.attributes.fg);
+                    _ = write!(result, "  fg:           {:?}\r\n", node.attributes.fg);
                 }
 
                 if self.is_node_focused(node.id) {
@@ -1359,20 +1365,25 @@ impl<'a> Context<'a, '_> {
 
     /// Returns an indexed color from the framebuffer.
     #[inline]
-    pub fn indexed(&self, index: IndexedColor) -> u32 {
+    pub fn indexed(&self, index: IndexedColor) -> StraightRgba {
         self.tui.framebuffer.indexed(index)
     }
 
     /// Returns an indexed color from the framebuffer with the given alpha.
     /// See [`Framebuffer::indexed_alpha()`].
     #[inline]
-    pub fn indexed_alpha(&self, index: IndexedColor, numerator: u32, denominator: u32) -> u32 {
+    pub fn indexed_alpha(
+        &self,
+        index: IndexedColor,
+        numerator: u32,
+        denominator: u32,
+    ) -> StraightRgba {
         self.tui.framebuffer.indexed_alpha(index, numerator, denominator)
     }
 
     /// Returns a color in contrast with the given color.
     /// See [`Framebuffer::contrasted()`].
-    pub fn contrasted(&self, color: u32) -> u32 {
+    pub fn contrasted(&self, color: StraightRgba) -> StraightRgba {
         self.tui.framebuffer.contrasted(color)
     }
 
@@ -1642,13 +1653,13 @@ impl<'a> Context<'a, '_> {
     }
 
     /// Assigns a sRGB background color to the current node.
-    pub fn attr_background_rgba(&mut self, bg: u32) {
+    pub fn attr_background_rgba(&mut self, bg: StraightRgba) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.bg = bg;
     }
 
     /// Assigns a sRGB foreground color to the current node.
-    pub fn attr_foreground_rgba(&mut self, fg: u32) {
+    pub fn attr_foreground_rgba(&mut self, fg: StraightRgba) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.fg = fg;
     }
@@ -1927,7 +1938,7 @@ impl<'a> Context<'a, '_> {
     }
 
     /// Changes the active pencil color of the current label.
-    pub fn styled_label_set_foreground(&mut self, fg: u32) {
+    pub fn styled_label_set_foreground(&mut self, fg: StraightRgba) {
         let mut node = self.tree.last_node.borrow_mut();
         let NodeContent::Text(content) = &mut node.content else {
             unreachable!();
@@ -3616,8 +3627,8 @@ struct NodeAttributes {
     float: Option<FloatAttributes>,
     position: Position,
     padding: Rect,
-    bg: u32,
-    fg: u32,
+    bg: StraightRgba,
+    fg: StraightRgba,
     reverse: bool,
     bordered: bool,
     focusable: bool,
@@ -3641,12 +3652,12 @@ struct TableContent<'a> {
 /// NOTE: Must not contain items that require drop().
 struct StyledTextChunk {
     offset: usize,
-    fg: u32,
+    fg: StraightRgba,
     attr: Attributes,
 }
 
 const INVALID_STYLED_TEXT_CHUNK: StyledTextChunk =
-    StyledTextChunk { offset: usize::MAX, fg: 0, attr: Attributes::None };
+    StyledTextChunk { offset: usize::MAX, fg: StraightRgba::from_le(0), attr: Attributes::None };
 
 /// NOTE: Must not contain items that require drop().
 struct TextContent<'a> {

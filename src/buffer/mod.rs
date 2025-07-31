@@ -42,7 +42,7 @@ use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
-use crate::oklab::oklab_blend;
+use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
 use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
 use crate::{apperr, icu, simd};
@@ -1834,12 +1834,13 @@ impl TextBuffer {
                     bottom: top + 1,
                 };
 
-                let mut bg = oklab_blend(
-                    fb.indexed(IndexedColor::Foreground),
-                    fb.indexed_alpha(IndexedColor::BrightBlue, 1, 2),
-                );
+                let mut bg = fb.indexed(IndexedColor::Foreground).oklab_blend(fb.indexed_alpha(
+                    IndexedColor::BrightBlue,
+                    1,
+                    2,
+                ));
                 if !focused {
-                    bg = oklab_blend(bg, fb.indexed_alpha(IndexedColor::Background, 1, 2))
+                    bg = bg.oklab_blend(fb.indexed_alpha(IndexedColor::Background, 1, 2));
                 };
                 let fg = fb.contrasted(bg);
                 fb.blend_bg(rect, bg);
@@ -1975,7 +1976,7 @@ impl TextBuffer {
                 right: destination.left + self.margin_width,
                 bottom: destination.bottom,
             };
-            fb.blend_fg(margin, 0x7f3f3f3f);
+            fb.blend_fg(margin, StraightRgba::from_le(0x7f3f3f3f));
         }
 
         if self.ruler > 0 {
@@ -2023,7 +2024,7 @@ impl TextBuffer {
                             right: destination.right,
                             bottom: cursor.y + 1,
                         },
-                        0x50282828,
+                        StraightRgba::from_le(0x50282828),
                     );
                 }
             }
