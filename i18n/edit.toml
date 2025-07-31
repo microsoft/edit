@@ -16,7 +16,7 @@ __default__ = [
 [__alias__]
 zh = "zh_hans"
 
-# (the keyboard key)
+# The keyboard key
 [Ctrl]
 en = "Ctrl"
 de = "Strg"
@@ -30,7 +30,7 @@ ru = "Ctrl"
 zh_hans = "Ctrl"
 zh_hant = "Ctrl"
 
-# (the keyboard key)
+# The keyboard key
 [Alt]
 en = "Alt"
 de = "Alt"
@@ -44,7 +44,7 @@ ru = "Alt"
 zh_hans = "Alt"
 zh_hant = "Alt"
 
-# (the keyboard key)
+# The keyboard key
 [Shift]
 en = "Shift"
 de = "Umschalt"
@@ -58,7 +58,7 @@ ru = "Shift"
 zh_hans = "Shift"
 zh_hant = "Shift"
 
-# (used as a common dialog button)
+# Used as a common dialog button
 [Ok]
 en = "Ok"
 de = "OK"
@@ -72,7 +72,7 @@ ru = "ОК"
 zh_hans = "确定"
 zh_hant = "確定"
 
-# (used as a common dialog button)
+# Used as a common dialog button
 [Yes]
 en = "Yes"
 de = "Ja"
@@ -86,7 +86,7 @@ ru = "Да"
 zh_hans = "是"
 zh_hant = "是"
 
-# (used as a common dialog button)
+# Used as a common dialog button
 [No]
 en = "No"
 de = "Nein"
@@ -100,7 +100,7 @@ ru = "Нет"
 zh_hans = "否"
 zh_hant = "否"
 
-# (used as a common dialog button)
+# Used as a common dialog button
 [Cancel]
 en = "Cancel"
 de = "Abbrechen"
@@ -114,7 +114,7 @@ ru = "Отмена"
 zh_hans = "取消"
 zh_hant = "取消"
 
-# (used as a common dialog button)
+# Used as a common dialog button
 [Always]
 en = "Always"
 de = "Immer"
@@ -128,7 +128,7 @@ ru = "Всегда"
 zh_hans = "总是"
 zh_hant = "總是"
 
-# (a menu bar item)
+# A menu bar item
 [File]
 en = "File"
 de = "Datei"
@@ -233,7 +233,7 @@ ru = "Перейти к строке:столбцу…"
 zh_hans = "转到行:列…"
 zh_hant = "跳至行:列…"
 
-# (a menu bar item)
+# A menu bar item
 [Edit]
 en = "Edit"
 de = "Bearbeiten"
@@ -351,7 +351,7 @@ ru = "Выделить всё"
 zh_hans = "全选"
 zh_hant = "全選"
 
-# (a menu bar item)
+# A menu bar item
 [View]
 en = "View"
 de = "Ansicht"
@@ -404,7 +404,7 @@ ru = "Перейти к файлу…"
 zh_hans = "转到文件…"
 zh_hant = "跳至檔案…"
 
-# (a menu bar item)
+# A menu bar item
 [Help]
 en = "Help"
 de = "Hilfe"
@@ -509,7 +509,7 @@ ru = "Версия: "
 zh_hans = "版本: "
 zh_hant = "版本: "
 
-# (Shown when the clipboard size exceeds the limit for OSC 52)
+# Shown when the clipboard size exceeds the limit for OSC 52
 [LargeClipboardWarningLine1]
 en = "Text you copy is shared with the terminal clipboard."
 de = "Der kopierte Text wird mit der Terminal-Zwischenablage geteilt."
@@ -523,7 +523,7 @@ ru = "Скопированный текст передаётся в буфер �
 zh_hans = "你复制的文本将共享到终端剪贴板。"
 zh_hant = "您複製的文字將會與終端機剪貼簿分享。"
 
-# (Shown when the clipboard size exceeds the limit for OSC 52)
+# Shown when the clipboard size exceeds the limit for OSC 52
 [LargeClipboardWarningLine2]
 en = "You copied {size} which may take a long time to share."
 de = "Sie haben {size} kopiert. Das Weitergeben könnte länger dauern."
@@ -537,7 +537,7 @@ ru = "Вы скопировали {size}; передача может занят
 zh_hans = "你复制了 {size}，共享可能需要较长时间。"
 zh_hant = "您已複製 {size}，共享可能需要較長時間。"
 
-# (Shown when the clipboard size exceeds the limit for OSC 52)
+# Shown when the clipboard size exceeds the limit for OSC 52
 [LargeClipboardWarningLine3]
 en = "Do you want to send it anyway?"
 de = "Möchten Sie es trotzdem senden?"
@@ -551,7 +551,7 @@ ru = "Отправить в любом случае?"
 zh_hans = "仍要发送吗？"
 zh_hant = "仍要傳送嗎？"
 
-# (as an alternative to LargeClipboardWarningLine2 and 3)
+# As an alternative to LargeClipboardWarningLine2 and 3
 [SuperLargeClipboardWarning]
 en = "The text you copied is too large to be shared."
 de = "Der kopierte Text ist zu groß, um geteilt zu werden."
@@ -604,7 +604,7 @@ ru = "Эта операция требует наличия библиотеки
 zh_hans = "此操作需要 ICU 库"
 zh_hant = "此操作需要 ICU 庫"
 
-# (for input field)
+# For input field
 [SearchNeedleLabel]
 en = "Find:"
 de = "Suchen:"
@@ -618,7 +618,7 @@ ru = "Найти:"
 zh_hans = "查找:"
 zh_hant = "尋找:"
 
-# (for input field)
+# For input field
 [SearchReplacementLabel]
 en = "Replace:"
 de = "Ersetzen:"
@@ -632,7 +632,7 @@ ru = "Замена:"
 zh_hans = "替换:"
 zh_hant = "替換:"
 
-# (toggle)
+# Toggle
 [SearchMatchCase]
 en = "Match Case"
 de = "Groß/Klein"
@@ -646,7 +646,7 @@ ru = "Регистр"
 zh_hans = "区分大小写"
 zh_hant = "區分大小寫"
 
-# (toggle)
+# Toggle
 [SearchWholeWord]
 en = "Whole Word"
 de = "Ganzes Wort"
@@ -660,7 +660,7 @@ ru = "Слово"
 zh_hans = "全字匹配"
 zh_hant = "全字匹配"
 
-# (toggle)
+# Toggle
 [SearchUseRegex]
 en = "Use Regex"
 de = "RegEx"
@@ -674,7 +674,7 @@ ru = "RegEx"
 zh_hans = "正则"
 zh_hant = "正則"
 
-# (button)
+# Button
 [SearchReplaceAll]
 en = "Replace All"
 de = "Alle ersetzen"
@@ -688,7 +688,7 @@ ru = "Заменить все"
 zh_hans = "全部替换"
 zh_hant = "全部取代"
 
-# (button)
+# Button
 [SearchClose]
 en = "Close"
 de = "Schließen"

@@ -27,6 +27,15 @@ winget install Microsoft.Edit
 * Clone the repository
 * For a release build, run: `cargo build --config .cargo/release.toml --release`
 
+### Build Configuration
+
+During compilation you can set various environment variables to configure the build. The following table lists the available configuration options:
+
+Environment variable | Description
+--- | ---
+`EDIT_CFG_ICU*` | See [ICU library name (SONAME)](#icu-library-name-soname) for details.
+`EDIT_CFG_LANGUAGES` | A comma-separated list of languages to include in the build. See [i18n/edit.toml](i18n/edit.toml) for available languages.
+
 ## Notes to Package Maintainers
 
 ### Package Naming

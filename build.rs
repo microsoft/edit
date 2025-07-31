@@ -3,7 +3,7 @@
 
 #![allow(irrefutable_let_patterns)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env::VarError;
 use std::io::Write as _;
 
@@ -29,9 +29,6 @@ fn main() {
 
 fn compile_i18n() {
     const PATH: &str = "i18n/edit.toml";
-
-    println!("cargo::rerun-if-env-changed=EDIT_CFG_LANGUAGES");
-    println!("cargo::rerun-if-changed={PATH}");
 
     let i18n = std::fs::read_to_string(PATH).unwrap();
     let i18n = toml_span::parse(&i18n).expect("Failed to parse i18n file");
@@ -78,31 +75,62 @@ fn compile_i18n() {
         languages = cfg_languages.split(',').map(|lang| lang.to_string()).collect();
     }
 
+    // Ensure English as the fallback language is always present.
+    if !languages.iter().any(|l| l == "en") {
+        languages.push("en".to_string());
+    }
+
     // Normalize language tags for use in source code (i.e. no "-").
     for lang in &mut languages {
         if lang.is_empty() {
-            panic!("i18n: empty language code");
+            panic!("i18n: empty language tag");
         }
         for c in unsafe { lang.as_bytes_mut() } {
             *c = match *c {
                 b'A'..=b'Z' | b'a'..=b'z' => c.to_ascii_lowercase(),
                 b'-' => b'_',
                 b'_' => b'_',
-                _ => panic!("i18n: language code \"{lang}\" must be [a-zA-Z_-]"),
+                _ => panic!("i18n: language tag \"{lang}\" must be [a-zA-Z_-]"),
             }
         }
     }
 
-    // Merge the aliases into the languages list.
-    let mut languages_with_aliases = {
-        let mut list: Vec<_> = languages.iter().map(|l| (l.clone(), l.clone())).collect();
-        for (alias, lang) in aliases {
-            if languages.contains(&lang) && !languages.contains(&alias) {
-                list.push((alias, lang));
+    // * Validate that there are no duplicate language tags.
+    // * Validate that all language tags are valid.
+    // * Merge the aliases into the languages list.
+    let mut languages_with_aliases: Vec<_>;
+    {
+        let mut specified = HashSet::new();
+        for lang in &languages {
+            if !specified.insert(lang.as_str()) {
+                panic!("i18n: duplicate language tag \"{lang}\"");
             }
         }
-        list
-    };
+
+        let mut available = HashSet::new();
+        for v in translations.values() {
+            for lang in v.keys() {
+                available.insert(lang.as_str());
+            }
+        }
+
+        let mut invalid = Vec::new();
+        for lang in &languages {
+            if !available.contains(lang.as_str()) {
+                invalid.push(lang.as_str());
+            }
+        }
+        if !invalid.is_empty() {
+            panic!("i18n: invalid language tags {invalid:?}");
+        }
+
+        languages_with_aliases = languages.iter().map(|l| (l.clone(), l.clone())).collect();
+        for (alias, lang) in aliases {
+            if specified.contains(lang.as_str()) && !specified.contains(alias.as_str()) {
+                languages_with_aliases.push((alias, lang));
+            }
+        }
+    }
 
     // Sort languages by:
     // - "en" first, because it'll map to `LangId::en == 0`, which is the default.
@@ -110,16 +138,16 @@ fn compile_i18n() {
     // - but tags with subtags (e.g. "zh_hans") before those without (e.g. "zh").
     {
         fn sort(a: &String, b: &String) -> std::cmp::Ordering {
-            if a == "en" {
-                std::cmp::Ordering::Less
-            } else if b == "en" {
-                std::cmp::Ordering::Greater
-            } else {
-                let (a0, a1) = a.split_once('_').unwrap_or((a, "xxxxxx"));
-                let (b0, b1) = b.split_once('_').unwrap_or((b, "xxxxxx"));
-                match a0.cmp(b0) {
-                    std::cmp::Ordering::Equal => a1.cmp(b1),
-                    ord => ord,
+            match (a == "en", b == "en") {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    let (a0, a1) = a.split_once('_').unwrap_or((a, "xxxxxx"));
+                    let (b0, b1) = b.split_once('_').unwrap_or((b, "xxxxxx"));
+                    match a0.cmp(b0) {
+                        std::cmp::Ordering::Equal => a1.cmp(b1),
+                        ord => ord,
+                    }
                 }
             }
         }
@@ -182,13 +210,17 @@ fn compile_i18n() {
             _ = writeln!(writer, "    [");
             for (_, v) in translations.iter() {
                 const DEFAULT: &String = &String::new();
-                _ = writeln!(writer, "        {:?},", v.get(lang).unwrap_or(DEFAULT));
+                let v = v.get(lang).or_else(|| v.get("en")).unwrap_or(DEFAULT);
+                _ = writeln!(writer, "        {v:?},");
             }
             _ = writeln!(writer, "    ],");
         }
 
         _ = writeln!(writer, "];");
     }
+
+    println!("cargo::rerun-if-env-changed=EDIT_CFG_LANGUAGES");
+    println!("cargo::rerun-if-changed={PATH}");
 }
 
 fn configure_icu(target_os: TargetOs) {
