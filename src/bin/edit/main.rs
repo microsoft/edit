@@ -638,6 +638,24 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         tui.setup_indexed_colors(indexed_colors);
     }
 
+    // Detects if edit is running on an "old" version of terminal.app on Mac OS. If it detects
+    // the terminal.app is older than version 460, which added truecolor support,
+    // is_old_macos_terminal gets set to true, and sets ColorMode to Color256.
+    let is_old_macos_terminal = {
+        if env::var("TERM_PROGRAM").as_deref() == Ok("Apple_Terminal") {
+            env::var("TERM_PROGRAM_VERSION")
+                .ok()
+                .and_then(|s| s.split('.').next()?.parse::<u32>().ok())
+                .map_or(false, |v| v < 460)
+        } else {
+            false
+        }
+    };
+
+    if is_old_macos_terminal {
+        tui.setup_color_mode(framebuffer::ColorMode::Color256);
+    }
+
     RestoreModes
 }
 
