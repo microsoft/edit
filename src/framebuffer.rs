@@ -118,7 +118,7 @@ impl Framebuffer {
                 DEFAULT_THEME[IndexedColor::Black as usize],
                 DEFAULT_THEME[IndexedColor::BrightWhite as usize],
             ],
-            contrast_colors: [const { Cell::new((StraightRgba::from_le(0), StraightRgba::from_le(0))) };
+            contrast_colors: [const { Cell::new((StraightRgba::zero(), StraightRgba::zero())) };
                 CACHE_TABLE_SIZE],
             background_fill: DEFAULT_THEME[IndexedColor::Background as usize],
             foreground_fill: DEFAULT_THEME[IndexedColor::Foreground as usize],
@@ -131,8 +131,8 @@ impl Framebuffer {
     /// successfully detect the light/dark mode of the terminal.
     pub fn set_indexed_colors(&mut self, colors: [StraightRgba; INDEXED_COLORS_COUNT]) {
         self.indexed_colors = colors;
-        self.background_fill = StraightRgba::from_le(0);
-        self.foreground_fill = StraightRgba::from_le(0);
+        self.background_fill = StraightRgba::zero();
+        self.foreground_fill = StraightRgba::zero();
 
         self.auto_colors = [
             self.indexed_colors[IndexedColor::Black as usize],
@@ -739,7 +739,7 @@ struct Bitmap {
 
 impl Bitmap {
     fn new(size: Size) -> Self {
-        Self { data: vec![StraightRgba::from_le(0); (size.width * size.height) as usize], size }
+        Self { data: vec![StraightRgba::zero(); (size.width * size.height) as usize], size }
     }
 
     fn fill(&mut self, color: StraightRgba) {

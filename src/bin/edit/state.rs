@@ -177,8 +177,8 @@ pub struct State {
 impl State {
     pub fn new() -> apperr::Result<Self> {
         Ok(Self {
-            menubar_color_bg: StraightRgba::from_le(0),
-            menubar_color_fg: StraightRgba::from_le(0),
+            menubar_color_bg: StraightRgba::zero(),
+            menubar_color_fg: StraightRgba::zero(),
 
             documents: Default::default(),
 

@@ -18,6 +18,11 @@ pub struct StraightRgba(u32);
 
 impl StraightRgba {
     #[inline]
+    pub const fn zero() -> Self {
+        StraightRgba(0)
+    }
+
+    #[inline]
     pub const fn from_le(color: u32) -> Self {
         StraightRgba(u32::from_le(color))
     }

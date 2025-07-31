@@ -1976,7 +1976,7 @@ impl TextBuffer {
                 right: destination.left + self.margin_width,
                 bottom: destination.bottom,
             };
-            fb.blend_fg(margin, StraightRgba::from_le(0x7f3f3f3f));
+            fb.blend_fg(margin, StraightRgba::from_le(0x7f7f7f7f));
         }
 
         if self.ruler > 0 {
@@ -2024,7 +2024,7 @@ impl TextBuffer {
                             right: destination.right,
                             bottom: cursor.y + 1,
                         },
-                        StraightRgba::from_le(0x50282828),
+                        StraightRgba::from_le(0x7f7f7f7f),
                     );
                 }
             }

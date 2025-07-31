@@ -392,10 +392,10 @@ impl Tui {
                 alt: "Alt",
                 shift: "Shift",
             },
-            floater_default_bg: StraightRgba::from_le(0),
-            floater_default_fg: StraightRgba::from_le(0),
-            modal_default_bg: StraightRgba::from_le(0),
-            modal_default_fg: StraightRgba::from_le(0),
+            floater_default_bg: StraightRgba::zero(),
+            floater_default_fg: StraightRgba::zero(),
+            modal_default_bg: StraightRgba::zero(),
+            modal_default_fg: StraightRgba::zero(),
 
             size: Size { width: 0, height: 0 },
             mouse_position: Point::MIN,
@@ -3657,7 +3657,7 @@ struct StyledTextChunk {
 }
 
 const INVALID_STYLED_TEXT_CHUNK: StyledTextChunk =
-    StyledTextChunk { offset: usize::MAX, fg: StraightRgba::from_le(0), attr: Attributes::None };
+    StyledTextChunk { offset: usize::MAX, fg: StraightRgba::zero(), attr: Attributes::None };
 
 /// NOTE: Must not contain items that require drop().
 struct TextContent<'a> {
