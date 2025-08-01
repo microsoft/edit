@@ -127,9 +127,14 @@ fn bench_hash(c: &mut Criterion) {
 
 fn bench_oklab(c: &mut Criterion) {
     c.benchmark_group("oklab")
-        .bench_function("srgb_to_oklab", |b| b.iter(|| oklab::srgb_to_oklab(black_box(0xff212cbe))))
-        .bench_function("oklab_blend", |b| {
-            b.iter(|| oklab::oklab_blend(black_box(0x7f212cbe), black_box(0x7f3aae3f)))
+        .bench_function("StraightRgba::as_oklab", |b| {
+            b.iter(|| black_box(oklab::StraightRgba::from_le(0xff212cbe)).as_oklab())
+        })
+        .bench_function("StraightRgba::oklab_blend", |b| {
+            b.iter(|| {
+                black_box(oklab::StraightRgba::from_le(0x7f212cbe))
+                    .oklab_blend(black_box(oklab::StraightRgba::from_le(0x7f3aae3f)))
+            })
         });
 }
 
