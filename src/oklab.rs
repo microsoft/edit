@@ -88,12 +88,11 @@ impl StraightRgba {
         let m_ = cbrtf_est(m);
         let s_ = cbrtf_est(s);
 
-        Oklab([
-            0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
-            1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
-            0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
-            alpha,
-        ])
+        let l = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
+        let a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
+        let b = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+
+        Oklab([l, a, b, alpha])
     }
 }
 
@@ -235,8 +234,8 @@ mod tests {
     #[test]
     fn test_blending() {
         let lower = StraightRgba::from_be(0x3498dbff);
-        let upper = StraightRgba::from_be(0xe74c3cff);
-        let expected = StraightRgba::from_be(0xba7297ff);
+        let upper = StraightRgba::from_be(0xe74c3c7f);
+        let expected = StraightRgba::from_be(0xa67f93ff);
         let blended = lower.oklab_blend(upper);
         assert_eq!(blended, expected);
     }
