@@ -1,10 +1,12 @@
 use std::marker::PhantomData;
+use std::mem::{self, MaybeUninit, forget};
 use std::ops::{Bound, Deref, DerefMut, Range, RangeBounds};
 use std::ptr::{self, NonNull};
+use std::slice;
 
 use crate::stdext::alloc::{ExAllocator, ExStdAlloc};
 
-/// [`Vec<T>`], performance oriented, with allocator support.
+/// [`Vec<T>`] with allocator support.
 pub struct ExVec<T, A: ExAllocator = ExStdAlloc> {
     ptr: NonNull<T>,
     cap: usize,
@@ -20,12 +22,9 @@ impl<T, A: ExAllocator> ExVec<T, A> {
     }
 
     pub fn with_capacity(alloc: A, capacity: usize) -> Self {
-        let cap = capacity.max(1);
-        let ptr = unsafe {
-            let layout = std::alloc::Layout::array::<T>(cap).unwrap();
-            NonNull::new(std::alloc::alloc(layout)).expect("Failed to allocate memory").cast()
-        };
-        Self { ptr, cap, len: 0, alloc, _marker: PhantomData }
+        let mut s = Self::new(alloc);
+        s.reserve_exact(capacity);
+        s
     }
 
     #[inline]
@@ -48,83 +47,83 @@ impl<T, A: ExAllocator> ExVec<T, A> {
         self.len == 0
     }
 
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.ptr.as_ptr()
+    }
+
     pub const fn as_slice(&self) -> &[T] {
-        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+        unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 
     pub const fn as_mut_slice(&mut self) -> &mut [T] {
-        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 
-    pub fn reserve(&mut self, additional: usize) {
-        if self.len + additional > self.cap {
-            let new_cap = (self.len + additional).next_power_of_two();
-            let new_ptr = unsafe {
-                let layout = std::alloc::Layout::array::<T>(new_cap).unwrap();
-                NonNull::new(std::alloc::alloc(layout)).expect("Failed to allocate memory").cast()
-            };
-            if self.ptr != NonNull::dangling() {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(self.ptr.as_ptr(), new_ptr.as_ptr(), self.len);
-                    std::alloc::dealloc(
-                        self.ptr.as_ptr() as *mut u8,
-                        std::alloc::Layout::array::<T>(self.cap).unwrap(),
-                    );
-                }
-            }
-            self.ptr = new_ptr;
-            self.cap = new_cap;
+    pub unsafe fn set_len(&mut self, new_len: usize) {
+        debug_assert!(new_len <= self.cap);
+        self.len = new_len;
+    }
+
+    pub fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<T>] {
+        unsafe {
+            slice::from_raw_parts_mut(
+                self.as_mut_ptr().add(self.len) as *mut MaybeUninit<T>,
+                self.cap - self.len,
+            )
         }
     }
 
+    pub fn leak(self) -> &'static mut [T] {
+        let slice = unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) };
+        forget(self);
+        slice
+    }
+
+    pub fn reserve(&mut self, additional: usize) {
+        self.reserve_impl(additional, false);
+    }
+
     pub fn reserve_exact(&mut self, additional: usize) {
-        if self.len + additional > self.cap {
-            let new_cap = (self.len + additional).next_power_of_two();
-            let new_ptr = unsafe {
-                let layout = std::alloc::Layout::array::<T>(new_cap).unwrap();
-                NonNull::new(std::alloc::alloc(layout)).expect("Failed to allocate memory").cast()
-            };
-            if self.ptr != NonNull::dangling() {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(self.ptr.as_ptr(), new_ptr.as_ptr(), self.len);
-                    std::alloc::dealloc(
-                        self.ptr.as_ptr() as *mut u8,
-                        std::alloc::Layout::array::<T>(self.cap).unwrap(),
+        self.reserve_impl(additional, true);
+    }
+
+    fn reserve_impl(&mut self, additional: usize, exact: bool) {
+        if additional == 0 {
+            return;
+        }
+
+        let new_cap = if exact { self.cap } else { self.cap * 2 };
+        let new_cap = new_cap.max(self.len + additional);
+
+        if new_cap > self.cap {
+            let new_ptr = self
+                .alloc
+                .allocate(new_cap * std::mem::size_of::<T>(), std::mem::align_of::<T>())
+                .unwrap()
+                .cast();
+
+            unsafe {
+                ptr::copy_nonoverlapping(self.ptr.as_ptr(), new_ptr.as_ptr(), self.len);
+                if self.cap != 0 {
+                    self.alloc.deallocate(
+                        self.ptr.cast(),
+                        self.cap * std::mem::size_of::<T>(),
+                        std::mem::align_of::<T>(),
                     );
                 }
             }
+
             self.ptr = new_ptr;
             self.cap = new_cap;
         }
     }
 
     pub fn shrink_to_fit(&mut self) {
-        if self.len < self.cap {
-            let new_cap = self.len.max(1);
-            if new_cap < self.cap {
-                let new_ptr = unsafe {
-                    let layout = std::alloc::Layout::array::<T>(new_cap).unwrap();
-                    NonNull::new(std::alloc::realloc(
-                        self.ptr.as_ptr() as *mut u8,
-                        layout,
-                        new_cap * std::mem::size_of::<T>(),
-                    ))
-                    .expect("Failed to reallocate memory")
-                    .cast()
-                };
-                self.ptr = new_ptr;
-                self.cap = new_cap;
-            }
-        }
+        todo!()
     }
 
     pub fn clear(&mut self) {
-        if self.ptr != NonNull::dangling() {
-            unsafe {
-                std::ptr::drop_in_place(self.ptr.as_ptr());
-                self.len = 0;
-            }
-        }
+        todo!()
     }
 
     pub fn extend<I>(&mut self, iter: I)
@@ -156,9 +155,7 @@ impl<T, A: ExAllocator> ExVec<T, A> {
             Bound::Unbounded => self.len,
         };
         if start < end && end <= self.len {
-            let slice =
-                unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().add(start), end - start) };
-            self.extend_from_slice(slice);
+            todo!()
         }
     }
 
@@ -178,68 +175,14 @@ impl<T, A: ExAllocator> ExVec<T, A> {
     where
         T: Copy,
     {
-        if count > 0 {
-            let new_len = self.len + count;
-            if new_len > self.cap {
-                self.reserve(new_len - self.len);
-            }
-            unsafe {
-                let ptr = self.as_mut_ptr().add(self.len);
-                for i in 0..count {
-                    ptr::write(ptr.add(i), value);
-                }
-                self.set_len(new_len);
-            }
-        }
+        todo!()
     }
 
     pub fn extend_from_slice(&mut self, src: &[T])
     where
         T: Clone,
     {
-        let src_len = src.len();
-        if src_len > 0 {
-            self.reserve(src_len);
-            unsafe {
-                let ptr = self.as_mut_ptr().add(self.len);
-                ptr::copy_nonoverlapping(src.as_ptr(), ptr, src_len);
-                self.set_len(self.len + src_len);
-            }
-        }
-    }
-
-    pub fn as_mut_ptr(&mut self) -> *mut T {
-        self.ptr.as_ptr()
-    }
-
-    pub unsafe fn set_len(&mut self, new_len: usize) {
-        debug_assert!(new_len <= self.cap);
-        self.len = new_len;
-    }
-
-    pub fn spare_capacity_mut(&mut self) -> &mut [T] {
-        if self.len < self.cap {
-            unsafe {
-                std::slice::from_raw_parts_mut(self.ptr.as_ptr().add(self.len), self.cap - self.len)
-            }
-        } else {
-            &mut []
-        }
-    }
-
-    pub fn iter(&self) -> std::slice::Iter<'_, T> {
-        self.deref().iter()
-    }
-
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, T> {
-        self.deref_mut().iter_mut()
-    }
-
-    pub fn leak(self) -> &'static mut [T] {
-        let slice = unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) };
-        // Prevent the destructor from running.
-        std::mem::forget(self);
-        slice
+        todo!()
     }
 }
 
@@ -295,7 +238,7 @@ impl<T: Copy, A: ExAllocator> ExVec<T, A> {
 
 impl<T, A: ExAllocator> Drop for ExVec<T, A> {
     fn drop(&mut self) {
-        if self.ptr != NonNull::dangling() {
+        if self.cap != 0 {
             unsafe {
                 self.alloc.deallocate(
                     self.ptr.cast(),

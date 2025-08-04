@@ -216,7 +216,7 @@ fn score_separator_at_pos(ch: char) -> i32 {
 }
 
 fn map_chars<'a>(arena: &'a Arena, s: &str) -> ExVec<char, &'a Arena> {
-    let mut chars = ExVec::with_capacity(arena, s.len());
+    let mut chars = ExVec::new(arena);
     chars.extend(s.chars());
     chars.shrink_to_fit();
     chars
