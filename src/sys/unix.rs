@@ -6,8 +6,8 @@
 //! Read the `windows` module for reference.
 //! TODO: This reminds me that the sys API should probably be a trait.
 
-use std::ffi::{CStr, c_int, c_void};
-use std::fs::{self, File};
+use std::ffi::{CStr, c_char, c_int, c_void};
+use std::fs::File;
 use std::mem::{self, ManuallyDrop, MaybeUninit};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
 use std::path::Path;
@@ -60,7 +60,11 @@ extern "C" fn sigwinch_handler(_: libc::c_int) {
     }
 }
 
-pub fn init() -> apperr::Result<Deinit> {
+pub fn init() -> Deinit {
+    Deinit
+}
+
+pub fn switch_modes() -> apperr::Result<()> {
     unsafe {
         // Reopen stdin if it's redirected (= piped input).
         if libc::isatty(STATE.stdin) == 0 {
@@ -70,26 +74,6 @@ pub fn init() -> apperr::Result<Deinit> {
         // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
         STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
 
-        Ok(Deinit)
-    }
-}
-
-pub struct Deinit;
-
-impl Drop for Deinit {
-    fn drop(&mut self) {
-        unsafe {
-            #[allow(static_mut_refs)]
-            if let Some(termios) = STATE.stdout_initial_termios.take() {
-                // Restore the original terminal modes.
-                libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios);
-            }
-        }
-    }
-}
-
-pub fn switch_modes() -> apperr::Result<()> {
-    unsafe {
         // Set STATE.inject_resize to true whenever we get a SIGWINCH.
         let mut sigwinch_action: libc::sigaction = mem::zeroed();
         sigwinch_action.sa_sigaction = sigwinch_handler as libc::sighandler_t;
@@ -97,7 +81,7 @@ pub fn switch_modes() -> apperr::Result<()> {
 
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
-        check_int_return(libc::tcgetattr(STATE.stdin, termios.as_mut_ptr()))?;
+        check_int_return(libc::tcgetattr(STATE.stdout, termios.as_mut_ptr()))?;
         let mut termios = termios.assume_init();
         STATE.stdout_initial_termios = Some(termios);
 
@@ -146,9 +130,23 @@ pub fn switch_modes() -> apperr::Result<()> {
 
         // Set the terminal to raw mode.
         termios.c_lflag &= !(libc::ICANON | libc::ECHO);
-        check_int_return(libc::tcsetattr(STATE.stdin, libc::TCSANOW, &termios))?;
+        check_int_return(libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios))?;
 
         Ok(())
+    }
+}
+
+pub struct Deinit;
+
+impl Drop for Deinit {
+    fn drop(&mut self) {
+        unsafe {
+            #[allow(static_mut_refs)]
+            if let Some(termios) = STATE.stdout_initial_termios.take() {
+                // Restore the original terminal modes.
+                libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios);
+            }
+        }
     }
 }
 
@@ -202,8 +200,8 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
 
         // We got some leftover broken UTF8 from a previous read? Prepend it.
         if STATE.utf8_len != 0 {
-            STATE.utf8_len = 0;
             buf.extend_from_slice(&STATE.utf8_buf[..STATE.utf8_len]);
+            STATE.utf8_len = 0;
         }
 
         loop {
@@ -433,9 +431,9 @@ pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> apperr::Result<(
     }
 }
 
-unsafe fn load_library(name: &CStr) -> apperr::Result<NonNull<c_void>> {
+unsafe fn load_library(name: *const c_char) -> apperr::Result<NonNull<c_void>> {
     unsafe {
-        NonNull::new(libc::dlopen(name.as_ptr(), libc::RTLD_LAZY))
+        NonNull::new(libc::dlopen(name, libc::RTLD_LAZY))
             .ok_or_else(|| errno_to_apperr(libc::ENOENT))
     }
 }
@@ -448,9 +446,12 @@ unsafe fn load_library(name: &CStr) -> apperr::Result<NonNull<c_void>> {
 /// of the function you're loading. No type checks whatsoever are performed.
 //
 // It'd be nice to constrain T to std::marker::FnPtr, but that's unstable.
-pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apperr::Result<T> {
+pub unsafe fn get_proc_address<T>(
+    handle: NonNull<c_void>,
+    name: *const c_char,
+) -> apperr::Result<T> {
     unsafe {
-        let sym = libc::dlsym(handle.as_ptr(), name.as_ptr());
+        let sym = libc::dlsym(handle.as_ptr(), name);
         if sym.is_null() {
             Err(errno_to_apperr(libc::ENOENT))
         } else {
@@ -459,20 +460,46 @@ pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apper
     }
 }
 
-pub fn load_libicuuc() -> apperr::Result<NonNull<c_void>> {
-    unsafe { load_library(c"libicuuc.so") }
+pub struct LibIcu {
+    pub libicuuc: NonNull<c_void>,
+    pub libicui18n: NonNull<c_void>,
 }
 
-pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
-    unsafe { load_library(c"libicui18n.so") }
-}
+pub fn load_icu() -> apperr::Result<LibIcu> {
+    const fn const_str_eq(a: &str, b: &str) -> bool {
+        let a = a.as_bytes();
+        let b = b.as_bytes();
+        let mut i = 0;
 
+        loop {
+            if i >= a.len() || i >= b.len() {
+                return a.len() == b.len();
+            }
+            if a[i] != b[i] {
+                return false;
+            }
+            i += 1;
+        }
+    }
+
+    const LIBICUUC: &str = concat!(env!("EDIT_CFG_ICUUC_SONAME"), "\0");
+    const LIBICUI18N: &str = concat!(env!("EDIT_CFG_ICUI18N_SONAME"), "\0");
+
+    if const { const_str_eq(LIBICUUC, LIBICUI18N) } {
+        let icu = unsafe { load_library(LIBICUUC.as_ptr() as *const _)? };
+        Ok(LibIcu { libicuuc: icu, libicui18n: icu })
+    } else {
+        let libicuuc = unsafe { load_library(LIBICUUC.as_ptr() as *const _)? };
+        let libicui18n = unsafe { load_library(LIBICUI18N.as_ptr() as *const _)? };
+        Ok(LibIcu { libicuuc, libicui18n })
+    }
+}
 /// ICU, by default, adds the major version as a suffix to each exported symbol.
 /// They also recommend to disable this for system-level installations (`runConfigureICU Linux --disable-renaming`),
 /// but I found that many (most?) Linux distributions don't do this for some reason.
 /// This function returns the suffix, if any.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn icu_proc_suffix(arena: &Arena, handle: NonNull<c_void>) -> ArenaString<'_> {
+#[cfg(edit_icu_renaming_auto_detect)]
+pub fn icu_detect_renaming_suffix(arena: &Arena, handle: NonNull<c_void>) -> ArenaString<'_> {
     unsafe {
         type T = *const c_void;
 
@@ -480,7 +507,7 @@ pub fn icu_proc_suffix(arena: &Arena, handle: NonNull<c_void>) -> ArenaString<'_
 
         // Check if the ICU library is using unversioned symbols.
         // Return an empty suffix in that case.
-        if get_proc_address::<T>(handle, c"u_errorName").is_ok() {
+        if get_proc_address::<T>(handle, c"u_errorName".as_ptr()).is_ok() {
             return res;
         }
 
@@ -488,7 +515,7 @@ pub fn icu_proc_suffix(arena: &Arena, handle: NonNull<c_void>) -> ArenaString<'_
         // this symbol seems to be always present. This allows us to call `dladdr`.
         // It's the `UCaseMap::~UCaseMap()` destructor which for some reason isn't
         // in a namespace. Thank you ICU maintainers for this oversight.
-        let proc = match get_proc_address::<T>(handle, c"_ZN8UCaseMapD1Ev") {
+        let proc = match get_proc_address::<T>(handle, c"_ZN8UCaseMapD1Ev".as_ptr()) {
             Ok(proc) => proc,
             Err(_) => return res,
         };
@@ -506,7 +533,7 @@ pub fn icu_proc_suffix(arena: &Arena, handle: NonNull<c_void>) -> ArenaString<'_
             Err(_) => return res,
         };
 
-        let path = match fs::read_link(path) {
+        let path = match std::fs::read_link(path) {
             Ok(path) => path,
             Err(_) => path.into(),
         };
@@ -528,7 +555,13 @@ pub fn icu_proc_suffix(arena: &Arena, handle: NonNull<c_void>) -> ArenaString<'_
     }
 }
 
-pub fn add_icu_proc_suffix<'a, 'b, 'r>(arena: &'a Arena, name: &'b CStr, suffix: &str) -> &'r CStr
+#[cfg(edit_icu_renaming_auto_detect)]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn icu_add_renaming_suffix<'a, 'b, 'r>(
+    arena: &'a Arena,
+    name: *const c_char,
+    suffix: &str,
+) -> *const c_char
 where
     'a: 'r,
     'b: 'r,
@@ -538,16 +571,15 @@ where
     } else {
         // SAFETY: In this particular case we know that the string
         // is valid UTF-8, because it comes from icu.rs.
+        let name = unsafe { CStr::from_ptr(name) };
         let name = unsafe { name.to_str().unwrap_unchecked() };
 
-        let mut res = ArenaString::new_in(arena);
+        let mut res = ManuallyDrop::new(ArenaString::new_in(arena));
         res.reserve(name.len() + suffix.len() + 1);
         res.push_str(name);
         res.push_str(suffix);
         res.push('\0');
-
-        let bytes: &'a [u8] = unsafe { mem::transmute(res.as_bytes()) };
-        unsafe { CStr::from_bytes_with_nul_unchecked(bytes) }
+        res.as_ptr() as *const c_char
     }
 }
 

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::ffi::{CStr, OsString, c_void};
+use std::ffi::{OsString, c_char, c_void};
 use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::mem::MaybeUninit;
@@ -19,6 +19,35 @@ use windows_sys::w;
 use crate::apperr;
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::helpers::*;
+
+macro_rules! w_env {
+    ($s:literal) => {{
+        const INPUT: &[u8] = env!($s).as_bytes();
+        const OUTPUT_LEN: usize = windows_sys::core::utf16_len(INPUT) + 1;
+        const OUTPUT: &[u16; OUTPUT_LEN] = {
+            let mut buffer = [0; OUTPUT_LEN];
+            let mut input_pos = 0;
+            let mut output_pos = 0;
+            while let Some((mut code_point, new_pos)) =
+                windows_sys::core::decode_utf8_char(INPUT, input_pos)
+            {
+                input_pos = new_pos;
+                if code_point <= 0xffff {
+                    buffer[output_pos] = code_point as u16;
+                    output_pos += 1;
+                } else {
+                    code_point -= 0x10000;
+                    buffer[output_pos] = 0xd800 + (code_point >> 10) as u16;
+                    output_pos += 1;
+                    buffer[output_pos] = 0xdc00 + (code_point & 0x3ff) as u16;
+                    output_pos += 1;
+                }
+            }
+            &{ buffer }
+        };
+        OUTPUT.as_ptr()
+    }};
+}
 
 type ReadConsoleInputExW = unsafe extern "system" fn(
     h_console_input: Foundation::HANDLE,
@@ -77,19 +106,43 @@ extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> Foundation::BOOL {
 }
 
 /// Initializes the platform-specific state.
-pub fn init() -> apperr::Result<Deinit> {
+pub fn init() -> Deinit {
     unsafe {
         // Get the stdin and stdout handles first, so that if this function fails,
         // we at least got something to use for `write_stdout`.
         STATE.stdin = Console::GetStdHandle(Console::STD_INPUT_HANDLE);
         STATE.stdout = Console::GetStdHandle(Console::STD_OUTPUT_HANDLE);
 
+        Deinit
+    }
+}
+
+/// Switches the terminal into raw mode, etc.
+pub fn switch_modes() -> apperr::Result<()> {
+    unsafe {
+        // `kernel32.dll` doesn't exist on OneCore variants of Windows.
+        // NOTE: `kernelbase.dll` is NOT a stable API to rely on. In our case it's the best option though.
+        //
+        // This is written as two nested `match` statements so that we can return the error from the first
+        // `load_read_func` call if it fails. The kernel32.dll lookup may contain some valid information,
+        // while the kernelbase.dll lookup may not, since it's not a stable API.
+        unsafe fn load_read_func(module: *const u16) -> apperr::Result<ReadConsoleInputExW> {
+            unsafe {
+                get_module(module)
+                    .and_then(|m| get_proc_address(m, c"ReadConsoleInputExW".as_ptr()))
+            }
+        }
+        STATE.read_console_input_ex = match load_read_func(w!("kernel32.dll")) {
+            Ok(func) => func,
+            Err(err) => match load_read_func(w!("kernelbase.dll")) {
+                Ok(func) => func,
+                Err(_) => return Err(err),
+            },
+        };
+
         // Reopen stdin if it's redirected (= piped input).
-        if !ptr::eq(STATE.stdin, Foundation::INVALID_HANDLE_VALUE)
-            && matches!(
-                FileSystem::GetFileType(STATE.stdin),
-                FileSystem::FILE_TYPE_DISK | FileSystem::FILE_TYPE_PIPE
-            )
+        if ptr::eq(STATE.stdin, Foundation::INVALID_HANDLE_VALUE)
+            || !matches!(FileSystem::GetFileType(STATE.stdin), FileSystem::FILE_TYPE_CHAR)
         {
             STATE.stdin = FileSystem::CreateFileW(
                 w!("CONIN$"),
@@ -101,32 +154,36 @@ pub fn init() -> apperr::Result<Deinit> {
                 null_mut(),
             );
         }
-
         if ptr::eq(STATE.stdin, Foundation::INVALID_HANDLE_VALUE)
             || ptr::eq(STATE.stdout, Foundation::INVALID_HANDLE_VALUE)
         {
             return Err(get_last_error());
         }
 
-        unsafe fn load_read_func(module: *const u16) -> apperr::Result<ReadConsoleInputExW> {
-            unsafe { get_module(module).and_then(|m| get_proc_address(m, c"ReadConsoleInputExW")) }
-        }
+        check_bool_return(Console::SetConsoleCtrlHandler(Some(console_ctrl_handler), 1))?;
 
-        // `kernel32.dll` doesn't exist on OneCore variants of Windows.
-        // NOTE: `kernelbase.dll` is NOT a stable API to rely on. In our case it's the best option though.
-        //
-        // This is written as two nested `match` statements so that we can return the error from the first
-        // `load_read_func` call if it fails. The kernel32.dll lookup may contain some valid information,
-        // while the kernelbase.dll lookup may not, since it's not a stable API.
-        STATE.read_console_input_ex = match load_read_func(w!("kernel32.dll")) {
-            Ok(func) => func,
-            Err(err) => match load_read_func(w!("kernelbase.dll")) {
-                Ok(func) => func,
-                Err(_) => return Err(err),
-            },
-        };
+        STATE.stdin_cp_old = Console::GetConsoleCP();
+        STATE.stdout_cp_old = Console::GetConsoleOutputCP();
+        check_bool_return(Console::GetConsoleMode(STATE.stdin, &raw mut STATE.stdin_mode_old))?;
+        check_bool_return(Console::GetConsoleMode(STATE.stdout, &raw mut STATE.stdout_mode_old))?;
 
-        Ok(Deinit)
+        check_bool_return(Console::SetConsoleCP(Globalization::CP_UTF8))?;
+        check_bool_return(Console::SetConsoleOutputCP(Globalization::CP_UTF8))?;
+        check_bool_return(Console::SetConsoleMode(
+            STATE.stdin,
+            Console::ENABLE_WINDOW_INPUT
+                | Console::ENABLE_EXTENDED_FLAGS
+                | Console::ENABLE_VIRTUAL_TERMINAL_INPUT,
+        ))?;
+        check_bool_return(Console::SetConsoleMode(
+            STATE.stdout,
+            Console::ENABLE_PROCESSED_OUTPUT
+                | Console::ENABLE_WRAP_AT_EOL_OUTPUT
+                | Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING
+                | Console::DISABLE_NEWLINE_AUTO_RETURN,
+        ))?;
+
+        Ok(())
     }
 }
 
@@ -152,36 +209,6 @@ impl Drop for Deinit {
                 STATE.stdout_mode_old = INVALID_CONSOLE_MODE;
             }
         }
-    }
-}
-
-/// Switches the terminal into raw mode, etc.
-pub fn switch_modes() -> apperr::Result<()> {
-    unsafe {
-        check_bool_return(Console::SetConsoleCtrlHandler(Some(console_ctrl_handler), 1))?;
-
-        STATE.stdin_cp_old = Console::GetConsoleCP();
-        STATE.stdout_cp_old = Console::GetConsoleOutputCP();
-        check_bool_return(Console::GetConsoleMode(STATE.stdin, &raw mut STATE.stdin_mode_old))?;
-        check_bool_return(Console::GetConsoleMode(STATE.stdout, &raw mut STATE.stdout_mode_old))?;
-
-        check_bool_return(Console::SetConsoleCP(Globalization::CP_UTF8))?;
-        check_bool_return(Console::SetConsoleOutputCP(Globalization::CP_UTF8))?;
-        check_bool_return(Console::SetConsoleMode(
-            STATE.stdin,
-            Console::ENABLE_WINDOW_INPUT
-                | Console::ENABLE_EXTENDED_FLAGS
-                | Console::ENABLE_VIRTUAL_TERMINAL_INPUT,
-        ))?;
-        check_bool_return(Console::SetConsoleMode(
-            STATE.stdout,
-            Console::ENABLE_PROCESSED_OUTPUT
-                | Console::ENABLE_WRAP_AT_EOL_OUTPUT
-                | Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING
-                | Console::DISABLE_NEWLINE_AUTO_RETURN,
-        ))?;
-
-        Ok(())
     }
 }
 
@@ -564,21 +591,50 @@ unsafe fn load_library(name: *const u16) -> apperr::Result<NonNull<c_void>> {
 /// of the function you're loading. No type checks whatsoever are performed.
 //
 // It'd be nice to constrain T to std::marker::FnPtr, but that's unstable.
-pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: &CStr) -> apperr::Result<T> {
+pub unsafe fn get_proc_address<T>(
+    handle: NonNull<c_void>,
+    name: *const c_char,
+) -> apperr::Result<T> {
     unsafe {
-        let ptr = LibraryLoader::GetProcAddress(handle.as_ptr(), name.as_ptr() as *const u8);
+        let ptr = LibraryLoader::GetProcAddress(handle.as_ptr(), name as *const u8);
         if let Some(ptr) = ptr { Ok(mem::transmute_copy(&ptr)) } else { Err(get_last_error()) }
     }
 }
 
-/// Loads the "common" portion of ICU4C.
-pub fn load_libicuuc() -> apperr::Result<NonNull<c_void>> {
-    unsafe { load_library(w!("icuuc.dll")) }
+pub struct LibIcu {
+    pub libicuuc: NonNull<c_void>,
+    pub libicui18n: NonNull<c_void>,
 }
 
-/// Loads the internationalization portion of ICU4C.
-pub fn load_libicui18n() -> apperr::Result<NonNull<c_void>> {
-    unsafe { load_library(w!("icuin.dll")) }
+pub fn load_icu() -> apperr::Result<LibIcu> {
+    const fn const_ptr_u16_eq(a: *const u16, b: *const u16) -> bool {
+        unsafe {
+            let mut a = a;
+            let mut b = b;
+            loop {
+                if *a != *b {
+                    return false;
+                }
+                if *a == 0 {
+                    return true;
+                }
+                a = a.add(1);
+                b = b.add(1);
+            }
+        }
+    }
+
+    const LIBICUUC: *const u16 = w_env!("EDIT_CFG_ICUUC_SONAME");
+    const LIBICUI18N: *const u16 = w_env!("EDIT_CFG_ICUI18N_SONAME");
+
+    if const { const_ptr_u16_eq(LIBICUUC, LIBICUI18N) } {
+        let icu = unsafe { load_library(LIBICUUC)? };
+        Ok(LibIcu { libicuuc: icu, libicui18n: icu })
+    } else {
+        let libicuuc = unsafe { load_library(LIBICUUC)? };
+        let libicui18n = unsafe { load_library(LIBICUI18N)? };
+        Ok(LibIcu { libicuuc, libicui18n })
+    }
 }
 
 /// Returns a list of preferred languages for the current user.
