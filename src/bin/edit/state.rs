@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
+use edit::stdext::*;
 use edit::tui::*;
 use edit::{apperr, buffer, icu, sys};
 
@@ -122,7 +123,7 @@ pub enum StateEncodingChange {
 
 #[derive(Default)]
 pub struct OscTitleFileStatus {
-    pub filename: String,
+    pub filename: ExString,
     pub dirty: bool,
 }
 
@@ -191,7 +192,7 @@ impl State {
             file_picker_pending_name: Default::default(),
             file_picker_entries: None,
             file_picker_overwrite_warning: None,
-            file_picker_autocomplete: Vec::new(),
+            file_picker_autocomplete: Default::default(),
 
             wants_search: StateSearch { kind: StateSearchKind::Hidden, focus: false },
             search_needle: Default::default(),

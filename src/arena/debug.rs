@@ -3,12 +3,12 @@
 
 #![allow(clippy::missing_safety_doc, clippy::mut_from_ref)]
 
-use std::alloc::{AllocError, Allocator, Layout};
 use std::mem::{self, MaybeUninit};
 use std::ptr::NonNull;
 
 use super::release;
 use crate::apperr;
+use crate::stdext::*;
 
 /// A debug wrapper for [`release::Arena`].
 ///
@@ -112,45 +112,30 @@ impl Arena {
     }
 }
 
-unsafe impl Allocator for Arena {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.delegate_target().alloc_raw(layout.size(), layout.align())
-    }
-
-    fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.delegate_target().allocate_zeroed(layout)
-    }
-
-    // While it is possible to shrink the tail end of the arena, it is
-    // not very useful given the existence of scoped scratch arenas.
-    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        unsafe { self.delegate_target().deallocate(ptr, layout) }
+unsafe impl ExAllocator for Arena {
+    fn allocate(&self, size: usize, align: usize) -> Result<NonNull<[u8]>, ExAllocError> {
+        self.delegate_target().allocate(size, align)
     }
 
     unsafe fn grow(
         &self,
         ptr: NonNull<u8>,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        unsafe { self.delegate_target().grow(ptr, old_layout, new_layout) }
+        old_size: usize,
+        new_size: usize,
+        align: usize,
+    ) -> Result<NonNull<[u8]>, ExAllocError> {
+        // Call the `grow` implementation of `release::Arena` directly
+        // to avoid the blanket `&A` impl that requires `ExDeallocator`.
+        unsafe {
+            <release::Arena as ExAllocator>::grow(
+                self.delegate_target(),
+                ptr,
+                old_size,
+                new_size,
+                align,
+            )
+        }
     }
 
-    unsafe fn grow_zeroed(
-        &self,
-        ptr: NonNull<u8>,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        unsafe { self.delegate_target().grow_zeroed(ptr, old_layout, new_layout) }
-    }
-
-    unsafe fn shrink(
-        &self,
-        ptr: NonNull<u8>,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        unsafe { self.delegate_target().shrink(ptr, old_layout, new_layout) }
-    }
+    unsafe fn deallocate(&self, _ptr: NonNull<u8>, _size: usize, _align: usize) {}
 }

@@ -36,7 +36,7 @@ use std::str;
 
 pub use gap_buffer::GapBuffer;
 
-use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::arena::{Arena, scratch_arena};
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
@@ -44,6 +44,7 @@ use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
 use crate::oklab::oklab_blend;
 use crate::simd::memchr2;
+use crate::stdext::*;
 use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
 use crate::{apperr, icu, simd};
 
@@ -144,7 +145,7 @@ pub struct SearchOptions {
 
 enum RegexReplacement<'a> {
     Group(i32),
-    Text(Vec<u8, &'a Arena>),
+    Text(ExVec<u8, &'a Arena>),
 }
 
 /// Caches the start and length of the active edit line for a single edit.
@@ -1287,15 +1288,15 @@ impl TextBuffer {
         arena: &'a Arena,
         search: &mut ActiveSearch,
         replacement: &[u8],
-    ) -> Vec<RegexReplacement<'a>, &'a Arena> {
-        let mut res = Vec::new_in(arena);
+    ) -> ExVec<RegexReplacement<'a>, &'a Arena> {
+        let mut res = ExVec::new(arena);
 
         if !search.options.use_regex {
             return res;
         }
 
         let group_count = search.regex.group_count();
-        let mut text = Vec::new_in(arena);
+        let mut text = ExVec::new(arena);
         let mut text_beg = 0;
 
         loop {
@@ -1366,7 +1367,7 @@ impl TextBuffer {
 
             if !text.is_empty() {
                 res.push(RegexReplacement::Text(text));
-                text = Vec::new_in(arena);
+                text = ExVec::new(arena);
             }
             if group >= 0 {
                 res.push(RegexReplacement::Group(group));
@@ -1720,7 +1721,7 @@ impl TextBuffer {
         let line_number_width = self.margin_width.max(3) as usize - 3;
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
-        let mut line = ArenaString::new_in(&scratch);
+        let mut line = ExString::new(&*scratch);
         let mut visual_pos_x_max = 0;
 
         // Pick the cursor closer to the `origin.y`.
@@ -2108,7 +2109,7 @@ impl TextBuffer {
 
         let mut offset = 0;
         let scratch = scratch_arena(None);
-        let mut newline_buffer = ArenaString::new_in(&scratch);
+        let mut newline_buffer = ExString::new(&*scratch);
 
         loop {
             // Can't use `unicode::newlines_forward` because bracketed paste uses CR instead of LF/CRLF.
@@ -2188,13 +2189,13 @@ impl TextBuffer {
                 // If tabs are enabled, add as many tabs as we can.
                 if self.indent_with_tabs {
                     let tab_count = newline_indentation / self.tab_size;
-                    newline_buffer.push_repeat('\t', tab_count as usize);
+                    newline_buffer.push_repeat(tab_count as usize, '\t');
                     newline_indentation -= tab_count * self.tab_size;
                 }
 
                 // If tabs are disabled, or if the indentation wasn't a multiple of the tab size,
                 // add spaces to make up the difference.
-                newline_buffer.push_repeat(' ', newline_indentation as usize);
+                newline_buffer.push_repeat(newline_indentation as usize, ' ');
             }
 
             self.edit_write(newline_buffer.as_bytes());
@@ -2464,10 +2465,10 @@ impl TextBuffer {
     fn extract_selection(&mut self, delete: bool) -> Vec<u8> {
         let line_copy = !self.has_selection();
         let Some((beg, end)) = self.selection_range_internal(true) else {
-            return Vec::new();
+            return Default::default();
         };
 
-        let mut out = Vec::new();
+        let mut out = Default::default();
         self.buffer.extract_raw(beg.offset..end.offset, &mut out, 0);
 
         if delete && !out.is_empty() {
@@ -2571,8 +2572,8 @@ impl TextBuffer {
                 stats_before: self.stats,
                 generation_before: self.buffer.generation(),
                 cursor: cursor.logical_pos,
-                deleted: Vec::new(),
-                added: Vec::new(),
+                deleted: Default::default(),
+                added: Default::default(),
             }));
 
             if let Some(info) = &self.active_edit_group

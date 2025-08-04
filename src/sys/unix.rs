@@ -14,9 +14,9 @@ use std::path::Path;
 use std::ptr::{self, NonNull, null_mut};
 use std::{thread, time};
 
-use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::arena::{Arena, scratch_arena};
 use crate::helpers::*;
-use crate::{apperr, arena_format};
+use crate::{apperr, exformat_in};
 
 #[cfg(target_os = "netbsd")]
 const fn desired_mprotect(flags: c_int) -> c_int {
@@ -183,14 +183,14 @@ fn get_window_size() -> (u16, u16) {
 /// Returns `None` if there was an error reading from stdin.
 /// Returns `Some("")` if the given timeout was reached.
 /// Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaString<'_>> {
+pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ExString<&Arena>> {
     unsafe {
         if STATE.inject_resize {
             timeout = time::Duration::ZERO;
         }
 
         let read_poll = timeout != time::Duration::MAX;
-        let mut buf = Vec::new_in(arena);
+        let mut buf = ExVec::new_in(arena);
 
         // We don't know if the input is valid UTF8, so we first use a Vec and then
         // later turn it into UTF8 using `from_utf8_lossy_owned`.
@@ -285,7 +285,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
             }
         }
 
-        let mut result = ArenaString::from_utf8_lossy_owned(buf);
+        let mut result = ExString::from_utf8_lossy_owned(buf);
 
         // We received a SIGWINCH? Add a fake window size sequence for our input parser.
         // I prepend it so that on startup, the TUI system gets first initialized with a size.
@@ -294,7 +294,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
             let (w, h) = get_window_size();
             if w > 0 && h > 0 {
                 let scratch = scratch_arena(Some(arena));
-                let seq = arena_format!(&scratch, "\x1b[8;{h};{w}t");
+                let seq = exformat_in!(&scratch, "\x1b[8;{h};{w}t");
                 result.replace_range(0..0, &seq);
             }
         }
@@ -499,11 +499,11 @@ pub fn load_icu() -> apperr::Result<LibIcu> {
 /// but I found that many (most?) Linux distributions don't do this for some reason.
 /// This function returns the suffix, if any.
 #[cfg(edit_icu_renaming_auto_detect)]
-pub fn icu_detect_renaming_suffix(arena: &Arena, handle: NonNull<c_void>) -> ArenaString<'_> {
+pub fn icu_detect_renaming_suffix(arena: &Arena, handle: NonNull<c_void>) -> ExString<&Arena> {
     unsafe {
         type T = *const c_void;
 
-        let mut res = ArenaString::new_in(arena);
+        let mut res = ExString::new_in(arena);
 
         // Check if the ICU library is using unversioned symbols.
         // Return an empty suffix in that case.
@@ -574,7 +574,7 @@ where
         let name = unsafe { CStr::from_ptr(name) };
         let name = unsafe { name.to_str().unwrap_unchecked() };
 
-        let mut res = ManuallyDrop::new(ArenaString::new_in(arena));
+        let mut res = ManuallyDrop::new(ExString::new_in(arena));
         res.reserve(name.len() + suffix.len() + 1);
         res.push_str(name);
         res.push_str(suffix);
@@ -583,8 +583,8 @@ where
     }
 }
 
-pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
-    let mut locales = Vec::new_in(arena);
+pub fn preferred_languages(arena: &Arena) -> ExVec<ExString<&Arena>, &Arena> {
+    let mut locales = ExVec::new_in(arena);
 
     for key in ["LANGUAGE", "LC_ALL", "LANG"] {
         if let Ok(val) = std::env::var(key)
@@ -593,9 +593,9 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
             locales.extend(val.split(':').filter(|s| !s.is_empty()).map(|s| {
                 // Replace all underscores with dashes,
                 // because the localization code expects pt-br, not pt_BR.
-                let mut res = Vec::new_in(arena);
+                let mut res = ExVec::new_in(arena);
                 res.extend(s.as_bytes().iter().map(|&b| if b == b'_' { b'-' } else { b }));
-                unsafe { ArenaString::from_utf8_unchecked(res) }
+                unsafe { ExString::from_utf8_unchecked(res) }
             }));
             break;
         }

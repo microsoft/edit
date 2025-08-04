@@ -15,7 +15,12 @@
     feature(stdarch_loongarch, stdarch_loongarch_feature_detection, loongarch_target_feature),
     allow(clippy::incompatible_msrv)
 )]
-#![allow(clippy::missing_transmute_annotations, clippy::new_without_default, stable_features)]
+#![allow(
+    clippy::missing_safety_doc,
+    clippy::missing_transmute_annotations,
+    clippy::new_without_default,
+    stable_features
+)]
 
 #[macro_use]
 pub mod arena;
@@ -35,6 +40,7 @@ pub mod input;
 pub mod oklab;
 pub mod path;
 pub mod simd;
+pub mod stdext;
 pub mod sys;
 pub mod tui;
 pub mod unicode;

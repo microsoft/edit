@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use edit::arena_format;
+use edit::exformat_in;
 use edit::helpers::*;
 use edit::input::{kbmod, vk};
 use edit::tui::*;
@@ -146,7 +146,7 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
 
             ctx.label(
                 "version",
-                &arena_format!(
+                &exformat_in!(
                     ctx.arena(),
                     "{}{}",
                     loc(LocId::AboutDialogVersion),

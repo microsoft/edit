@@ -1,56 +1,52 @@
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-
 use std::fmt;
 use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 
-use super::Arena;
-use crate::helpers::*;
+use crate::stdext::*;
 
-/// A custom string type, because `std` lacks allocator support for [`String`].
-///
-/// To keep things simple, this one is hardcoded to [`Arena`].
-#[derive(Clone)]
-pub struct ArenaString<'a> {
-    vec: Vec<u8, &'a Arena>,
+pub struct ExString<A: ExAllocator = ExStdAlloc> {
+    vec: ExVec<u8, A>,
 }
 
-impl<'a> ArenaString<'a> {
-    /// Creates a new [`ArenaString`] in the given arena.
+impl<A: ExAllocator> ExString<A> {
+    /// Creates a new [`ExString`] in the given arena.
     #[must_use]
-    pub const fn new_in(arena: &'a Arena) -> Self {
-        Self { vec: Vec::new_in(arena) }
+    pub fn new(alloc: A) -> Self {
+        Self { vec: ExVec::new(alloc) }
     }
 
     #[must_use]
-    pub fn with_capacity_in(capacity: usize, arena: &'a Arena) -> Self {
-        Self { vec: Vec::with_capacity_in(capacity, arena) }
+    pub fn with_capacity(alloc: A, capacity: usize) -> Self {
+        Self { vec: ExVec::with_capacity(alloc, capacity) }
     }
 
-    /// Turns a [`str`] into an [`ArenaString`].
+    /// Turns a [`str`] into an [`ExString`].
     #[must_use]
-    pub fn from_str(arena: &'a Arena, s: &str) -> Self {
-        let mut res = Self::new_in(arena);
+    pub fn from_str(alloc: A, s: &str) -> Self {
+        let mut res = Self::new(alloc);
         res.push_str(s);
         res
     }
 
+    pub fn from_utf8(bytes: ExVec<u8, A>) -> Result<Self, std::string::FromUtf8Error> {
+        Ok(Self { vec: bytes })
+    }
+
     /// It says right here that you checked if `bytes` is valid UTF-8
-    /// and you are sure it is. Presto! Here's an `ArenaString`!
+    /// and you are sure it is. Presto! Here's an `ExString`!
     ///
     /// # Safety
     ///
     /// You fool! It says "unchecked" right there. Now the house is burning.
     #[inline]
     #[must_use]
-    pub unsafe fn from_utf8_unchecked(bytes: Vec<u8, &'a Arena>) -> Self {
+    pub unsafe fn from_utf8_unchecked(bytes: ExVec<u8, A>) -> Self {
         Self { vec: bytes }
     }
 
     /// Checks whether `text` contains only valid UTF-8.
     /// If the entire string is valid, it returns `Ok(text)`.
-    /// Otherwise, it returns `Err(ArenaString)` with all invalid sequences replaced with U+FFFD.
-    pub fn from_utf8_lossy<'s>(arena: &'a Arena, text: &'s [u8]) -> Result<&'s str, Self> {
+    /// Otherwise, it returns `Err(ExString)` with all invalid sequences replaced with U+FFFD.
+    pub fn from_utf8_lossy(alloc: A, text: &[u8]) -> Result<&str, Self> {
         let mut iter = text.utf8_chunks();
         let Some(mut chunk) = iter.next() else {
             return Ok("");
@@ -64,7 +60,7 @@ impl<'a> ArenaString<'a> {
 
         const REPLACEMENT: &str = "\u{FFFD}";
 
-        let mut res = Self::new_in(arena);
+        let mut res = Self::new(alloc);
         res.reserve(text.len());
 
         loop {
@@ -79,15 +75,6 @@ impl<'a> ArenaString<'a> {
         }
 
         Err(res)
-    }
-
-    /// Turns a [`Vec<u8>`] into an [`ArenaString`], replacing invalid UTF-8 sequences with U+FFFD.
-    #[must_use]
-    pub fn from_utf8_lossy_owned(v: Vec<u8, &'a Arena>) -> Self {
-        match Self::from_utf8_lossy(v.allocator(), &v) {
-            Ok(..) => unsafe { Self::from_utf8_unchecked(v) },
-            Err(s) => s,
-        }
     }
 
     /// It's empty.
@@ -105,12 +92,12 @@ impl<'a> ArenaString<'a> {
         self.vec.capacity()
     }
 
-    /// It's a [`String`], now it's a [`str`]. Wow!
+    /// It's a [`ExString`], now it's a [`str`]. Wow!
     pub fn as_str(&self) -> &str {
         unsafe { str::from_utf8_unchecked(self.vec.as_slice()) }
     }
 
-    /// It's a [`String`], now it's a [`str`]. And it's mutable! WOW!
+    /// It's a [`ExString`], now it's a [`str`]. And it's mutable! WOW!
     pub fn as_mut_str(&mut self) -> &mut str {
         unsafe { str::from_utf8_unchecked_mut(self.vec.as_mut_slice()) }
     }
@@ -120,12 +107,12 @@ impl<'a> ArenaString<'a> {
         self.vec.as_slice()
     }
 
-    /// Returns a mutable reference to the contents of this `String`.
+    /// Returns a mutable reference to the contents of this `ExString`.
     ///
     /// # Safety
     ///
     /// The underlying `&mut Vec` allows writing bytes which are not valid UTF-8.
-    pub unsafe fn as_mut_vec(&mut self) -> &mut Vec<u8, &'a Arena> {
+    pub unsafe fn as_mut_vec(&mut self) -> &mut ExVec<u8, A> {
         &mut self.vec
     }
 
@@ -135,7 +122,7 @@ impl<'a> ArenaString<'a> {
         self.vec.reserve(additional)
     }
 
-    /// Just like [`ArenaString::reserve`], but it doesn't overallocate.
+    /// Just like [`ExString::reserve`], but it doesn't overallocate.
     pub fn reserve_exact(&mut self, additional: usize) {
         self.vec.reserve_exact(additional)
     }
@@ -162,14 +149,14 @@ impl<'a> ArenaString<'a> {
     #[inline]
     pub fn push(&mut self, ch: char) {
         match ch.len_utf8() {
-            1 => self.vec.push(ch as u8),
+            1 => _ = self.vec.push(ch as u8),
             _ => self.vec.extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes()),
         }
     }
 
     /// Same as `push(char)` but with a specified number of character copies.
     /// Shockingly absent from the standard library.
-    pub fn push_repeat(&mut self, ch: char, total_copies: usize) {
+    pub fn push_repeat(&mut self, total_copies: usize, ch: char) {
         if total_copies == 0 {
             return;
         }
@@ -178,7 +165,7 @@ impl<'a> ArenaString<'a> {
 
         if ch.is_ascii() {
             // Compiles down to `memset()`.
-            buf.extend(std::iter::repeat_n(ch as u8, total_copies));
+            buf.push_repeat(total_copies, ch as u8);
         } else {
             // Implements efficient string padding using quadratic duplication.
             let mut utf8_buf = [0; 4];
@@ -221,39 +208,65 @@ impl<'a> ArenaString<'a> {
     }
 }
 
-impl fmt::Debug for ArenaString<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&**self, f)
+impl<A: ExAllocator> Deref for ExString<A> {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.as_str()
     }
 }
 
-impl PartialEq<&str> for ArenaString<'_> {
+impl<A: ExAllocator> DerefMut for ExString<A> {
+    fn deref_mut(&mut self) -> &mut str {
+        self.as_mut_str()
+    }
+}
+
+impl<A: ExAllocator + Clone> Clone for ExString<A> {
+    fn clone(&self) -> Self {
+        Self { vec: self.vec.clone() }
+    }
+}
+
+impl<A: ExAllocator + Default> Default for ExString<A> {
+    fn default() -> Self {
+        Self { vec: ExVec::new(A::default()) }
+    }
+}
+
+impl<A: ExAllocator> PartialEq<&str> for ExString<A> {
     fn eq(&self, other: &&str) -> bool {
         self.as_str() == *other
     }
 }
 
-impl Deref for ArenaString<'_> {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        self.as_str()
+impl<A: ExAllocator> PartialEq<ExString<A>> for &str {
+    fn eq(&self, other: &ExString<A>) -> bool {
+        *self == other.as_str()
     }
 }
 
-impl DerefMut for ArenaString<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.as_mut_str()
+impl<A: ExAllocator> PartialEq for ExString<A> {
+    fn eq(&self, other: &Self) -> bool {
+        self.deref().eq(other.deref())
     }
 }
 
-impl fmt::Display for ArenaString<'_> {
+impl<A: ExAllocator> Eq for ExString<A> {}
+
+impl<A: ExAllocator> fmt::Debug for ExString<A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_str().fmt(f)
+    }
+}
+
+impl<A: ExAllocator> fmt::Display for ExString<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl fmt::Write for ArenaString<'_> {
+impl<A: ExAllocator> fmt::Write for ExString<A> {
     #[inline]
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.push_str(s);
@@ -268,10 +281,10 @@ impl fmt::Write for ArenaString<'_> {
 }
 
 #[macro_export]
-macro_rules! arena_format {
+macro_rules! exformat_in {
     ($arena:expr, $($arg:tt)*) => {{
         use std::fmt::Write as _;
-        let mut output = $crate::arena::ArenaString::new_in($arena);
+        let mut output = $crate::stdext::ExString::new($arena);
         output.write_fmt(format_args!($($arg)*)).unwrap();
         output
     }}

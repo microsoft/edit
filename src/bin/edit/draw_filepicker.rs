@@ -9,6 +9,7 @@ use edit::arena::scratch_arena;
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::input::{kbmod, vk};
+use edit::stdext::*;
 use edit::tui::*;
 use edit::{icu, path};
 
@@ -304,7 +305,7 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
 fn draw_dialog_saveas_refresh_files(state: &mut State) {
     let dir = state.file_picker_pending_dir.as_path();
     // ["..", directories, files]
-    let mut dirs_files = [Vec::new(), Vec::new(), Vec::new()];
+    let mut dirs_files = [const { Vec::new() }; 3];
 
     #[cfg(windows)]
     if dir.as_os_str().is_empty() {
@@ -376,7 +377,7 @@ fn update_autocomplete_suggestions(state: &mut State) {
     // The problem is finding the upper bound. Here I'm using a trick:
     // By appending U+10FFFF (the highest possible Unicode code point)
     // we create a needle that naturally yields an upper bound.
-    let mut needle_upper_bound = Vec::with_capacity_in(needle.len() + 4, &*scratch);
+    let mut needle_upper_bound = ExVec::with_capacity(&*scratch, needle.len() + 4);
     needle_upper_bound.extend_from_slice(needle);
     needle_upper_bound.extend_from_slice(b"\xf4\x8f\xbf\xbf");
 

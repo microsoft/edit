@@ -46,9 +46,6 @@ pub fn normalize(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
-    use std::path::Path;
-
     use super::*;
 
     fn norm(s: &str) -> OsString {

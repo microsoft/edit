@@ -6,8 +6,9 @@ use edit::framebuffer::{Attributes, IndexedColor};
 use edit::fuzzy::score_fuzzy;
 use edit::helpers::*;
 use edit::input::vk;
+use edit::stdext::*;
 use edit::tui::*;
-use edit::{arena_format, icu};
+use edit::{exformat_in, icu};
 
 use crate::localization::*;
 use crate::state::*;
@@ -72,7 +73,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 
         state.wants_indentation_picker |= ctx.button(
             "indentation",
-            &arena_format!(
+            &exformat_in!(
                 ctx.arena(),
                 "{}:{}",
                 loc(if tb.indent_with_tabs() {
@@ -149,7 +150,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 
         ctx.label(
             "location",
-            &arena_format!(
+            &exformat_in!(
                 ctx.arena(),
                 "{}:{}",
                 tb.cursor_logical_pos().y + 1,
@@ -160,7 +161,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
         #[cfg(feature = "debug-latency")]
         ctx.label(
             "stats",
-            &arena_format!(ctx.arena(), "{}/{}", tb.logical_line_count(), tb.visual_line_count(),),
+            &exformat_in!(ctx.arena(), "{}/{}", tb.logical_line_count(), tb.visual_line_count(),),
         );
 
         if tb.is_overtype() && ctx.button("overtype", "OVR", ButtonStyle::default()) {
@@ -180,7 +181,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             let filename_buf;
 
             if total > 1 {
-                filename_buf = arena_format!(ctx.arena(), "{} + {}", filename, total - 1);
+                filename_buf = exformat_in!(ctx.arena(), "{} + {}", filename, total - 1);
                 filename = &filename_buf;
             }
 
@@ -290,7 +291,7 @@ fn encoding_picker_update_list(state: &mut State) {
 
     let encodings = icu::get_available_encodings();
     let scratch = scratch_arena(None);
-    let mut matches = Vec::new_in(&*scratch);
+    let mut matches = ExVec::new(&*scratch);
 
     for enc in encodings.all {
         let local_scratch = scratch_arena(Some(&scratch));

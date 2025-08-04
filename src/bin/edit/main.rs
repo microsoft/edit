@@ -22,14 +22,15 @@ use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
 use draw_statusbar::*;
-use edit::arena::{self, Arena, ArenaString, scratch_arena};
+use edit::arena::{self, Arena, scratch_arena};
 use edit::framebuffer::{self, IndexedColor};
 use edit::helpers::{CoordType, KIBI, MEBI, MetricFormatter, Rect, Size};
 use edit::input::{self, kbmod, vk};
 use edit::oklab::oklab_blend;
+use edit::stdext::*;
 use edit::tui::*;
 use edit::vt::{self, Token};
-use edit::{apperr, arena_format, base64, path, sys, unicode};
+use edit::{apperr, base64, exformat_in, path, sys, unicode};
 use localization::*;
 use state::*;
 
@@ -182,8 +183,8 @@ fn run() -> apperr::Result<()> {
                 let status = time_end - time_beg;
 
                 let scratch_alt = scratch_arena(Some(&scratch));
-                let status = arena_format!(
-                    &scratch_alt,
+                let status = exformat_in!(
+                    &*scratch_alt,
                     "{}P {}B {:.3}μs",
                     passes,
                     output.len(),
@@ -224,7 +225,7 @@ fn run() -> apperr::Result<()> {
 // Returns true if the application should exit early.
 fn handle_args(state: &mut State) -> apperr::Result<bool> {
     let scratch = scratch_arena(None);
-    let mut paths: Vec<PathBuf, &Arena> = Vec::new_in(&*scratch);
+    let mut paths: ExVec<PathBuf, &Arena> = ExVec::new(&*scratch);
     let mut cwd = env::current_dir()?;
 
     // The best CLI argument parser in the world.
@@ -372,7 +373,7 @@ fn draw_handle_wants_exit(_ctx: &mut Context, state: &mut State) {
     }
 }
 
-fn write_terminal_title(output: &mut ArenaString, state: &mut State) {
+fn write_terminal_title(output: &mut ExString<&Arena>, state: &mut State) {
     let (filename, dirty) = state
         .documents
         .active()
@@ -394,7 +395,7 @@ fn write_terminal_title(output: &mut ArenaString, state: &mut State) {
     }
     output.push_str("edit\x1b\\");
 
-    state.osc_title_file_status.filename = filename.to_string();
+    state.osc_title_file_status.filename = ExString::from_str(ExStdAlloc, filename);
     state.osc_title_file_status.dirty = dirty;
 }
 
@@ -425,10 +426,9 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
         } else {
             let label2 = {
                 let template = loc(LocId::LargeClipboardWarningLine2);
-                let size = arena_format!(ctx.arena(), "{}", MetricFormatter(data_len));
+                let size = exformat_in!(ctx.arena(), "{}", MetricFormatter(data_len));
 
-                let mut label =
-                    ArenaString::with_capacity_in(template.len() + size.len(), ctx.arena());
+                let mut label = ExString::with_capacity(ctx.arena(), template.len() + size.len());
                 label.push_str(template);
                 label.replace_once_in_place("{size}", &size);
                 label
@@ -492,7 +492,7 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
 }
 
 #[cold]
-fn write_osc_clipboard(tui: &mut Tui, state: &mut State, output: &mut ArenaString) {
+fn write_osc_clipboard(tui: &mut Tui, state: &mut State, output: &mut ExString<&Arena>) {
     let clipboard = tui.clipboard_mut();
     let data = clipboard.read();
 

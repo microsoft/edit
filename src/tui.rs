@@ -92,7 +92,7 @@
 //! use edit::helpers::Size;
 //! use edit::input::Input;
 //! use edit::tui::*;
-//! use edit::{arena, arena_format};
+//! use edit::{arena, exformat_in};
 //!
 //! struct State {
 //!     counter: i32,
@@ -137,7 +137,7 @@
 //!
 //!         // Similarly, formatting and showing labels is straightforward.
 //!         // It's impossible to forget updating the label this way.
-//!         ctx.label("label", &arena_format!(ctx.arena(), "Counter: {}", state.counter));
+//!         ctx.label("label", &exformat_in!(ctx.arena(), "Counter: {}", state.counter));
 //!     }
 //!     ctx.table_end();
 //! }
@@ -149,7 +149,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::{iter, mem, ptr, time};
 
-use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::arena::{Arena, scratch_arena};
 use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
 use crate::clipboard::Clipboard;
@@ -158,7 +158,8 @@ use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedC
 use crate::hash::*;
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
-use crate::{apperr, arena_format, input, simd, unicode};
+use crate::stdext::*;
+use crate::{apperr, exformat_in, input, simd, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
@@ -841,7 +842,7 @@ impl Tui {
     }
 
     /// Renders the last frame into the framebuffer and returns the VT output.
-    pub fn render<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
+    pub fn render<'a>(&mut self, arena: &'a Arena) -> ExString<&'a Arena> {
         self.framebuffer.flip(self.size);
         for child in self.prev_tree.iterate_roots() {
             let mut child = child.borrow_mut();
@@ -859,13 +860,14 @@ impl Tui {
         }
 
         let scratch = scratch_arena(None);
+        let mut fill = ExString::new(&*scratch);
 
         if node.attributes.bordered {
             // ┌────┐
             {
-                let mut fill = ArenaString::new_in(&scratch);
+                fill.clear();
                 fill.push('┌');
-                fill.push_repeat('─', (outer_clipped.right - outer_clipped.left - 2) as usize);
+                fill.push_repeat((outer_clipped.right - outer_clipped.left - 2) as usize, '─');
                 fill.push('┐');
                 self.framebuffer.replace_text(
                     outer_clipped.top,
@@ -877,9 +879,9 @@ impl Tui {
 
             // │    │
             {
-                let mut fill = ArenaString::new_in(&scratch);
+                fill.clear();
                 fill.push('│');
-                fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left - 2) as usize);
+                fill.push_repeat((outer_clipped.right - outer_clipped.left - 2) as usize, ' ');
                 fill.push('│');
 
                 for y in outer_clipped.top + 1..outer_clipped.bottom - 1 {
@@ -894,9 +896,9 @@ impl Tui {
 
             // └────┘
             {
-                let mut fill = ArenaString::new_in(&scratch);
+                fill.clear();
                 fill.push('└');
-                fill.push_repeat('─', (outer_clipped.right - outer_clipped.left - 2) as usize);
+                fill.push_repeat((outer_clipped.right - outer_clipped.left - 2) as usize, '─');
                 fill.push('┘');
                 self.framebuffer.replace_text(
                     outer_clipped.bottom - 1,
@@ -909,8 +911,8 @@ impl Tui {
 
         if node.attributes.float.is_some() {
             if !node.attributes.bordered {
-                let mut fill = ArenaString::new_in(&scratch);
-                fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left) as usize);
+                fill.clear();
+                fill.push_repeat((outer_clipped.right - outer_clipped.left) as usize, ' ');
 
                 for y in outer_clipped.top..outer_clipped.bottom {
                     self.framebuffer.replace_text(
@@ -1068,7 +1070,7 @@ impl Tui {
 
             let scratch = scratch_arena(None);
 
-            let mut modified = ArenaString::new_in(&scratch);
+            let mut modified = ExString::new(&*scratch);
             modified.reserve(text.len() + 3);
             modified.push_str(&text[..skipped.start]);
             modified.push('…');
@@ -1118,8 +1120,8 @@ impl Tui {
     }
 
     /// Outputs a debug string of the layout and focus tree.
-    pub fn debug_layout<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
-        let mut result = ArenaString::new_in(arena);
+    pub fn debug_layout<'a>(&mut self, arena: &'a Arena) -> ExString<&'a Arena> {
+        let mut result = ExString::new(arena);
         result.push_str("general:\r\n- focus_path:\r\n");
 
         for &id in &self.focused_node_path {
@@ -1132,35 +1134,35 @@ impl Tui {
             Tree::visit_all(root, root, true, |node| {
                 let node = node.borrow();
                 let depth = node.depth;
-                result.push_repeat(' ', depth * 2);
+                result.push_repeat(depth * 2, ' ');
                 _ = write!(result, "- id: {:016x}\r\n", node.id);
 
-                result.push_repeat(' ', depth * 2);
+                result.push_repeat(depth * 2, ' ');
                 _ = write!(result, "  classname:    {}\r\n", node.classname);
 
                 if depth == 0
                     && let Some(parent) = node.parent
                 {
                     let parent = parent.borrow();
-                    result.push_repeat(' ', depth * 2);
+                    result.push_repeat(depth * 2, ' ');
                     _ = write!(result, "  parent:       {:016x}\r\n", parent.id);
                 }
 
-                result.push_repeat(' ', depth * 2);
+                result.push_repeat(depth * 2, ' ');
                 _ = write!(
                     result,
                     "  intrinsic:    {{{}, {}}}\r\n",
                     node.intrinsic_size.width, node.intrinsic_size.height
                 );
 
-                result.push_repeat(' ', depth * 2);
+                result.push_repeat(depth * 2, ' ');
                 _ = write!(
                     result,
                     "  outer:        {{{}, {}, {}, {}}}\r\n",
                     node.outer.left, node.outer.top, node.outer.right, node.outer.bottom
                 );
 
-                result.push_repeat(' ', depth * 2);
+                result.push_repeat(depth * 2, ' ');
                 _ = write!(
                     result,
                     "  inner:        {{{}, {}, {}, {}}}\r\n",
@@ -1168,38 +1170,38 @@ impl Tui {
                 );
 
                 if node.attributes.bordered {
-                    result.push_repeat(' ', depth * 2);
+                    result.push_repeat(depth * 2, ' ');
                     result.push_str("  bordered:     true\r\n");
                 }
 
                 if node.attributes.bg != 0 {
-                    result.push_repeat(' ', depth * 2);
+                    result.push_repeat(depth * 2, ' ');
                     _ = write!(result, "  bg:           #{:08x}\r\n", node.attributes.bg);
                 }
 
                 if node.attributes.fg != 0 {
-                    result.push_repeat(' ', depth * 2);
+                    result.push_repeat(depth * 2, ' ');
                     _ = write!(result, "  fg:           #{:08x}\r\n", node.attributes.fg);
                 }
 
                 if self.is_node_focused(node.id) {
-                    result.push_repeat(' ', depth * 2);
+                    result.push_repeat(depth * 2, ' ');
                     result.push_str("  focused:      true\r\n");
                 }
 
                 match &node.content {
                     NodeContent::Text(content) => {
-                        result.push_repeat(' ', depth * 2);
+                        result.push_repeat(depth * 2, ' ');
                         _ = write!(result, "  text:         \"{}\"\r\n", &content.text);
                     }
                     NodeContent::Textarea(content) => {
                         let tb = content.buffer.borrow();
                         let tb = &*tb;
-                        result.push_repeat(' ', depth * 2);
+                        result.push_repeat(depth * 2, ' ');
                         _ = write!(result, "  textarea:     {tb:p}\r\n");
                     }
                     NodeContent::Scrollarea(..) => {
-                        result.push_repeat(' ', depth * 2);
+                        result.push_repeat(depth * 2, ' ');
                         result.push_str("  scrollable:   true\r\n");
                     }
                     _ => {}
@@ -1730,9 +1732,9 @@ impl<'a> Context<'a, '_> {
 
         let mut last_node = self.tree.last_node.borrow_mut();
         let title = if title.is_empty() {
-            ArenaString::new_in(self.arena())
+            ExString::new(self.arena())
         } else {
-            arena_format!(self.arena(), " {} ", title)
+            exformat_in!(self.arena(), " {} ", title)
         };
         last_node.content = NodeContent::Modal(title);
         self.last_modal = Some(self.tree.last_node);
@@ -1762,7 +1764,7 @@ impl<'a> Context<'a, '_> {
 
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.content = NodeContent::Table(TableContent {
-            columns: Vec::new_in(self.arena()),
+            columns: ExVec::new(self.arena()),
             cell_gap: Default::default(),
         });
     }
@@ -1920,8 +1922,8 @@ impl<'a> Context<'a, '_> {
     pub fn styled_label_begin(&mut self, classname: &'static str) {
         self.block_begin(classname);
         self.tree.last_node.borrow_mut().content = NodeContent::Text(TextContent {
-            text: ArenaString::new_in(self.arena()),
-            chunks: Vec::with_capacity_in(4, self.arena()),
+            text: ExString::new(self.arena()),
+            chunks: ExVec::with_capacity(self.arena(), 4),
             overflow: Overflow::Clip,
         });
     }
@@ -3300,7 +3302,7 @@ impl<'a> Context<'a, '_> {
     fn menubar_shortcut(&mut self, shortcut: InputKey) {
         let shortcut_letter = shortcut.value() as u8 as char;
         if shortcut_letter.is_ascii_uppercase() {
-            let mut shortcut_text = ArenaString::new_in(self.arena());
+            let mut shortcut_text = ExString::new(self.arena());
             if shortcut.modifiers_contains(kbmod::CTRL) {
                 shortcut_text.push_str(self.tui.modifier_translations.ctrl);
                 shortcut_text.push('+');
@@ -3634,7 +3636,7 @@ struct ListContent<'a> {
 
 /// NOTE: Must not contain items that require drop().
 struct TableContent<'a> {
-    columns: Vec<CoordType, &'a Arena>,
+    columns: ExVec<CoordType, &'a Arena>,
     cell_gap: Size,
 }
 
@@ -3650,8 +3652,8 @@ const INVALID_STYLED_TEXT_CHUNK: StyledTextChunk =
 
 /// NOTE: Must not contain items that require drop().
 struct TextContent<'a> {
-    text: ArenaString<'a>,
-    chunks: Vec<StyledTextChunk, &'a Arena>,
+    text: ExString<&'a Arena>,
+    chunks: ExVec<StyledTextChunk, &'a Arena>,
     overflow: Overflow,
 }
 
@@ -3684,7 +3686,7 @@ enum NodeContent<'a> {
     #[default]
     None,
     List(ListContent<'a>),
-    Modal(ArenaString<'a>), // title
+    Modal(ExString<&'a Arena>), // title
     Table(TableContent<'a>),
     Text(TextContent<'a>),
     Textarea(TextareaContent<'a>),

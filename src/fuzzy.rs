@@ -5,10 +5,9 @@
 //! Other algorithms exist, such as Sublime Text's, or the one used in `fzf`,
 //! but I figured that this one is what lots of people may be familiar with.
 
-use std::vec;
-
 use crate::arena::{Arena, scratch_arena};
 use crate::icu;
+use crate::stdext::*;
 
 const NO_MATCH: i32 = 0;
 
@@ -17,10 +16,10 @@ pub fn score_fuzzy<'a>(
     haystack: &str,
     needle: &str,
     allow_non_contiguous_matches: bool,
-) -> (i32, Vec<usize, &'a Arena>) {
+) -> (i32, ExVec<usize, &'a Arena>) {
     if haystack.is_empty() || needle.is_empty() {
         // return early if target or query are empty
-        return (NO_MATCH, Vec::new_in(arena));
+        return (NO_MATCH, ExVec::new(arena));
     }
 
     let scratch = scratch_arena(Some(arena));
@@ -29,7 +28,7 @@ pub fn score_fuzzy<'a>(
 
     if target.len() < query.len() {
         // impossible for query to be contained in target
-        return (NO_MATCH, Vec::new_in(arena));
+        return (NO_MATCH, ExVec::new(arena));
     }
 
     let target_lower = icu::fold_case(&scratch, haystack);
@@ -38,8 +37,11 @@ pub fn score_fuzzy<'a>(
     let query_lower = map_chars(&scratch, &query_lower);
 
     let area = query.len() * target.len();
-    let mut scores = vec::from_elem_in(0, area, &*scratch);
-    let mut matches = vec::from_elem_in(0, area, &*scratch);
+    let mut scores = ExVec::new(&*scratch);
+    let mut matches = ExVec::new(&*scratch);
+
+    scores.push_repeat(area, NO_MATCH);
+    matches.push_repeat(area, NO_MATCH);
 
     //
     // Build Scorer Matrix:
@@ -121,7 +123,7 @@ pub fn score_fuzzy<'a>(
     }
 
     // Restore Positions (starting from bottom right of matrix)
-    let mut positions = Vec::new_in(arena);
+    let mut positions = ExVec::new(arena);
 
     if !query.is_empty() && !target.is_empty() {
         let mut query_index = query.len() - 1;
@@ -213,8 +215,8 @@ fn score_separator_at_pos(ch: char) -> i32 {
     }
 }
 
-fn map_chars<'a>(arena: &'a Arena, s: &str) -> Vec<char, &'a Arena> {
-    let mut chars = Vec::with_capacity_in(s.len(), arena);
+fn map_chars<'a>(arena: &'a Arena, s: &str) -> ExVec<char, &'a Arena> {
+    let mut chars = ExVec::with_capacity(arena, s.len());
     chars.extend(s.chars());
     chars.shrink_to_fit();
     chars

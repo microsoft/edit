@@ -279,7 +279,7 @@ impl Parser {
     pub fn new() -> Self {
         Self {
             bracketed_paste: false,
-            bracketed_paste_buf: Vec::new(),
+            bracketed_paste_buf: Default::default(),
             x10_mouse_want: false,
             x10_mouse_buf: [0; 3],
             x10_mouse_len: 0,

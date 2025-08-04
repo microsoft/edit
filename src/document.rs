@@ -8,8 +8,9 @@ use std::mem;
 use std::ops::Range;
 use std::path::PathBuf;
 
-use crate::arena::{ArenaString, scratch_arena};
+use crate::arena::scratch_arena;
 use crate::helpers::ReplaceRange as _;
+use crate::stdext::*;
 
 /// An abstraction over reading from text containers.
 pub trait ReadableDocument {
@@ -77,7 +78,7 @@ impl WriteableDocument for String {
     fn replace(&mut self, range: Range<usize>, replacement: &[u8]) {
         // `replacement` is not guaranteed to be valid UTF-8, so we need to sanitize it.
         let scratch = scratch_arena(None);
-        let utf8 = ArenaString::from_utf8_lossy(&scratch, replacement);
+        let utf8 = ExString::from_utf8_lossy(&*scratch, replacement);
         let src = match &utf8 {
             Ok(s) => s,
             Err(s) => s.as_str(),

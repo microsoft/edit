@@ -70,7 +70,7 @@ impl GapBuffer {
         if small {
             reserve = SMALL_CAPACITY;
             text = NonNull::dangling();
-            buffer = BackingBuffer::Vec(Vec::new());
+            buffer = BackingBuffer::Vec(Default::default());
         } else {
             reserve = LARGE_CAPACITY;
             text = unsafe { sys::virtual_reserve(reserve)? };

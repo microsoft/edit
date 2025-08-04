@@ -3,7 +3,8 @@
 
 //! Base64 facilities.
 
-use crate::arena::ArenaString;
+use crate::arena::Arena;
+use crate::stdext::*;
 
 const CHARSET: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -15,7 +16,7 @@ pub fn encode_len(src_len: usize) -> usize {
 }
 
 /// Encodes the given bytes as base64 and appends them to the destination string.
-pub fn encode(dst: &mut ArenaString, src: &[u8]) {
+pub fn encode(dst: &mut ExString<&Arena>, src: &[u8]) {
     unsafe {
         let mut inp = src.as_ptr();
         let mut remaining = src.len();
@@ -79,14 +80,13 @@ pub fn encode(dst: &mut ArenaString, src: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use super::encode;
-    use crate::arena::{Arena, ArenaString};
+    use super::*;
 
     #[test]
     fn test_basic() {
         let arena = Arena::new(4 * 1024).unwrap();
         let enc = |s: &[u8]| {
-            let mut dst = ArenaString::new_in(&arena);
+            let mut dst = ExString::new(&arena);
             encode(&mut dst, s);
             dst
         };

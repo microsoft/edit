@@ -9,10 +9,11 @@ use std::ops::{BitOr, BitXor};
 use std::ptr;
 use std::slice::ChunksExact;
 
-use crate::arena::{Arena, ArenaString};
+use crate::arena::Arena;
 use crate::helpers::{CoordType, Point, Rect, Size};
 use crate::oklab::{oklab_blend, srgb_to_oklab};
 use crate::simd::{MemsetSafe, memset};
+use crate::stdext::*;
 use crate::unicode::MeasurementConfig;
 
 // Same constants as used in the PCG family of RNGs.
@@ -404,7 +405,7 @@ impl Framebuffer {
 
     /// Renders the framebuffer contents accumulated since the
     /// last call to `flip()` and returns them serialized as VT.
-    pub fn render<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
+    pub fn render<'a>(&mut self, arena: &'a Arena) -> ExString<&'a Arena> {
         let idx = self.frame_counter & 1;
         // Borrows the front/back buffers without letting Rust know that we have a reference to self.
         // SAFETY: Well this is certainly correct, but whether Rust and its strict rules likes it is another question.
@@ -425,7 +426,7 @@ impl Framebuffer {
         let mut back_fgs = back.fg_bitmap.iter();
         let mut back_attrs = back.attributes.iter();
 
-        let mut result = ArenaString::new_in(arena);
+        let mut result = ExString::new(arena);
         let mut last_bg = u64::MAX;
         let mut last_fg = u64::MAX;
         let mut last_attr = Attributes::None;
@@ -537,7 +538,7 @@ impl Framebuffer {
         result
     }
 
-    fn format_color(&self, dst: &mut ArenaString, fg: bool, mut color: u32) {
+    fn format_color(&self, dst: &mut ExString<&Arena>, fg: bool, mut color: u32) {
         let typ = if fg { '3' } else { '4' };
 
         // Some terminals support transparent backgrounds which are used

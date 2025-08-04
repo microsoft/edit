@@ -17,8 +17,9 @@ use windows_sys::Win32::{Foundation, Globalization};
 use windows_sys::w;
 
 use crate::apperr;
-use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::arena::{Arena, scratch_arena};
 use crate::helpers::*;
+use crate::stdext::*;
 
 macro_rules! w_env {
     ($s:literal) => {{
@@ -243,7 +244,7 @@ fn get_console_size() -> Option<Size> {
 /// * `None` if there was an error reading from stdin.
 /// * `Some("")` if the given timeout was reached.
 /// * Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaString<'_>> {
+pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ExString<&Arena>> {
     let scratch = scratch_arena(Some(arena));
 
     // On startup we're asked to inject a window size so that the UI system can layout the elements.
@@ -340,7 +341,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
     let resize_event_len = if resize_event.is_some() { RESIZE_EVENT_FMT_MAX_LEN } else { 0 };
     // +1 to account for a potential `STATE.leading_surrogate`.
     let utf8_max_len = (utf16_buf_len + 1) * 3;
-    let mut text = ArenaString::new_in(arena);
+    let mut text = ExString::new(arena);
     text.reserve(utf8_max_len + resize_event_len);
 
     // Now prepend our previously extracted resize event.
@@ -638,13 +639,13 @@ pub fn load_icu() -> apperr::Result<LibIcu> {
 }
 
 /// Returns a list of preferred languages for the current user.
-pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
+pub fn preferred_languages(arena: &Arena) -> ExVec<ExString<&Arena>, &Arena> {
     // If the GetUserPreferredUILanguages() don't fit into 512 characters,
     // honestly, just give up. How many languages do you realistically need?
     const LEN: usize = 512;
 
     let scratch = scratch_arena(Some(arena));
-    let mut res = Vec::new_in(arena);
+    let mut res = ExVec::new(arena);
 
     // Get the list of preferred languages via `GetUserPreferredUILanguages`.
     let langs = unsafe {
@@ -678,13 +679,13 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
         langs
             .split_terminator('\0')
             .filter(|s| !s.is_empty())
-            .map(|s| ArenaString::from_str(arena, s)),
+            .map(|s| ExString::from_str(arena, s)),
     );
     res
 }
 
-fn wide_to_utf8<'a>(arena: &'a Arena, wide: &[u16]) -> ArenaString<'a> {
-    let mut res = ArenaString::new_in(arena);
+fn wide_to_utf8<'a>(arena: &'a Arena, wide: &[u16]) -> ExString<&'a Arena> {
+    let mut res = ExString::new(arena);
     res.reserve(wide.len() * 3);
 
     let len = unsafe {

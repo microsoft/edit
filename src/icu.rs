@@ -10,10 +10,11 @@ use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::ptr::{null, null_mut};
 
-use crate::arena::{Arena, ArenaString, scratch_arena};
+use crate::arena::{Arena, scratch_arena};
 use crate::buffer::TextBuffer;
+use crate::stdext::*;
 use crate::unicode::Utf8Chars;
-use crate::{apperr, arena_format, sys};
+use crate::{apperr, exformat_in, sys};
 
 #[derive(Clone, Copy)]
 pub struct Encoding {
@@ -35,8 +36,8 @@ pub fn get_available_encodings() -> &'static Encodings {
     unsafe {
         if ENCODINGS.all.is_empty() {
             let scratch = scratch_arena(None);
-            let mut preferred = Vec::new_in(&*scratch);
-            let mut alternative = Vec::new_in(&*scratch);
+            let mut preferred = ExVec::new(&*scratch);
+            let mut alternative = ExVec::new(&*scratch);
 
             // These encodings are always available.
             preferred.push(Encoding { label: "UTF-8", canonical: "UTF-8" });
@@ -78,9 +79,9 @@ pub fn get_available_encodings() -> &'static Encodings {
             let preferred_len = preferred.len();
 
             // Combine the preferred and alternative encodings into a single list.
-            let mut all = Vec::with_capacity(preferred.len() + alternative.len());
-            all.extend(preferred);
-            all.extend(alternative);
+            let mut all = ExVec::with_capacity(ExStdAlloc, preferred.len() + alternative.len());
+            all.extend_from_slice(&preferred[..]);
+            all.extend_from_slice(&preferred[..]);
 
             let all = all.leak();
             ENCODINGS.preferred = &all[..preferred_len];
@@ -173,8 +174,8 @@ impl<'pivot> Converter<'pivot> {
         Ok(Self { source, target, pivot_buffer, pivot_source, pivot_target, reset: true })
     }
 
-    fn append_nul<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
-        arena_format!(arena, "{}\0", input)
+    fn append_nul<'a>(arena: &'a Arena, input: &str) -> ExString<&'a Arena> {
+        exformat_in!(arena, "{}\0", input)
     }
 
     /// Performs one step of the encoding conversion.
@@ -625,7 +626,7 @@ impl Regex {
         let f = init_if_needed()?;
         unsafe {
             let scratch = scratch_arena(None);
-            let mut utf16 = Vec::new_in(&*scratch);
+            let mut utf16 = ExVec::new(&*scratch);
             let mut status = icu_ffi::U_ZERO_ERROR;
 
             utf16.extend(pattern.encode_utf16());
@@ -813,7 +814,7 @@ static mut ROOT_CASEMAP: Option<*mut icu_ffi::UCaseMap> = None;
 ///
 /// Case folding differs from lower case in that the output is primarily useful
 /// to machines for comparisons. It's like applying Unicode normalization.
-pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
+pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ExString<&'a Arena> {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     let casemap = unsafe {
@@ -831,13 +832,13 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
     if !casemap.is_null() {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
-        let mut output = Vec::new_in(arena);
+        let mut output = ExVec::new(arena);
         let mut output_len;
 
         // First, guess the output length:
         // TODO: What's a good heuristic here?
         {
-            output.reserve_exact(input.len() + 16);
+            output.reserve(input.len() + 16);
             let output = output.spare_capacity_mut();
             output_len = unsafe {
                 (f.ucasemap_utf8FoldCase)(
@@ -853,7 +854,7 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
 
         // If that failed to fit, retry with the correct length.
         if status == icu_ffi::U_BUFFER_OVERFLOW_ERROR && output_len > 0 {
-            output.reserve_exact(output_len as usize);
+            output.reserve(output_len as usize);
             let output = output.spare_capacity_mut();
             output_len = unsafe {
                 (f.ucasemap_utf8FoldCase)(
@@ -871,11 +872,11 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
             unsafe {
                 output.set_len(output_len as usize);
             }
-            return unsafe { ArenaString::from_utf8_unchecked(output) };
+            return unsafe { ExString::from_utf8_unchecked(output) };
         }
     }
 
-    let mut result = ArenaString::from_str(arena, input);
+    let mut result = ExString::from_str(arena, input);
     for b in unsafe { result.as_bytes_mut() } {
         b.make_ascii_lowercase();
     }
