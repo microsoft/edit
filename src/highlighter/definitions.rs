@@ -176,25 +176,32 @@ flowchart TD
     2["string_single"]
     3["string_escape"]
     4["string_resolve"]
-    0 -->|"Prefix(#)<br/>Some(Comment)"| 5
-    5 -->|"Chars(Line)<br/>Some(Comment)"| pop327680@{ shape: stop }
+    5["string_resolve_change"]
+    0 -->|"Prefix(#)<br/>Some(Comment)"| 6
+    6 -->|"Chars(Line)<br/>Some(Comment)"| pop393216@{ shape: stop }
     0 -->|"Prefix(&quot;)<br/>Some(String)"| push1[/"string_double"/]
     0 -->|"Prefix(')<br/>Some(String)"| push2[/"string_single"/]
-    0 -->|"Prefix(-)<br/>Some(Number)"| 7
-    7 -->|"Charset([0-9])<br/>Some(Number)"| 6
-    6 -->|"Prefix(.)<br/>Some(Number)"| 9
-    9 -->|"Charset([0-9])<br/>Some(Number)"| 8
-    8 -->|"PrefixInsensitive(e)<br/>Some(Number)"| 10
-    10 -->|"Prefix(+, -)<br/>Some(Number)"| 11
-    11 -->|"Charset([0-9])<br/>Some(Number)"| push720900[/"string_resolve"/]
-    11 -->|"Chars(0)<br/>Some(Other)"| pop720896@{ shape: stop }
-    10 -->|"Chars(0)<br/>None"| 11
-    8 -->|"Chars(0)<br/>None"| push524292[/"string_resolve"/]
-    9 -->|"Chars(0)<br/>Some(Other)"| pop589824@{ shape: stop }
-    6 -->|"Chars(0)<br/>None"| 8
-    7 -->|"Chars(0)<br/>Some(Other)"| pop458752@{ shape: stop }
-    0 -->|"Charset([0-9])<br/>Some(Number)"| 6
-    0 -->|"Prefix(true, false, null)<br/>Some(Keyword)"| push4[/"string_resolve"/]
+    0 -->|"Prefix(-)<br/>Some(Number)"| 8
+    8 -->|"Charset([0-9])<br/>Some(Number)"| 7
+    7 -->|"Prefix(.)<br/>Some(Number)"| 10
+    10 -->|"Charset([0-9])<br/>Some(Number)"| 9
+    9 -->|"PrefixInsensitive(e)<br/>Some(Number)"| 11
+    11 -->|"Prefix(+, -)<br/>Some(Number)"| 12
+    12 -->|"Charset([0-9])<br/>Some(Number)"| 4
+    4 -->|"Charset([0x09-0x0D,  ])<br/>None"| 13
+    13 -->|"Charset([0x00-0x08, 0x0E-0x1F, !-0xFF])<br/>None"| 5
+    5 -->|"Charset([0x00-&quot;, $-0xFF])<br/>Some(String)"| pop327680@{ shape: stop }
+    5 -->|"Chars(0)<br/>None"| pop327680@{ shape: stop }
+    13 -->|"Chars(0)<br/>None"| pop851968@{ shape: stop }
+    4 -->|"Chars(0)<br/>None"| 13
+    12 -->|"Chars(0)<br/>Some(Other)"| pop786432@{ shape: stop }
+    11 -->|"Chars(0)<br/>None"| 12
+    9 -->|"Chars(0)<br/>None"| 4
+    10 -->|"Chars(0)<br/>Some(Other)"| pop655360@{ shape: stop }
+    7 -->|"Chars(0)<br/>None"| 9
+    8 -->|"Chars(0)<br/>Some(Other)"| pop524288@{ shape: stop }
+    0 -->|"Charset([0-9])<br/>Some(Number)"| 7
+    0 -->|"Prefix(true, false, null)<br/>Some(Keyword)"| 4
     0 -->|"Charset([0x00-!, $-&, (-,, .-/, :-e, g-m, o-s, u-0xFF])<br/>None"| pop0@{ shape: stop }
     0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
     1 -->|"Prefix(&quot;)<br/>Some(String)"| pop65536@{ shape: stop }
@@ -206,12 +213,6 @@ flowchart TD
     2 -->|"Charset([0x00-&, (-[, ]-0xFF])<br/>None"| 2
     2 -->|"Chars(1)<br/>None"| 2
     3 -->|"Chars(1)<br/>Some(String)"| pop196608@{ shape: stop }
-    4 -->|"Charset([0x09-0x0D,  ])<br/>Some(String)"| 12
-    12 -->|"Charset([0x00-0x08, 0x0E-0x1F, !-0xFF])<br/>Some(String)"| 13
-    13 -->|"Charset([0x00-&quot;, $-0xFF])<br/>Some(String)"| pop851968@{ shape: stop }
-    13 -->|"Chars(0)<br/>None"| pop851968@{ shape: stop }
-    12 -->|"Chars(0)<br/>None"| pop786432@{ shape: stop }
-    4 -->|"Chars(0)<br/>None"| 12
 **/
 #[rustfmt::skip]
 const LANG_YAML_CHARSET_0: &[u8; 256] = &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -233,14 +234,14 @@ pub const LANG_YAML: &Language = &Language {
     extensions: &["yaml", "yml"],
     states: &[
         &[
-            (Prefix(r#"#"#), Some(Comment), Change(5)),
+            (Prefix(r#"#"#), Some(Comment), Change(6)),
             (Prefix(r#"""#), Some(String), Push(1)),
             (Prefix(r#"'"#), Some(String), Push(2)),
-            (Prefix(r#"-"#), Some(Number), Change(7)),
-            (Charset(LANG_YAML_CHARSET_0), Some(Number), Change(6)),
-            (Prefix(r#"true"#), Some(Keyword), Push(4)),
-            (Prefix(r#"false"#), Some(Keyword), Push(4)),
-            (Prefix(r#"null"#), Some(Keyword), Push(4)),
+            (Prefix(r#"-"#), Some(Number), Change(8)),
+            (Charset(LANG_YAML_CHARSET_0), Some(Number), Change(7)),
+            (Prefix(r#"true"#), Some(Keyword), Change(4)),
+            (Prefix(r#"false"#), Some(Keyword), Change(4)),
+            (Prefix(r#"null"#), Some(Keyword), Change(4)),
             (Charset(LANG_YAML_CHARSET_4), None, Pop),
             (Chars(1), None, Pop),
         ],
@@ -260,43 +261,43 @@ pub const LANG_YAML: &Language = &Language {
             (Chars(1), Some(String), Pop),
         ],
         &[
-            (Charset(LANG_YAML_CHARSET_1), Some(String), Change(12)),
-            (Chars(0), None, Change(12)),
+            (Charset(LANG_YAML_CHARSET_1), None, Change(13)),
+            (Chars(0), None, Change(13)),
+        ],
+        &[
+            (Charset(LANG_YAML_CHARSET_3), Some(String), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (Chars(usize::MAX), Some(Comment), Pop),
         ],
         &[
-            (Prefix(r#"."#), Some(Number), Change(9)),
-            (Chars(0), None, Change(8)),
+            (Prefix(r#"."#), Some(Number), Change(10)),
+            (Chars(0), None, Change(9)),
         ],
         &[
-            (Charset(LANG_YAML_CHARSET_0), Some(Number), Change(6)),
+            (Charset(LANG_YAML_CHARSET_0), Some(Number), Change(7)),
             (Chars(0), Some(Other), Pop),
         ],
         &[
-            (PrefixInsensitive(r#"e"#), Some(Number), Change(10)),
-            (Chars(0), None, Push(4)),
+            (PrefixInsensitive(r#"e"#), Some(Number), Change(11)),
+            (Chars(0), None, Change(4)),
         ],
         &[
-            (Charset(LANG_YAML_CHARSET_0), Some(Number), Change(8)),
+            (Charset(LANG_YAML_CHARSET_0), Some(Number), Change(9)),
             (Chars(0), Some(Other), Pop),
         ],
         &[
-            (Prefix(r#"+"#), Some(Number), Change(11)),
-            (Prefix(r#"-"#), Some(Number), Change(11)),
-            (Chars(0), None, Change(11)),
+            (Prefix(r#"+"#), Some(Number), Change(12)),
+            (Prefix(r#"-"#), Some(Number), Change(12)),
+            (Chars(0), None, Change(12)),
         ],
         &[
-            (Charset(LANG_YAML_CHARSET_0), Some(Number), Push(4)),
+            (Charset(LANG_YAML_CHARSET_0), Some(Number), Change(4)),
             (Chars(0), Some(Other), Pop),
         ],
         &[
-            (Charset(LANG_YAML_CHARSET_2), Some(String), Change(13)),
-            (Chars(0), None, Pop),
-        ],
-        &[
-            (Charset(LANG_YAML_CHARSET_3), Some(String), Pop),
+            (Charset(LANG_YAML_CHARSET_2), None, Change(5)),
             (Chars(0), None, Pop),
         ],
     ],

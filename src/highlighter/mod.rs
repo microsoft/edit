@@ -153,7 +153,11 @@ impl<'doc> Highlighter<'doc> {
 
         res.push(Higlight { start, kind });
 
-        'outer: loop {
+        loop {
+            if off >= line_buf.len() {
+                break;
+            }
+
             let mut end = off;
 
             for t in self.language.states[state] {
@@ -217,10 +221,6 @@ impl<'doc> Highlighter<'doc> {
 
                 off = end;
                 break;
-            }
-
-            if off >= line_buf.len() {
-                break 'outer;
             }
         }
 

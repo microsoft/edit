@@ -30,7 +30,8 @@ pub type Rule = (&'static str, Option<HighlightKind>, ActionDefinition);
 
 #[derive(Debug, Clone, Copy)]
 pub enum ActionDefinition {
-    Push(&'static str), // state name to push
+    Change(&'static str),
+    Push(&'static str),
     Pop,
 }
 
@@ -75,9 +76,9 @@ pub const LANGUAGES: &[Language] = &[
                     (
                         r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#,
                         Some(Number),
-                        Push("string_resolve"),
+                        Change("string_resolve"),
                     ),
-                    (r#"(?:true|false|null)"#, Some(Keyword), Push("string_resolve")),
+                    (r#"(?:true|false|null)"#, Some(Keyword), Change("string_resolve")),
                 ],
             },
             State {
@@ -97,7 +98,11 @@ pub const LANGUAGES: &[Language] = &[
             State { name: "string_escape", rules: &[(r#"."#, Some(String), Pop)] },
             State {
                 name: "string_resolve",
-                rules: &[(r#"\s*\S+[^#]*"#, Some(String), Pop), (r#""#, None, Pop)],
+                rules: &[(r#"\s*\S+"#, None, Change("string_resolve_change")), (r#""#, None, Pop)],
+            },
+            State {
+                name: "string_resolve_change",
+                rules: &[(r#"[^#]*"#, Some(String), Pop), (r#""#, None, Pop)],
             },
         ],
     },

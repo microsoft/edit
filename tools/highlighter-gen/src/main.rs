@@ -32,7 +32,7 @@ fn main() {
         use std::ops::RangeInclusive;
 
         use Action::*;
-        use Consume::*;
+        use Test::*;
         use HighlightKind::*;
 
         pub struct Language {
@@ -41,9 +41,10 @@ fn main() {
             pub states: &'static [&'static [Transition<'static>]],
         }
 
-        pub type Transition<'a> = (Consume<'a>, Option<HighlightKind>, Action);
+        pub type Transition<'a> = (Test<'a>, Option<HighlightKind>, Action);
 
-        pub enum Consume<'a> {
+        pub enum Test<'a> {
+            StopIfDone,
             Chars(usize),
             Charset(&'a [u8; 256]),
             Prefix(&'a str),
@@ -129,17 +130,18 @@ fn main() {
 
             for t in &state.transitions {
                 let test = match &t.test {
-                    GraphConsume::Chars(usize::MAX) => "Chars(usize::MAX)".to_string(),
-                    GraphConsume::Chars(n) => {
+                    GraphTest::StopIfDone => "StopIfDone".to_string(),
+                    GraphTest::Chars(usize::MAX) => "Chars(usize::MAX)".to_string(),
+                    GraphTest::Chars(n) => {
                         format!("Chars({n})")
                     }
-                    GraphConsume::Charset(cs) => {
+                    GraphTest::Charset(cs) => {
                         format!("Charset(LANG_{}_CHARSET_{})", name_uppercase, cs.id())
                     }
-                    GraphConsume::Prefix(s) => {
+                    GraphTest::Prefix(s) => {
                         format!("Prefix(r#\"{s}\"#)")
                     }
-                    GraphConsume::PrefixInsensitive(s) => {
+                    GraphTest::PrefixInsensitive(s) => {
                         format!("PrefixInsensitive(r#\"{s}\"#)")
                     }
                 };

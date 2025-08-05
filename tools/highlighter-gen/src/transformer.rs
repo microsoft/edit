@@ -54,6 +54,7 @@ impl GraphBuilder {
             .parse(rule.0)
             .unwrap();
         let dst = match rule.2 {
+            ActionDefinition::Change(name) => GraphAction::Change(self.get_root_by_name(name)),
             ActionDefinition::Push(name) => GraphAction::Push(self.get_root_by_name(name)),
             ActionDefinition::Pop => GraphAction::Pop,
         };
@@ -121,7 +122,7 @@ impl GraphBuilder {
             kind,
             src,
             dst,
-            GraphConsume::Prefix(String::from_utf8(lit.to_vec()).unwrap()),
+            GraphTest::Prefix(String::from_utf8(lit.to_vec()).unwrap()),
         )
     }
 
@@ -135,7 +136,7 @@ impl GraphBuilder {
     ) -> GraphAction {
         let c = self.class_to_charset(class);
         let c = self.charsets.intern(c);
-        self.add_transition(kind, src, dst, GraphConsume::Charset(c))
+        self.add_transition(kind, src, dst, GraphTest::Charset(c))
     }
 
     // [eE]
@@ -169,9 +170,9 @@ impl GraphBuilder {
                 && charset[upper]
             {
                 charset[upper] = false;
-                GraphConsume::PrefixInsensitive(str)
+                GraphTest::PrefixInsensitive(str)
             } else {
-                GraphConsume::Prefix(str)
+                GraphTest::Prefix(str)
             };
 
             let d = self.add_transition(kind, src.clone(), dst.clone(), test);
@@ -190,7 +191,7 @@ impl GraphBuilder {
         src: Rc<WipStateCell>,
         dst: GraphAction,
     ) -> GraphAction {
-        self.add_transition(kind, src, dst, GraphConsume::Chars(0))
+        self.add_transition(kind, src, dst, GraphTest::Chars(0))
     }
 
     // .*
@@ -200,7 +201,7 @@ impl GraphBuilder {
         src: Rc<WipStateCell>,
         dst: GraphAction,
     ) -> GraphAction {
-        self.add_transition(kind, src, dst, GraphConsume::Chars(usize::MAX))
+        self.add_transition(kind, src, dst, GraphTest::Chars(usize::MAX))
     }
 
     // .
@@ -210,7 +211,7 @@ impl GraphBuilder {
         src: Rc<WipStateCell>,
         dst: GraphAction,
     ) -> GraphAction {
-        self.add_transition(kind, src, dst, GraphConsume::Chars(1))
+        self.add_transition(kind, src, dst, GraphTest::Chars(1))
     }
 
     // (a)(b)
@@ -266,8 +267,7 @@ impl GraphBuilder {
                 } else {
                     dst.clone()
                 };
-                src =
-                    self.add_transition(kind, src_idx, next, GraphConsume::PrefixInsensitive(str));
+                src = self.add_transition(kind, src_idx, next, GraphTest::PrefixInsensitive(str));
             } else {
                 // Any other sequence is simply concatenated.
                 let next = if it.peek().is_some() {
@@ -340,7 +340,7 @@ impl GraphBuilder {
         kind: Option<HighlightKind>,
         src: Rc<WipStateCell>,
         dst: GraphAction,
-        test: GraphConsume,
+        test: GraphTest,
     ) -> GraphAction {
         let mut s = src.borrow_mut();
 
@@ -357,7 +357,7 @@ impl GraphBuilder {
             if let GraphAction::Change(d) = &t.action
                 && matches!(dst, GraphAction::Pop)
             {
-                self.add_transition(kind, d.clone(), GraphAction::Pop, GraphConsume::Chars(0));
+                self.add_transition(kind, d.clone(), GraphAction::Pop, GraphTest::Chars(0));
                 return GraphAction::Pop;
             }
 
@@ -369,7 +369,7 @@ impl GraphBuilder {
 
         // Check for plausibility: if any prior test encompasses the new test, panic.
         for t in &s.transitions {
-            use GraphConsume::*;
+            use GraphTest::*;
 
             if match (&t.test, &test) {
                 (Chars(_), _) => true,
@@ -414,11 +414,11 @@ impl GraphBuilder {
 
             for t in &s.transitions {
                 match &t.test {
-                    GraphConsume::Chars(_) => {
+                    GraphTest::Chars(_) => {
                         s.coverage.fill(true);
                         break;
                     }
-                    GraphConsume::Charset(c) => {
+                    GraphTest::Charset(c) => {
                         s.coverage.merge(c);
                     }
                     _ => {}
@@ -441,7 +441,7 @@ impl GraphBuilder {
             if !s.coverage.covers_all() {
                 s.transitions.push(GraphTransition {
                     origin: -1,
-                    test: GraphConsume::Chars(0),
+                    test: GraphTest::Chars(0),
                     kind: Some(HighlightKind::Other),
                     action: GraphAction::Pop,
                 });
@@ -457,18 +457,19 @@ impl GraphBuilder {
 
             for t in &s.transitions {
                 match &t.test {
-                    GraphConsume::Chars(_) => {
+                    GraphTest::StopIfDone => {}
+                    GraphTest::Chars(_) => {
                         cs.fill(true);
                         break;
                     }
-                    GraphConsume::Charset(c) => {
+                    GraphTest::Charset(c) => {
                         cs.merge(c);
                     }
-                    GraphConsume::Prefix(s) => {
+                    GraphTest::Prefix(s) => {
                         let ch = s.as_bytes()[0];
                         cs.set(ch, true);
                     }
-                    GraphConsume::PrefixInsensitive(s) => {
+                    GraphTest::PrefixInsensitive(s) => {
                         let ch = s.as_bytes()[0];
                         cs.set(ch.to_ascii_uppercase(), true);
                         cs.set(ch.to_ascii_lowercase(), true);
@@ -489,7 +490,7 @@ impl GraphBuilder {
 
                 s.transitions.push(GraphTransition {
                     origin: -1,
-                    test: GraphConsume::Charset(cs),
+                    test: GraphTest::Charset(cs),
                     kind: None,
                     action: action.clone(),
                 });
@@ -498,7 +499,7 @@ impl GraphBuilder {
             if !s.coverage.covers_all() {
                 s.transitions.push(GraphTransition {
                     origin: -1,
-                    test: GraphConsume::Chars(1),
+                    test: GraphTest::Chars(1),
                     kind: None,
                     action,
                 });
@@ -536,8 +537,8 @@ impl GraphBuilder {
         for t in &s.transitions {
             let mut cs_buf = MaybeUninit::uninit();
             let cs = match &t.test {
-                GraphConsume::Chars(_) => cs_buf.write(Charset::yes()),
-                GraphConsume::Charset(c) => &**c,
+                GraphTest::Chars(_) => cs_buf.write(Charset::yes()),
+                GraphTest::Charset(c) => &**c,
                 _ => continue,
             };
 
@@ -558,10 +559,11 @@ impl GraphBuilder {
         }
 
         if !match &t.test {
-            GraphConsume::Chars(_) => true,
-            GraphConsume::Charset(c) => fallback_cs.is_superset(c),
-            GraphConsume::Prefix(s) => fallback_cs.covers_str(s),
-            GraphConsume::PrefixInsensitive(s) => fallback_cs.covers_str_insensitive(s),
+            GraphTest::StopIfDone => false,
+            GraphTest::Chars(_) => true,
+            GraphTest::Charset(c) => fallback_cs.is_superset(c),
+            GraphTest::Prefix(s) => fallback_cs.covers_str(s),
+            GraphTest::PrefixInsensitive(s) => fallback_cs.covers_str_insensitive(s),
         } {
             return;
         }
@@ -613,10 +615,11 @@ impl GraphBuilder {
 
             while let Some(t) = iter.next() {
                 let label = match &t.test {
-                    GraphConsume::Chars(usize::MAX) => "Chars(Line)".to_string(),
-                    GraphConsume::Chars(n) => format!("Chars({n})"),
-                    GraphConsume::Charset(c) => format!("Charset({c:?})"),
-                    GraphConsume::Prefix(s) => {
+                    GraphTest::StopIfDone => "StopIfDone".to_string(),
+                    GraphTest::Chars(usize::MAX) => "Chars(Line)".to_string(),
+                    GraphTest::Chars(n) => format!("Chars({n})"),
+                    GraphTest::Charset(c) => format!("Charset({c:?})"),
+                    GraphTest::Prefix(s) => {
                         let mut label = String::new();
                         _ = write!(label, "Prefix({s}");
 
@@ -624,7 +627,7 @@ impl GraphBuilder {
                             let Some(next) = iter.peek() else {
                                 break;
                             };
-                            let GraphConsume::Prefix(next_s) = &next.test else {
+                            let GraphTest::Prefix(next_s) = &next.test else {
                                 break;
                             };
                             if next.action != t.action {
@@ -638,7 +641,7 @@ impl GraphBuilder {
                         label.push(')');
                         label
                     }
-                    GraphConsume::PrefixInsensitive(s) => {
+                    GraphTest::PrefixInsensitive(s) => {
                         let mut label = String::new();
                         _ = write!(label, "PrefixInsensitive({s}");
 
@@ -646,7 +649,7 @@ impl GraphBuilder {
                             let Some(next) = iter.peek() else {
                                 break;
                             };
-                            let GraphConsume::PrefixInsensitive(next_s) = &next.test else {
+                            let GraphTest::PrefixInsensitive(next_s) = &next.test else {
                                 break;
                             };
                             if next.action != t.action {
@@ -786,8 +789,8 @@ impl PartialEq for GraphAction {
 impl Eq for GraphAction {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GraphConsume {
-    // Same as super::Consume
+pub enum GraphTest {
+    StopIfDone,
     Chars(usize),
     Charset(Rc<Charset>),
     Prefix(String),
@@ -797,7 +800,7 @@ pub enum GraphConsume {
 #[derive(Debug, Clone)]
 pub struct GraphTransition {
     origin: i32,
-    pub test: GraphConsume,
+    pub test: GraphTest,
     pub kind: Option<HighlightKind>,
     pub action: GraphAction,
 }
