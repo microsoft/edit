@@ -4,7 +4,7 @@
 use std::ops::RangeInclusive;
 
 use Action::*;
-use Consume::*;
+use Test::*;
 use HighlightKind::*;
 
 pub struct Language {
@@ -13,9 +13,10 @@ pub struct Language {
     pub states: &'static [&'static [Transition<'static>]],
 }
 
-pub type Transition<'a> = (Consume<'a>, Option<HighlightKind>, Action);
+pub type Transition<'a> = (Test<'a>, Option<HighlightKind>, Action);
 
-pub enum Consume<'a> {
+pub enum Test<'a> {
+    StopIfDone,
     Chars(usize),
     Charset(&'a [u8; 256]),
     Prefix(&'a str),
@@ -74,13 +75,16 @@ flowchart TD
     0 -->|"Prefix(true, false, null)<br/>Some(Other)"| 12
     12 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Other)"| pop786432@{ shape: stop }
     12 -->|"Chars(0)<br/>Some(Keyword)"| pop786432@{ shape: stop }
+    0 -->|"StopIfDone<br/>None"| pop0@{ shape: stop }
     0 -->|"Charset([0x00-!, #-,, ., :-e, g-m, o-s, u-0xFF])<br/>None"| pop0@{ shape: stop }
     0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
     1 -->|"Prefix(*/)<br/>Some(Comment)"| pop65536@{ shape: stop }
+    1 -->|"StopIfDone<br/>None"| pop65536@{ shape: stop }
     1 -->|"Charset([0x00-), +-0xFF])<br/>None"| 1
     1 -->|"Chars(1)<br/>None"| 1
     2 -->|"Prefix(\\)<br/>Some(String)"| push131075[/"string_escape"/]
     2 -->|"Prefix(&quot;)<br/>Some(String)"| pop131072@{ shape: stop }
+    2 -->|"StopIfDone<br/>None"| pop131072@{ shape: stop }
     2 -->|"Charset([0x00-!, #-[, ]-0xFF])<br/>None"| 2
     2 -->|"Chars(1)<br/>None"| 2
     3 -->|"Chars(1)<br/>Some(String)"| pop196608@{ shape: stop }
@@ -109,17 +113,20 @@ pub const LANG_JSON: &Language = &Language {
             (Prefix(r#"true"#), Some(Other), Change(12)),
             (Prefix(r#"false"#), Some(Other), Change(12)),
             (Prefix(r#"null"#), Some(Other), Change(12)),
+            (StopIfDone, None, Pop),
             (Charset(LANG_JSON_CHARSET_2), None, Pop),
             (Chars(1), None, Pop),
         ],
         &[
             (Prefix(r#"*/"#), Some(Comment), Pop),
+            (StopIfDone, None, Pop),
             (Charset(LANG_JSON_CHARSET_3), None, Change(1)),
             (Chars(1), None, Change(1)),
         ],
         &[
             (Prefix(r#"\"#), Some(String), Push(3)),
             (Prefix(r#"""#), Some(String), Pop),
+            (StopIfDone, None, Pop),
             (Charset(LANG_JSON_CHARSET_4), None, Change(2)),
             (Chars(1), None, Change(2)),
         ],
@@ -172,58 +179,61 @@ config:
 ---
 flowchart TD
     0["ground"]
-    1["string_double"]
-    2["string_single"]
-    3["string_escape"]
-    4["string_resolve"]
-    5["string_resolve_change"]
+    1["type_resolve"]
+    2["type_resolve2"]
+    3["string_double"]
+    4["string_single"]
+    5["string_escape"]
     0 -->|"Prefix(#)<br/>Some(Comment)"| 6
     6 -->|"Chars(Line)<br/>Some(Comment)"| pop393216@{ shape: stop }
-    0 -->|"Prefix(&quot;)<br/>Some(String)"| push1[/"string_double"/]
-    0 -->|"Prefix(')<br/>Some(String)"| push2[/"string_single"/]
+    0 -->|"Prefix(&quot;)<br/>Some(String)"| push3[/"string_double"/]
+    0 -->|"Prefix(')<br/>Some(String)"| push4[/"string_single"/]
     0 -->|"Prefix(-)<br/>Some(Number)"| 8
     8 -->|"Charset([0-9])<br/>Some(Number)"| 7
     7 -->|"Prefix(.)<br/>Some(Number)"| 10
     10 -->|"Charset([0-9])<br/>Some(Number)"| 9
     9 -->|"PrefixInsensitive(e)<br/>Some(Number)"| 11
     11 -->|"Prefix(+, -)<br/>Some(Number)"| 12
-    12 -->|"Charset([0-9])<br/>Some(Number)"| 4
-    4 -->|"Charset([0x09-0x0D,  ])<br/>None"| 13
-    13 -->|"Charset([0x00-0x08, 0x0E-0x1F, !-0xFF])<br/>None"| 5
-    5 -->|"Charset([0x00-&quot;, $-0xFF])<br/>Some(String)"| pop327680@{ shape: stop }
-    5 -->|"Chars(0)<br/>None"| pop327680@{ shape: stop }
-    13 -->|"Chars(0)<br/>None"| pop851968@{ shape: stop }
-    4 -->|"Chars(0)<br/>None"| 13
+    12 -->|"Charset([0-9])<br/>Some(Number)"| 1
+    1 -->|"Charset([0x09-0x0D,  ])<br/>None"| 2
+    2 -->|"Prefix(:)<br/>Some(Keyword)"| pop131072@{ shape: stop }
+    2 -->|"Charset([0x00-0x08, 0x0E-0x1F, !-&quot;, $-0xFF])<br/>Some(String)"| pop131072@{ shape: stop }
+    2 -->|"Chars(0)<br/>None"| pop131072@{ shape: stop }
+    1 -->|"Chars(0)<br/>None"| 2
     12 -->|"Chars(0)<br/>Some(Other)"| pop786432@{ shape: stop }
     11 -->|"Chars(0)<br/>None"| 12
-    9 -->|"Chars(0)<br/>None"| 4
+    9 -->|"Chars(0)<br/>None"| 1
     10 -->|"Chars(0)<br/>Some(Other)"| pop655360@{ shape: stop }
     7 -->|"Chars(0)<br/>None"| 9
     8 -->|"Chars(0)<br/>Some(Other)"| pop524288@{ shape: stop }
     0 -->|"Charset([0-9])<br/>Some(Number)"| 7
-    0 -->|"Prefix(true, false, null)<br/>Some(Keyword)"| 4
-    0 -->|"Charset([0x00-!, $-&, (-,, .-/, :-e, g-m, o-s, u-0xFF])<br/>None"| pop0@{ shape: stop }
+    0 -->|"Prefix(true, false, null)<br/>Some(Keyword)"| 1
+    0 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(String)"| 1
+    0 -->|"StopIfDone<br/>None"| pop0@{ shape: stop }
+    0 -->|"Charset([0x00-!, $-&, (-,, .-/, :-@, [-^, `, {-0x7F])<br/>None"| pop0@{ shape: stop }
     0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
-    1 -->|"Prefix(&quot;)<br/>Some(String)"| pop65536@{ shape: stop }
-    1 -->|"Prefix(\\)<br/>Some(String)"| push65539[/"string_escape"/]
-    1 -->|"Charset([0x00-!, #-[, ]-0xFF])<br/>None"| 1
-    1 -->|"Chars(1)<br/>None"| 1
-    2 -->|"Prefix(')<br/>Some(String)"| pop131072@{ shape: stop }
-    2 -->|"Prefix(\\)<br/>Some(String)"| push131075[/"string_escape"/]
-    2 -->|"Charset([0x00-&, (-[, ]-0xFF])<br/>None"| 2
-    2 -->|"Chars(1)<br/>None"| 2
-    3 -->|"Chars(1)<br/>Some(String)"| pop196608@{ shape: stop }
+    3 -->|"Prefix(&quot;)<br/>Some(String)"| pop196608@{ shape: stop }
+    3 -->|"Prefix(\\)<br/>Some(String)"| push196613[/"string_escape"/]
+    3 -->|"StopIfDone<br/>None"| pop196608@{ shape: stop }
+    3 -->|"Charset([0x00-!, #-[, ]-0xFF])<br/>None"| 3
+    3 -->|"Chars(1)<br/>None"| 3
+    4 -->|"Prefix(')<br/>Some(String)"| pop262144@{ shape: stop }
+    4 -->|"Prefix(\\)<br/>Some(String)"| push262149[/"string_escape"/]
+    4 -->|"StopIfDone<br/>None"| pop262144@{ shape: stop }
+    4 -->|"Charset([0x00-&, (-[, ]-0xFF])<br/>None"| 4
+    4 -->|"Chars(1)<br/>None"| 4
+    5 -->|"Chars(1)<br/>Some(String)"| pop327680@{ shape: stop }
 **/
 #[rustfmt::skip]
 const LANG_YAML_CHARSET_0: &[u8; 256] = &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 #[rustfmt::skip]
-const LANG_YAML_CHARSET_1: &[u8; 256] = &[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const LANG_YAML_CHARSET_1: &[u8; 256] = &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
 #[rustfmt::skip]
-const LANG_YAML_CHARSET_2: &[u8; 256] = &[1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+const LANG_YAML_CHARSET_2: &[u8; 256] = &[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 #[rustfmt::skip]
-const LANG_YAML_CHARSET_3: &[u8; 256] = &[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+const LANG_YAML_CHARSET_3: &[u8; 256] = &[1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
 #[rustfmt::skip]
-const LANG_YAML_CHARSET_4: &[u8; 256] = &[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+const LANG_YAML_CHARSET_4: &[u8; 256] = &[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 #[rustfmt::skip]
 const LANG_YAML_CHARSET_5: &[u8; 256] = &[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
 #[rustfmt::skip]
@@ -235,38 +245,43 @@ pub const LANG_YAML: &Language = &Language {
     states: &[
         &[
             (Prefix(r#"#"#), Some(Comment), Change(6)),
-            (Prefix(r#"""#), Some(String), Push(1)),
-            (Prefix(r#"'"#), Some(String), Push(2)),
+            (Prefix(r#"""#), Some(String), Push(3)),
+            (Prefix(r#"'"#), Some(String), Push(4)),
             (Prefix(r#"-"#), Some(Number), Change(8)),
             (Charset(LANG_YAML_CHARSET_0), Some(Number), Change(7)),
-            (Prefix(r#"true"#), Some(Keyword), Change(4)),
-            (Prefix(r#"false"#), Some(Keyword), Change(4)),
-            (Prefix(r#"null"#), Some(Keyword), Change(4)),
+            (Prefix(r#"true"#), Some(Keyword), Change(1)),
+            (Prefix(r#"false"#), Some(Keyword), Change(1)),
+            (Prefix(r#"null"#), Some(Keyword), Change(1)),
+            (Charset(LANG_YAML_CHARSET_1), Some(String), Change(1)),
+            (StopIfDone, None, Pop),
             (Charset(LANG_YAML_CHARSET_4), None, Pop),
             (Chars(1), None, Pop),
         ],
         &[
+            (Charset(LANG_YAML_CHARSET_2), None, Change(2)),
+            (Chars(0), None, Change(2)),
+        ],
+        &[
+            (Prefix(r#":"#), Some(Keyword), Pop),
+            (Charset(LANG_YAML_CHARSET_3), Some(String), Pop),
+            (Chars(0), None, Pop),
+        ],
+        &[
             (Prefix(r#"""#), Some(String), Pop),
-            (Prefix(r#"\"#), Some(String), Push(3)),
-            (Charset(LANG_YAML_CHARSET_5), None, Change(1)),
-            (Chars(1), None, Change(1)),
+            (Prefix(r#"\"#), Some(String), Push(5)),
+            (StopIfDone, None, Pop),
+            (Charset(LANG_YAML_CHARSET_5), None, Change(3)),
+            (Chars(1), None, Change(3)),
         ],
         &[
             (Prefix(r#"'"#), Some(String), Pop),
-            (Prefix(r#"\"#), Some(String), Push(3)),
-            (Charset(LANG_YAML_CHARSET_6), None, Change(2)),
-            (Chars(1), None, Change(2)),
+            (Prefix(r#"\"#), Some(String), Push(5)),
+            (StopIfDone, None, Pop),
+            (Charset(LANG_YAML_CHARSET_6), None, Change(4)),
+            (Chars(1), None, Change(4)),
         ],
         &[
             (Chars(1), Some(String), Pop),
-        ],
-        &[
-            (Charset(LANG_YAML_CHARSET_1), None, Change(13)),
-            (Chars(0), None, Change(13)),
-        ],
-        &[
-            (Charset(LANG_YAML_CHARSET_3), Some(String), Pop),
-            (Chars(0), None, Pop),
         ],
         &[
             (Chars(usize::MAX), Some(Comment), Pop),
@@ -281,7 +296,7 @@ pub const LANG_YAML: &Language = &Language {
         ],
         &[
             (PrefixInsensitive(r#"e"#), Some(Number), Change(11)),
-            (Chars(0), None, Change(4)),
+            (Chars(0), None, Change(1)),
         ],
         &[
             (Charset(LANG_YAML_CHARSET_0), Some(Number), Change(9)),
@@ -293,12 +308,8 @@ pub const LANG_YAML: &Language = &Language {
             (Chars(0), None, Change(12)),
         ],
         &[
-            (Charset(LANG_YAML_CHARSET_0), Some(Number), Change(4)),
+            (Charset(LANG_YAML_CHARSET_0), Some(Number), Change(1)),
             (Chars(0), Some(Other), Pop),
-        ],
-        &[
-            (Charset(LANG_YAML_CHARSET_2), None, Change(5)),
-            (Chars(0), None, Pop),
         ],
     ],
 };
@@ -323,15 +334,18 @@ flowchart TD
     0 -->|"PrefixInsensitive(break, case, continue, done, do, elif, else, esac, fi, for, function, if, in, return, select, then, until, while)<br/>Some(Keyword)"| pop0@{ shape: stop }
     0 -->|"Charset([0-9])<br/>Some(Number)"| pop0@{ shape: stop }
     0 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Method)"| pop0@{ shape: stop }
+    0 -->|"StopIfDone<br/>None"| pop0@{ shape: stop }
     0 -->|"Charset([0x00- , &, (-), ,-., :-;, ?-@, [-^, `, {, }-0x7F])<br/>None"| pop0@{ shape: stop }
     0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
     1 -->|"Prefix(')<br/>Some(String)"| pop65536@{ shape: stop }
     1 -->|"Prefix(\\)<br/>Some(String)"| push65539[/"string_escape"/]
+    1 -->|"StopIfDone<br/>None"| pop65536@{ shape: stop }
     1 -->|"Charset([0x00-&, (-[, ]-0xFF])<br/>None"| 1
     1 -->|"Chars(1)<br/>None"| 1
     2 -->|"Prefix(&quot;)<br/>Some(String)"| pop131072@{ shape: stop }
     2 -->|"Prefix(\\)<br/>Some(String)"| push131075[/"string_escape"/]
     2 -->|"Prefix($)<br/>Some(Other)"| push131076[/"variable"/]
+    2 -->|"StopIfDone<br/>None"| pop131072@{ shape: stop }
     2 -->|"Charset([0x00-!, #, %-[, ]-0xFF])<br/>None"| 2
     2 -->|"Chars(1)<br/>None"| 2
     3 -->|"Chars(1)<br/>Some(String)"| pop196608@{ shape: stop }
@@ -342,6 +356,7 @@ flowchart TD
     7 -->|"Chars(0)<br/>Some(Other)"| pop458752@{ shape: stop }
     6 -->|"Chars(0)<br/>None"| 7
     4 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Variable)"| pop262144@{ shape: stop }
+    4 -->|"StopIfDone<br/>None"| pop262144@{ shape: stop }
     4 -->|"Charset([0x00-&quot;, $-/, :->, @, [-^, `, |-0x7F])<br/>None"| 4
     4 -->|"Chars(1)<br/>None"| 4
 **/
@@ -398,12 +413,14 @@ pub const LANG_BASH: &Language = &Language {
             (PrefixInsensitive(r#"while"#), Some(Keyword), Pop),
             (Charset(LANG_BASH_CHARSET_0), Some(Number), Pop),
             (Charset(LANG_BASH_CHARSET_1), Some(Method), Pop),
+            (StopIfDone, None, Pop),
             (Charset(LANG_BASH_CHARSET_3), None, Pop),
             (Chars(1), None, Pop),
         ],
         &[
             (Prefix(r#"'"#), Some(String), Pop),
             (Prefix(r#"\"#), Some(String), Push(3)),
+            (StopIfDone, None, Pop),
             (Charset(LANG_BASH_CHARSET_4), None, Change(1)),
             (Chars(1), None, Change(1)),
         ],
@@ -411,6 +428,7 @@ pub const LANG_BASH: &Language = &Language {
             (Prefix(r#"""#), Some(String), Pop),
             (Prefix(r#"\"#), Some(String), Push(3)),
             (Prefix(r#"$"#), Some(Other), Push(4)),
+            (StopIfDone, None, Pop),
             (Charset(LANG_BASH_CHARSET_5), None, Change(2)),
             (Chars(1), None, Change(2)),
         ],
@@ -422,6 +440,7 @@ pub const LANG_BASH: &Language = &Language {
             (Prefix(r#"?"#), Some(Variable), Pop),
             (Prefix(r#"{"#), Some(Variable), Change(6)),
             (Charset(LANG_BASH_CHARSET_1), Some(Variable), Pop),
+            (StopIfDone, None, Pop),
             (Charset(LANG_BASH_CHARSET_6), None, Change(4)),
             (Chars(1), None, Change(4)),
         ],
@@ -477,18 +496,22 @@ flowchart TD
     13 -->|"Charset([-, 0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Method)"| pop851968@{ shape: stop }
     13 -->|"Chars(0)<br/>Some(Keyword)"| pop851968@{ shape: stop }
     0 -->|"Charset([-, 0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Method)"| pop0@{ shape: stop }
+    0 -->|"StopIfDone<br/>None"| pop0@{ shape: stop }
     0 -->|"Charset([0x00- , &, (-), ,, ., :-;, ?-@, [-^, `, {, }-0x7F])<br/>None"| pop0@{ shape: stop }
     0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
     1 -->|"Prefix(#>)<br/>Some(Comment)"| pop65536@{ shape: stop }
+    1 -->|"StopIfDone<br/>None"| pop65536@{ shape: stop }
     1 -->|"Charset([0x00-&quot;, $-0xFF])<br/>None"| 1
     1 -->|"Chars(1)<br/>None"| 1
     2 -->|"Prefix(')<br/>Some(String)"| pop131072@{ shape: stop }
     2 -->|"Prefix(`)<br/>Some(String)"| push131076[/"string_escape"/]
+    2 -->|"StopIfDone<br/>None"| pop131072@{ shape: stop }
     2 -->|"Charset([0x00-&, (-_, a-0xFF])<br/>None"| 2
     2 -->|"Chars(1)<br/>None"| 2
     3 -->|"Prefix(&quot;)<br/>Some(String)"| pop196608@{ shape: stop }
     3 -->|"Prefix(`)<br/>Some(String)"| push196612[/"string_escape"/]
     3 -->|"Prefix($)<br/>Some(Other)"| push196613[/"variable"/]
+    3 -->|"StopIfDone<br/>None"| pop196608@{ shape: stop }
     3 -->|"Charset([0x00-!, #, %-_, a-0xFF])<br/>None"| 3
     3 -->|"Chars(1)<br/>None"| 3
     4 -->|"Chars(1)<br/>Some(String)"| pop262144@{ shape: stop }
@@ -499,6 +522,7 @@ flowchart TD
     15 -->|"Chars(0)<br/>Some(Other)"| pop983040@{ shape: stop }
     14 -->|"Chars(0)<br/>None"| 15
     5 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Variable)"| pop327680@{ shape: stop }
+    5 -->|"StopIfDone<br/>None"| pop327680@{ shape: stop }
     5 -->|"Charset([0x00-#, %-', )-/, :->, @, [-], `, |-0x7F])<br/>None"| 5
     5 -->|"Chars(1)<br/>None"| 5
 **/
@@ -559,17 +583,20 @@ pub const LANG_POWERSHELL: &Language = &Language {
             (PrefixInsensitive(r#"using"#), Some(Method), Change(13)),
             (PrefixInsensitive(r#"while"#), Some(Method), Change(13)),
             (Charset(LANG_POWERSHELL_CHARSET_2), Some(Method), Pop),
+            (StopIfDone, None, Pop),
             (Charset(LANG_POWERSHELL_CHARSET_4), None, Pop),
             (Chars(1), None, Pop),
         ],
         &[
             (Prefix(r#"#>"#), Some(Comment), Pop),
+            (StopIfDone, None, Pop),
             (Charset(LANG_POWERSHELL_CHARSET_5), None, Change(1)),
             (Chars(1), None, Change(1)),
         ],
         &[
             (Prefix(r#"'"#), Some(String), Pop),
             (Prefix(r#"`"#), Some(String), Push(4)),
+            (StopIfDone, None, Pop),
             (Charset(LANG_POWERSHELL_CHARSET_6), None, Change(2)),
             (Chars(1), None, Change(2)),
         ],
@@ -577,6 +604,7 @@ pub const LANG_POWERSHELL: &Language = &Language {
             (Prefix(r#"""#), Some(String), Pop),
             (Prefix(r#"`"#), Some(String), Push(4)),
             (Prefix(r#"$"#), Some(Other), Push(5)),
+            (StopIfDone, None, Pop),
             (Charset(LANG_POWERSHELL_CHARSET_7), None, Change(3)),
             (Chars(1), None, Change(3)),
         ],
@@ -590,6 +618,7 @@ pub const LANG_POWERSHELL: &Language = &Language {
             (Prefix(r#"^"#), Some(Variable), Pop),
             (Prefix(r#"{"#), Some(Variable), Change(14)),
             (Charset(LANG_POWERSHELL_CHARSET_1), Some(Variable), Pop),
+            (StopIfDone, None, Pop),
             (Charset(LANG_POWERSHELL_CHARSET_8), None, Change(5)),
             (Chars(1), None, Change(5)),
         ],
@@ -660,14 +689,17 @@ flowchart TD
     6 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Other)"| pop393216@{ shape: stop }
     6 -->|"Chars(0)<br/>Some(Keyword)"| pop393216@{ shape: stop }
     0 -->|"Charset([0-9])<br/>Some(Number)"| pop0@{ shape: stop }
+    0 -->|"StopIfDone<br/>None"| pop0@{ shape: stop }
     0 -->|"Charset([0x00- , #-$, &-), ,-., ;, ?-A, H, J-L, N-O, Q, T-a, h, j-l, n-o, q, t-{, }-0xFF])<br/>None"| pop0@{ shape: stop }
     0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
     1 -->|"Prefix(&quot;)<br/>Some(String)"| pop65536@{ shape: stop }
     1 -->|"Prefix(\\)<br/>Some(String)"| push65538[/"string_escape"/]
+    1 -->|"StopIfDone<br/>None"| pop65536@{ shape: stop }
     1 -->|"Charset([0x00-!, #-[, ]-0xFF])<br/>None"| 1
     1 -->|"Chars(1)<br/>None"| 1
     2 -->|"Chars(1)<br/>Some(String)"| pop131072@{ shape: stop }
     3 -->|"Prefix(%)<br/>Some(Variable)"| pop196608@{ shape: stop }
+    3 -->|"StopIfDone<br/>None"| pop196608@{ shape: stop }
     3 -->|"Charset([0x00-$, &-0xFF])<br/>None"| 3
     3 -->|"Chars(1)<br/>None"| 3
 **/
@@ -722,12 +754,14 @@ pub const LANG_BATCH: &Language = &Language {
             (PrefixInsensitive(r#"ren"#), Some(Other), Change(6)),
             (PrefixInsensitive(r#"set"#), Some(Other), Change(6)),
             (Charset(LANG_BATCH_CHARSET_2), Some(Number), Pop),
+            (StopIfDone, None, Pop),
             (Charset(LANG_BATCH_CHARSET_3), None, Pop),
             (Chars(1), None, Pop),
         ],
         &[
             (Prefix(r#"""#), Some(String), Pop),
             (Prefix(r#"\"#), Some(String), Push(2)),
+            (StopIfDone, None, Pop),
             (Charset(LANG_BATCH_CHARSET_4), None, Change(1)),
             (Chars(1), None, Change(1)),
         ],
@@ -736,6 +770,7 @@ pub const LANG_BATCH: &Language = &Language {
         ],
         &[
             (Prefix(r#"%"#), Some(Variable), Pop),
+            (StopIfDone, None, Pop),
             (Charset(LANG_BATCH_CHARSET_5), None, Change(3)),
             (Chars(1), None, Change(3)),
         ],

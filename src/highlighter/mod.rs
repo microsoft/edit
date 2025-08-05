@@ -61,16 +61,17 @@ impl<'doc> Highlighter<'doc> {
                     let mut starter = [0; 256];
                     for t in transitions {
                         match t.0 {
-                            Consume::Chars(_) => starter.fill(1),
-                            Consume::Prefix(prefix) => {
+                            Test::StopIfDone => {}
+                            Test::Chars(_) => starter.fill(1),
+                            Test::Prefix(prefix) => {
                                 starter[prefix.as_bytes()[0] as usize] = 1;
                             }
-                            Consume::PrefixInsensitive(prefix) => {
+                            Test::PrefixInsensitive(prefix) => {
                                 let ch = prefix.as_bytes()[0];
                                 starter[ch.to_ascii_uppercase() as usize] = 1;
                                 starter[ch.to_ascii_lowercase() as usize] = 1;
                             }
-                            Consume::Charset(cs) => {
+                            Test::Charset(cs) => {
                                 for (a, b) in starter.iter_mut().zip(cs.iter()) {
                                     *a |= *b;
                                 }
@@ -151,33 +152,33 @@ impl<'doc> Highlighter<'doc> {
         let mut state = self.state;
         let mut kind = self.kind;
 
-        res.push(Higlight { start, kind });
-
-        loop {
-            if off >= line_buf.len() {
-                break;
-            }
-
+        'outer: loop {
             let mut end = off;
 
             for t in self.language.states[state] {
                 match t.0 {
-                    Consume::Chars(n) => {
-                        end = end.saturating_add(n);
+                    Test::StopIfDone => {
+                        if off >= line_buf.len() {
+                            break 'outer;
+                        }
+                        continue;
                     }
-                    Consume::Prefix(str) => {
+                    Test::Chars(n) => {
+                        end = end + n.min(line_buf.len() - end);
+                    }
+                    Test::Prefix(str) => {
                         if !line_buf[end..].starts_with(str.as_bytes()) {
                             continue;
                         }
                         end += str.len();
                     }
-                    Consume::PrefixInsensitive(str) => {
+                    Test::PrefixInsensitive(str) => {
                         if !line_buf[end..].starts_with_ignore_ascii_case(str) {
                             continue;
                         }
                         end += str.len();
                     }
-                    Consume::Charset(cs) => {
+                    Test::Charset(cs) => {
                         // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
                         if end >= line_buf.len() || cs[line_buf[end] as usize] == 0 {
                             continue;

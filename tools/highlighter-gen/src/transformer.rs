@@ -490,13 +490,16 @@ impl GraphBuilder {
 
                 s.transitions.push(GraphTransition {
                     origin: -1,
+                    test: GraphTest::StopIfDone,
+                    kind: None,
+                    action: GraphAction::Pop,
+                });
+                s.transitions.push(GraphTransition {
+                    origin: -1,
                     test: GraphTest::Charset(cs),
                     kind: None,
                     action: action.clone(),
                 });
-            }
-
-            if !s.coverage.covers_all() {
                 s.transitions.push(GraphTransition {
                     origin: -1,
                     test: GraphTest::Chars(1),
