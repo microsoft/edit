@@ -76,9 +76,19 @@ pub const LANGUAGES: &[Language] = &[
                     (
                         r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#,
                         Some(Number),
-                        Change("string_resolve"),
+                        Change("type_resolve"),
                     ),
-                    (r#"(?:true|false|null)"#, Some(Keyword), Change("string_resolve")),
+                    (r#"(?:true|false|null)"#, Some(Keyword), Change("type_resolve")),
+                    (r#"[^#\W]+"#, Some(String), Change("type_resolve")),
+                ],
+            },
+            State { name: "type_resolve", rules: &[(r#"\s*"#, None, Change("type_resolve2"))] },
+            State {
+                name: "type_resolve2",
+                rules: &[
+                    (r#":"#, Some(Keyword), Pop),
+                    (r#"[^#\s]+"#, Some(String), Pop),
+                    (r#""#, None, Pop),
                 ],
             },
             State {
@@ -96,14 +106,6 @@ pub const LANGUAGES: &[Language] = &[
                 ],
             },
             State { name: "string_escape", rules: &[(r#"."#, Some(String), Pop)] },
-            State {
-                name: "string_resolve",
-                rules: &[(r#"\s*\S+"#, None, Change("string_resolve_change")), (r#""#, None, Pop)],
-            },
-            State {
-                name: "string_resolve_change",
-                rules: &[(r#"[^#]*"#, Some(String), Pop), (r#""#, None, Pop)],
-            },
         ],
     },
     Language {

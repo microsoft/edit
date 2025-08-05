@@ -1,7 +1,6 @@
 # This is a comment
 ---
 string: "Hello, world!"
-single_quoted: 'Single quoted string'
 plain: plainValue
 multiline: |
   This is a
