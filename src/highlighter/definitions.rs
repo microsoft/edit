@@ -65,17 +65,17 @@ flowchart TD
     10 -->|"Prefix(+, -)<br/>None"| 11
     11 -->|"Charset([0-9])<br/>None"| 9
     9 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Other)"| pop589824@{ shape: stop }
-    9 -->|"Chars(0)<br/>Some(Number)"| pop589824@{ shape: stop }
-    11 -->|"Chars(0)<br/>Some(Other)"| pop720896@{ shape: stop }
+    9 -->|"Chars(0)<br/>None"| pop589824@{ shape: stop }
+    11 -->|"Chars(0)<br/>None"| pop720896@{ shape: stop }
     10 -->|"Chars(0)<br/>None"| 11
     7 -->|"Chars(0)<br/>None"| 9
-    8 -->|"Chars(0)<br/>Some(Other)"| pop524288@{ shape: stop }
+    8 -->|"Chars(0)<br/>None"| pop524288@{ shape: stop }
     5 -->|"Chars(0)<br/>None"| 7
-    6 -->|"Chars(0)<br/>Some(Other)"| pop393216@{ shape: stop }
+    6 -->|"Chars(0)<br/>None"| pop393216@{ shape: stop }
     0 -->|"Charset([0-9])<br/>None"| 5
     0 -->|"Prefix(true, false, null)<br/>None"| 12
     12 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Other)"| pop786432@{ shape: stop }
-    12 -->|"Chars(0)<br/>Some(Keyword)"| pop786432@{ shape: stop }
+    12 -->|"Chars(0)<br/>None"| pop786432@{ shape: stop }
     0 -->|"StopIfDone<br/>None"| pop0@{ shape: stop }
     0 -->|"Charset([0x00-!, #-,, ., :-e, g-m, o-s, u-0xFF])<br/>None"| pop0@{ shape: stop }
     0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
@@ -143,7 +143,7 @@ pub const LANG_JSON: &Language = &Language {
         ],
         &[
             (Charset(LANG_JSON_CHARSET_0), None, Change(5)),
-            (Chars(0), Some(Other), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (PrefixInsensitive(r#"e"#), None, Change(10)),
@@ -151,11 +151,11 @@ pub const LANG_JSON: &Language = &Language {
         ],
         &[
             (Charset(LANG_JSON_CHARSET_0), None, Change(7)),
-            (Chars(0), Some(Other), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (Charset(LANG_JSON_CHARSET_1), Some(Other), Pop),
-            (Chars(0), Some(Number), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (Prefix(r#"+"#), None, Change(11)),
@@ -164,11 +164,11 @@ pub const LANG_JSON: &Language = &Language {
         ],
         &[
             (Charset(LANG_JSON_CHARSET_0), None, Change(9)),
-            (Chars(0), Some(Other), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (Charset(LANG_JSON_CHARSET_1), Some(Other), Pop),
-            (Chars(0), Some(Keyword), Pop),
+            (Chars(0), None, Pop),
         ],
     ],
 };
@@ -202,17 +202,17 @@ flowchart TD
     14 -->|"Charset([0x00-0x08, 0x0E-0x1F, !-&quot;, $-9, ;-0xFF])<br/>None"| 15
     15 -->|"Charset([0x00-&quot;, $-0xFF])<br/>Some(String)"| pop983040@{ shape: stop }
     15 -->|"Chars(0)<br/>Some(String)"| pop983040@{ shape: stop }
-    14 -->|"Chars(0)<br/>Some(Keyword)"| pop917504@{ shape: stop }
+    14 -->|"Chars(0)<br/>None"| pop917504@{ shape: stop }
     13 -->|"Charset([0x00-&quot;, $-0xFF])<br/>Some(String)"| pop851968@{ shape: stop }
     13 -->|"Chars(0)<br/>Some(String)"| pop851968@{ shape: stop }
     12 -->|"Chars(0)<br/>None"| 13
     1 -->|"Chars(0)<br/>None"| 12
-    11 -->|"Chars(0)<br/>Some(Other)"| pop720896@{ shape: stop }
+    11 -->|"Chars(0)<br/>None"| pop720896@{ shape: stop }
     10 -->|"Chars(0)<br/>None"| 11
     8 -->|"Chars(0)<br/>Some(Number)"| 1
-    9 -->|"Chars(0)<br/>Some(Other)"| pop589824@{ shape: stop }
+    9 -->|"Chars(0)<br/>None"| pop589824@{ shape: stop }
     6 -->|"Chars(0)<br/>None"| 8
-    7 -->|"Chars(0)<br/>Some(Other)"| pop458752@{ shape: stop }
+    7 -->|"Chars(0)<br/>None"| pop458752@{ shape: stop }
     0 -->|"Charset([0-9])<br/>None"| 6
     0 -->|"Prefix(true, false, null)<br/>Some(Keyword)"| 1
     0 -->|"Charset([0x00-0x08, 0x0E-0x1F, !-&quot;, $-9, ;-0xFF])<br/>Some(String)"| 1
@@ -294,7 +294,7 @@ pub const LANG_YAML: &Language = &Language {
         ],
         &[
             (Charset(LANG_YAML_CHARSET_0), None, Change(6)),
-            (Chars(0), Some(Other), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (PrefixInsensitive(r#"e"#), None, Change(10)),
@@ -302,7 +302,7 @@ pub const LANG_YAML: &Language = &Language {
         ],
         &[
             (Charset(LANG_YAML_CHARSET_0), None, Change(8)),
-            (Chars(0), Some(Other), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (Prefix(r#"+"#), None, Change(11)),
@@ -311,7 +311,7 @@ pub const LANG_YAML: &Language = &Language {
         ],
         &[
             (Charset(LANG_YAML_CHARSET_0), Some(Number), Change(1)),
-            (Chars(0), Some(Other), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (Charset(LANG_YAML_CHARSET_1), None, Change(13)),
@@ -324,7 +324,7 @@ pub const LANG_YAML: &Language = &Language {
         ],
         &[
             (Charset(LANG_YAML_CHARSET_1), None, Change(15)),
-            (Chars(0), Some(Keyword), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (Charset(LANG_YAML_CHARSET_3), Some(String), Pop),
@@ -373,7 +373,7 @@ flowchart TD
     4 -->|"Prefix({)<br/>None"| 6
     6 -->|"Charset([0x00-|, ~-0xFF])<br/>None"| 7
     7 -->|"Prefix(})<br/>Some(Variable)"| pop458752@{ shape: stop }
-    7 -->|"Chars(0)<br/>Some(Other)"| pop458752@{ shape: stop }
+    7 -->|"Chars(0)<br/>None"| pop458752@{ shape: stop }
     6 -->|"Chars(0)<br/>None"| 7
     4 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Variable)"| pop262144@{ shape: stop }
     4 -->|"StopIfDone<br/>None"| pop262144@{ shape: stop }
@@ -473,7 +473,7 @@ pub const LANG_BASH: &Language = &Language {
         ],
         &[
             (Prefix(r#"}"#), Some(Variable), Pop),
-            (Chars(0), Some(Other), Pop),
+            (Chars(0), None, Pop),
         ],
     ],
 };
@@ -504,18 +504,18 @@ flowchart TD
     9 -->|"PrefixInsensitive(e)<br/>None"| 11
     11 -->|"Prefix(+, -)<br/>None"| 12
     12 -->|"Charset([0-9])<br/>Some(Number)"| pop786432@{ shape: stop }
-    12 -->|"Chars(0)<br/>Some(Other)"| pop786432@{ shape: stop }
+    12 -->|"Chars(0)<br/>None"| pop786432@{ shape: stop }
     11 -->|"Chars(0)<br/>None"| 12
     9 -->|"Chars(0)<br/>Some(Number)"| pop589824@{ shape: stop }
-    10 -->|"Chars(0)<br/>Some(Other)"| pop655360@{ shape: stop }
+    10 -->|"Chars(0)<br/>None"| pop655360@{ shape: stop }
     7 -->|"Chars(0)<br/>None"| 9
     8 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Operator)"| pop524288@{ shape: stop }
-    8 -->|"Chars(0)<br/>Some(Other)"| pop524288@{ shape: stop }
+    8 -->|"Chars(0)<br/>None"| pop524288@{ shape: stop }
     0 -->|"Charset([0-9])<br/>None"| 7
     0 -->|"Prefix(!, %, *, +, /, <, =, >, |)<br/>Some(Operator)"| pop0@{ shape: stop }
     0 -->|"PrefixInsensitive(break, catch, continue, do, elseif, else, finally, foreach, function, if, return, switch, throw, try, using, while)<br/>None"| 13
     13 -->|"Charset([-, 0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Method)"| pop851968@{ shape: stop }
-    13 -->|"Chars(0)<br/>Some(Keyword)"| pop851968@{ shape: stop }
+    13 -->|"Chars(0)<br/>None"| pop851968@{ shape: stop }
     0 -->|"Charset([-, 0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Method)"| pop0@{ shape: stop }
     0 -->|"StopIfDone<br/>None"| pop0@{ shape: stop }
     0 -->|"Charset([0x00- , &, (-), ,, ., :-;, ?-@, [-^, `, {, }-0x7F])<br/>None"| pop0@{ shape: stop }
@@ -540,7 +540,7 @@ flowchart TD
     5 -->|"Prefix({)<br/>None"| 14
     14 -->|"Charset([0x00-|, ~-0xFF])<br/>None"| 15
     15 -->|"Prefix(})<br/>Some(Variable)"| pop983040@{ shape: stop }
-    15 -->|"Chars(0)<br/>Some(Other)"| pop983040@{ shape: stop }
+    15 -->|"Chars(0)<br/>None"| pop983040@{ shape: stop }
     14 -->|"Chars(0)<br/>None"| 15
     5 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Variable)"| pop327680@{ shape: stop }
     5 -->|"StopIfDone<br/>None"| pop327680@{ shape: stop }
@@ -653,7 +653,7 @@ pub const LANG_POWERSHELL: &Language = &Language {
         &[
             (Charset(LANG_POWERSHELL_CHARSET_0), None, Change(7)),
             (Charset(LANG_POWERSHELL_CHARSET_1), Some(Operator), Pop),
-            (Chars(0), Some(Other), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (PrefixInsensitive(r#"e"#), None, Change(11)),
@@ -661,7 +661,7 @@ pub const LANG_POWERSHELL: &Language = &Language {
         ],
         &[
             (Charset(LANG_POWERSHELL_CHARSET_0), None, Change(9)),
-            (Chars(0), Some(Other), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (Prefix(r#"+"#), None, Change(12)),
@@ -670,11 +670,11 @@ pub const LANG_POWERSHELL: &Language = &Language {
         ],
         &[
             (Charset(LANG_POWERSHELL_CHARSET_0), Some(Number), Pop),
-            (Chars(0), Some(Other), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (Charset(LANG_POWERSHELL_CHARSET_2), Some(Method), Pop),
-            (Chars(0), Some(Keyword), Pop),
+            (Chars(0), None, Pop),
         ],
         &[
             (Charset(LANG_POWERSHELL_CHARSET_3), None, Change(15)),
@@ -682,7 +682,7 @@ pub const LANG_POWERSHELL: &Language = &Language {
         ],
         &[
             (Prefix(r#"}"#), Some(Variable), Pop),
-            (Chars(0), Some(Other), Pop),
+            (Chars(0), None, Pop),
         ],
     ],
 };
@@ -709,7 +709,7 @@ flowchart TD
     0 -->|"Prefix(!, *, +, /, <, =, >, |)<br/>Some(Operator)"| pop0@{ shape: stop }
     0 -->|"PrefixInsensitive(break, call, cd, chdir, cls, copy, del, dir, echo, exit, for, goto, if, md, mkdir, move, pause, ren, set)<br/>None"| 6
     6 -->|"Charset([0-9, A-Z, _, a-z, 0x80-0xFF])<br/>Some(Other)"| pop393216@{ shape: stop }
-    6 -->|"Chars(0)<br/>Some(Keyword)"| pop393216@{ shape: stop }
+    6 -->|"Chars(0)<br/>None"| pop393216@{ shape: stop }
     0 -->|"Charset([0-9])<br/>Some(Number)"| pop0@{ shape: stop }
     0 -->|"StopIfDone<br/>None"| pop0@{ shape: stop }
     0 -->|"Charset([0x00- , #-$, &-), ,-., ;, ?-A, H, J-L, N-O, Q, T-a, h, j-l, n-o, q, t-{, }-0xFF])<br/>None"| pop0@{ shape: stop }
@@ -805,7 +805,7 @@ pub const LANG_BATCH: &Language = &Language {
         ],
         &[
             (Charset(LANG_BATCH_CHARSET_1), Some(Other), Pop),
-            (Chars(0), Some(Keyword), Pop),
+            (Chars(0), None, Pop),
         ],
     ],
 };
