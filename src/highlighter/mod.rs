@@ -60,8 +60,7 @@ impl<'doc> Highlighter<'doc> {
                 .map(|&transitions| {
                     let mut starter = [0; 256];
                     for t in transitions {
-                        match t.0 {
-                            Test::StopIfDone => {}
+                        match t.test {
                             Test::Chars(_) => starter.fill(1),
                             Test::Prefix(prefix) => {
                                 starter[prefix.as_bytes()[0] as usize] = 1;
@@ -76,6 +75,7 @@ impl<'doc> Highlighter<'doc> {
                                     *a |= *b;
                                 }
                             }
+                            Test::Skip(cs) => {}
                         }
                     }
                     starter
@@ -146,81 +146,79 @@ impl<'doc> Highlighter<'doc> {
         let mut off = 0usize;
         let mut start = 0usize;
 
-        let mut root_state = self.state;
-        let mut root_kind = self.kind;
-
         let mut state = self.state;
         let mut kind = self.kind;
 
         'outer: loop {
-            let mut end = off;
+            let beg = off;
 
             for t in self.language.states[state] {
-                match t.0 {
-                    Test::StopIfDone => {
-                        if off >= line_buf.len() {
-                            break 'outer;
-                        }
-                        continue;
-                    }
+                match t.test {
                     Test::Chars(n) => {
-                        end = end + n.min(line_buf.len() - end);
+                        off = off + n.min(line_buf.len() - off);
                     }
                     Test::Prefix(str) => {
-                        if !line_buf[end..].starts_with(str.as_bytes()) {
+                        if !line_buf[off..].starts_with(str.as_bytes()) {
                             continue;
                         }
-                        end += str.len();
+                        off += str.len();
                     }
                     Test::PrefixInsensitive(str) => {
-                        if !line_buf[end..].starts_with_ignore_ascii_case(str) {
+                        if !line_buf[off..].starts_with_ignore_ascii_case(str) {
                             continue;
                         }
-                        end += str.len();
+                        off += str.len();
                     }
                     Test::Charset(cs) => {
                         // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
-                        if end >= line_buf.len() || cs[line_buf[end] as usize] == 0 {
+                        if off >= line_buf.len() || cs[line_buf[off] as usize] == 0 {
                             continue;
                         }
                         while {
-                            end += 1;
-                            end < line_buf.len() && cs[line_buf[end] as usize] != 0
+                            off += 1;
+                            off < line_buf.len() && cs[line_buf[off] as usize] != 0
                         } {}
+                    }
+                    Test::Skip(cs) => {
+                        while {
+                            off += 1;
+                            off < line_buf.len() && cs[line_buf[off] as usize] != 0
+                        } {}
+                        if off >= line_buf.len() {
+                            break 'outer;
+                        }
+                        // TODO: This is a dumb way to ensure that the start of the highlight span advances.
+                        if state == 0 {
+                            start = off;
+                        }
                     }
                 }
 
-                match t.2 {
+                match t.action {
                     Action::Change(to) => {
                         state = to as usize;
-                        kind = t.1.unwrap_or(kind);
+                        kind = t.kind.unwrap_or(kind);
                     }
                     Action::Push(to) => {
                         res.push(Higlight { start, kind });
 
-                        self.state_stack.push((root_state, root_kind));
-                        root_state = to as usize;
-                        root_kind = t.1.unwrap_or(kind);
-                        state = root_state;
-                        kind = root_kind;
+                        self.state_stack.push((state, kind));
+                        state = to as usize;
+                        kind = t.kind.unwrap_or(kind);
+
+                        start = beg;
+                    }
+                    Action::Pop => {
+                        kind = t.kind.unwrap_or(kind);
+                        res.push(Higlight { start, kind });
+
+                        (state, kind) = self.state_stack.last().copied().unwrap_or_default();
+                        self.state_stack.pop();
 
                         start = off;
                     }
-                    Action::Pop => {
-                        kind = t.1.unwrap_or(kind);
-                        res.push(Higlight { start, kind });
-
-                        (root_state, root_kind) =
-                            self.state_stack.last().copied().unwrap_or_default();
-                        self.state_stack.pop();
-                        state = root_state;
-                        kind = root_kind;
-
-                        start = end;
-                    }
                 }
 
-                off = end;
                 break;
             }
         }

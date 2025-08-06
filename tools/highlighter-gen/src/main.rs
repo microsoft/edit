@@ -32,8 +32,8 @@ fn main() {
         use std::ops::RangeInclusive;
 
         use Action::*;
-        use Test::*;
         use HighlightKind::*;
+        use Test::*;
 
         pub struct Language {
             pub name: &'static str,
@@ -41,14 +41,18 @@ fn main() {
             pub states: &'static [&'static [Transition<'static>]],
         }
 
-        pub type Transition<'a> = (Test<'a>, Option<HighlightKind>, Action);
+        pub struct Transition<'a> {
+            pub test: Test<'a>,
+            pub kind: Option<HighlightKind>,
+            pub action: Action,
+        }
 
         pub enum Test<'a> {
-            StopIfDone,
             Chars(usize),
             Charset(&'a [u8; 256]),
             Prefix(&'a str),
             PrefixInsensitive(&'a str),
+            Skip(&'a [u8; 256]),
         }
 
         #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +72,10 @@ fn main() {
             Change(u8),
             Push(u8),
             Pop,
+        }
+
+        const fn t<'a>(test: Test<'a>, kind: Option<HighlightKind>, action: Action) -> Transition<'a> {
+            Transition { test, kind, action }
         }
 
         "#
@@ -144,7 +152,6 @@ fn main() {
 
             for t in &state.transitions {
                 let test = match &t.test {
-                    GraphTest::StopIfDone => "StopIfDone".to_string(),
                     GraphTest::Chars(usize::MAX) => "Chars(usize::MAX)".to_string(),
                     GraphTest::Chars(n) => {
                         format!("Chars({n})")
@@ -158,13 +165,20 @@ fn main() {
                     GraphTest::PrefixInsensitive(s) => {
                         format!("PrefixInsensitive(r#\"{s}\"#)")
                     }
+                    GraphTest::Skip(cs) => {
+                        format!("Skip(LANG_{}_CHARSET_{})", name_uppercase, cs.id())
+                    }
                 };
                 let action = match &t.action {
                     GraphAction::Change(next) => format!("Change({})", next.borrow().id),
                     GraphAction::Push(next) => format!("Push({})", next.borrow().id),
                     GraphAction::Pop => "Pop".to_string(),
                 };
-                _ = writeln!(output, r#"            ({test}, {kind:?}, {action}),"#, kind = t.kind);
+                _ = writeln!(
+                    output,
+                    r#"            t({test}, {kind:?}, {action}),"#,
+                    kind = t.kind,
+                );
             }
 
             _ = writeln!(output, r#"        ],"#);
