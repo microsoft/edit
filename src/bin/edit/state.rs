@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
+use edit::oklab::StraightRgba;
 use edit::tui::*;
 use edit::{apperr, buffer, icu, sys};
 
@@ -127,8 +128,8 @@ pub struct OscTitleFileStatus {
 }
 
 pub struct State {
-    pub menubar_color_bg: u32,
-    pub menubar_color_fg: u32,
+    pub menubar_color_bg: StraightRgba,
+    pub menubar_color_fg: StraightRgba,
 
     pub documents: DocumentManager,
 
@@ -176,8 +177,8 @@ pub struct State {
 impl State {
     pub fn new() -> apperr::Result<Self> {
         Ok(Self {
-            menubar_color_bg: 0,
-            menubar_color_fg: 0,
+            menubar_color_bg: StraightRgba::zero(),
+            menubar_color_fg: StraightRgba::zero(),
 
             documents: Default::default(),
 
