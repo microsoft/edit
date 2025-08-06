@@ -89,12 +89,12 @@ impl GraphBuilder {
                 }
                 (0, None, HirKind::Class(Class::Bytes(class))) => {
                     let dst = self.transform_class_plus(kind, src.clone(), dst.clone(), class);
-                    self.transform_option(None, src, dst.clone());
+                    self.transform_option(kind, src, dst.clone());
                     dst
                 }
                 (0, Some(1), _) => {
                     let dst = self.transform(kind, src.clone(), dst.clone(), &rep.sub);
-                    self.transform_option(None, src, dst.clone());
+                    self.transform_option(kind, src, dst.clone());
                     dst
                 }
                 (1, None, HirKind::Class(Class::Bytes(class))) => {

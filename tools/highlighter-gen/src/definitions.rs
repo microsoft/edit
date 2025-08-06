@@ -79,15 +79,18 @@ pub const LANGUAGES: &[Language] = &[
                         Change("type_resolve"),
                     ),
                     (r#"(?:true|false|null)"#, Some(Keyword), Change("type_resolve")),
-                    (r#"[^#\W]+"#, Some(String), Change("type_resolve")),
+                    (r#"[^\s#:]+"#, Some(String), Change("type_resolve")),
                 ],
             },
-            State { name: "type_resolve", rules: &[(r#"\s*"#, None, Change("type_resolve2"))] },
             State {
-                name: "type_resolve2",
+                name: "type_resolve",
                 rules: &[
-                    (r#":"#, Some(Keyword), Pop),
-                    (r#"[^#\s]+"#, Some(String), Pop),
+                    // "foo" + ":foo" -> String
+                    (r#"\s*[^\s#:]*:[^\s#:]+[^#]*"#, Some(String), Pop),
+                    // "foo" + ":" -> Keyword
+                    (r#"\s*[^\s#:]*:"#, Some(Keyword), Pop),
+                    // "foo" + " foo" -> String
+                    (r#"\s*[^\s#:]+[^#]*"#, Some(String), Pop),
                     (r#""#, None, Pop),
                 ],
             },
