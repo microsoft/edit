@@ -79,20 +79,21 @@ pub const LANGUAGES: &[Language] = &[
                         Change("type_resolve"),
                     ),
                     (r#"(?:true|false|null)"#, Some(Keyword), Change("type_resolve")),
-                    (r#"[^\s#:]+"#, Some(String), Change("type_resolve")),
+                    (r#"\w+"#, Some(String), Change("type_resolve")),
                 ],
             },
             State {
                 name: "type_resolve",
                 rules: &[
-                    // "foo" + ":foo" -> String
-                    (r#"\s*[^\s#:]*:[^\s#:]+[^#]*"#, Some(String), Pop),
-                    // "foo" + ":" -> Keyword
-                    (r#"\s*[^\s#:]*:"#, Some(Keyword), Pop),
-                    // "foo" + " foo" -> String
-                    (r#"\s*[^\s#:]+[^#]*"#, Some(String), Pop),
+                    (r#"\s*[^\s#:]+:"#, Some(Keyword), Change("type_resolve_maybe_keyword")),
+                    (r#"\s*[^\s#:]+"#, Some(String), Pop),
+                    (r#"\s*:"#, Some(Keyword), Change("type_resolve_maybe_keyword")),
                     (r#""#, None, Pop),
                 ],
+            },
+            State {
+                name: "type_resolve_maybe_keyword",
+                rules: &[(r#"[^\s#:]+[^#]*"#, Some(String), Pop), (r#""#, None, Pop)],
             },
             State {
                 name: "string_double",
@@ -170,16 +171,17 @@ pub const LANGUAGES: &[Language] = &[
                     (r#"'"#, Some(String), Push("string_single")),
                     (r#"\""#, Some(String), Push("string_double")),
                     (r#"\$"#, Some(Variable), Push("variable")),
+                    (r#"\)"#, Some(Other), Pop),
                     (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Some(Number), Pop),
                     (r#"-\w+"#, Some(Operator), Pop),
                     (r#"[!*/%+<=>|]"#, Some(Operator), Pop),
                     (
-                        r#"(?i:break|catch|continue|do|elseif|else|finally|foreach|function|if|return|switch|throw|try|using|while)[\w-]+"#,
+                        r#"(?i:break|catch|continue|do|elseif|else|finally|foreach|for|function|if|return|switch|throw|try|using|while)[\w-]+"#,
                         Some(Method),
                         Pop,
                     ),
                     (
-                        r#"(?i:break|catch|continue|do|elseif|else|finally|foreach|function|if|return|switch|throw|try|using|while)"#,
+                        r#"(?i:break|catch|continue|do|elseif|else|finally|foreach|for|function|if|return|switch|throw|try|using|while)"#,
                         Some(Keyword),
                         Pop,
                     ),
@@ -189,27 +191,25 @@ pub const LANGUAGES: &[Language] = &[
             State { name: "comment", rules: &[(r#"#>"#, Some(Comment), Pop)] },
             State {
                 name: "string_single",
-                rules: &[
-                    (r#"'"#, Some(String), Pop),
-                    (r#"`"#, Some(String), Push("string_escape")),
-                ],
+                rules: &[(r#"'"#, None, Pop), (r#"`"#, None, Push("string_escape"))],
             },
             State {
                 name: "string_double",
                 rules: &[
-                    (r#"""#, Some(String), Pop),
-                    (r#"`"#, Some(String), Push("string_escape")),
-                    (r#"\$"#, Some(Other), Push("variable")),
+                    (r#"""#, None, Pop),
+                    (r#"`"#, None, Push("string_escape")),
+                    (r#"\$\("#, Some(Other), Push("ground")),
+                    (r#"\$"#, Some(Variable), Push("variable")),
                 ],
             },
-            State { name: "string_escape", rules: &[(r#"."#, Some(String), Pop)] },
+            State { name: "string_escape", rules: &[(r#"."#, None, Pop)] },
             State {
                 name: "variable",
                 rules: &[
-                    (r#"\("#, Some(Other), Pop), // TODO: subexpression
-                    (r#"[$^?]"#, Some(Variable), Pop),
-                    (r#"\{[^}]*\}"#, Some(Variable), Pop),
-                    (r#"\w+"#, Some(Variable), Pop),
+                    (r#"[$^?]"#, None, Pop),
+                    (r#"\{[^}]*\}"#, None, Pop),
+                    (r#"\w+"#, None, Pop),
+                    (r#""#, Some(Other), Pop),
                 ],
             },
         ],

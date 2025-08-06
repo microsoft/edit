@@ -47,7 +47,7 @@ impl GraphBuilder {
 
     pub fn parse(&mut self, root: usize, rule: &Rule) {
         self.origin += 1;
-        let dst = self.add_indirect_target(rule.2);
+
         let hir = regex_syntax::ParserBuilder::new()
             .utf8(false)
             .unicode(false)
@@ -55,7 +55,26 @@ impl GraphBuilder {
             .build()
             .parse(rule.0)
             .unwrap();
-        self.transform(rule.1, self.roots[root].clone(), dst, &hir);
+
+        // By creating a deferred target node like this:
+        //   [node] --- Chars(0) --> Pop
+        // we allow later regex to add more transitions to [node].
+        //
+        // During `simplify_indirections()` we'll then clean those up again, by connection
+        // nodes together directly if they're joined by just a `Chars(0)` transition.
+        let src = self.roots[root].clone();
+        let dst = self.add_state();
+        let dst = self.transform(None, src, GraphAction::Change(dst), &hir);
+        let dst = match dst {
+            GraphAction::Change(dst) => dst,
+            _ => panic!("Unexpected transform result: {dst:?}"),
+        };
+        let actual_dst = match rule.2 {
+            ActionDefinition::Change(name) => GraphAction::Change(self.get_root_by_name(name)),
+            ActionDefinition::Push(name) => GraphAction::Push(self.get_root_by_name(name)),
+            ActionDefinition::Pop => GraphAction::Pop,
+        };
+        self.add_transition(rule.1, dst, actual_dst, GraphTest::Chars(0));
     }
 
     fn transform(
@@ -336,7 +355,7 @@ impl GraphBuilder {
         let mut s = src.borrow_mut();
 
         // Check if the edge already exists.
-        for t in &s.transitions {
+        for t in &mut s.transitions {
             if t.test != test {
                 continue;
             }
@@ -382,28 +401,11 @@ impl GraphBuilder {
         dst
     }
 
-    // By creating a deferred target node like this:
-    //   [node] --- Chars(0) --> Pop
-    // we allow later regex to add more transitions to [node].
-    //
-    // During `simplify_indirections()` we'll then clean those up again, by connection
-    // nodes together directly if they're joined by just a `Chars(0)` transition.
-    fn add_indirect_target(&mut self, action: ActionDefinition) -> GraphAction {
-        let dst = match action {
-            ActionDefinition::Change(name) => GraphAction::Change(self.get_root_by_name(name)),
-            ActionDefinition::Push(name) => GraphAction::Push(self.get_root_by_name(name)),
-            ActionDefinition::Pop => GraphAction::Pop,
-        };
-        let d = self.add_state();
-        self.add_transition(None, d.clone(), dst, GraphTest::Chars(0));
-        GraphAction::Change(d)
-    }
-
     pub fn finalize(&mut self) {
         self.finalize_simplify_indirections();
         self.finalize_compute_charset_coverage();
         self.finalize_add_fallbacks();
-        self.finalize_add_always_matching_fallbacks();
+        self.finalize_add_final_fallbacks();
         self.finalize_compute_fast_skips();
         self.finalize_assign_state_ids();
     }
@@ -420,10 +422,11 @@ impl GraphBuilder {
                     && let t = &s.transitions[0]
                     && t.test == GraphTest::Chars(0)
                 {
+                    let kind = t.kind;
                     let action = t.action.clone();
                     s.transitions.clear();
                     drop(s);
-                    return Some((state, action));
+                    return Some((state, kind, action));
                 }
             }
             None
@@ -433,7 +436,7 @@ impl GraphBuilder {
         // * Find a pointless indirection to remove
         // * Find all states that point to it
         // * Connect their transitions directly to the indirect target
-        while let Some((dst, action)) = find() {
+        while let Some((dst, kind, action)) = find() {
             for state in &self.states {
                 let Some(state) = state.upgrade() else {
                     continue;
@@ -444,6 +447,15 @@ impl GraphBuilder {
                     if let GraphAction::Change(d) = &t.action
                         && Rc::ptr_eq(d, &dst)
                     {
+                        if kind.is_some() {
+                            if t.kind.is_some() && t.kind != kind {
+                                panic!(
+                                    "Inconsistent highlight kinds for indirection: {:?} vs {:?}",
+                                    t.kind, kind
+                                );
+                            }
+                            t.kind = kind;
+                        }
                         t.action = action.clone();
                     }
                 }
@@ -456,7 +468,7 @@ impl GraphBuilder {
 
     /// Compute existing charset coverage.
     /// Technically we don't need to do that for the root states.
-    fn finalize_compute_charset_coverage(&mut self) {
+    fn finalize_compute_charset_coverage(&self) {
         for s in &self.states {
             let Some(s) = s.upgrade() else {
                 continue;
@@ -481,7 +493,7 @@ impl GraphBuilder {
     }
 
     /// Add fallbacks from earlier regexes to later regexes that cover them.
-    fn finalize_add_fallbacks(&mut self) {
+    fn finalize_add_fallbacks(&self) {
         fn fallback_find(src: Rc<WipStateCell>) {
             let s = src.borrow();
             let mut has_children = false;
@@ -522,11 +534,11 @@ impl GraphBuilder {
             }
 
             if !match &t.test {
-                GraphTest::StopIfDone => false,
                 GraphTest::Chars(_) => true,
                 GraphTest::Charset(c) => fallback_cs.is_superset(c),
                 GraphTest::Prefix(s) => fallback_cs.covers_str(s),
                 GraphTest::PrefixInsensitive(s) => fallback_cs.covers_str_insensitive(s),
+                GraphTest::Skip(_) => false,
             } {
                 return;
             }
@@ -554,8 +566,9 @@ impl GraphBuilder {
         }
     }
 
-    /// Add always-matching fallbacks to all remaining ones.
-    fn finalize_add_always_matching_fallbacks(&mut self) {
+    /// Add always-matching fallbacks to all remaining ones,
+    /// that drop down to a None highlight kind.
+    fn finalize_add_final_fallbacks(&self) {
         for s in &self.states[self.roots.len()..] {
             let Some(s) = s.upgrade() else {
                 continue;
@@ -577,13 +590,12 @@ impl GraphBuilder {
     // This is different from coverage computation above, because here
     // we want to "skip" any character that can never be matched.
     fn finalize_compute_fast_skips(&mut self) {
-        for (idx, root) in self.roots.iter().enumerate() {
+        for root in &self.roots {
             let mut s = root.borrow_mut();
             let mut cs = Charset::no();
 
             for t in &s.transitions {
                 match &t.test {
-                    GraphTest::StopIfDone => {}
                     GraphTest::Chars(_) => {
                         cs.fill(true);
                         break;
@@ -600,44 +612,26 @@ impl GraphBuilder {
                         cs.set(ch.to_ascii_uppercase(), true);
                         cs.set(ch.to_ascii_lowercase(), true);
                     }
+                    GraphTest::Skip(_) => {}
                 }
             }
 
-            let action = if idx == 0 {
-                // Resets the start of the highlight span.
-                GraphAction::Pop
-            } else {
-                GraphAction::Change(root.clone())
-            };
-
             if !cs.covers_all() {
                 cs.invert();
-                let cs = self.charsets.intern(cs);
 
+                // TODO: This creates a circular reference in memory.
                 s.transitions.push(GraphTransition {
                     origin: -1,
-                    test: GraphTest::StopIfDone,
+                    test: GraphTest::Skip(self.charsets.intern(cs)),
                     kind: None,
-                    action: GraphAction::Pop,
-                });
-                s.transitions.push(GraphTransition {
-                    origin: -1,
-                    test: GraphTest::Charset(cs),
-                    kind: None,
-                    action: action.clone(),
-                });
-                s.transitions.push(GraphTransition {
-                    origin: -1,
-                    test: GraphTest::Chars(1),
-                    kind: None,
-                    action,
+                    action: GraphAction::Change(root.clone()),
                 });
             }
         }
     }
 
     // Assign IDs to states.
-    fn finalize_assign_state_ids(&mut self) {
+    fn finalize_assign_state_ids(&self) {
         let mut id = 0;
         for s in &self.states {
             let Some(s) = s.upgrade() else {
@@ -679,7 +673,6 @@ impl GraphBuilder {
 
             while let Some(t) = iter.next() {
                 let label = match &t.test {
-                    GraphTest::StopIfDone => "StopIfDone".to_string(),
                     GraphTest::Chars(usize::MAX) => "Chars(Line)".to_string(),
                     GraphTest::Chars(n) => format!("Chars({n})"),
                     GraphTest::Charset(c) => format!("Charset({c:?})"),
@@ -727,6 +720,9 @@ impl GraphBuilder {
                         label.push(')');
                         label
                     }
+                    GraphTest::Skip(c) => {
+                        format!("Skip({c:?})")
+                    }
                 };
 
                 let dst = match &t.action {
@@ -765,7 +761,7 @@ impl GraphBuilder {
         for src in &self.roots {
             _ = writeln!(
                 &mut visitor.output,
-                "    {}[\"{}\"]",
+                "    {0}[\"{0} ({1})\"]",
                 src.borrow().id,
                 src.borrow().name.unwrap()
             );
@@ -854,11 +850,11 @@ impl Eq for GraphAction {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GraphTest {
-    StopIfDone,
     Chars(usize),
     Charset(Rc<Charset>),
     Prefix(String),
     PrefixInsensitive(String),
+    Skip(Rc<Charset>),
 }
 
 #[derive(Debug, Clone)]

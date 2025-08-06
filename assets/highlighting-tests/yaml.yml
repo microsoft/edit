@@ -34,10 +34,8 @@ nested:
   - name: Bob
     age: 25
     married: true
-complex_key:
-  [a, b, c]: complex value
-empty_sequence: []
-empty_mapping: {}
+empty_sequence: [foo, 123, bar]
+empty_mapping: { foo: bar }
 literal_colon: "value:with:colons"
 literal_dash: "-not-a-sequence"
 special_chars: "Tab:\t Newline:\n Unicode:\u2713"
