@@ -89,7 +89,21 @@ fn main() {
 
         builder.finalize();
 
-        _ = writeln!(output, "/**\n{}**/", builder.format_as_mermaid());
+        _ = writedoc!(
+            output,
+            "
+            /**
+            ---
+            title: {}
+            config:
+              layout: elk
+            ---
+            {}
+            **/
+            ",
+            lang.name,
+            builder.format_as_mermaid()
+        );
 
         for cs in builder.charsets() {
             _ = writedoc!(

@@ -248,8 +248,8 @@ impl GraphBuilder {
                 _ => panic!("Unexpected action in transform_concat"),
             };
 
-            if let Some(ch) = check_lowercase_literal(hir) {
-                // Transform [aA][bB][cC] into PrefixInsensitive("abc").
+            // Transform [aA][bB][cC] into PrefixInsensitive("abc").
+            let prefix_insensitive = check_lowercase_literal(hir).map(|ch| {
                 let mut str = String::new();
                 str.push(ch as char);
 
@@ -262,20 +262,17 @@ impl GraphBuilder {
                     }
                 }
 
-                let next = if it.peek().is_some() {
-                    GraphAction::Change(self.add_state(depth))
-                } else {
-                    dst.clone()
-                };
-                src = self.add_transition(kind, src_idx, next, GraphTest::PrefixInsensitive(str));
+                str
+            });
+
+            let more = it.peek().is_some();
+            let kind = if more { None } else { kind };
+            let dst = if more { GraphAction::Change(self.add_state(depth)) } else { dst.clone() };
+
+            if let Some(str) = prefix_insensitive {
+                src = self.add_transition(kind, src_idx, dst, GraphTest::PrefixInsensitive(str));
             } else {
-                // Any other sequence is simply concatenated.
-                let next = if it.peek().is_some() {
-                    GraphAction::Change(self.add_state(depth))
-                } else {
-                    dst.clone()
-                };
-                src = self.transform(kind, src_idx, next, hir);
+                src = self.transform(kind, src_idx, dst, hir);
             }
         }
 
@@ -700,7 +697,7 @@ impl GraphBuilder {
 
         let mut visitor = Visitor { visited: HashSet::new(), output: String::new() };
 
-        _ = write!(&mut visitor.output, "---\nconfig:\n  layout: elk\n---\nflowchart TD\n");
+        _ = writeln!(&mut visitor.output, "flowchart TD");
         for src in &self.roots {
             _ = writeln!(
                 &mut visitor.output,
@@ -713,6 +710,7 @@ impl GraphBuilder {
             print_state(&mut visitor, src.clone());
         }
 
+        visitor.output.pop(); // Remove the last newline character.
         visitor.output
     }
 
