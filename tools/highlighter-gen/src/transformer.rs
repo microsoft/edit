@@ -538,7 +538,6 @@ impl GraphBuilder {
                 GraphTest::Charset(c) => fallback_cs.is_superset(c),
                 GraphTest::Prefix(s) => fallback_cs.covers_str(s),
                 GraphTest::PrefixInsensitive(s) => fallback_cs.covers_str_insensitive(s),
-                GraphTest::Skip(_) => false,
             } {
                 return;
             }
@@ -612,19 +611,23 @@ impl GraphBuilder {
                         cs.set(ch.to_ascii_uppercase(), true);
                         cs.set(ch.to_ascii_lowercase(), true);
                     }
-                    GraphTest::Skip(_) => {}
                 }
             }
 
             if !cs.covers_all() {
                 cs.invert();
 
-                // TODO: This creates a circular reference in memory.
                 s.transitions.push(GraphTransition {
                     origin: -1,
-                    test: GraphTest::Skip(self.charsets.intern(cs)),
+                    test: GraphTest::Charset(self.charsets.intern(cs)),
                     kind: None,
-                    action: GraphAction::Change(root.clone()),
+                    action: GraphAction::Loop,
+                });
+                s.transitions.push(GraphTransition {
+                    origin: -1,
+                    test: GraphTest::Chars(1),
+                    kind: None,
+                    action: GraphAction::Loop,
                 });
             }
         }
@@ -720,12 +723,10 @@ impl GraphBuilder {
                         label.push(')');
                         label
                     }
-                    GraphTest::Skip(c) => {
-                        format!("Skip({c:?})")
-                    }
                 };
 
                 let dst = match &t.action {
+                    GraphAction::Loop => "loop".to_string(),
                     GraphAction::Change(dst) => {
                         format!("{}", dst.borrow().id)
                     }
@@ -819,7 +820,7 @@ pub type WipStateCell = RefCell<GraphState>;
 
 #[derive(Clone)]
 pub enum GraphAction {
-    // Same as super::Action
+    Loop,
     Change(Rc<WipStateCell>),
     Push(Rc<WipStateCell>),
     Pop,
@@ -828,6 +829,7 @@ pub enum GraphAction {
 impl Debug for GraphAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            GraphAction::Loop => write!(f, "Loop"),
             GraphAction::Change(s) => write!(f, "Change({:p})", Rc::as_ptr(s)),
             GraphAction::Push(s) => write!(f, "Push({:p})", Rc::as_ptr(s)),
             GraphAction::Pop => write!(f, "Pop"),
@@ -854,7 +856,6 @@ pub enum GraphTest {
     Charset(Rc<Charset>),
     Prefix(String),
     PrefixInsensitive(String),
-    Skip(Rc<Charset>),
 }
 
 #[derive(Debug, Clone)]

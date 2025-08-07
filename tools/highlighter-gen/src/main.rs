@@ -52,7 +52,6 @@ fn main() {
             Charset(&'a [u8; 256]),
             Prefix(&'a str),
             PrefixInsensitive(&'a str),
-            Skip(&'a [u8; 256]),
         }
 
         #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +68,7 @@ fn main() {
         }
 
         pub enum Action {
+            Loop,
             Change(u8),
             Push(u8),
             Pop,
@@ -165,11 +165,9 @@ fn main() {
                     GraphTest::PrefixInsensitive(s) => {
                         format!("PrefixInsensitive(r#\"{s}\"#)")
                     }
-                    GraphTest::Skip(cs) => {
-                        format!("Skip(LANG_{}_CHARSET_{})", name_uppercase, cs.id())
-                    }
                 };
                 let action = match &t.action {
+                    GraphAction::Loop => "Loop".to_string(),
                     GraphAction::Change(next) => format!("Change({})", next.borrow().id),
                     GraphAction::Push(next) => format!("Push({})", next.borrow().id),
                     GraphAction::Pop => "Pop".to_string(),

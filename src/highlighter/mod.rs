@@ -75,7 +75,6 @@ impl<'doc> Highlighter<'doc> {
                                     *a |= *b;
                                 }
                             }
-                            Test::Skip(cs) => {}
                         }
                     }
                     starter
@@ -179,22 +178,17 @@ impl<'doc> Highlighter<'doc> {
                             off < line_buf.len() && cs[line_buf[off] as usize] != 0
                         } {}
                     }
-                    Test::Skip(cs) => {
-                        while {
-                            off += 1;
-                            off < line_buf.len() && cs[line_buf[off] as usize] != 0
-                        } {}
-                        if off >= line_buf.len() {
-                            break 'outer;
-                        }
-                        // TODO: This is a dumb way to ensure that the start of the highlight span advances.
-                        if state == 0 {
-                            start = off;
-                        }
-                    }
                 }
 
                 match t.action {
+                    Action::Loop => {
+                        if off >= line_buf.len() {
+                            break 'outer;
+                        }
+
+                        res.push(Higlight { start, kind });
+                        start = off;
+                    }
                     Action::Change(to) => {
                         state = to as usize;
                         kind = t.kind.unwrap_or(kind);
