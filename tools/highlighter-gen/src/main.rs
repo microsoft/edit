@@ -71,7 +71,7 @@ fn main() {
             Loop,
             Change(u8),
             Push(u8),
-            Pop,
+            Pop(u8),
         }
 
         const fn t<'a>(test: Test<'a>, kind: Option<HighlightKind>, action: Action) -> Transition<'a> {
@@ -170,7 +170,7 @@ fn main() {
                     GraphAction::Loop => "Loop".to_string(),
                     GraphAction::Change(next) => format!("Change({})", next.borrow().id),
                     GraphAction::Push(next) => format!("Push({})", next.borrow().id),
-                    GraphAction::Pop => "Pop".to_string(),
+                    GraphAction::Pop(count) => format!("Pop({})", count),
                 };
                 _ = writeln!(
                     output,

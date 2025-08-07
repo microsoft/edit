@@ -1,4 +1,3 @@
-use ActionDefinition::*;
 use HighlightKind::*;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -26,11 +25,42 @@ pub struct State {
     pub rules: &'static [Rule],
 }
 
-pub type Rule = (&'static str, Option<HighlightKind>, ActionDefinition);
+pub struct Rule {
+    pub pattern: &'static str,
+    pub kind: Option<HighlightKind>,
+    pub action: ActionDefinition,
+}
+
+const fn re(s: &'static str) -> Rule {
+    Rule { pattern: s, kind: None, action: ActionDefinition::Done }
+}
+
+impl Rule {
+    const fn is(mut self, kind: HighlightKind) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+
+    const fn then_goto(mut self, target: &'static str) -> Self {
+        self.action = ActionDefinition::Change(target);
+        self
+    }
+
+    const fn then_push(mut self, target: &'static str) -> Self {
+        self.action = ActionDefinition::Push(target);
+        self
+    }
+
+    const fn then_pop(mut self) -> Self {
+        self.action = ActionDefinition::Pop;
+        self
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum ActionDefinition {
     Change(&'static str),
+    Done,
     Push(&'static str),
     Pop,
 }
@@ -43,24 +73,19 @@ pub const LANGUAGES: &[Language] = &[
             State {
                 name: "ground",
                 rules: &[
-                    (r#"//.*"#, Some(Comment), Pop),
-                    (r#"/\*"#, Some(Comment), Push("comment")),
-                    (r#"""#, Some(String), Push("string")),
-                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?\w+"#, Some(Other), Pop),
-                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Some(Number), Pop),
-                    (r#"(?:true|false|null)\w+"#, Some(Other), Pop),
-                    (r#"(?:true|false|null)"#, Some(Keyword), Pop),
+                    re(r#"//.*"#).is(Comment),
+                    re(r#"/\*"#).is(Comment).then_push("comment"),
+                    re(r#"""#).is(String).then_push("string_double"),
+                    re(r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#).is(Number).then_goto("resolve_type"),
+                    re(r#"(?:true|false|null)"#).is(Keyword).then_goto("resolve_type"),
                 ],
             },
-            State { name: "comment", rules: &[(r#"\*/"#, Some(Comment), Pop)] },
+            State { name: "resolve_type", rules: &[re(r#"\w+"#).is(Other), re(r#""#)] },
+            State { name: "comment", rules: &[re(r#"\*/"#).then_pop()] },
             State {
-                name: "string",
-                rules: &[
-                    (r#"\\"#, Some(String), Push("string_escape")),
-                    (r#"""#, Some(String), Pop),
-                ],
+                name: "string_double",
+                rules: &[re(r#"""#), re(r#"\\."#).then_goto("string_double")],
             },
-            State { name: "string_escape", rules: &[(r#"."#, Some(String), Pop)] },
         ],
     },
     Language {
@@ -70,46 +95,35 @@ pub const LANGUAGES: &[Language] = &[
             State {
                 name: "ground",
                 rules: &[
-                    (r#"#.*"#, Some(Comment), Pop),
-                    (r#"""#, Some(String), Push("string_double")),
-                    (r#"'"#, Some(String), Push("string_single")),
-                    (
-                        r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#,
-                        Some(Number),
-                        Change("type_resolve"),
-                    ),
-                    (r#"(?:true|false|null)"#, Some(Keyword), Change("type_resolve")),
-                    (r#"\w+"#, Some(String), Change("type_resolve")),
+                    re(r#"#.*"#).is(Comment),
+                    re(r#"""#).is(String).then_push("string_double"),
+                    re(r#"'"#).is(String).then_push("string_single"),
+                    re(r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#).is(Number).then_goto("resolve_type"),
+                    re(r#"(?:true|false|null)"#).is(Keyword).then_goto("resolve_type"),
+                    re(r#"\w+"#).is(String).then_goto("resolve_type"),
                 ],
             },
             State {
-                name: "type_resolve",
+                name: "resolve_type",
                 rules: &[
-                    (r#"\s*[^\s#:]+:"#, Some(Keyword), Change("type_resolve_maybe_keyword")),
-                    (r#"\s*[^\s#:]+"#, Some(String), Pop),
-                    (r#"\s*:"#, Some(Keyword), Change("type_resolve_maybe_keyword")),
-                    (r#""#, None, Pop),
+                    re(r#"\s*[^\s#:]+:"#).is(Keyword).then_goto("resolve_type_maybe_keyword"),
+                    re(r#"\s*[^\s#:]+"#).is(String),
+                    re(r#"\s*:"#).is(Keyword).then_goto("resolve_type_maybe_keyword"),
+                    re(r#""#),
                 ],
             },
             State {
-                name: "type_resolve_maybe_keyword",
-                rules: &[(r#"[^\s#:]+[^#]*"#, Some(String), Pop), (r#""#, None, Pop)],
+                name: "resolve_type_maybe_keyword",
+                rules: &[re(r#"[^\s#:]+[^#]*"#).is(String), re(r#""#)],
             },
             State {
                 name: "string_double",
-                rules: &[
-                    (r#"""#, Some(String), Pop),
-                    (r#"\\"#, Some(String), Push("string_escape")),
-                ],
+                rules: &[re(r#"""#), re(r#"\\."#).then_goto("string_double")],
             },
             State {
                 name: "string_single",
-                rules: &[
-                    (r#"'"#, Some(String), Pop),
-                    (r#"\\"#, Some(String), Push("string_escape")),
-                ],
+                rules: &[re(r#"'"#), re(r#"\\."#).then_goto("string_single")],
             },
-            State { name: "string_escape", rules: &[(r#"."#, Some(String), Pop)] },
         ],
     },
     Language {
@@ -119,42 +133,34 @@ pub const LANGUAGES: &[Language] = &[
             State {
                 name: "ground",
                 rules: &[
-                    (r#"#.*"#, Some(Comment), Pop),
-                    (r#"'"#, Some(String), Push("string_single")),
-                    (r#"""#, Some(String), Push("string_double")),
-                    (r#"\$"#, Some(Variable), Push("variable")),
-                    (r#"[!*/%+<=>|]"#, Some(Operator), Pop),
-                    (
-                        r"(?i:break|case|continue|done|do|elif|else|esac|fi|for|function|if|in|return|select|then|until|while)",
-                        Some(Keyword),
-                        Pop,
-                    ),
-                    (r#"\d+"#, Some(Number), Pop),
-                    (r"\w+", Some(Method), Pop),
+                    re(r#"#.*"#).is(Comment),
+                    re(r#"'"#).is(String).then_push("string_single"),
+                    re(r#"""#).is(String).then_push("string_double"),
+                    re(r#"\$"#).is(Variable).then_push("variable"),
+                    re(r#"[!*/%+<=>|]"#).is(Operator),
+                    re(r"(?i:break|case|continue|done|do|elif|else|esac|fi|for|function|if|in|return|select|then|until|while)").is(Keyword).then_pop(),
+                    re(r#"\d+"#).is(Number),
+                    re(r"\w+").is(Method),
                 ],
             },
             State {
                 name: "string_single",
-                rules: &[
-                    (r#"'"#, Some(String), Pop),
-                    (r#"\\"#, Some(String), Push("string_escape")),
-                ],
+                rules: &[re(r#"'"#), re(r#"\\."#).then_goto("string_single")],
             },
             State {
                 name: "string_double",
                 rules: &[
-                    (r#"""#, Some(String), Pop),
-                    (r#"\\"#, Some(String), Push("string_escape")),
-                    (r#"\$"#, Some(Other), Push("variable")),
+                    re(r#"""#),
+                    re(r#"\\."#).then_goto("string_double"),
+                    re(r#"\$"#).is(Other).then_push("variable"),
                 ],
             },
-            State { name: "string_escape", rules: &[(r#"."#, Some(String), Pop)] },
             State {
                 name: "variable",
                 rules: &[
-                    (r#"[#?]"#, Some(Variable), Pop),
-                    (r#"\{[^}]*\}"#, Some(Variable), Pop),
-                    (r#"\w+"#, Some(Variable), Pop),
+                    re(r#"[#?]"#).is(Variable),
+                    re(r#"\{[^}]*\}"#).is(Variable),
+                    re(r#"\w+"#).is(Variable),
                 ],
             },
         ],
@@ -166,51 +172,38 @@ pub const LANGUAGES: &[Language] = &[
             State {
                 name: "ground",
                 rules: &[
-                    (r#"#.*"#, Some(Comment), Pop),
-                    (r#"<#"#, Some(Comment), Push("comment")),
-                    (r#"'"#, Some(String), Push("string_single")),
-                    (r#"\""#, Some(String), Push("string_double")),
-                    (r#"\$"#, Some(Variable), Push("variable")),
-                    (r#"\)"#, Some(Other), Pop),
-                    (r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#, Some(Number), Pop),
-                    (r#"-\w+"#, Some(Operator), Pop),
-                    (r#"[!*/%+<=>|]"#, Some(Operator), Pop),
-                    (
-                        r#"(?i:break|catch|continue|do|elseif|else|finally|foreach|for|function|if|return|switch|throw|try|using|while)[\w-]+"#,
-                        Some(Method),
-                        Pop,
-                    ),
-                    (
-                        r#"(?i:break|catch|continue|do|elseif|else|finally|foreach|for|function|if|return|switch|throw|try|using|while)"#,
-                        Some(Keyword),
-                        Pop,
-                    ),
-                    (r#"[\w-]+"#, Some(Method), Pop),
+                    re(r#"#.*"#).is(Comment),
+                    re(r#"<#"#).is(Comment).then_push("comment"),
+                    re(r#"'"#).is(String).then_push("string_single"),
+                    re(r#"\""#).is(String).then_push("string_double"),
+                    re(r#"\$"#).is(Variable).then_push("variable"),
+                    re(r#"\("#).is(Other).then_push("ground"),
+                    re(r#"\)"#).is(Other),
+                    re(r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#).is(Number),
+                    re(r#"-\w+"#).is(Operator),
+                    re(r#"[!*/%+<=>|]"#).is(Operator),
+                    re(r#"(?i:break|catch|continue|do|elseif|else|finally|foreach|for|function|if|return|switch|throw|try|using|while)[\w-]+"#).is(Method).then_pop(),
+                    re(r#"(?i:break|catch|continue|do|elseif|else|finally|foreach|for|function|if|return|switch|throw|try|using|while)"#).is(Keyword).then_pop(),
+                    re(r#"[\w-]+"#).is(Method),
                 ],
             },
-            State { name: "comment", rules: &[(r#"#>"#, Some(Comment), Pop)] },
+            State { name: "comment", rules: &[re(r#"#>"#).is(Comment)] },
             State {
                 name: "string_single",
-                rules: &[(r#"'"#, None, Pop), (r#"`"#, None, Push("string_escape"))],
+                rules: &[re(r#"'"#), re(r#"`."#).then_goto("string_single")],
             },
             State {
                 name: "string_double",
                 rules: &[
-                    (r#"""#, None, Pop),
-                    (r#"`"#, None, Push("string_escape")),
-                    (r#"\$\("#, Some(Other), Push("ground")),
-                    (r#"\$"#, Some(Variable), Push("variable")),
+                    re(r#"""#),
+                    re(r#"`."#).then_goto("string_double"),
+                    re(r#"\$\("#).is(Other).then_push("ground"),
+                    re(r#"\$"#).is(Variable).then_push("variable"),
                 ],
             },
-            State { name: "string_escape", rules: &[(r#"."#, None, Pop)] },
             State {
                 name: "variable",
-                rules: &[
-                    (r#"[$^?]"#, None, Pop),
-                    (r#"\{[^}]*\}"#, None, Pop),
-                    (r#"\w+"#, None, Pop),
-                    (r#""#, Some(Other), Pop),
-                ],
+                rules: &[re(r#"[$^?]"#), re(r#"\{[^}]*\}"#), re(r#"\w+"#), re(r#""#).is(Other)],
             },
         ],
     },
@@ -221,35 +214,23 @@ pub const LANGUAGES: &[Language] = &[
             State {
                 name: "ground",
                 rules: &[
-                    (r#"(?i:rem)\S+"#, Some(Other), Pop),
-                    (r#"(?i:rem).*"#, Some(Comment), Pop),
-                    (r#"::.*"#, Some(Comment), Pop),
-                    (r#"""#, Some(String), Push("string")),
-                    (r#"%%"#, Some(Other), Pop),
-                    (r#"%"#, Some(Variable), Push("variable")),
-                    (r#"[!*/+<=>|]"#, Some(Operator), Pop),
-                    (
-                        r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)\w+",
-                        Some(Other),
-                        Pop,
-                    ),
-                    (
-                        r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)",
-                        Some(Keyword),
-                        Pop,
-                    ),
-                    (r#"\d+"#, Some(Number), Pop),
+                    re(r#"(?i:rem)\S+"#).is(Other),
+                    re(r#"(?i:rem).*"#).is(Comment),
+                    re(r#"::.*"#).is(Comment),
+                    re(r#"""#).is(String).then_push("string_double"),
+                    re(r#"%%"#).is(Other),
+                    re(r#"%"#).is(Variable).then_push("variable"),
+                    re(r#"[!*/+<=>|]"#).is(Operator),
+                    re(r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)\w+").is(Other).then_pop(),
+                    re(r"(?i:break|call|cd|chdir|cls|copy|del|dir|echo|exit|for|goto|if|md|mkdir|move|pause|ren|set)").is(Keyword).then_pop(),
+                    re(r#"\d+"#).is(Number),
                 ],
             },
             State {
-                name: "string",
-                rules: &[
-                    (r#"""#, Some(String), Pop),
-                    (r#"\\"#, Some(String), Push("string_escape")),
-                ],
+                name: "string_double",
+                rules: &[re(r#"""#), re(r#"\\."#).then_goto("string_double")],
             },
-            State { name: "string_escape", rules: &[(r#"."#, Some(String), Pop)] },
-            State { name: "variable", rules: &[(r#"%"#, Some(Variable), Pop)] },
+            State { name: "variable", rules: &[re(r#"%"#).is(Variable)] },
         ],
     },
 ];

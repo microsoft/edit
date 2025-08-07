@@ -148,6 +148,10 @@ impl<'doc> Highlighter<'doc> {
         let mut state = self.state;
         let mut kind = self.kind;
 
+        if self.state_stack.is_empty() {
+            self.state_stack.push((state, kind));
+        }
+
         'outer: loop {
             let beg = off;
 
@@ -202,12 +206,15 @@ impl<'doc> Highlighter<'doc> {
 
                         start = beg;
                     }
-                    Action::Pop => {
+                    Action::Pop(n) => {
                         kind = t.kind.unwrap_or(kind);
                         res.push(Higlight { start, kind });
 
                         (state, kind) = self.state_stack.last().copied().unwrap_or_default();
-                        self.state_stack.pop();
+
+                        let len = self.state_stack.len();
+                        let n = n as usize;
+                        self.state_stack.truncate(len - len.min(n) + 1);
 
                         start = off;
                     }

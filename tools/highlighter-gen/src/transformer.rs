@@ -38,11 +38,9 @@ impl GraphBuilder {
     }
 
     fn get_root_by_name(&self, name: &str) -> Rc<WipStateCell> {
-        self.roots
-            .iter()
-            .find(|s| s.borrow().name == Some(name))
-            .cloned()
-            .expect("Unknown state name")
+        self.roots.iter().find(|s| s.borrow().name == Some(name)).cloned().unwrap_or_else(|| {
+            panic!("No root state found with name: {name}");
+        })
     }
 
     pub fn parse(&mut self, root: usize, rule: &Rule) {
@@ -53,7 +51,7 @@ impl GraphBuilder {
             .unicode(false)
             .dot_matches_new_line(true)
             .build()
-            .parse(rule.0)
+            .parse(rule.pattern)
             .unwrap();
 
         // By creating a deferred target node like this:
@@ -69,12 +67,13 @@ impl GraphBuilder {
             GraphAction::Change(dst) => dst,
             _ => panic!("Unexpected transform result: {dst:?}"),
         };
-        let actual_dst = match rule.2 {
+        let actual_dst = match rule.action {
+            ActionDefinition::Done => GraphAction::Pop(0),
             ActionDefinition::Change(name) => GraphAction::Change(self.get_root_by_name(name)),
             ActionDefinition::Push(name) => GraphAction::Push(self.get_root_by_name(name)),
-            ActionDefinition::Pop => GraphAction::Pop,
+            ActionDefinition::Pop => GraphAction::Pop(1),
         };
-        self.add_transition(rule.1, dst, actual_dst, GraphTest::Chars(0));
+        self.add_transition(rule.kind, dst, actual_dst, GraphTest::Chars(0));
     }
 
     fn transform(
@@ -321,13 +320,13 @@ impl GraphBuilder {
             charset[r.start() as usize..=r.end() as usize].fill(true);
         }
 
-        // If the class includes \w, we also set any non-ASCII characters.
+        // If the class includes \w, we also set any non-ASCII UTF8 starters.
         // That's not how Unicode works, but it simplifies the implementation.
         if [(b'0', b'9'), (b'A', b'Z'), (b'_', b'_'), (b'a', b'z')]
             .iter()
             .all(|&(beg, end)| charset[beg as usize..=end as usize].iter().all(|&b| b))
         {
-            charset[0x80..=0xFF].fill(true);
+            charset[0xC2..=0xF4].fill(true);
         }
 
         charset
@@ -495,8 +494,10 @@ impl GraphBuilder {
     /// Add fallbacks from earlier regexes to later regexes that cover them.
     fn finalize_add_fallbacks(&self) {
         fn fallback_find(src: Rc<WipStateCell>) {
-            let s = src.borrow();
             let mut has_children = false;
+            let Ok(s) = src.try_borrow_mut() else {
+                return;
+            };
 
             for t in &s.transitions {
                 if let GraphAction::Change(dst) = &t.action {
@@ -579,7 +580,7 @@ impl GraphBuilder {
                     origin: -1,
                     test: GraphTest::Chars(0),
                     kind: None,
-                    action: GraphAction::Pop,
+                    action: GraphAction::Pop(0),
                 });
             }
         }
@@ -671,8 +672,13 @@ impl GraphBuilder {
                 return;
             }
 
-            let transitions = &src.borrow().transitions;
+            let src = src.borrow();
+            let transitions = &src.transitions;
             let mut iter = transitions.iter().peekable();
+
+            if let Some(name) = src.name {
+                _ = writeln!(&mut visitor.output, "    {0}[\"{0} ({1})\"]", src.id, name);
+            }
 
             while let Some(t) = iter.next() {
                 let label = match &t.test {
@@ -726,19 +732,21 @@ impl GraphBuilder {
                 };
 
                 let dst = match &t.action {
-                    GraphAction::Loop => "loop".to_string(),
+                    GraphAction::Loop => {
+                        format!("{}", src.id)
+                    }
                     GraphAction::Change(dst) => {
                         format!("{}", dst.borrow().id)
                     }
                     GraphAction::Push(dst) => {
                         format!(
                             "push{}[/\"{}\"/]",
-                            src.borrow().id << 16 | dst.borrow().id,
+                            src.id << 16 | dst.borrow().id,
                             dst.borrow().name.unwrap()
                         )
                     }
-                    GraphAction::Pop => {
-                        format!("pop{}@{{ shape: stop }}", src.borrow().id << 16)
+                    GraphAction::Pop(_) => {
+                        format!("pop{}@{{ shape: stop }}", src.id << 16)
                     }
                 };
 
@@ -746,7 +754,7 @@ impl GraphBuilder {
                 _ = writeln!(
                     &mut visitor.output,
                     "    {src} -->|\"{label}<br/>{kind:?}\"| {dst}",
-                    src = src.borrow().id,
+                    src = src.id,
                     kind = t.kind,
                 );
 
@@ -759,14 +767,6 @@ impl GraphBuilder {
         let mut visitor = Visitor { visited: HashSet::new(), output: String::new() };
 
         _ = writeln!(&mut visitor.output, "flowchart TD");
-        for src in &self.roots {
-            _ = writeln!(
-                &mut visitor.output,
-                "    {0}[\"{0} ({1})\"]",
-                src.borrow().id,
-                src.borrow().name.unwrap()
-            );
-        }
         for src in &self.roots {
             print_state(&mut visitor, src.clone());
         }
@@ -823,7 +823,7 @@ pub enum GraphAction {
     Loop,
     Change(Rc<WipStateCell>),
     Push(Rc<WipStateCell>),
-    Pop,
+    Pop(usize),
 }
 
 impl Debug for GraphAction {
@@ -832,7 +832,7 @@ impl Debug for GraphAction {
             GraphAction::Loop => write!(f, "Loop"),
             GraphAction::Change(s) => write!(f, "Change({:p})", Rc::as_ptr(s)),
             GraphAction::Push(s) => write!(f, "Push({:p})", Rc::as_ptr(s)),
-            GraphAction::Pop => write!(f, "Pop"),
+            GraphAction::Pop(count) => write!(f, "Pop({count})"),
         }
     }
 }
@@ -842,7 +842,7 @@ impl PartialEq for GraphAction {
         match (self, other) {
             (GraphAction::Change(a), GraphAction::Change(b)) => Rc::ptr_eq(a, b),
             (GraphAction::Push(a), GraphAction::Push(b)) => Rc::ptr_eq(a, b),
-            (GraphAction::Pop, GraphAction::Pop) => true,
+            (GraphAction::Pop(a), GraphAction::Pop(b)) => *a == *b,
             _ => false,
         }
     }
