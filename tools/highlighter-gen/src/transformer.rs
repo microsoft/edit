@@ -184,6 +184,7 @@ impl GraphBuilder {
                 && charset[upper]
             {
                 charset[upper] = false;
+                str.make_ascii_lowercase();
                 GraphTest::PrefixInsensitive(str)
             } else {
                 GraphTest::Prefix(str)
@@ -275,6 +276,7 @@ impl GraphBuilder {
                     }
                 }
 
+                str.make_ascii_lowercase();
                 str
             });
 
