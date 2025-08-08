@@ -42,7 +42,7 @@ use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
-use crate::highlighter::{HighlightKind, Highlighter, Language};
+use crate::lsh::{HighlightKind, Highlighter, Language};
 use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
 use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};

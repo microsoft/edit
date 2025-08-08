@@ -1,3 +1,5 @@
+//! Welcome to Leonard's Shitty Highlighter.
+
 mod definitions;
 
 use std::ffi::OsStr;
@@ -10,7 +12,7 @@ pub use definitions::{HighlightKind, Language};
 use crate::arena::{Arena, scratch_arena};
 use crate::document::ReadableDocument;
 use crate::helpers::*;
-use crate::highlighter::definitions::*;
+use crate::lsh::definitions::*;
 use crate::{simd, unicode};
 
 pub fn language_from_path(path: &Path) -> Option<&'static Language> {
@@ -33,6 +35,7 @@ impl Debug for Higlight {
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub struct State {}
 
+#[derive(Clone)]
 pub struct Highlighter<'a> {
     doc: &'a dyn ReadableDocument,
     offset: usize,
@@ -92,6 +95,8 @@ impl<'doc> Highlighter<'doc> {
     }
 
     pub fn parse_next_line<'a>(&mut self, arena: &'a Arena) -> Vec<Higlight, &'a Arena> {
+        const MAX_LEN: usize = 32 * KIBI;
+
         let scratch = scratch_arena(Some(arena));
         let line_beg = self.offset;
         let mut line_buf = Vec::new_in(&*scratch);
@@ -116,7 +121,7 @@ impl<'doc> Highlighter<'doc> {
 
                 // Overly long lines are not highlighted, so we limit the line length to 32 KiB.
                 // I'm worried it may run into weird edge cases.
-                let end = off.min(MEBI - line_buf.len());
+                let end = off.min(MAX_LEN - line_buf.len());
                 // If we're at it we can also help Rust understand that indexing with `end` doesn't panic.
                 let end = end.min(chunk.len());
 
@@ -124,7 +129,7 @@ impl<'doc> Highlighter<'doc> {
 
                 // If the line is too long, we don't highlight it.
                 // This is to prevent performance issues with very long lines.
-                if line_buf.len() >= MEBI {
+                if line_buf.len() >= MAX_LEN {
                     return res;
                 }
 
@@ -145,12 +150,9 @@ impl<'doc> Highlighter<'doc> {
         let mut off = 0usize;
         let mut start = 0usize;
 
+        let mut root = (self.state, self.kind);
         let mut state = self.state;
         let mut kind = self.kind;
-
-        if self.state_stack.is_empty() {
-            self.state_stack.push((state, kind));
-        }
 
         'outer: loop {
             let beg = off;
@@ -185,38 +187,36 @@ impl<'doc> Highlighter<'doc> {
                 }
 
                 match t.action {
-                    Action::Loop => {
-                        if off >= line_buf.len() {
-                            break 'outer;
-                        }
-
-                        res.push(Higlight { start, kind });
-                        start = off;
-                    }
                     Action::Change(to) => {
                         state = to as usize;
                         kind = t.kind.unwrap_or(kind);
                     }
                     Action::Push(to) => {
-                        res.push(Higlight { start, kind });
+                        self.state_stack.push(root);
 
-                        self.state_stack.push((state, kind));
                         state = to as usize;
                         kind = t.kind.unwrap_or(kind);
+                        res.push(Higlight { start, kind });
 
-                        start = beg;
+                        root = (state, kind);
+                        start = off;
                     }
                     Action::Pop(n) => {
+                        if n != 0 {
+                            root = self.state_stack.last().copied().unwrap_or_default();
+                            self.state_stack
+                                .truncate(self.state_stack.len().saturating_sub(n as usize));
+                        }
+
                         kind = t.kind.unwrap_or(kind);
                         res.push(Higlight { start, kind });
 
-                        (state, kind) = self.state_stack.last().copied().unwrap_or_default();
-
-                        let len = self.state_stack.len();
-                        let n = n as usize;
-                        self.state_stack.truncate(len - len.min(n) + 1);
-
+                        (state, kind) = root;
                         start = off;
+
+                        if off >= line_buf.len() {
+                            break 'outer;
+                        }
                     }
                 }
 
@@ -224,8 +224,12 @@ impl<'doc> Highlighter<'doc> {
             }
         }
 
-        res.push(Higlight { start, kind });
-        res.push(Higlight { start: line_buf.len(), kind });
+        if res.last().is_none_or(|h| h.start != start) {
+            res.push(Higlight { start, kind });
+        }
+        if res.last().is_some_and(|h| h.start != line_buf.len()) {
+            res.push(Higlight { start: line_buf.len(), kind });
+        }
 
         // Adjust the range to account for the line offset.
         for h in &mut res {

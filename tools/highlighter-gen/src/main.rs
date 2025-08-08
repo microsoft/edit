@@ -68,7 +68,6 @@ fn main() {
         }
 
         pub enum Action {
-            Loop,
             Change(u8),
             Push(u8),
             Pop(u8),
@@ -167,7 +166,6 @@ fn main() {
                     }
                 };
                 let action = match &t.action {
-                    GraphAction::Loop => "Loop".to_string(),
                     GraphAction::Change(next) => format!("Change({})", next.borrow().id),
                     GraphAction::Push(next) => format!("Push({})", next.borrow().id),
                     GraphAction::Pop(count) => format!("Pop({})", count),
