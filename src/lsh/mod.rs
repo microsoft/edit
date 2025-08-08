@@ -38,11 +38,9 @@ pub struct State {}
 #[derive(Clone)]
 pub struct Highlighter<'a> {
     doc: &'a dyn ReadableDocument,
+    language: &'static Language,
     offset: usize,
     logical_pos_y: CoordType,
-
-    language: &'static Language,
-    starter: Vec<[u8; 256]>,
 
     state: usize,
     kind: HighlightKind,
@@ -53,37 +51,9 @@ impl<'doc> Highlighter<'doc> {
     pub fn new(doc: &'doc dyn ReadableDocument, language: &'static Language) -> Self {
         Self {
             doc,
+            language,
             offset: 0,
             logical_pos_y: 0,
-
-            language,
-            starter: language
-                .states
-                .iter()
-                .map(|&transitions| {
-                    let mut starter = [0; 256];
-                    for t in transitions {
-                        match t.test {
-                            Test::Chars(_) => starter.fill(1),
-                            Test::Prefix(prefix) => {
-                                starter[prefix.as_bytes()[0] as usize] = 1;
-                            }
-                            Test::PrefixInsensitive(prefix) => {
-                                let ch = prefix.as_bytes()[0];
-                                starter[ch.to_ascii_uppercase() as usize] = 1;
-                                starter[ch.to_ascii_lowercase() as usize] = 1;
-                            }
-                            Test::Charset(cs) => {
-                                let cs = language.charsets[cs];
-                                for (a, b) in starter.iter_mut().zip(cs.iter()) {
-                                    *a |= *b;
-                                }
-                            }
-                        }
-                    }
-                    starter
-                })
-                .collect(),
 
             state: 0,
             kind: Default::default(),
@@ -178,12 +148,12 @@ impl<'doc> Highlighter<'doc> {
                     Test::Charset(cs) => {
                         // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
                         let cs = unsafe { *self.language.charsets.get_unchecked(cs) };
-                        if off >= line_buf.len() || cs[line_buf[off] as usize] == 0 {
+                        if off >= line_buf.len() || !Self::in_set(cs, line_buf[off]) {
                             continue;
                         }
                         while {
                             off += 1;
-                            off < line_buf.len() && cs[line_buf[off] as usize] != 0
+                            off < line_buf.len() && Self::in_set(cs, line_buf[off])
                         } {}
                     }
                 }
@@ -299,6 +269,17 @@ impl<'doc> Highlighter<'doc> {
 
             true
         }
+    }
+
+    #[inline]
+    fn in_set(bitmap: &[u16; 16], byte: u8) -> bool {
+        let lo_nibble = byte & 0xf;
+        let hi_nibble = byte >> 4;
+
+        let bitset = bitmap[lo_nibble as usize];
+        let bitmask = 1u16 << hi_nibble;
+
+        (bitset & bitmask) != 0
     }
 }
 

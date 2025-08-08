@@ -38,7 +38,7 @@ fn main() {
         pub struct Language {
             pub name: &'static str,
             pub extensions: &'static [&'static str],
-            pub charsets: &'static [&'static [u8; 256]],
+            pub charsets: &'static [&'static [u16; 16]],
             pub states: &'static [&'static [Transition<'static>]],
         }
 
@@ -129,11 +129,15 @@ fn main() {
 
         for cs in builder.charsets() {
             _ = write!(output, "        &[",);
-            for (i, bit) in cs.bits().iter().enumerate() {
-                if i > 0 {
+            for lo in 0..16 {
+                if lo > 0 {
                     _ = write!(output, ", ");
                 }
-                _ = write!(output, "{}", *bit as u8);
+                let mut u = 0u16;
+                for hi in 0..16 {
+                    u |= (cs[hi * 16 + lo] as u16) << hi;
+                }
+                _ = write!(output, "0x{u:04x}");
             }
             _ = writeln!(output, "],");
         }
