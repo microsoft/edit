@@ -74,6 +74,7 @@ impl<'doc> Highlighter<'doc> {
                                 starter[ch.to_ascii_lowercase() as usize] = 1;
                             }
                             Test::Charset(cs) => {
+                                let cs = language.charsets[cs];
                                 for (a, b) in starter.iter_mut().zip(cs.iter()) {
                                     *a |= *b;
                                 }
@@ -157,25 +158,26 @@ impl<'doc> Highlighter<'doc> {
         'outer: loop {
             let beg = off;
 
-            for t in self.language.states[state] {
+            for t in unsafe { *self.language.states.get_unchecked(state) } {
                 match t.test {
                     Test::Chars(n) => {
                         off = off + n.min(line_buf.len() - off);
                     }
                     Test::Prefix(str) => {
-                        if !line_buf[off..].starts_with(str.as_bytes()) {
+                        if !Self::inlined_memcmp(line_buf, off, str) {
                             continue;
                         }
                         off += str.len();
                     }
                     Test::PrefixInsensitive(str) => {
-                        if !line_buf[off..].starts_with_ignore_ascii_case(str) {
+                        if !Self::inlined_memicmp(line_buf, off, str) {
                             continue;
                         }
                         off += str.len();
                     }
                     Test::Charset(cs) => {
                         // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
+                        let cs = unsafe { *self.language.charsets.get_unchecked(cs) };
                         if off >= line_buf.len() || cs[line_buf[off] as usize] == 0 {
                             continue;
                         }
@@ -239,6 +241,64 @@ impl<'doc> Highlighter<'doc> {
         self.state = state;
         self.kind = kind;
         res
+    }
+
+    /// A mini-memcmp implementation for short needles.
+    /// Compares the `haystack` at `off` with the `needle`.
+    #[inline]
+    fn inlined_memcmp(haystack: &[u8], off: usize, needle: &str) -> bool {
+        unsafe {
+            let needle = needle.as_bytes();
+            let needle_len = needle.len();
+
+            if haystack.len() - off < needle_len {
+                return false;
+            }
+
+            let mut a = haystack.as_ptr().add(off);
+            let mut b = needle.as_ptr();
+            let mut i = 0;
+
+            while i < needle_len {
+                let a = *a.add(i);
+                let b = *b.add(i);
+                i += 1;
+                if a != b {
+                    return false;
+                }
+            }
+
+            true
+        }
+    }
+
+    /// Like `inlined_memcmp`, but case-insensitive.
+    #[inline]
+    fn inlined_memicmp(haystack: &[u8], off: usize, needle: &str) -> bool {
+        unsafe {
+            let needle = needle.as_bytes();
+            let needle_len = needle.len();
+
+            if haystack.len() - off < needle_len {
+                return false;
+            }
+
+            let mut a = haystack.as_ptr().add(off);
+            let mut b = needle.as_ptr();
+            let mut i = 0;
+
+            while i < needle_len {
+                // str in PrefixInsensitive(str) is expected to be lowercase, printable ASCII.
+                let a = a.add(i).read().to_ascii_lowercase();
+                let b = b.add(i).read();
+                i += 1;
+                if a != b {
+                    return false;
+                }
+            }
+
+            true
+        }
     }
 }
 

@@ -38,6 +38,7 @@ fn main() {
         pub struct Language {
             pub name: &'static str,
             pub extensions: &'static [&'static str],
+            pub charsets: &'static [&'static [u8; 256]],
             pub states: &'static [&'static [Transition<'static>]],
         }
 
@@ -49,7 +50,7 @@ fn main() {
 
         pub enum Test<'a> {
             Chars(usize),
-            Charset(&'a [u8; 256]),
+            Charset(usize),
             Prefix(&'a str),
             PrefixInsensitive(&'a str),
         }
@@ -112,24 +113,6 @@ fn main() {
             builder.format_as_mermaid()
         );
 
-        for cs in builder.charsets() {
-            _ = writedoc!(
-                output,
-                "
-                #[rustfmt::skip]
-                const LANG_{}_CHARSET_{}: &[u8; 256] = &[",
-                name_uppercase,
-                cs.id()
-            );
-            for (i, bit) in cs.bits().iter().enumerate() {
-                if i > 0 {
-                    _ = write!(output, ", ");
-                }
-                _ = write!(output, "{}", *bit as u8);
-            }
-            _ = writeln!(output, "];");
-        }
-
         _ = writedoc!(
             output,
             r#"
@@ -137,12 +120,25 @@ fn main() {
             pub const LANG_{name_uppercase}: &Language = &Language {{
                 name: "{name}",
                 extensions: &{extensions:?},
-                states: &[
+                charsets: &[
             "#,
             name = lang.name,
             name_uppercase = name_uppercase,
             extensions = lang.extensions,
         );
+
+        for cs in builder.charsets() {
+            _ = write!(output, "        &[",);
+            for (i, bit) in cs.bits().iter().enumerate() {
+                if i > 0 {
+                    _ = write!(output, ", ");
+                }
+                _ = write!(output, "{}", *bit as u8);
+            }
+            _ = writeln!(output, "],");
+        }
+
+        _ = write!(output, "    ],\n    states: &[\n");
 
         for state in builder.states() {
             let state = state.borrow();
@@ -156,7 +152,7 @@ fn main() {
                         format!("Chars({n})")
                     }
                     GraphTest::Charset(cs) => {
-                        format!("Charset(LANG_{}_CHARSET_{})", name_uppercase, cs.id())
+                        format!("Charset({})", cs.id())
                     }
                     GraphTest::Prefix(s) => {
                         format!("Prefix(r#\"{s}\"#)")
