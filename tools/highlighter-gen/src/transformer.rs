@@ -376,6 +376,8 @@ impl GraphBuilder {
             if match (&t.test, &test) {
                 (Chars(_), _) => true,
                 (Charset(p), Charset(n)) => n.is_superset(p),
+                (Charset(p), Prefix(n)) => p.covers_char(n.as_bytes()[0]),
+                (Charset(p), PrefixInsensitive(n)) => p.covers_char_insensitive(n.as_bytes()[0]),
                 (Prefix(p), Prefix(s)) => s.starts_with(p.as_str()),
                 (PrefixInsensitive(p), Prefix(s) | PrefixInsensitive(s)) => {
                     let s = s.as_bytes();
@@ -622,13 +624,13 @@ impl GraphBuilder {
                     origin: -1,
                     test: GraphTest::Charset(self.charsets.intern(cs)),
                     kind: None,
-                    action: GraphAction::Loop,
+                    action: GraphAction::Pop(0),
                 });
                 s.transitions.push(GraphTransition {
                     origin: -1,
                     test: GraphTest::Chars(1),
                     kind: None,
-                    action: GraphAction::Loop,
+                    action: GraphAction::Pop(0),
                 });
             }
         }
@@ -732,9 +734,6 @@ impl GraphBuilder {
                 };
 
                 let dst = match &t.action {
-                    GraphAction::Loop => {
-                        format!("{}", src.id)
-                    }
                     GraphAction::Change(dst) => {
                         format!("{}", dst.borrow().id)
                     }
@@ -820,7 +819,6 @@ pub type WipStateCell = RefCell<GraphState>;
 
 #[derive(Clone)]
 pub enum GraphAction {
-    Loop,
     Change(Rc<WipStateCell>),
     Push(Rc<WipStateCell>),
     Pop(usize),
@@ -829,7 +827,6 @@ pub enum GraphAction {
 impl Debug for GraphAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GraphAction::Loop => write!(f, "Loop"),
             GraphAction::Change(s) => write!(f, "Change({:p})", Rc::as_ptr(s)),
             GraphAction::Push(s) => write!(f, "Push({:p})", Rc::as_ptr(s)),
             GraphAction::Pop(count) => write!(f, "Pop({count})"),
@@ -911,6 +908,14 @@ impl Charset {
 
     pub fn covers_all(&self) -> bool {
         self.bits.iter().all(|&b| b)
+    }
+
+    pub fn covers_char(&self, b: u8) -> bool {
+        self.bits[b as usize]
+    }
+
+    pub fn covers_char_insensitive(&self, b: u8) -> bool {
+        self.bits[b.to_ascii_uppercase() as usize] && self.bits[b.to_ascii_lowercase() as usize]
     }
 
     pub fn covers_str(&self, s: &str) -> bool {
