@@ -7,7 +7,7 @@
             "type": "cppvsdbg",
             "request": "launch",
             "console": "externalTerminal",
-            "program": "${workspaceFolder}/target/release/edit",
+            "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
                 "assets/highlighting-tests/bash.sh",

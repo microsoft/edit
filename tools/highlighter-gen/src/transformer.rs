@@ -884,10 +884,6 @@ impl Charset {
         self.id
     }
 
-    pub fn bits(&self) -> &[bool; 256] {
-        &self.bits
-    }
-
     pub fn fill(&mut self, value: bool) {
         self.bits.fill(value);
     }
