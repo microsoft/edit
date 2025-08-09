@@ -255,9 +255,8 @@ fn memset_dispatch(beg: *mut u8, end: *mut u8, val: u64) {
 fn memset_lasx(mut beg: *mut u8, end: *mut u8, val: u64) {
     unsafe {
         use std::arch::loongarch64::*;
-        use std::mem::transmute as T;
 
-        let fill: v32i8 = T(lasx_xvreplgr2vr_d(val as i64));
+        let fill = lasx_xvreplgr2vr_d(val as i64);
 
         if end.offset_from_unsigned(beg) >= 32 {
             lasx_xvst::<0>(fill, beg as *mut _);
@@ -280,7 +279,7 @@ fn memset_lasx(mut beg: *mut u8, end: *mut u8, val: u64) {
         }
 
         if end.offset_from_unsigned(beg) >= 16 {
-            let fill: v16i8 = T(lsx_vreplgr2vr_d(val as i64));
+            let fill = lsx_vreplgr2vr_d(val as i64);
 
             loop {
                 lsx_vst::<0>(fill, beg as *mut _);
@@ -316,10 +315,9 @@ fn memset_lasx(mut beg: *mut u8, end: *mut u8, val: u64) {
 unsafe fn memset_lsx(mut beg: *mut u8, end: *mut u8, val: u64) {
     unsafe {
         use std::arch::loongarch64::*;
-        use std::mem::transmute as T;
 
         if end.offset_from_unsigned(beg) >= 16 {
-            let fill: v16i8 = T(lsx_vreplgr2vr_d(val as i64));
+            let fill = lsx_vreplgr2vr_d(val as i64);
 
             lsx_vst::<0>(fill, beg as *mut _);
             let off = beg.align_offset(16);

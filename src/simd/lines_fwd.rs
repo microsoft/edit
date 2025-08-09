@@ -199,17 +199,16 @@ unsafe fn lines_fwd_lasx(
 ) -> (*const u8, CoordType) {
     unsafe {
         use std::arch::loongarch64::*;
-        use std::mem::transmute as T;
 
         #[inline(always)]
-        unsafe fn horizontal_sum(sum: v32i8) -> u32 {
+        unsafe fn horizontal_sum(sum: m256i) -> u32 {
             unsafe {
                 let sum = lasx_xvhaddw_h_b(sum, sum);
                 let sum = lasx_xvhaddw_w_h(sum, sum);
                 let sum = lasx_xvhaddw_d_w(sum, sum);
                 let sum = lasx_xvhaddw_q_d(sum, sum);
-                let tmp = lasx_xvpermi_q::<1>(T(sum), T(sum));
-                let sum = lasx_xvadd_w(T(sum), T(tmp));
+                let tmp = lasx_xvpermi_q::<1>(sum, sum);
+                let sum = lasx_xvadd_w(sum, tmp);
                 lasx_xvpickve2gr_wu::<0>(sum)
             }
         }
@@ -247,8 +246,8 @@ unsafe fn lines_fwd_lasx(
                 let v = lasx_xvld::<0>(beg as *const _);
                 let c = lasx_xvseq_b(v, lf);
 
-                let ones = lasx_xvand_v(T(c), T(lasx_xvrepli_b(1)));
-                let sum = horizontal_sum(T(ones));
+                let ones = lasx_xvand_v(c, lasx_xvrepli_b(1));
+                let sum = horizontal_sum(ones);
 
                 let line_next = line + sum as CoordType;
                 if line_next >= line_stop {
@@ -274,16 +273,15 @@ unsafe fn lines_fwd_lsx(
 ) -> (*const u8, CoordType) {
     unsafe {
         use std::arch::loongarch64::*;
-        use std::mem::transmute as T;
 
         #[inline(always)]
-        unsafe fn horizontal_sum(sum: v16i8) -> u32 {
+        unsafe fn horizontal_sum(sum: m128i) -> u32 {
             unsafe {
                 let sum = lsx_vhaddw_h_b(sum, sum);
                 let sum = lsx_vhaddw_w_h(sum, sum);
                 let sum = lsx_vhaddw_d_w(sum, sum);
                 let sum = lsx_vhaddw_q_d(sum, sum);
-                lsx_vpickve2gr_wu::<0>(T(sum))
+                lsx_vpickve2gr_wu::<0>(sum)
             }
         }
 
@@ -320,8 +318,8 @@ unsafe fn lines_fwd_lsx(
                 let v = lsx_vld::<0>(beg as *const _);
                 let c = lsx_vseq_b(v, lf);
 
-                let ones = lsx_vand_v(T(c), T(lsx_vrepli_b(1)));
-                let sum = horizontal_sum(T(ones));
+                let ones = lsx_vand_v(c, lsx_vrepli_b(1));
+                let sum = horizontal_sum(ones);
 
                 let line_next = line + sum as CoordType;
                 if line_next >= line_stop {

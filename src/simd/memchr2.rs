@@ -122,7 +122,6 @@ unsafe fn memchr2_dispatch(needle1: u8, needle2: u8, beg: *const u8, end: *const
 unsafe fn memchr2_lasx(needle1: u8, needle2: u8, mut beg: *const u8, end: *const u8) -> *const u8 {
     unsafe {
         use std::arch::loongarch64::*;
-        use std::mem::transmute as T;
 
         let n1 = lasx_xvreplgr2vr_b(needle1 as i32);
         let n2 = lasx_xvreplgr2vr_b(needle2 as i32);
@@ -136,10 +135,10 @@ unsafe fn memchr2_lasx(needle1: u8, needle2: u8, mut beg: *const u8, end: *const
             let v = lasx_xvld::<0>(beg as *const _);
             let a = lasx_xvseq_b(v, n1);
             let b = lasx_xvseq_b(v, n2);
-            let c = lasx_xvor_v(T(a), T(b));
-            let m = lasx_xvmskltz_b(T(c));
-            let l = lasx_xvpickve2gr_wu::<0>(T(m));
-            let h = lasx_xvpickve2gr_wu::<4>(T(m));
+            let c = lasx_xvor_v(a, b);
+            let m = lasx_xvmskltz_b(c);
+            let l = lasx_xvpickve2gr_wu::<0>(m);
+            let h = lasx_xvpickve2gr_wu::<4>(m);
             let m = (h << 16) | l;
 
             if m != 0 {
@@ -158,7 +157,6 @@ unsafe fn memchr2_lasx(needle1: u8, needle2: u8, mut beg: *const u8, end: *const
 unsafe fn memchr2_lsx(needle1: u8, needle2: u8, mut beg: *const u8, end: *const u8) -> *const u8 {
     unsafe {
         use std::arch::loongarch64::*;
-        use std::mem::transmute as T;
 
         let n1 = lsx_vreplgr2vr_b(needle1 as i32);
         let n2 = lsx_vreplgr2vr_b(needle2 as i32);
@@ -172,9 +170,9 @@ unsafe fn memchr2_lsx(needle1: u8, needle2: u8, mut beg: *const u8, end: *const 
             let v = lsx_vld::<0>(beg as *const _);
             let a = lsx_vseq_b(v, n1);
             let b = lsx_vseq_b(v, n2);
-            let c = lsx_vor_v(T(a), T(b));
-            let m = lsx_vmskltz_b(T(c));
-            let m = lsx_vpickve2gr_wu::<0>(T(m));
+            let c = lsx_vor_v(a, b);
+            let m = lsx_vmskltz_b(c);
+            let m = lsx_vpickve2gr_wu::<0>(m);
 
             if m != 0 {
                 return beg.add(m.trailing_zeros() as usize);
