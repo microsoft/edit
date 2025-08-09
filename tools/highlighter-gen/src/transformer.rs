@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::fmt::{Debug, Write as _};
+use std::fmt::{self, Write as _};
 use std::mem::{self, MaybeUninit};
 use std::ops::{Index, IndexMut};
 use std::rc::{Rc, Weak};
@@ -13,6 +13,7 @@ pub struct GraphBuilder {
     roots: Vec<Rc<WipStateCell>>,
     states: Vec<Weak<WipStateCell>>,
     charsets: CharsetInterner,
+    strings: StringInterner,
 
     origin: i32,
 }
@@ -22,7 +23,12 @@ impl GraphBuilder {
         GraphBuilder {
             roots: Vec::with_capacity(16),
             states: Vec::with_capacity(16),
-            charsets: CharsetInterner { charsets: Vec::with_capacity(16) },
+            charsets: CharsetInterner {
+                list: Vec::with_capacity(16),
+            },
+            strings: StringInterner {
+                list: Vec::with_capacity(16),
+            },
 
             origin: -1,
         }
@@ -38,9 +44,13 @@ impl GraphBuilder {
     }
 
     fn get_root_by_name(&self, name: &str) -> Rc<WipStateCell> {
-        self.roots.iter().find(|s| s.borrow().name == Some(name)).cloned().unwrap_or_else(|| {
-            panic!("No root state found with name: {name}");
-        })
+        self.roots
+            .iter()
+            .find(|s| s.borrow().name == Some(name))
+            .cloned()
+            .unwrap_or_else(|| {
+                panic!("No root state found with name: {name}");
+            })
     }
 
     pub fn parse(&mut self, root: usize, rule: &Rule) {
@@ -132,12 +142,9 @@ impl GraphBuilder {
         dst: GraphAction,
         lit: &[u8],
     ) -> GraphAction {
-        self.add_transition(
-            kind,
-            src,
-            dst,
-            GraphTest::Prefix(String::from_utf8(lit.to_vec()).unwrap()),
-        )
+        let prefix = String::from_utf8(lit.to_vec()).unwrap();
+        let prefix = self.strings.intern(prefix);
+        self.add_transition(kind, src, dst, GraphTest::Prefix(prefix))
     }
 
     // [a-z]+
@@ -185,9 +192,9 @@ impl GraphBuilder {
             {
                 charset[upper] = false;
                 str.make_ascii_lowercase();
-                GraphTest::PrefixInsensitive(str)
+                GraphTest::PrefixInsensitive(self.strings.intern(str))
             } else {
-                GraphTest::Prefix(str)
+                GraphTest::Prefix(self.strings.intern(str))
             };
 
             let d = self.add_transition(kind, src.clone(), dst.clone(), test);
@@ -282,9 +289,14 @@ impl GraphBuilder {
 
             let more = it.peek().is_some();
             let kind = if more { None } else { kind };
-            let dst = if more { GraphAction::Change(self.add_state()) } else { dst.clone() };
+            let dst = if more {
+                GraphAction::Change(self.add_state())
+            } else {
+                dst.clone()
+            };
 
             if let Some(str) = prefix_insensitive {
+                let str = self.strings.intern(str);
                 src = self.add_transition(kind, src_idx, dst, GraphTest::PrefixInsensitive(str));
             } else {
                 src = self.transform(kind, src_idx, dst, hir);
@@ -378,12 +390,14 @@ impl GraphBuilder {
             if match (&t.test, &test) {
                 (Chars(_), _) => true,
                 (Charset(p), Charset(n)) => n.is_superset(p),
-                (Charset(p), Prefix(n)) => p.covers_char(n.as_bytes()[0]),
-                (Charset(p), PrefixInsensitive(n)) => p.covers_char_insensitive(n.as_bytes()[0]),
-                (Prefix(p), Prefix(s)) => s.starts_with(p.as_str()),
+                (Charset(p), Prefix(n)) => p.covers_char(n.string.as_bytes()[0]),
+                (Charset(p), PrefixInsensitive(n)) => {
+                    p.covers_char_insensitive(n.string.as_bytes()[0])
+                }
+                (Prefix(p), Prefix(s)) => s.string.starts_with(p.string.as_str()),
                 (PrefixInsensitive(p), Prefix(s) | PrefixInsensitive(s)) => {
-                    let s = s.as_bytes();
-                    let p = p.as_bytes();
+                    let s = s.string.as_bytes();
+                    let p = p.string.as_bytes();
                     p.len() <= s.len() && s[..p.len()].eq_ignore_ascii_case(p)
                 }
                 _ => false,
@@ -416,57 +430,62 @@ impl GraphBuilder {
     // Remove pointless indirections from `add_indirect_target()` like this:
     //   [node] --- Chars(0) --> Pop
     fn finalize_simplify_indirections(&mut self) {
-        // Returns a transition which consists of just a single Chars(0) test.
-        let find = || {
+        // Progressively:
+        // * Find a pointless indirection to remove
+        // * Find all states that point to it
+        // * Connect their transitions directly to the indirect target
+        loop {
+            let mut candidates = Vec::new();
+
             for state in &self.states {
                 if let Some(state) = state.upgrade()
-                    && let mut s = state.borrow_mut()
+                    && let s = state.borrow_mut()
                     && s.transitions.len() == 1
                     && let t = &s.transitions[0]
                     && t.test == GraphTest::Chars(0)
                 {
                     let kind = t.kind;
                     let action = t.action.clone();
-                    s.transitions.clear();
                     drop(s);
-                    return Some((state, kind, action));
+                    candidates.push((state, kind, action));
                 }
             }
-            None
-        };
 
-        // Progressively:
-        // * Find a pointless indirection to remove
-        // * Find all states that point to it
-        // * Connect their transitions directly to the indirect target
-        while let Some((dst, kind, action)) = find() {
-            for state in &self.states {
-                let Some(state) = state.upgrade() else {
-                    continue;
-                };
+            let mut any_fixed = false;
 
-                let mut s = state.borrow_mut();
-                for t in &mut s.transitions {
-                    if let GraphAction::Change(d) = &t.action
-                        && Rc::ptr_eq(d, &dst)
-                    {
-                        if kind.is_some() {
-                            if t.kind.is_some() && t.kind != kind {
-                                panic!(
-                                    "Inconsistent highlight kinds for indirection: {:?} vs {:?}",
-                                    t.kind, kind
-                                );
+            for (dst, kind, action) in candidates {
+                for state in &self.states {
+                    let Some(state) = state.upgrade() else {
+                        continue;
+                    };
+
+                    let mut s = state.borrow_mut();
+                    for t in &mut s.transitions {
+                        if let GraphAction::Change(d) = &t.action
+                            && Rc::ptr_eq(d, &dst)
+                        {
+                            if kind.is_some() {
+                                if t.kind.is_some() && t.kind != kind {
+                                    panic!(
+                                        "Inconsistent highlight kinds for indirection: {:?} vs {:?}",
+                                        t.kind, kind
+                                    );
+                                }
+                                t.kind = kind;
                             }
-                            t.kind = kind;
+                            t.action = action.clone();
+                            any_fixed = true;
                         }
-                        t.action = action.clone();
                     }
                 }
             }
+
+            if !any_fixed {
+                break;
+            }
         }
 
-        // We now got a bunch of indirections with no transitions. Remove them.
-        self.states.retain(|s| s.upgrade().is_some_and(|s| !s.borrow().transitions.is_empty()));
+        self.states.retain(|s| s.strong_count() > 0);
     }
 
     /// Compute existing charset coverage.
@@ -541,8 +560,8 @@ impl GraphBuilder {
             if !match &t.test {
                 GraphTest::Chars(_) => true,
                 GraphTest::Charset(c) => fallback_cs.is_superset(c),
-                GraphTest::Prefix(s) => fallback_cs.covers_str(s),
-                GraphTest::PrefixInsensitive(s) => fallback_cs.covers_str_insensitive(s),
+                GraphTest::Prefix(s) => fallback_cs.covers_str(&s.string),
+                GraphTest::PrefixInsensitive(s) => fallback_cs.covers_str_insensitive(&s.string),
             } {
                 return;
             }
@@ -608,11 +627,11 @@ impl GraphBuilder {
                         cs.merge(c);
                     }
                     GraphTest::Prefix(s) => {
-                        let ch = s.as_bytes()[0];
+                        let ch = s.string.as_bytes()[0];
                         cs.set(ch, true);
                     }
                     GraphTest::PrefixInsensitive(s) => {
-                        let ch = s.as_bytes()[0];
+                        let ch = s.string.as_bytes()[0];
                         cs.set(ch.to_ascii_uppercase(), true);
                         cs.set(ch.to_ascii_lowercase(), true);
                     }
@@ -691,7 +710,7 @@ impl GraphBuilder {
                     GraphTest::Charset(c) => format!("Charset({c:?})"),
                     GraphTest::Prefix(s) => {
                         let mut label = String::new();
-                        _ = write!(label, "Prefix({s}");
+                        _ = write!(label, "Prefix({}", s.string);
 
                         loop {
                             let Some(next) = iter.peek() else {
@@ -704,7 +723,7 @@ impl GraphBuilder {
                                 break;
                             }
 
-                            _ = write!(label, ", {next_s}");
+                            _ = write!(label, ", {}", next_s.string);
                             iter.next();
                         }
 
@@ -713,7 +732,7 @@ impl GraphBuilder {
                     }
                     GraphTest::PrefixInsensitive(s) => {
                         let mut label = String::new();
-                        _ = write!(label, "PrefixInsensitive({s}");
+                        _ = write!(label, "PrefixInsensitive({}", s.string);
 
                         loop {
                             let Some(next) = iter.peek() else {
@@ -726,7 +745,7 @@ impl GraphBuilder {
                                 break;
                             }
 
-                            _ = write!(label, ", {next_s}");
+                            _ = write!(label, ", {}", next_s.string);
                             iter.next();
                         }
 
@@ -765,7 +784,10 @@ impl GraphBuilder {
             }
         }
 
-        let mut visitor = Visitor { visited: HashSet::new(), output: String::new() };
+        let mut visitor = Visitor {
+            visited: HashSet::new(),
+            output: String::new(),
+        };
 
         _ = writeln!(&mut visitor.output, "flowchart TD");
         for src in &self.roots {
@@ -780,31 +802,88 @@ impl GraphBuilder {
         self.charsets.extract()
     }
 
+    pub fn strings(&self) -> Vec<Rc<StringWithId>> {
+        self.strings.extract()
+    }
+
     pub fn states(&self) -> Vec<Rc<WipStateCell>> {
         self.states.iter().filter_map(Weak::upgrade).collect()
     }
 }
 
 struct CharsetInterner {
-    charsets: Vec<Weak<Charset>>,
+    list: Vec<Weak<Charset>>,
 }
 
 impl CharsetInterner {
-    pub fn intern(&mut self, mut charset: Charset) -> Rc<Charset> {
-        if let Some(rc) = self.charsets.iter().filter_map(|w| w.upgrade()).find(|c| **c == charset)
+    fn intern(&mut self, mut charset: Charset) -> Rc<Charset> {
+        if let Some(rc) = self
+            .list
+            .iter()
+            .filter_map(|w| w.upgrade())
+            .find(|c| **c == charset)
         {
             return rc;
         }
 
-        charset.id = self.charsets.len();
+        charset.id = self.list.len();
 
         let rc = Rc::new(charset);
-        self.charsets.push(Rc::downgrade(&rc));
+        self.list.push(Rc::downgrade(&rc));
         rc
     }
 
     pub fn extract(&self) -> Vec<Rc<Charset>> {
-        self.charsets.iter().filter_map(Weak::upgrade).collect()
+        self.list.iter().filter_map(Weak::upgrade).collect()
+    }
+}
+
+pub struct StringWithId {
+    id: usize,
+    string: String,
+}
+
+impl StringWithId {
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    pub fn string(&self) -> &str {
+        &self.string
+    }
+}
+
+impl fmt::Debug for StringWithId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.string.fmt(f)
+    }
+}
+
+struct StringInterner {
+    list: Vec<Weak<StringWithId>>,
+}
+
+impl StringInterner {
+    fn intern(&mut self, string: String) -> Rc<StringWithId> {
+        if let Some(rc) = self
+            .list
+            .iter()
+            .filter_map(|w| w.upgrade())
+            .find(|c| c.string == string)
+        {
+            return rc;
+        }
+
+        let rc = Rc::new(StringWithId {
+            id: self.list.len(),
+            string,
+        });
+        self.list.push(Rc::downgrade(&rc));
+        rc
+    }
+
+    pub fn extract(&self) -> Vec<Rc<StringWithId>> {
+        self.list.iter().filter_map(Weak::upgrade).collect()
     }
 }
 
@@ -826,8 +905,8 @@ pub enum GraphAction {
     Pop(usize),
 }
 
-impl Debug for GraphAction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for GraphAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             GraphAction::Change(s) => write!(f, "Change({:p})", Rc::as_ptr(s)),
             GraphAction::Push(s) => write!(f, "Push({:p})", Rc::as_ptr(s)),
@@ -849,13 +928,27 @@ impl PartialEq for GraphAction {
 
 impl Eq for GraphAction {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum GraphTest {
     Chars(usize),
     Charset(Rc<Charset>),
-    Prefix(String),
-    PrefixInsensitive(String),
+    Prefix(Rc<StringWithId>),
+    PrefixInsensitive(Rc<StringWithId>),
 }
+
+impl PartialEq for GraphTest {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (GraphTest::Chars(a), GraphTest::Chars(b)) => a == b,
+            (GraphTest::Charset(a), GraphTest::Charset(b)) => Rc::ptr_eq(a, b),
+            (GraphTest::Prefix(a), GraphTest::Prefix(b)) => Rc::ptr_eq(a, b),
+            (GraphTest::PrefixInsensitive(a), GraphTest::PrefixInsensitive(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for GraphTest {}
 
 #[derive(Debug, Clone)]
 pub struct GraphTransition {
@@ -873,11 +966,17 @@ pub struct Charset {
 
 impl Charset {
     pub fn no() -> Self {
-        Charset { id: 0, bits: [false; 256] }
+        Charset {
+            id: 0,
+            bits: [false; 256],
+        }
     }
 
     pub fn yes() -> Self {
-        Charset { id: 0, bits: [true; 256] }
+        Charset {
+            id: 0,
+            bits: [true; 256],
+        }
     }
 
     pub fn id(&self) -> usize {
@@ -953,9 +1052,9 @@ impl Default for Charset {
     }
 }
 
-impl Debug for Charset {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let show_char = |f: &mut std::fmt::Formatter<'_>, b: usize| {
+impl fmt::Debug for Charset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let show_char = |f: &mut fmt::Formatter<'_>, b: usize| {
             let b = b as u8;
             if b.is_ascii_graphic() || b == b' ' {
                 let b = b as char;

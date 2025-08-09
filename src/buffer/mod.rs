@@ -1991,6 +1991,7 @@ impl TextBuffer {
 
                             let color = match kind {
                                 HighlightKind::Other => continue,
+                                HighlightKind::Direct(idx) => IndexedColor::from(idx as u8),
                                 HighlightKind::Comment => IndexedColor::Green,
                                 HighlightKind::Number => IndexedColor::BrightGreen,
                                 HighlightKind::String => IndexedColor::BrightRed,

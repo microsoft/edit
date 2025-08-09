@@ -53,6 +53,12 @@ pub enum IndexedColor {
     Foreground,
 }
 
+impl<T: Into<u8>> From<T> for IndexedColor {
+    fn from(value: T) -> Self {
+        unsafe { std::mem::transmute(value.into() & 0xF) }
+    }
+}
+
 /// Number of indices used by [`IndexedColor`].
 pub const INDEXED_COLORS_COUNT: usize = 18;
 

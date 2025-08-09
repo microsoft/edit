@@ -33,12 +33,12 @@ fn main() {
 
         use Action::*;
         use HighlightKind::*;
+        use IndexedColor::*;
         use Test::*;
 
         pub struct Language {
             pub name: &'static str,
-            pub extensions: &'static [&'static str],
-            pub charsets: &'static [&'static [u16; 16]],
+            pub filenames: &'static [&'static str],
             pub states: &'static [&'static [Transition<'static>]],
         }
 
@@ -50,15 +50,37 @@ fn main() {
 
         pub enum Test<'a> {
             Chars(usize),
-            Charset(usize),
-            Prefix(&'a str),
-            PrefixInsensitive(&'a str),
+            Charset(&'a [u16; 16]),
+            Prefix(*const u8),
+            PrefixInsensitive(*const u8),
+        }
+
+        #[allow(dead_code)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum IndexedColor {
+            Black,
+            Red,
+            Green,
+            Yellow,
+            Blue,
+            Magenta,
+            Cyan,
+            White,
+            BrightBlack,
+            BrightRed,
+            BrightGreen,
+            BrightYellow,
+            BrightBlue,
+            BrightMagenta,
+            BrightCyan,
+            BrightWhite,
         }
 
         #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
         pub enum HighlightKind {
             #[default]
             Other,
+            Direct(IndexedColor),
             Comment,
             Number,
             String,
@@ -113,22 +135,15 @@ fn main() {
             builder.format_as_mermaid()
         );
 
-        _ = writedoc!(
-            output,
-            r#"
-            #[rustfmt::skip]
-            pub const LANG_{name_uppercase}: &Language = &Language {{
-                name: "{name}",
-                extensions: &{extensions:?},
-                charsets: &[
-            "#,
-            name = lang.name,
-            name_uppercase = name_uppercase,
-            extensions = lang.extensions,
-        );
-
         for cs in builder.charsets() {
-            _ = write!(output, "        &[",);
+            _ = writedoc!(
+                output,
+                "
+                #[rustfmt::skip]
+                const LANG_{}_CHARSET_{}: &[u16; 16] = &[",
+                name_uppercase,
+                cs.id()
+            );
             for lo in 0..16 {
                 if lo > 0 {
                     _ = write!(output, ", ");
@@ -139,10 +154,37 @@ fn main() {
                 }
                 _ = write!(output, "0x{u:04x}");
             }
-            _ = writeln!(output, "],");
+            _ = writeln!(output, "];");
         }
 
-        _ = write!(output, "    ],\n    states: &[\n");
+        for s in builder.strings() {
+            _ = writedoc!(
+                output,
+                "
+                const LANG_{}_STRING_{}: *const u8 = [",
+                name_uppercase,
+                s.id(),
+            );
+            _ = write!(output, "{}", s.string().len());
+            for &c in s.string().as_bytes() {
+                _ = write!(output, ", 0x{:02x}", c);
+            }
+            _ = writeln!(output, "].as_ptr();");
+        }
+
+        _ = writedoc!(
+            output,
+            r#"
+            #[rustfmt::skip]
+            pub const LANG_{name_uppercase}: &Language = &Language {{
+                name: "{name}",
+                filenames: &{filenames:?},
+                states: &[
+            "#,
+            name = lang.name,
+            name_uppercase = name_uppercase,
+            filenames = lang.filenames,
+        );
 
         for state in builder.states() {
             let state = state.borrow();
@@ -156,13 +198,17 @@ fn main() {
                         format!("Chars({n})")
                     }
                     GraphTest::Charset(cs) => {
-                        format!("Charset({})", cs.id())
+                        format!("Charset(LANG_{}_CHARSET_{})", name_uppercase, cs.id())
                     }
                     GraphTest::Prefix(s) => {
-                        format!("Prefix(r#\"{s}\"#)")
+                        format!("Prefix(LANG_{}_STRING_{})", name_uppercase, s.id())
                     }
                     GraphTest::PrefixInsensitive(s) => {
-                        format!("PrefixInsensitive(r#\"{s}\"#)")
+                        format!(
+                            "PrefixInsensitive(LANG_{}_STRING_{})",
+                            name_uppercase,
+                            s.id()
+                        )
                     }
                 };
                 let action = match &t.action {
