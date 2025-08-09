@@ -16,8 +16,22 @@ use crate::lsh::definitions::*;
 use crate::{simd, unicode};
 
 pub fn language_from_path(path: &Path) -> Option<&'static Language> {
-    let ext = path.extension()?;
-    LANGUAGES.iter().copied().find(|lang| lang.extensions.iter().any(|&e| OsStr::new(e) == ext))
+    let filename = path.file_name()?.as_encoded_bytes();
+
+    for &l in LANGUAGES {
+        for f in l.filenames {
+            let f = f.as_bytes();
+            if let Some(suffix) = f.strip_prefix(b"*") {
+                if filename.ends_with(suffix) {
+                    return Some(l);
+                }
+            } else if filename == f {
+                return Some(l);
+            }
+        }
+    }
+
+    None
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -134,12 +148,16 @@ impl<'doc> Highlighter<'doc> {
                         off = off + n.min(line_buf.len() - off);
                     }
                     Test::Prefix(str) => {
+                        let str =
+                            unsafe { std::slice::from_raw_parts(str.add(1), str.read() as usize) };
                         if !Self::inlined_memcmp(line_buf, off, str) {
                             continue;
                         }
                         off += str.len();
                     }
                     Test::PrefixInsensitive(str) => {
+                        let str =
+                            unsafe { std::slice::from_raw_parts(str.add(1), str.read() as usize) };
                         if !Self::inlined_memicmp(line_buf, off, str) {
                             continue;
                         }
@@ -147,7 +165,6 @@ impl<'doc> Highlighter<'doc> {
                     }
                     Test::Charset(cs) => {
                         // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
-                        let cs = unsafe { *self.language.charsets.get_unchecked(cs) };
                         if off >= line_buf.len() || !Self::in_set(cs, line_buf[off]) {
                             continue;
                         }
@@ -216,11 +233,9 @@ impl<'doc> Highlighter<'doc> {
     /// A mini-memcmp implementation for short needles.
     /// Compares the `haystack` at `off` with the `needle`.
     #[inline]
-    fn inlined_memcmp(haystack: &[u8], off: usize, needle: &str) -> bool {
+    fn inlined_memcmp(haystack: &[u8], off: usize, needle: &[u8]) -> bool {
         unsafe {
-            let needle = needle.as_bytes();
             let needle_len = needle.len();
-
             if haystack.len() - off < needle_len {
                 return false;
             }
@@ -244,11 +259,9 @@ impl<'doc> Highlighter<'doc> {
 
     /// Like `inlined_memcmp`, but case-insensitive.
     #[inline]
-    fn inlined_memicmp(haystack: &[u8], off: usize, needle: &str) -> bool {
+    fn inlined_memicmp(haystack: &[u8], off: usize, needle: &[u8]) -> bool {
         unsafe {
-            let needle = needle.as_bytes();
             let needle_len = needle.len();
-
             if haystack.len() - off < needle_len {
                 return false;
             }
