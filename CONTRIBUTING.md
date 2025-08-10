@@ -46,4 +46,4 @@ The overall architecture of the project can be summarized as follows:
 If you have an issue with your terminal, the places of interest are the aforementioned:
 * VT parser in `src/vt.rs`
 * Platform specific code in `src/sys`
-* And the `setup_terminal` function in `src/bin/edit/main.rs`
+* And the `setup_terminal` function in `src/bin/edit/main.rs'
