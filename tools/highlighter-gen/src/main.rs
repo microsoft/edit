@@ -104,7 +104,14 @@ fn main() {
     });
 
     for lang in LANGUAGES {
-        let name_uppercase = lang.name.to_ascii_uppercase();
+        let name_uppercase = lang.name.bytes().fold(String::new(), |mut acc, ch| {
+            if ch.is_ascii_alphanumeric() {
+                acc.push(ch.to_ascii_uppercase() as char);
+            } else if !acc.ends_with('_') {
+                acc.push('_');
+            }
+            acc
+        });
         let mut builder = GraphBuilder::new();
 
         for s in lang.states {
@@ -244,7 +251,18 @@ fn main() {
         "#
     );
     for lang in LANGUAGES {
-        let name_uppercase = lang.name.to_ascii_uppercase();
+        let name_uppercase: String = lang.name.chars().fold(String::new(), |mut acc, ch| {
+            if ch.is_whitespace() || ch.is_control() {
+                if !acc.ends_with('_') {
+                    acc.push('_');
+                }
+            } else {
+                for up in ch.to_uppercase() {
+                    acc.push(up);
+                }
+            }
+            acc
+        });
         _ = writeln!(output, "    LANG_{name_uppercase},");
     }
     _ = writeln!(output, "];");

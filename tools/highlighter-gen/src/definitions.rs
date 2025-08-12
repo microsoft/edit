@@ -1,15 +1,9 @@
+#![allow(dead_code)]
+
 use HighlightKind::*;
 use IndexedColor::*;
 
-pub const LANGUAGES: &[&Language] = &[
-    &LANG_DIFF,
-    &LANG_COMMIT_EDITMSG,
-    &LANG_JSON,
-    &LANG_YAML,
-    &LANG_BASH,
-    &LANG_POWERSHELL,
-    &LANG_BATCH,
-];
+pub const LANGUAGES: &[&Language] = &[&LANG_GIT_COMMIT, &LANG_GIT_REBASE];
 
 const LANG_DIFF: Language = Language {
     name: "Diff",
@@ -33,9 +27,9 @@ const LANG_DIFF: Language = Language {
     ],
 };
 
-const LANG_COMMIT_EDITMSG: Language = Language {
-    name: "COMMIT_EDITMSG",
-    filenames: &["COMMIT_EDITMSG"],
+const LANG_GIT_COMMIT: Language = Language {
+    name: "Git Commit Message",
+    filenames: &["COMMIT_EDITMSG", "MERGE_MSG"],
     states: &[
         State {
             name: "ground",
@@ -76,6 +70,39 @@ const LANG_COMMIT_EDITMSG: Language = Language {
         State {
             name: "ignore",
             rules: &[re(r#".*"#)],
+        },
+    ],
+};
+
+const LANG_GIT_REBASE: Language = Language {
+    name: "Git Rebase Message",
+    filenames: &["git-rebase-todo"], // TODO: https://github.com/microsoft/vscode/issues/156954
+    states: &[
+        State {
+            name: "ground",
+            rules: &[
+                re(r#"break"#).is(Keyword),
+                re(r#"drop"#).is(Keyword),
+                re(r#"edit"#).is(Keyword),
+                re(r#"exec"#).is(Keyword),
+                re(r#"fixup"#).is(Keyword),
+                re(r#"pick"#).is(Keyword),
+                re(r#"reword"#).is(Keyword),
+                re(r#"squash"#).is(Keyword),
+                re(r#"b"#).is(Keyword),
+                re(r#"d"#).is(Keyword),
+                re(r#"e"#).is(Keyword),
+                re(r#"f"#).is(Keyword),
+                re(r#"p"#).is(Keyword),
+                re(r#"r"#).is(Keyword),
+                re(r#"s"#).is(Keyword),
+                re(r#"x"#).is(Keyword),
+                re(r#".*"#).is(Comment), // TODO: Should be Other for invalid lines.
+            ],
+        },
+        State {
+            name: "hash",
+            rules: &[re(r#"\S+"#).is(Variable).then_pop(), re(r#""#).then_pop()],
         },
     ],
 };
@@ -388,7 +415,6 @@ pub enum HighlightKind {
 }
 
 pub struct Language {
-    #[allow(dead_code)]
     pub name: &'static str,
     pub filenames: &'static [&'static str],
     pub states: &'static [State],

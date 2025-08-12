@@ -74,44 +74,7 @@ const fn t<'a>(test: Test<'a>, kind: Option<HighlightKind>, action: Action) -> T
 
 /**
 ---
-title: Diff
-config:
-  layout: elk
----
-flowchart TD
-    0["0 (ground)"]
-    0 -->|"Prefix(diff, ---, +++, -, +)<br/>Some(Direct(BrightBlue))"| 1
-    1["1 (ignore)"]
-    1 -->|"Chars(Line)<br/>None"| pop65536@{ shape: stop }
-    0 -->|"Chars(0)<br/>None"| 1
-**/
-const LANG_DIFF_STRING_0: *const u8 = [4, 0x64, 0x69, 0x66, 0x66].as_ptr();
-const LANG_DIFF_STRING_1: *const u8 = [3, 0x2d, 0x2d, 0x2d].as_ptr();
-const LANG_DIFF_STRING_2: *const u8 = [3, 0x2b, 0x2b, 0x2b].as_ptr();
-const LANG_DIFF_STRING_3: *const u8 = [1, 0x2d].as_ptr();
-const LANG_DIFF_STRING_4: *const u8 = [1, 0x2b].as_ptr();
-#[rustfmt::skip]
-pub const LANG_DIFF: &Language = &Language {
-    name: "Diff",
-    filenames: &["*.diff", "*.patch"],
-    states: &[
-        &[
-            t(Prefix(LANG_DIFF_STRING_0), Some(Direct(BrightBlue)), Change(1)),
-            t(Prefix(LANG_DIFF_STRING_1), Some(Direct(BrightBlue)), Change(1)),
-            t(Prefix(LANG_DIFF_STRING_2), Some(Direct(BrightBlue)), Change(1)),
-            t(Prefix(LANG_DIFF_STRING_3), Some(Direct(BrightRed)), Change(1)),
-            t(Prefix(LANG_DIFF_STRING_4), Some(Direct(BrightGreen)), Change(1)),
-            t(Chars(0), None, Change(1)),
-        ],
-        &[
-            t(Chars(usize::MAX), None, Pop(0)),
-        ],
-    ],
-};
-
-/**
----
-title: COMMIT_EDITMSG
+title: Git Commit Message
 config:
   layout: elk
 ---
@@ -139,48 +102,43 @@ flowchart TD
     3 -->|"Prefix(diff, ---, +++, -, +)<br/>Some(Direct(BrightBlue))"| 4
     3 -->|"Chars(0)<br/>None"| 4
 **/
-const LANG_COMMIT_EDITMSG_STRING_0: *const u8 = [1, 0x23].as_ptr();
-const LANG_COMMIT_EDITMSG_STRING_1: *const u8 =
-    [10, 0x64, 0x69, 0x66, 0x66, 0x20, 0x2d, 0x2d, 0x67, 0x69, 0x74].as_ptr();
-const LANG_COMMIT_EDITMSG_STRING_2: *const u8 =
-    [9, 0x09, 0x64, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x64, 0x3a].as_ptr();
-const LANG_COMMIT_EDITMSG_STRING_3: *const u8 =
-    [10, 0x09, 0x6d, 0x6f, 0x64, 0x69, 0x66, 0x69, 0x65, 0x64, 0x3a].as_ptr();
-const LANG_COMMIT_EDITMSG_STRING_4: *const u8 =
-    [10, 0x09, 0x6e, 0x65, 0x77, 0x20, 0x66, 0x69, 0x6c, 0x65, 0x3a].as_ptr();
-const LANG_COMMIT_EDITMSG_STRING_5: *const u8 =
-    [9, 0x09, 0x72, 0x65, 0x6e, 0x61, 0x6d, 0x65, 0x64, 0x3a].as_ptr();
-const LANG_COMMIT_EDITMSG_STRING_6: *const u8 = [4, 0x64, 0x69, 0x66, 0x66].as_ptr();
-const LANG_COMMIT_EDITMSG_STRING_7: *const u8 = [3, 0x2d, 0x2d, 0x2d].as_ptr();
-const LANG_COMMIT_EDITMSG_STRING_8: *const u8 = [3, 0x2b, 0x2b, 0x2b].as_ptr();
-const LANG_COMMIT_EDITMSG_STRING_9: *const u8 = [1, 0x2d].as_ptr();
-const LANG_COMMIT_EDITMSG_STRING_10: *const u8 = [1, 0x2b].as_ptr();
+const LANG_GIT_COMMIT_MESSAGE_STRING_0: *const u8 = [1, 0x23].as_ptr();
+const LANG_GIT_COMMIT_MESSAGE_STRING_1: *const u8 = [10, 0x64, 0x69, 0x66, 0x66, 0x20, 0x2d, 0x2d, 0x67, 0x69, 0x74].as_ptr();
+const LANG_GIT_COMMIT_MESSAGE_STRING_2: *const u8 = [9, 0x09, 0x64, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x64, 0x3a].as_ptr();
+const LANG_GIT_COMMIT_MESSAGE_STRING_3: *const u8 = [10, 0x09, 0x6d, 0x6f, 0x64, 0x69, 0x66, 0x69, 0x65, 0x64, 0x3a].as_ptr();
+const LANG_GIT_COMMIT_MESSAGE_STRING_4: *const u8 = [10, 0x09, 0x6e, 0x65, 0x77, 0x20, 0x66, 0x69, 0x6c, 0x65, 0x3a].as_ptr();
+const LANG_GIT_COMMIT_MESSAGE_STRING_5: *const u8 = [9, 0x09, 0x72, 0x65, 0x6e, 0x61, 0x6d, 0x65, 0x64, 0x3a].as_ptr();
+const LANG_GIT_COMMIT_MESSAGE_STRING_6: *const u8 = [4, 0x64, 0x69, 0x66, 0x66].as_ptr();
+const LANG_GIT_COMMIT_MESSAGE_STRING_7: *const u8 = [3, 0x2d, 0x2d, 0x2d].as_ptr();
+const LANG_GIT_COMMIT_MESSAGE_STRING_8: *const u8 = [3, 0x2b, 0x2b, 0x2b].as_ptr();
+const LANG_GIT_COMMIT_MESSAGE_STRING_9: *const u8 = [1, 0x2d].as_ptr();
+const LANG_GIT_COMMIT_MESSAGE_STRING_10: *const u8 = [1, 0x2b].as_ptr();
 #[rustfmt::skip]
-pub const LANG_COMMIT_EDITMSG: &Language = &Language {
-    name: "COMMIT_EDITMSG",
-    filenames: &["COMMIT_EDITMSG"],
+pub const LANG_GIT_COMMIT_MESSAGE: &Language = &Language {
+    name: "Git Commit Message",
+    filenames: &["COMMIT_EDITMSG", "MERGE_MSG"],
     states: &[
         &[
-            t(Prefix(LANG_COMMIT_EDITMSG_STRING_0), Some(Comment), Push(1)),
-            t(Prefix(LANG_COMMIT_EDITMSG_STRING_1), None, Change(5)),
+            t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_0), Some(Comment), Push(1)),
+            t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_1), None, Change(5)),
             t(Chars(0), None, Change(4)),
         ],
         &[
-            t(Prefix(LANG_COMMIT_EDITMSG_STRING_2), None, Change(6)),
-            t(Prefix(LANG_COMMIT_EDITMSG_STRING_3), None, Change(7)),
-            t(Prefix(LANG_COMMIT_EDITMSG_STRING_4), None, Change(8)),
-            t(Prefix(LANG_COMMIT_EDITMSG_STRING_5), None, Change(9)),
+            t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_2), None, Change(6)),
+            t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_3), None, Change(7)),
+            t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_4), None, Change(8)),
+            t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_5), None, Change(9)),
             t(Chars(usize::MAX), None, Pop(1)),
         ],
         &[
             t(Chars(0), Some(Other), Push(3)),
         ],
         &[
-            t(Prefix(LANG_COMMIT_EDITMSG_STRING_6), Some(Direct(BrightBlue)), Change(4)),
-            t(Prefix(LANG_COMMIT_EDITMSG_STRING_7), Some(Direct(BrightBlue)), Change(4)),
-            t(Prefix(LANG_COMMIT_EDITMSG_STRING_8), Some(Direct(BrightBlue)), Change(4)),
-            t(Prefix(LANG_COMMIT_EDITMSG_STRING_9), Some(Direct(BrightRed)), Change(4)),
-            t(Prefix(LANG_COMMIT_EDITMSG_STRING_10), Some(Direct(BrightGreen)), Change(4)),
+            t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_6), Some(Direct(BrightBlue)), Change(4)),
+            t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_7), Some(Direct(BrightBlue)), Change(4)),
+            t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_8), Some(Direct(BrightBlue)), Change(4)),
+            t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_9), Some(Direct(BrightRed)), Change(4)),
+            t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_10), Some(Direct(BrightGreen)), Change(4)),
             t(Chars(0), None, Change(4)),
         ],
         &[
@@ -206,894 +164,69 @@ pub const LANG_COMMIT_EDITMSG: &Language = &Language {
 
 /**
 ---
-title: JSON
+title: Git Rebase Message
 config:
   layout: elk
 ---
 flowchart TD
     0["0 (ground)"]
-    0 -->|"Prefix(//)<br/>None"| 4
-    4 -->|"Chars(Line)<br/>Some(Comment)"| pop262144@{ shape: stop }
-    0 -->|"Prefix(/*)<br/>Some(Comment)"| push2[/"comment"/]
-    0 -->|"Prefix(&quot;)<br/>Some(String)"| 3
-    3["3 (string_double)"]
-    3 -->|"Prefix(&quot;)<br/>None"| pop196608@{ shape: stop }
-    3 -->|"Prefix(\\)<br/>None"| 11
-    11 -->|"Chars(1)<br/>None"| 3
-    3 -->|"Charset([0x00-!, #-[, ]-0xFF])<br/>None"| pop196608@{ shape: stop }
-    3 -->|"Chars(1)<br/>None"| pop196608@{ shape: stop }
-    0 -->|"Prefix(-)<br/>None"| 6
-    6 -->|"Charset([0-9])<br/>None"| 5
-    5 -->|"Prefix(.)<br/>None"| 8
-    8 -->|"Charset([0-9])<br/>None"| 7
-    7 -->|"PrefixInsensitive(e)<br/>None"| 9
-    9 -->|"Prefix(+, -)<br/>None"| 10
-    10 -->|"Charset([0-9])<br/>Some(Number)"| 1
-    1["1 (resolve_type)"]
-    1 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>Some(Other)"| pop65536@{ shape: stop }
+    0 -->|"Prefix(break, drop, edit, exec, fixup, pick, reword, squash, b, d, e, f, p, r, s, x)<br/>Some(Keyword)"| pop0@{ shape: stop }
+    0 -->|"Chars(Line)<br/>Some(Comment)"| pop0@{ shape: stop }
+    1["1 (hash)"]
+    1 -->|"Charset([0x00-0x08, 0x0E-0x1F, !-0xFF])<br/>Some(Variable)"| pop65536@{ shape: stop }
     1 -->|"Chars(0)<br/>None"| pop65536@{ shape: stop }
-    10 -->|"Chars(0)<br/>None"| pop655360@{ shape: stop }
-    9 -->|"Chars(0)<br/>None"| 10
-    7 -->|"Chars(0)<br/>Some(Number)"| 1
-    8 -->|"Chars(0)<br/>None"| pop524288@{ shape: stop }
-    5 -->|"Chars(0)<br/>None"| 7
-    6 -->|"Chars(0)<br/>None"| pop393216@{ shape: stop }
-    0 -->|"Charset([0-9])<br/>None"| 5
-    0 -->|"PrefixInsensitive(false, null, true)<br/>Some(Keyword)"| 1
-    0 -->|"Charset([0x00-!, #-,, ., :-E, G-M, O-S, U-e, g-m, o-s, u-0xFF])<br/>None"| pop0@{ shape: stop }
-    0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
-    2["2 (comment)"]
-    2 -->|"Prefix(*/)<br/>None"| pop131072@{ shape: stop }
-    2 -->|"Charset([0x00-), +-0xFF])<br/>None"| pop131072@{ shape: stop }
-    2 -->|"Chars(1)<br/>None"| pop131072@{ shape: stop }
 **/
 #[rustfmt::skip]
-const LANG_JSON_CHARSET_0: &[u16; 16] = &[0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000];
+const LANG_GIT_REBASE_MESSAGE_CHARSET_0: &[u16; 16] = &[0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xffff, 0xffff];
+const LANG_GIT_REBASE_MESSAGE_STRING_0: *const u8 = [5, 0x62, 0x72, 0x65, 0x61, 0x6b].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_1: *const u8 = [4, 0x64, 0x72, 0x6f, 0x70].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_2: *const u8 = [4, 0x65, 0x64, 0x69, 0x74].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_3: *const u8 = [4, 0x65, 0x78, 0x65, 0x63].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_4: *const u8 = [5, 0x66, 0x69, 0x78, 0x75, 0x70].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_5: *const u8 = [4, 0x70, 0x69, 0x63, 0x6b].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_6: *const u8 = [6, 0x72, 0x65, 0x77, 0x6f, 0x72, 0x64].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_7: *const u8 = [6, 0x73, 0x71, 0x75, 0x61, 0x73, 0x68].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_8: *const u8 = [1, 0x62].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_9: *const u8 = [1, 0x64].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_10: *const u8 = [1, 0x65].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_11: *const u8 = [1, 0x66].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_12: *const u8 = [1, 0x70].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_13: *const u8 = [1, 0x72].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_14: *const u8 = [1, 0x73].as_ptr();
+const LANG_GIT_REBASE_MESSAGE_STRING_15: *const u8 = [1, 0x78].as_ptr();
 #[rustfmt::skip]
-const LANG_JSON_CHARSET_1: &[u16; 16] = &[0xe0a8, 0xe0f8, 0xf0f8, 0xf0f8, 0xf0f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f0, 0x7050, 0x7050, 0x7050, 0x7050, 0x7070];
-#[rustfmt::skip]
-const LANG_JSON_CHARSET_2: &[u16; 16] = &[0xfff7, 0xfff7, 0xfff3, 0xfff7, 0xff57, 0xfff7, 0xffa7, 0xfff7, 0xfff7, 0xfff7, 0xffff, 0xffff, 0xffff, 0xfffb, 0xffaf, 0xfffb];
-#[rustfmt::skip]
-const LANG_JSON_CHARSET_3: &[u16; 16] = &[0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff];
-#[rustfmt::skip]
-const LANG_JSON_CHARSET_4: &[u16; 16] = &[0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffdf, 0xffff, 0xffff, 0xffff];
-const LANG_JSON_STRING_0: *const u8 = [2, 0x2f, 0x2f].as_ptr();
-const LANG_JSON_STRING_1: *const u8 = [2, 0x2f, 0x2a].as_ptr();
-const LANG_JSON_STRING_2: *const u8 = [1, 0x22].as_ptr();
-const LANG_JSON_STRING_3: *const u8 = [1, 0x2d].as_ptr();
-const LANG_JSON_STRING_4: *const u8 = [1, 0x2e].as_ptr();
-const LANG_JSON_STRING_5: *const u8 = [1, 0x65].as_ptr();
-const LANG_JSON_STRING_6: *const u8 = [1, 0x2b].as_ptr();
-const LANG_JSON_STRING_7: *const u8 = [5, 0x66, 0x61, 0x6c, 0x73, 0x65].as_ptr();
-const LANG_JSON_STRING_8: *const u8 = [4, 0x6e, 0x75, 0x6c, 0x6c].as_ptr();
-const LANG_JSON_STRING_9: *const u8 = [4, 0x74, 0x72, 0x75, 0x65].as_ptr();
-const LANG_JSON_STRING_10: *const u8 = [2, 0x2a, 0x2f].as_ptr();
-const LANG_JSON_STRING_11: *const u8 = [1, 0x5c].as_ptr();
-#[rustfmt::skip]
-pub const LANG_JSON: &Language = &Language {
-    name: "JSON",
-    filenames: &["*.json", "*.jsonc"],
+pub const LANG_GIT_REBASE_MESSAGE: &Language = &Language {
+    name: "Git Rebase Message",
+    filenames: &["git-rebase-todo"],
     states: &[
         &[
-            t(Prefix(LANG_JSON_STRING_0), None, Change(4)),
-            t(Prefix(LANG_JSON_STRING_1), Some(Comment), Push(2)),
-            t(Prefix(LANG_JSON_STRING_2), Some(String), Change(3)),
-            t(Prefix(LANG_JSON_STRING_3), None, Change(6)),
-            t(Charset(LANG_JSON_CHARSET_0), None, Change(5)),
-            t(PrefixInsensitive(LANG_JSON_STRING_7), Some(Keyword), Change(1)),
-            t(PrefixInsensitive(LANG_JSON_STRING_8), Some(Keyword), Change(1)),
-            t(PrefixInsensitive(LANG_JSON_STRING_9), Some(Keyword), Change(1)),
-            t(Charset(LANG_JSON_CHARSET_2), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Charset(LANG_JSON_CHARSET_1), Some(Other), Pop(0)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_JSON_STRING_10), None, Pop(1)),
-            t(Charset(LANG_JSON_CHARSET_3), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_JSON_STRING_2), None, Pop(0)),
-            t(Prefix(LANG_JSON_STRING_11), None, Change(11)),
-            t(Charset(LANG_JSON_CHARSET_4), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_0), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_1), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_2), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_3), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_4), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_5), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_6), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_7), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_8), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_9), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_10), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_11), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_12), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_13), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_14), Some(Keyword), Pop(0)),
+            t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_15), Some(Keyword), Pop(0)),
             t(Chars(usize::MAX), Some(Comment), Pop(0)),
         ],
         &[
-            t(Prefix(LANG_JSON_STRING_4), None, Change(8)),
-            t(Chars(0), None, Change(7)),
-        ],
-        &[
-            t(Charset(LANG_JSON_CHARSET_0), None, Change(5)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(PrefixInsensitive(LANG_JSON_STRING_5), None, Change(9)),
-            t(Chars(0), Some(Number), Change(1)),
-        ],
-        &[
-            t(Charset(LANG_JSON_CHARSET_0), None, Change(7)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_JSON_STRING_6), None, Change(10)),
-            t(Prefix(LANG_JSON_STRING_3), None, Change(10)),
-            t(Chars(0), None, Change(10)),
-        ],
-        &[
-            t(Charset(LANG_JSON_CHARSET_0), Some(Number), Change(1)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(Chars(1), None, Change(3)),
-        ],
-    ],
-};
-
-/**
----
-title: YAML
-config:
-  layout: elk
----
-flowchart TD
-    0["0 (ground)"]
-    0 -->|"Prefix(#)<br/>None"| 5
-    5 -->|"Chars(Line)<br/>Some(Comment)"| pop327680@{ shape: stop }
-    0 -->|"Prefix(&quot;)<br/>Some(String)"| 3
-    3["3 (string_double)"]
-    3 -->|"Prefix(&quot;)<br/>None"| pop196608@{ shape: stop }
-    3 -->|"Prefix(\\)<br/>None"| 15
-    15 -->|"Chars(1)<br/>None"| 3
-    3 -->|"Charset([0x00-!, #-[, ]-0xFF])<br/>None"| pop196608@{ shape: stop }
-    3 -->|"Chars(1)<br/>None"| pop196608@{ shape: stop }
-    0 -->|"Prefix(')<br/>Some(String)"| 4
-    4["4 (string_single)"]
-    4 -->|"Prefix(')<br/>None"| pop262144@{ shape: stop }
-    4 -->|"Prefix(\\)<br/>None"| 16
-    16 -->|"Chars(1)<br/>None"| 4
-    4 -->|"Charset([0x00-&, (-[, ]-0xFF])<br/>None"| pop262144@{ shape: stop }
-    4 -->|"Chars(1)<br/>None"| pop262144@{ shape: stop }
-    0 -->|"Prefix(-)<br/>None"| 7
-    7 -->|"Charset([0-9])<br/>None"| 6
-    6 -->|"Prefix(.)<br/>None"| 9
-    9 -->|"Charset([0-9])<br/>None"| 8
-    8 -->|"PrefixInsensitive(e)<br/>None"| 10
-    10 -->|"Prefix(+, -)<br/>None"| 11
-    11 -->|"Charset([0-9])<br/>Some(Number)"| 1
-    1["1 (resolve_type)"]
-    1 -->|"Charset([0x09-0x0D,  ])<br/>None"| 12
-    12 -->|"Charset([0x00-0x08, 0x0E-0x1F, !-&quot;, $-9, ;-0xFF])<br/>None"| 13
-    13 -->|"Prefix(:)<br/>Some(Keyword)"| 2
-    2["2 (resolve_type_maybe_keyword)"]
-    2 -->|"Charset([0x00-0x08, 0x0E-0x1F, !-&quot;, $-9, ;-0xFF])<br/>None"| 14
-    14 -->|"Charset([0x00-&quot;, $-0xFF])<br/>Some(String)"| pop917504@{ shape: stop }
-    14 -->|"Chars(0)<br/>Some(String)"| pop917504@{ shape: stop }
-    2 -->|"Chars(0)<br/>None"| pop131072@{ shape: stop }
-    13 -->|"Chars(0)<br/>Some(String)"| pop851968@{ shape: stop }
-    12 -->|"Prefix(:)<br/>Some(Keyword)"| 2
-    12 -->|"Chars(0)<br/>None"| pop786432@{ shape: stop }
-    1 -->|"Chars(0)<br/>None"| 12
-    11 -->|"Chars(0)<br/>None"| pop720896@{ shape: stop }
-    10 -->|"Chars(0)<br/>None"| 11
-    8 -->|"Chars(0)<br/>Some(Number)"| 1
-    9 -->|"Chars(0)<br/>None"| pop589824@{ shape: stop }
-    6 -->|"Chars(0)<br/>None"| 8
-    7 -->|"Chars(0)<br/>None"| pop458752@{ shape: stop }
-    0 -->|"Charset([0-9])<br/>None"| 6
-    0 -->|"PrefixInsensitive(false, null, true)<br/>Some(Keyword)"| 1
-    0 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>Some(String)"| 1
-    0 -->|"Charset([0x00-!, $-&, (-,, .-/, :-@, [-^, `, {-0xC1, 0xF5-0xFF])<br/>None"| pop0@{ shape: stop }
-    0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
-**/
-#[rustfmt::skip]
-const LANG_YAML_CHARSET_0: &[u16; 16] = &[0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000];
-#[rustfmt::skip]
-const LANG_YAML_CHARSET_1: &[u16; 16] = &[0xe0a8, 0xe0f8, 0xf0f8, 0xf0f8, 0xf0f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f0, 0x7050, 0x7050, 0x7050, 0x7050, 0x7070];
-#[rustfmt::skip]
-const LANG_YAML_CHARSET_2: &[u16; 16] = &[0x0004, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0000, 0x0000];
-#[rustfmt::skip]
-const LANG_YAML_CHARSET_3: &[u16; 16] = &[0xfffb, 0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffe, 0xfff6, 0xfffe, 0xfffe, 0xfffe, 0xffff, 0xffff];
-#[rustfmt::skip]
-const LANG_YAML_CHARSET_4: &[u16; 16] = &[0xffff, 0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff];
-#[rustfmt::skip]
-const LANG_YAML_CHARSET_5: &[u16; 16] = &[0x1f57, 0x1f07, 0x0f03, 0x0f03, 0x0f07, 0x8f07, 0x8f07, 0x8f03, 0x8f07, 0x8f07, 0x8f0f, 0x8faf, 0x8faf, 0x8fab, 0x8faf, 0x8f8f];
-#[rustfmt::skip]
-const LANG_YAML_CHARSET_6: &[u16; 16] = &[0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffdf, 0xffff, 0xffff, 0xffff];
-#[rustfmt::skip]
-const LANG_YAML_CHARSET_7: &[u16; 16] = &[0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffdf, 0xffff, 0xffff, 0xffff];
-const LANG_YAML_STRING_0: *const u8 = [1, 0x23].as_ptr();
-const LANG_YAML_STRING_1: *const u8 = [1, 0x22].as_ptr();
-const LANG_YAML_STRING_2: *const u8 = [1, 0x27].as_ptr();
-const LANG_YAML_STRING_3: *const u8 = [1, 0x2d].as_ptr();
-const LANG_YAML_STRING_4: *const u8 = [1, 0x2e].as_ptr();
-const LANG_YAML_STRING_5: *const u8 = [1, 0x65].as_ptr();
-const LANG_YAML_STRING_6: *const u8 = [1, 0x2b].as_ptr();
-const LANG_YAML_STRING_7: *const u8 = [5, 0x66, 0x61, 0x6c, 0x73, 0x65].as_ptr();
-const LANG_YAML_STRING_8: *const u8 = [4, 0x6e, 0x75, 0x6c, 0x6c].as_ptr();
-const LANG_YAML_STRING_9: *const u8 = [4, 0x74, 0x72, 0x75, 0x65].as_ptr();
-const LANG_YAML_STRING_10: *const u8 = [1, 0x3a].as_ptr();
-const LANG_YAML_STRING_11: *const u8 = [1, 0x5c].as_ptr();
-#[rustfmt::skip]
-pub const LANG_YAML: &Language = &Language {
-    name: "YAML",
-    filenames: &["*.yaml", "*.yml"],
-    states: &[
-        &[
-            t(Prefix(LANG_YAML_STRING_0), None, Change(5)),
-            t(Prefix(LANG_YAML_STRING_1), Some(String), Change(3)),
-            t(Prefix(LANG_YAML_STRING_2), Some(String), Change(4)),
-            t(Prefix(LANG_YAML_STRING_3), None, Change(7)),
-            t(Charset(LANG_YAML_CHARSET_0), None, Change(6)),
-            t(PrefixInsensitive(LANG_YAML_STRING_7), Some(Keyword), Change(1)),
-            t(PrefixInsensitive(LANG_YAML_STRING_8), Some(Keyword), Change(1)),
-            t(PrefixInsensitive(LANG_YAML_STRING_9), Some(Keyword), Change(1)),
-            t(Charset(LANG_YAML_CHARSET_1), Some(String), Change(1)),
-            t(Charset(LANG_YAML_CHARSET_5), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Charset(LANG_YAML_CHARSET_2), None, Change(12)),
-            t(Chars(0), None, Change(12)),
-        ],
-        &[
-            t(Charset(LANG_YAML_CHARSET_3), None, Change(14)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_YAML_STRING_1), None, Pop(0)),
-            t(Prefix(LANG_YAML_STRING_11), None, Change(15)),
-            t(Charset(LANG_YAML_CHARSET_6), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_YAML_STRING_2), None, Pop(0)),
-            t(Prefix(LANG_YAML_STRING_11), None, Change(16)),
-            t(Charset(LANG_YAML_CHARSET_7), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Chars(usize::MAX), Some(Comment), Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_YAML_STRING_4), None, Change(9)),
-            t(Chars(0), None, Change(8)),
-        ],
-        &[
-            t(Charset(LANG_YAML_CHARSET_0), None, Change(6)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(PrefixInsensitive(LANG_YAML_STRING_5), None, Change(10)),
-            t(Chars(0), Some(Number), Change(1)),
-        ],
-        &[
-            t(Charset(LANG_YAML_CHARSET_0), None, Change(8)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_YAML_STRING_6), None, Change(11)),
-            t(Prefix(LANG_YAML_STRING_3), None, Change(11)),
-            t(Chars(0), None, Change(11)),
-        ],
-        &[
-            t(Charset(LANG_YAML_CHARSET_0), Some(Number), Change(1)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(Charset(LANG_YAML_CHARSET_3), None, Change(13)),
-            t(Prefix(LANG_YAML_STRING_10), Some(Keyword), Change(2)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_YAML_STRING_10), Some(Keyword), Change(2)),
-            t(Chars(0), Some(String), Pop(0)),
-        ],
-        &[
-            t(Charset(LANG_YAML_CHARSET_4), Some(String), Pop(0)),
-            t(Chars(0), Some(String), Pop(0)),
-        ],
-        &[
-            t(Chars(1), None, Change(3)),
-        ],
-        &[
-            t(Chars(1), None, Change(4)),
-        ],
-    ],
-};
-
-/**
----
-title: Bash
-config:
-  layout: elk
----
-flowchart TD
-    0["0 (ground)"]
-    0 -->|"Prefix(#)<br/>None"| 5
-    5 -->|"Chars(Line)<br/>Some(Comment)"| pop327680@{ shape: stop }
-    0 -->|"Prefix(')<br/>Some(String)"| push1[/"string_single"/]
-    0 -->|"Prefix(&quot;)<br/>Some(String)"| push2[/"string_double"/]
-    0 -->|"Prefix($)<br/>Some(Variable)"| push3[/"variable"/]
-    0 -->|"Prefix(!, %, *, +, /, <, =, >, |)<br/>Some(Operator)"| pop0@{ shape: stop }
-    0 -->|"PrefixInsensitive(break, case, continue, done, do, elif, else, esac, fi, for, function, if, in, return, select, then, until, while)<br/>Some(Keyword)"| 4
-    4["4 (resolve_type)"]
-    4 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>Some(Other)"| pop262144@{ shape: stop }
-    4 -->|"Chars(0)<br/>None"| pop262144@{ shape: stop }
-    0 -->|"Charset([0-9])<br/>Some(Number)"| pop0@{ shape: stop }
-    0 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>Some(Method)"| pop0@{ shape: stop }
-    0 -->|"Charset([0x00- , &, (-), ,-., :-;, ?-@, [-^, `, {, }-0xC1, 0xF5-0xFF])<br/>None"| pop0@{ shape: stop }
-    0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
-    1["1 (string_single)"]
-    1 -->|"Prefix(')<br/>None"| pop65536@{ shape: stop }
-    1 -->|"Prefix(\\)<br/>None"| 6
-    6 -->|"Chars(1)<br/>None"| 1
-    1 -->|"Charset([0x00-&, (-[, ]-0xFF])<br/>None"| pop65536@{ shape: stop }
-    1 -->|"Chars(1)<br/>None"| pop65536@{ shape: stop }
-    2["2 (string_double)"]
-    2 -->|"Prefix(&quot;)<br/>None"| pop131072@{ shape: stop }
-    2 -->|"Prefix(\\)<br/>None"| 7
-    7 -->|"Chars(1)<br/>None"| 2
-    2 -->|"Prefix($)<br/>Some(Other)"| push131075[/"variable"/]
-    2 -->|"Charset([0x00-!, #, %-[, ]-0xFF])<br/>None"| pop131072@{ shape: stop }
-    2 -->|"Chars(1)<br/>None"| pop131072@{ shape: stop }
-    3["3 (variable)"]
-    3 -->|"Prefix(#, ?)<br/>Some(Variable)"| pop196608@{ shape: stop }
-    3 -->|"Prefix({)<br/>None"| 8
-    8 -->|"Charset([0x00-|, ~-0xFF])<br/>None"| 9
-    9 -->|"Prefix(})<br/>Some(Variable)"| pop589824@{ shape: stop }
-    9 -->|"Chars(0)<br/>None"| pop589824@{ shape: stop }
-    8 -->|"Chars(0)<br/>None"| 9
-    3 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>Some(Variable)"| pop196608@{ shape: stop }
-    3 -->|"Chars(0)<br/>Some(Other)"| pop196608@{ shape: stop }
-**/
-#[rustfmt::skip]
-const LANG_BASH_CHARSET_0: &[u16; 16] = &[0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000];
-#[rustfmt::skip]
-const LANG_BASH_CHARSET_1: &[u16; 16] = &[0xe0a8, 0xe0f8, 0xf0f8, 0xf0f8, 0xf0f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f0, 0x7050, 0x7050, 0x7050, 0x7050, 0x7070];
-#[rustfmt::skip]
-const LANG_BASH_CHARSET_2: &[u16; 16] = &[0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xff7f, 0xffff, 0xffff];
-#[rustfmt::skip]
-const LANG_BASH_CHARSET_3: &[u16; 16] = &[0x1f57, 0x1f03, 0x0f03, 0x0f03, 0x0f03, 0x8f03, 0x8f07, 0x8f03, 0x8f07, 0x8f07, 0x8f0b, 0x8fab, 0x8f27, 0x8fa7, 0x8fa7, 0x8f8b];
-#[rustfmt::skip]
-const LANG_BASH_CHARSET_4: &[u16; 16] = &[0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffdf, 0xffff, 0xffff, 0xffff];
-#[rustfmt::skip]
-const LANG_BASH_CHARSET_5: &[u16; 16] = &[0xffff, 0xffff, 0xfffb, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffdf, 0xffff, 0xffff, 0xffff];
-const LANG_BASH_STRING_0: *const u8 = [1, 0x23].as_ptr();
-const LANG_BASH_STRING_1: *const u8 = [1, 0x27].as_ptr();
-const LANG_BASH_STRING_2: *const u8 = [1, 0x22].as_ptr();
-const LANG_BASH_STRING_3: *const u8 = [1, 0x24].as_ptr();
-const LANG_BASH_STRING_4: *const u8 = [1, 0x21].as_ptr();
-const LANG_BASH_STRING_5: *const u8 = [1, 0x25].as_ptr();
-const LANG_BASH_STRING_6: *const u8 = [1, 0x2a].as_ptr();
-const LANG_BASH_STRING_7: *const u8 = [1, 0x2b].as_ptr();
-const LANG_BASH_STRING_8: *const u8 = [1, 0x2f].as_ptr();
-const LANG_BASH_STRING_9: *const u8 = [1, 0x3c].as_ptr();
-const LANG_BASH_STRING_10: *const u8 = [1, 0x3d].as_ptr();
-const LANG_BASH_STRING_11: *const u8 = [1, 0x3e].as_ptr();
-const LANG_BASH_STRING_12: *const u8 = [1, 0x7c].as_ptr();
-const LANG_BASH_STRING_13: *const u8 = [5, 0x62, 0x72, 0x65, 0x61, 0x6b].as_ptr();
-const LANG_BASH_STRING_14: *const u8 = [4, 0x63, 0x61, 0x73, 0x65].as_ptr();
-const LANG_BASH_STRING_15: *const u8 = [8, 0x63, 0x6f, 0x6e, 0x74, 0x69, 0x6e, 0x75, 0x65].as_ptr();
-const LANG_BASH_STRING_16: *const u8 = [4, 0x64, 0x6f, 0x6e, 0x65].as_ptr();
-const LANG_BASH_STRING_17: *const u8 = [2, 0x64, 0x6f].as_ptr();
-const LANG_BASH_STRING_18: *const u8 = [4, 0x65, 0x6c, 0x69, 0x66].as_ptr();
-const LANG_BASH_STRING_19: *const u8 = [4, 0x65, 0x6c, 0x73, 0x65].as_ptr();
-const LANG_BASH_STRING_20: *const u8 = [4, 0x65, 0x73, 0x61, 0x63].as_ptr();
-const LANG_BASH_STRING_21: *const u8 = [2, 0x66, 0x69].as_ptr();
-const LANG_BASH_STRING_22: *const u8 = [3, 0x66, 0x6f, 0x72].as_ptr();
-const LANG_BASH_STRING_23: *const u8 = [8, 0x66, 0x75, 0x6e, 0x63, 0x74, 0x69, 0x6f, 0x6e].as_ptr();
-const LANG_BASH_STRING_24: *const u8 = [2, 0x69, 0x66].as_ptr();
-const LANG_BASH_STRING_25: *const u8 = [2, 0x69, 0x6e].as_ptr();
-const LANG_BASH_STRING_26: *const u8 = [6, 0x72, 0x65, 0x74, 0x75, 0x72, 0x6e].as_ptr();
-const LANG_BASH_STRING_27: *const u8 = [6, 0x73, 0x65, 0x6c, 0x65, 0x63, 0x74].as_ptr();
-const LANG_BASH_STRING_28: *const u8 = [4, 0x74, 0x68, 0x65, 0x6e].as_ptr();
-const LANG_BASH_STRING_29: *const u8 = [5, 0x75, 0x6e, 0x74, 0x69, 0x6c].as_ptr();
-const LANG_BASH_STRING_30: *const u8 = [5, 0x77, 0x68, 0x69, 0x6c, 0x65].as_ptr();
-const LANG_BASH_STRING_31: *const u8 = [1, 0x5c].as_ptr();
-const LANG_BASH_STRING_32: *const u8 = [1, 0x3f].as_ptr();
-const LANG_BASH_STRING_33: *const u8 = [1, 0x7b].as_ptr();
-const LANG_BASH_STRING_34: *const u8 = [1, 0x7d].as_ptr();
-#[rustfmt::skip]
-pub const LANG_BASH: &Language = &Language {
-    name: "Bash",
-    filenames: &["*.sh", "*.zsh"],
-    states: &[
-        &[
-            t(Prefix(LANG_BASH_STRING_0), None, Change(5)),
-            t(Prefix(LANG_BASH_STRING_1), Some(String), Push(1)),
-            t(Prefix(LANG_BASH_STRING_2), Some(String), Push(2)),
-            t(Prefix(LANG_BASH_STRING_3), Some(Variable), Push(3)),
-            t(Prefix(LANG_BASH_STRING_4), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BASH_STRING_5), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BASH_STRING_6), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BASH_STRING_7), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BASH_STRING_8), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BASH_STRING_9), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BASH_STRING_10), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BASH_STRING_11), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BASH_STRING_12), Some(Operator), Pop(0)),
-            t(PrefixInsensitive(LANG_BASH_STRING_13), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_14), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_15), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_16), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_17), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_18), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_19), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_20), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_21), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_22), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_23), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_24), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_25), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_26), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_27), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_28), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_29), Some(Keyword), Change(4)),
-            t(PrefixInsensitive(LANG_BASH_STRING_30), Some(Keyword), Change(4)),
-            t(Charset(LANG_BASH_CHARSET_0), Some(Number), Pop(0)),
-            t(Charset(LANG_BASH_CHARSET_1), Some(Method), Pop(0)),
-            t(Charset(LANG_BASH_CHARSET_3), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_BASH_STRING_1), None, Pop(1)),
-            t(Prefix(LANG_BASH_STRING_31), None, Change(6)),
-            t(Charset(LANG_BASH_CHARSET_4), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_BASH_STRING_2), None, Pop(1)),
-            t(Prefix(LANG_BASH_STRING_31), None, Change(7)),
-            t(Prefix(LANG_BASH_STRING_3), Some(Other), Push(3)),
-            t(Charset(LANG_BASH_CHARSET_5), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_BASH_STRING_0), Some(Variable), Pop(1)),
-            t(Prefix(LANG_BASH_STRING_32), Some(Variable), Pop(1)),
-            t(Prefix(LANG_BASH_STRING_33), None, Change(8)),
-            t(Charset(LANG_BASH_CHARSET_1), Some(Variable), Pop(1)),
-            t(Chars(0), Some(Other), Pop(1)),
-        ],
-        &[
-            t(Charset(LANG_BASH_CHARSET_1), Some(Other), Pop(0)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(Chars(usize::MAX), Some(Comment), Pop(0)),
-        ],
-        &[
-            t(Chars(1), None, Change(1)),
-        ],
-        &[
-            t(Chars(1), None, Change(2)),
-        ],
-        &[
-            t(Charset(LANG_BASH_CHARSET_2), None, Change(9)),
-            t(Chars(0), None, Change(9)),
-        ],
-        &[
-            t(Prefix(LANG_BASH_STRING_34), Some(Variable), Pop(1)),
-            t(Chars(0), None, Pop(0)),
-        ],
-    ],
-};
-
-/**
----
-title: PowerShell
-config:
-  layout: elk
----
-flowchart TD
-    0["0 (ground)"]
-    0 -->|"Prefix(#)<br/>None"| 6
-    6 -->|"Chars(Line)<br/>Some(Comment)"| pop393216@{ shape: stop }
-    0 -->|"Prefix(<#)<br/>Some(Comment)"| push1[/"comment"/]
-    0 -->|"Prefix(')<br/>Some(String)"| push2[/"string_single"/]
-    0 -->|"Prefix(&quot;)<br/>Some(String)"| push3[/"string_double"/]
-    0 -->|"Prefix($()<br/>Some(Other)"| push0[/"ground"/]
-    0 -->|"Prefix($)<br/>Some(Variable)"| push4[/"variable"/]
-    0 -->|"Prefix(()<br/>Some(Other)"| push0[/"ground"/]
-    0 -->|"Prefix())<br/>Some(Other)"| pop0@{ shape: stop }
-    0 -->|"Prefix(-)<br/>None"| 8
-    8 -->|"Charset([0-9])<br/>None"| 7
-    7 -->|"Prefix(.)<br/>None"| 10
-    10 -->|"Charset([0-9])<br/>None"| 9
-    9 -->|"PrefixInsensitive(e)<br/>None"| 11
-    11 -->|"Prefix(+, -)<br/>None"| 12
-    12 -->|"Charset([0-9])<br/>Some(Number)"| pop786432@{ shape: stop }
-    12 -->|"Chars(0)<br/>None"| pop786432@{ shape: stop }
-    11 -->|"Chars(0)<br/>None"| 12
-    9 -->|"Chars(0)<br/>Some(Number)"| pop589824@{ shape: stop }
-    10 -->|"Chars(0)<br/>None"| pop655360@{ shape: stop }
-    7 -->|"Chars(0)<br/>None"| 9
-    8 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>Some(Operator)"| pop524288@{ shape: stop }
-    8 -->|"Chars(0)<br/>None"| pop524288@{ shape: stop }
-    0 -->|"Charset([0-9])<br/>None"| 7
-    0 -->|"Prefix(!, %, *, +, /, <, =, >, |)<br/>Some(Operator)"| pop0@{ shape: stop }
-    0 -->|"PrefixInsensitive(break, catch, continue, do, elseif, else, finally, foreach, for, function, if, return, switch, throw, try, using, while)<br/>Some(Keyword)"| 5
-    5["5 (resolve_type)"]
-    5 -->|"Charset([-, 0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>Some(Other)"| pop327680@{ shape: stop }
-    5 -->|"Chars(0)<br/>None"| pop327680@{ shape: stop }
-    0 -->|"Charset([-, 0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>Some(Method)"| pop0@{ shape: stop }
-    0 -->|"Charset([0x00- , &, ,, ., :-;, ?-@, [-^, `, {, }-0xC1, 0xF5-0xFF])<br/>None"| pop0@{ shape: stop }
-    0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
-    1["1 (comment)"]
-    1 -->|"Prefix(#>)<br/>Some(Comment)"| pop65536@{ shape: stop }
-    1 -->|"Charset([0x00-&quot;, $-0xFF])<br/>None"| pop65536@{ shape: stop }
-    1 -->|"Chars(1)<br/>None"| pop65536@{ shape: stop }
-    2["2 (string_single)"]
-    2 -->|"Prefix(')<br/>None"| pop131072@{ shape: stop }
-    2 -->|"Prefix(`)<br/>None"| 13
-    13 -->|"Chars(1)<br/>None"| 2
-    2 -->|"Charset([0x00-&, (-_, a-0xFF])<br/>None"| pop131072@{ shape: stop }
-    2 -->|"Chars(1)<br/>None"| pop131072@{ shape: stop }
-    3["3 (string_double)"]
-    3 -->|"Prefix(&quot;)<br/>None"| pop196608@{ shape: stop }
-    3 -->|"Prefix(`)<br/>None"| 14
-    14 -->|"Chars(1)<br/>None"| 3
-    3 -->|"Prefix($()<br/>Some(Other)"| push196608[/"ground"/]
-    3 -->|"Prefix($)<br/>Some(Variable)"| push196612[/"variable"/]
-    3 -->|"Charset([0x00-!, #, %-_, a-0xFF])<br/>None"| pop196608@{ shape: stop }
-    3 -->|"Chars(1)<br/>None"| pop196608@{ shape: stop }
-    4["4 (variable)"]
-    4 -->|"Prefix($, ?, ^)<br/>None"| pop262144@{ shape: stop }
-    4 -->|"Prefix({)<br/>None"| 15
-    15 -->|"Charset([0x00-|, ~-0xFF])<br/>None"| 16
-    16 -->|"Prefix(})<br/>None"| pop1048576@{ shape: stop }
-    16 -->|"Chars(0)<br/>None"| pop1048576@{ shape: stop }
-    15 -->|"Chars(0)<br/>None"| 16
-    4 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>None"| pop262144@{ shape: stop }
-    4 -->|"Chars(0)<br/>Some(Other)"| pop262144@{ shape: stop }
-**/
-#[rustfmt::skip]
-const LANG_POWERSHELL_CHARSET_0: &[u16; 16] = &[0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000];
-#[rustfmt::skip]
-const LANG_POWERSHELL_CHARSET_1: &[u16; 16] = &[0xe0a8, 0xe0f8, 0xf0f8, 0xf0f8, 0xf0f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f0, 0x7050, 0x7050, 0x7050, 0x7050, 0x7070];
-#[rustfmt::skip]
-const LANG_POWERSHELL_CHARSET_2: &[u16; 16] = &[0xe0a8, 0xe0f8, 0xf0f8, 0xf0f8, 0xf0f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f0, 0x7050, 0x7050, 0x7054, 0x7050, 0x7070];
-#[rustfmt::skip]
-const LANG_POWERSHELL_CHARSET_3: &[u16; 16] = &[0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xff7f, 0xffff, 0xffff];
-#[rustfmt::skip]
-const LANG_POWERSHELL_CHARSET_4: &[u16; 16] = &[0x1f57, 0x1f03, 0x0f03, 0x0f03, 0x0f03, 0x8f03, 0x8f07, 0x8f03, 0x8f03, 0x8f03, 0x8f0b, 0x8fab, 0x8f27, 0x8fa3, 0x8fa7, 0x8f8b];
-#[rustfmt::skip]
-const LANG_POWERSHELL_CHARSET_5: &[u16; 16] = &[0xffff, 0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff];
-#[rustfmt::skip]
-const LANG_POWERSHELL_CHARSET_6: &[u16; 16] = &[0xffbf, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff];
-#[rustfmt::skip]
-const LANG_POWERSHELL_CHARSET_7: &[u16; 16] = &[0xffbf, 0xffff, 0xfffb, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff];
-const LANG_POWERSHELL_STRING_0: *const u8 = [1, 0x23].as_ptr();
-const LANG_POWERSHELL_STRING_1: *const u8 = [2, 0x3c, 0x23].as_ptr();
-const LANG_POWERSHELL_STRING_2: *const u8 = [1, 0x27].as_ptr();
-const LANG_POWERSHELL_STRING_3: *const u8 = [1, 0x22].as_ptr();
-const LANG_POWERSHELL_STRING_4: *const u8 = [2, 0x24, 0x28].as_ptr();
-const LANG_POWERSHELL_STRING_5: *const u8 = [1, 0x24].as_ptr();
-const LANG_POWERSHELL_STRING_6: *const u8 = [1, 0x28].as_ptr();
-const LANG_POWERSHELL_STRING_7: *const u8 = [1, 0x29].as_ptr();
-const LANG_POWERSHELL_STRING_8: *const u8 = [1, 0x2d].as_ptr();
-const LANG_POWERSHELL_STRING_9: *const u8 = [1, 0x2e].as_ptr();
-const LANG_POWERSHELL_STRING_10: *const u8 = [1, 0x65].as_ptr();
-const LANG_POWERSHELL_STRING_11: *const u8 = [1, 0x2b].as_ptr();
-const LANG_POWERSHELL_STRING_12: *const u8 = [1, 0x21].as_ptr();
-const LANG_POWERSHELL_STRING_13: *const u8 = [1, 0x25].as_ptr();
-const LANG_POWERSHELL_STRING_14: *const u8 = [1, 0x2a].as_ptr();
-const LANG_POWERSHELL_STRING_15: *const u8 = [1, 0x2f].as_ptr();
-const LANG_POWERSHELL_STRING_16: *const u8 = [1, 0x3c].as_ptr();
-const LANG_POWERSHELL_STRING_17: *const u8 = [1, 0x3d].as_ptr();
-const LANG_POWERSHELL_STRING_18: *const u8 = [1, 0x3e].as_ptr();
-const LANG_POWERSHELL_STRING_19: *const u8 = [1, 0x7c].as_ptr();
-const LANG_POWERSHELL_STRING_20: *const u8 = [5, 0x62, 0x72, 0x65, 0x61, 0x6b].as_ptr();
-const LANG_POWERSHELL_STRING_21: *const u8 = [5, 0x63, 0x61, 0x74, 0x63, 0x68].as_ptr();
-const LANG_POWERSHELL_STRING_22: *const u8 =
-    [8, 0x63, 0x6f, 0x6e, 0x74, 0x69, 0x6e, 0x75, 0x65].as_ptr();
-const LANG_POWERSHELL_STRING_23: *const u8 = [2, 0x64, 0x6f].as_ptr();
-const LANG_POWERSHELL_STRING_24: *const u8 = [6, 0x65, 0x6c, 0x73, 0x65, 0x69, 0x66].as_ptr();
-const LANG_POWERSHELL_STRING_25: *const u8 = [4, 0x65, 0x6c, 0x73, 0x65].as_ptr();
-const LANG_POWERSHELL_STRING_26: *const u8 = [7, 0x66, 0x69, 0x6e, 0x61, 0x6c, 0x6c, 0x79].as_ptr();
-const LANG_POWERSHELL_STRING_27: *const u8 = [7, 0x66, 0x6f, 0x72, 0x65, 0x61, 0x63, 0x68].as_ptr();
-const LANG_POWERSHELL_STRING_28: *const u8 = [3, 0x66, 0x6f, 0x72].as_ptr();
-const LANG_POWERSHELL_STRING_29: *const u8 =
-    [8, 0x66, 0x75, 0x6e, 0x63, 0x74, 0x69, 0x6f, 0x6e].as_ptr();
-const LANG_POWERSHELL_STRING_30: *const u8 = [2, 0x69, 0x66].as_ptr();
-const LANG_POWERSHELL_STRING_31: *const u8 = [6, 0x72, 0x65, 0x74, 0x75, 0x72, 0x6e].as_ptr();
-const LANG_POWERSHELL_STRING_32: *const u8 = [6, 0x73, 0x77, 0x69, 0x74, 0x63, 0x68].as_ptr();
-const LANG_POWERSHELL_STRING_33: *const u8 = [5, 0x74, 0x68, 0x72, 0x6f, 0x77].as_ptr();
-const LANG_POWERSHELL_STRING_34: *const u8 = [3, 0x74, 0x72, 0x79].as_ptr();
-const LANG_POWERSHELL_STRING_35: *const u8 = [5, 0x75, 0x73, 0x69, 0x6e, 0x67].as_ptr();
-const LANG_POWERSHELL_STRING_36: *const u8 = [5, 0x77, 0x68, 0x69, 0x6c, 0x65].as_ptr();
-const LANG_POWERSHELL_STRING_37: *const u8 = [2, 0x23, 0x3e].as_ptr();
-const LANG_POWERSHELL_STRING_38: *const u8 = [1, 0x60].as_ptr();
-const LANG_POWERSHELL_STRING_39: *const u8 = [1, 0x3f].as_ptr();
-const LANG_POWERSHELL_STRING_40: *const u8 = [1, 0x5e].as_ptr();
-const LANG_POWERSHELL_STRING_41: *const u8 = [1, 0x7b].as_ptr();
-const LANG_POWERSHELL_STRING_42: *const u8 = [1, 0x7d].as_ptr();
-#[rustfmt::skip]
-pub const LANG_POWERSHELL: &Language = &Language {
-    name: "PowerShell",
-    filenames: &["*.ps1", "*.psm1", "*.psd1"],
-    states: &[
-        &[
-            t(Prefix(LANG_POWERSHELL_STRING_0), None, Change(6)),
-            t(Prefix(LANG_POWERSHELL_STRING_1), Some(Comment), Push(1)),
-            t(Prefix(LANG_POWERSHELL_STRING_2), Some(String), Push(2)),
-            t(Prefix(LANG_POWERSHELL_STRING_3), Some(String), Push(3)),
-            t(Prefix(LANG_POWERSHELL_STRING_4), Some(Other), Push(0)),
-            t(Prefix(LANG_POWERSHELL_STRING_5), Some(Variable), Push(4)),
-            t(Prefix(LANG_POWERSHELL_STRING_6), Some(Other), Push(0)),
-            t(Prefix(LANG_POWERSHELL_STRING_7), Some(Other), Pop(1)),
-            t(Prefix(LANG_POWERSHELL_STRING_8), None, Change(8)),
-            t(Charset(LANG_POWERSHELL_CHARSET_0), None, Change(7)),
-            t(Prefix(LANG_POWERSHELL_STRING_12), Some(Operator), Pop(0)),
-            t(Prefix(LANG_POWERSHELL_STRING_13), Some(Operator), Pop(0)),
-            t(Prefix(LANG_POWERSHELL_STRING_14), Some(Operator), Pop(0)),
-            t(Prefix(LANG_POWERSHELL_STRING_11), Some(Operator), Pop(0)),
-            t(Prefix(LANG_POWERSHELL_STRING_15), Some(Operator), Pop(0)),
-            t(Prefix(LANG_POWERSHELL_STRING_16), Some(Operator), Pop(0)),
-            t(Prefix(LANG_POWERSHELL_STRING_17), Some(Operator), Pop(0)),
-            t(Prefix(LANG_POWERSHELL_STRING_18), Some(Operator), Pop(0)),
-            t(Prefix(LANG_POWERSHELL_STRING_19), Some(Operator), Pop(0)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_20), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_21), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_22), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_23), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_24), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_25), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_26), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_27), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_28), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_29), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_30), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_31), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_32), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_33), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_34), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_35), Some(Keyword), Change(5)),
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_36), Some(Keyword), Change(5)),
-            t(Charset(LANG_POWERSHELL_CHARSET_2), Some(Method), Pop(0)),
-            t(Charset(LANG_POWERSHELL_CHARSET_4), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_POWERSHELL_STRING_37), Some(Comment), Pop(1)),
-            t(Charset(LANG_POWERSHELL_CHARSET_5), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_POWERSHELL_STRING_2), None, Pop(1)),
-            t(Prefix(LANG_POWERSHELL_STRING_38), None, Change(13)),
-            t(Charset(LANG_POWERSHELL_CHARSET_6), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_POWERSHELL_STRING_3), None, Pop(1)),
-            t(Prefix(LANG_POWERSHELL_STRING_38), None, Change(14)),
-            t(Prefix(LANG_POWERSHELL_STRING_4), Some(Other), Push(0)),
-            t(Prefix(LANG_POWERSHELL_STRING_5), Some(Variable), Push(4)),
-            t(Charset(LANG_POWERSHELL_CHARSET_7), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_POWERSHELL_STRING_5), None, Pop(1)),
-            t(Prefix(LANG_POWERSHELL_STRING_39), None, Pop(1)),
-            t(Prefix(LANG_POWERSHELL_STRING_40), None, Pop(1)),
-            t(Prefix(LANG_POWERSHELL_STRING_41), None, Change(15)),
-            t(Charset(LANG_POWERSHELL_CHARSET_1), None, Pop(1)),
-            t(Chars(0), Some(Other), Pop(1)),
-        ],
-        &[
-            t(Charset(LANG_POWERSHELL_CHARSET_2), Some(Other), Pop(0)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(Chars(usize::MAX), Some(Comment), Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_POWERSHELL_STRING_9), None, Change(10)),
-            t(Chars(0), None, Change(9)),
-        ],
-        &[
-            t(Charset(LANG_POWERSHELL_CHARSET_0), None, Change(7)),
-            t(Charset(LANG_POWERSHELL_CHARSET_1), Some(Operator), Pop(0)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(PrefixInsensitive(LANG_POWERSHELL_STRING_10), None, Change(11)),
-            t(Chars(0), Some(Number), Pop(0)),
-        ],
-        &[
-            t(Charset(LANG_POWERSHELL_CHARSET_0), None, Change(9)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_POWERSHELL_STRING_11), None, Change(12)),
-            t(Prefix(LANG_POWERSHELL_STRING_8), None, Change(12)),
-            t(Chars(0), None, Change(12)),
-        ],
-        &[
-            t(Charset(LANG_POWERSHELL_CHARSET_0), Some(Number), Pop(0)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(Chars(1), None, Change(2)),
-        ],
-        &[
-            t(Chars(1), None, Change(3)),
-        ],
-        &[
-            t(Charset(LANG_POWERSHELL_CHARSET_3), None, Change(16)),
-            t(Chars(0), None, Change(16)),
-        ],
-        &[
-            t(Prefix(LANG_POWERSHELL_STRING_42), None, Pop(1)),
-            t(Chars(0), None, Pop(0)),
-        ],
-    ],
-};
-
-/**
----
-title: Batch
-config:
-  layout: elk
----
-flowchart TD
-    0["0 (ground)"]
-    0 -->|"PrefixInsensitive(rem)<br/>None"| 4
-    4 -->|"Charset([0x00-0x08, 0x0E-0x1F, !-0xFF])<br/>Some(Other)"| pop262144@{ shape: stop }
-    4 -->|"Chars(Line)<br/>Some(Comment)"| pop262144@{ shape: stop }
-    0 -->|"Prefix(::)<br/>None"| 5
-    5 -->|"Chars(Line)<br/>Some(Comment)"| pop327680@{ shape: stop }
-    0 -->|"Prefix(&quot;)<br/>Some(String)"| push1[/"string_double"/]
-    0 -->|"Prefix(%%)<br/>Some(Other)"| pop0@{ shape: stop }
-    0 -->|"Prefix(%)<br/>Some(Variable)"| push2[/"variable"/]
-    0 -->|"Prefix(!, *, +, /, <, =, >, |)<br/>Some(Operator)"| pop0@{ shape: stop }
-    0 -->|"PrefixInsensitive(break, call, cd, chdir, cls, copy, del, dir, echo, exit, for, goto, if, md, mkdir, move, pause, ren, set)<br/>Some(Keyword)"| 3
-    3["3 (resolve_type)"]
-    3 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>Some(Other)"| pop196608@{ shape: stop }
-    3 -->|"Chars(0)<br/>None"| pop196608@{ shape: stop }
-    0 -->|"Charset([0-9])<br/>Some(Number)"| pop0@{ shape: stop }
-    0 -->|"Charset([0x00- , #-$, &-), ,-., ;, ?-A, H, J-L, N-O, Q, T-a, h, j-l, n-o, q, t-{, }-0xFF])<br/>None"| pop0@{ shape: stop }
-    0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
-    1["1 (string_double)"]
-    1 -->|"Prefix(&quot;)<br/>None"| pop65536@{ shape: stop }
-    1 -->|"Prefix(\\)<br/>None"| 6
-    6 -->|"Chars(1)<br/>None"| 1
-    1 -->|"Charset([0x00-!, #-[, ]-0xFF])<br/>None"| pop65536@{ shape: stop }
-    1 -->|"Chars(1)<br/>None"| pop65536@{ shape: stop }
-    2["2 (variable)"]
-    2 -->|"Prefix(%)<br/>None"| pop131072@{ shape: stop }
-    2 -->|"Charset([0x00-$, &-0xFF])<br/>None"| pop131072@{ shape: stop }
-    2 -->|"Chars(1)<br/>None"| pop131072@{ shape: stop }
-**/
-#[rustfmt::skip]
-const LANG_BATCH_CHARSET_0: &[u16; 16] = &[0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xffff, 0xffff];
-#[rustfmt::skip]
-const LANG_BATCH_CHARSET_1: &[u16; 16] = &[0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000];
-#[rustfmt::skip]
-const LANG_BATCH_CHARSET_2: &[u16; 16] = &[0xe0a8, 0xe0f8, 0xf0f8, 0xf0f8, 0xf0f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f0, 0x7050, 0x7050, 0x7050, 0x7050, 0x7070];
-#[rustfmt::skip]
-const LANG_BATCH_CHARSET_3: &[u16; 16] = &[0xff57, 0xfff3, 0xff03, 0xff07, 0xffa7, 0xffa3, 0xffa7, 0xffa7, 0xfff7, 0xffa7, 0xfff3, 0xfffb, 0xff77, 0xffa7, 0xfff7, 0xfffb];
-#[rustfmt::skip]
-const LANG_BATCH_CHARSET_4: &[u16; 16] = &[0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffdf, 0xffff, 0xffff, 0xffff];
-#[rustfmt::skip]
-const LANG_BATCH_CHARSET_5: &[u16; 16] = &[0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff];
-const LANG_BATCH_STRING_0: *const u8 = [3, 0x72, 0x65, 0x6d].as_ptr();
-const LANG_BATCH_STRING_1: *const u8 = [2, 0x3a, 0x3a].as_ptr();
-const LANG_BATCH_STRING_2: *const u8 = [1, 0x22].as_ptr();
-const LANG_BATCH_STRING_3: *const u8 = [2, 0x25, 0x25].as_ptr();
-const LANG_BATCH_STRING_4: *const u8 = [1, 0x25].as_ptr();
-const LANG_BATCH_STRING_5: *const u8 = [1, 0x21].as_ptr();
-const LANG_BATCH_STRING_6: *const u8 = [1, 0x2a].as_ptr();
-const LANG_BATCH_STRING_7: *const u8 = [1, 0x2b].as_ptr();
-const LANG_BATCH_STRING_8: *const u8 = [1, 0x2f].as_ptr();
-const LANG_BATCH_STRING_9: *const u8 = [1, 0x3c].as_ptr();
-const LANG_BATCH_STRING_10: *const u8 = [1, 0x3d].as_ptr();
-const LANG_BATCH_STRING_11: *const u8 = [1, 0x3e].as_ptr();
-const LANG_BATCH_STRING_12: *const u8 = [1, 0x7c].as_ptr();
-const LANG_BATCH_STRING_13: *const u8 = [5, 0x62, 0x72, 0x65, 0x61, 0x6b].as_ptr();
-const LANG_BATCH_STRING_14: *const u8 = [4, 0x63, 0x61, 0x6c, 0x6c].as_ptr();
-const LANG_BATCH_STRING_15: *const u8 = [2, 0x63, 0x64].as_ptr();
-const LANG_BATCH_STRING_16: *const u8 = [5, 0x63, 0x68, 0x64, 0x69, 0x72].as_ptr();
-const LANG_BATCH_STRING_17: *const u8 = [3, 0x63, 0x6c, 0x73].as_ptr();
-const LANG_BATCH_STRING_18: *const u8 = [4, 0x63, 0x6f, 0x70, 0x79].as_ptr();
-const LANG_BATCH_STRING_19: *const u8 = [3, 0x64, 0x65, 0x6c].as_ptr();
-const LANG_BATCH_STRING_20: *const u8 = [3, 0x64, 0x69, 0x72].as_ptr();
-const LANG_BATCH_STRING_21: *const u8 = [4, 0x65, 0x63, 0x68, 0x6f].as_ptr();
-const LANG_BATCH_STRING_22: *const u8 = [4, 0x65, 0x78, 0x69, 0x74].as_ptr();
-const LANG_BATCH_STRING_23: *const u8 = [3, 0x66, 0x6f, 0x72].as_ptr();
-const LANG_BATCH_STRING_24: *const u8 = [4, 0x67, 0x6f, 0x74, 0x6f].as_ptr();
-const LANG_BATCH_STRING_25: *const u8 = [2, 0x69, 0x66].as_ptr();
-const LANG_BATCH_STRING_26: *const u8 = [2, 0x6d, 0x64].as_ptr();
-const LANG_BATCH_STRING_27: *const u8 = [5, 0x6d, 0x6b, 0x64, 0x69, 0x72].as_ptr();
-const LANG_BATCH_STRING_28: *const u8 = [4, 0x6d, 0x6f, 0x76, 0x65].as_ptr();
-const LANG_BATCH_STRING_29: *const u8 = [5, 0x70, 0x61, 0x75, 0x73, 0x65].as_ptr();
-const LANG_BATCH_STRING_30: *const u8 = [3, 0x72, 0x65, 0x6e].as_ptr();
-const LANG_BATCH_STRING_31: *const u8 = [3, 0x73, 0x65, 0x74].as_ptr();
-const LANG_BATCH_STRING_32: *const u8 = [1, 0x5c].as_ptr();
-#[rustfmt::skip]
-pub const LANG_BATCH: &Language = &Language {
-    name: "Batch",
-    filenames: &["*.bat", "*.cmd"],
-    states: &[
-        &[
-            t(PrefixInsensitive(LANG_BATCH_STRING_0), None, Change(4)),
-            t(Prefix(LANG_BATCH_STRING_1), None, Change(5)),
-            t(Prefix(LANG_BATCH_STRING_2), Some(String), Push(1)),
-            t(Prefix(LANG_BATCH_STRING_3), Some(Other), Pop(0)),
-            t(Prefix(LANG_BATCH_STRING_4), Some(Variable), Push(2)),
-            t(Prefix(LANG_BATCH_STRING_5), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BATCH_STRING_6), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BATCH_STRING_7), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BATCH_STRING_8), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BATCH_STRING_9), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BATCH_STRING_10), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BATCH_STRING_11), Some(Operator), Pop(0)),
-            t(Prefix(LANG_BATCH_STRING_12), Some(Operator), Pop(0)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_13), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_14), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_15), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_16), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_17), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_18), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_19), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_20), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_21), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_22), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_23), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_24), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_25), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_26), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_27), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_28), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_29), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_30), Some(Keyword), Change(3)),
-            t(PrefixInsensitive(LANG_BATCH_STRING_31), Some(Keyword), Change(3)),
-            t(Charset(LANG_BATCH_CHARSET_1), Some(Number), Pop(0)),
-            t(Charset(LANG_BATCH_CHARSET_3), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_BATCH_STRING_2), None, Pop(1)),
-            t(Prefix(LANG_BATCH_STRING_32), None, Change(6)),
-            t(Charset(LANG_BATCH_CHARSET_4), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Prefix(LANG_BATCH_STRING_4), None, Pop(1)),
-            t(Charset(LANG_BATCH_CHARSET_5), None, Pop(0)),
-            t(Chars(1), None, Pop(0)),
-        ],
-        &[
-            t(Charset(LANG_BATCH_CHARSET_2), Some(Other), Pop(0)),
-            t(Chars(0), None, Pop(0)),
-        ],
-        &[
-            t(Charset(LANG_BATCH_CHARSET_0), Some(Other), Pop(0)),
-            t(Chars(usize::MAX), Some(Comment), Pop(0)),
-        ],
-        &[
-            t(Chars(usize::MAX), Some(Comment), Pop(0)),
-        ],
-        &[
-            t(Chars(1), None, Change(1)),
+            t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_0), Some(Variable), Pop(1)),
+            t(Chars(0), None, Pop(1)),
         ],
     ],
 };
 
 #[rustfmt::skip]
 pub const LANGUAGES: &[&Language] = &[
-    LANG_DIFF,
-    LANG_COMMIT_EDITMSG,
-    LANG_JSON,
-    LANG_YAML,
-    LANG_BASH,
-    LANG_POWERSHELL,
-    LANG_BATCH,
+    LANG_GIT_COMMIT_MESSAGE,
+    LANG_GIT_REBASE_MESSAGE,
 ];
