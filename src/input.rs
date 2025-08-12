@@ -6,14 +6,16 @@
 //! In the future this allows us to take apart the application and
 //! support input schemes that aren't VT, such as UEFI, or GUI.
 
-use std::mem;
+use std::ops::{BitOr, BitOrAssign};
+use std::{fmt, mem};
 
 use crate::helpers::{CoordType, Point, Size};
+use crate::kbd::*;
 use crate::vt;
 
 /// Represents a key/modifier combination.
 ///
-/// TODO: Is this a good idea? I did it to allow typing `kbmod::CTRL | vk::A`.
+/// TODO: Is this a good idea? I did it to allow typing `MOD_CTRL | VK_A`.
 /// The reason it's an awkward u32 and not a struct is to hopefully make ABIs easier later.
 /// Of course you could just translate on the ABI boundary, but my hope is that this
 /// design lets me realize some restrictions early on that I can't foresee yet.
@@ -32,7 +34,7 @@ impl InputKey {
         } else if ch >= 'a' && ch <= 'z' {
             Some(Self(ch as u32 & !0x20)) // Shift a-z to A-Z
         } else if ch >= 'A' && ch <= 'Z' {
-            Some(Self(kbmod::SHIFT.0 | ch as u32))
+            Some(Self(MOD_SHIFT.0 | ch as u32))
         } else {
             None
         }
@@ -59,13 +61,62 @@ impl InputKey {
     }
 }
 
+impl fmt::Debug for InputKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.0 {
+            0x00 => "NULL",
+            0x08 => "BACK",
+            0x09 => "TAB",
+            0x0D => "RETURN",
+            0x1B => "ESCAPE",
+            0x20 => "SPACE",
+            0x21 => "PRIOR",
+            0x22 => "NEXT",
+
+            0x23 => "END",
+            0x24 => "HOME",
+
+            0x25 => "LEFT",
+            0x26 => "UP",
+            0x27 => "RIGHT",
+            0x28 => "DOWN",
+
+            0x2D => "INSERT",
+            0x2E => "DELETE",
+
+            0x6A => "MULTIPLY",
+            0x6B => "ADD",
+            0x6C => "SEPARATOR",
+            0x6D => "SUBTRACT",
+            0x6E => "DECIMAL",
+            0x6F => "DIVIDE",
+            _ => {
+                return {
+                    if matches!(self.0, 0x30..=0x39 | 0x41..=0x5A) {
+                        // 0-9, A-Z
+                        write!(f, "{}", char::from_u32(self.0).unwrap_or('\0'))
+                    } else if matches!(self.0, 0x70..=0x87) {
+                        // F1-F24
+                        write!(f, "F{}", self.0 - 0x70 + 1)
+                    } else if matches!(self.0, 0x60..=0x69) {
+                        // NUMPAD0-NUMPAD9
+                        write!(f, "NUMPAD{}", self.0 - 0x60)
+                    } else {
+                        write!(f, "VK_{:02X}", self.0)
+                    }
+                };
+            }
+        })
+    }
+}
+
 /// A keyboard modifier. Ctrl/Alt/Shift.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct InputKeyMod(u32);
 
 impl InputKeyMod {
-    const fn new(v: u32) -> Self {
+    pub(crate) const fn new(v: u32) -> Self {
         Self(v)
     }
 
@@ -74,7 +125,7 @@ impl InputKeyMod {
     }
 }
 
-impl std::ops::BitOr<InputKeyMod> for InputKey {
+impl BitOr<InputKeyMod> for InputKeyMod {
     type Output = Self;
 
     fn bitor(self, rhs: InputKeyMod) -> Self {
@@ -82,7 +133,15 @@ impl std::ops::BitOr<InputKeyMod> for InputKey {
     }
 }
 
-impl std::ops::BitOr<InputKey> for InputKeyMod {
+impl BitOr<InputKeyMod> for InputKey {
+    type Output = Self;
+
+    fn bitor(self, rhs: InputKeyMod) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl BitOr<InputKey> for InputKeyMod {
     type Output = InputKey;
 
     fn bitor(self, rhs: InputKey) -> InputKey {
@@ -90,137 +149,30 @@ impl std::ops::BitOr<InputKey> for InputKeyMod {
     }
 }
 
-impl std::ops::BitOrAssign for InputKeyMod {
+impl BitOrAssign for InputKeyMod {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
     }
 }
 
-/// Keyboard keys.
-///
-/// The codes defined here match the VK_* constants on Windows.
-/// It's a convenient way to handle keyboard input, even on other platforms.
-pub mod vk {
-    use super::InputKey;
-
-    pub const NULL: InputKey = InputKey::new('\0' as u32);
-    pub const BACK: InputKey = InputKey::new(0x08);
-    pub const TAB: InputKey = InputKey::new('\t' as u32);
-    pub const RETURN: InputKey = InputKey::new('\r' as u32);
-    pub const ESCAPE: InputKey = InputKey::new(0x1B);
-    pub const SPACE: InputKey = InputKey::new(' ' as u32);
-    pub const PRIOR: InputKey = InputKey::new(0x21);
-    pub const NEXT: InputKey = InputKey::new(0x22);
-
-    pub const END: InputKey = InputKey::new(0x23);
-    pub const HOME: InputKey = InputKey::new(0x24);
-
-    pub const LEFT: InputKey = InputKey::new(0x25);
-    pub const UP: InputKey = InputKey::new(0x26);
-    pub const RIGHT: InputKey = InputKey::new(0x27);
-    pub const DOWN: InputKey = InputKey::new(0x28);
-
-    pub const INSERT: InputKey = InputKey::new(0x2D);
-    pub const DELETE: InputKey = InputKey::new(0x2E);
-
-    pub const N0: InputKey = InputKey::new('0' as u32);
-    pub const N1: InputKey = InputKey::new('1' as u32);
-    pub const N2: InputKey = InputKey::new('2' as u32);
-    pub const N3: InputKey = InputKey::new('3' as u32);
-    pub const N4: InputKey = InputKey::new('4' as u32);
-    pub const N5: InputKey = InputKey::new('5' as u32);
-    pub const N6: InputKey = InputKey::new('6' as u32);
-    pub const N7: InputKey = InputKey::new('7' as u32);
-    pub const N8: InputKey = InputKey::new('8' as u32);
-    pub const N9: InputKey = InputKey::new('9' as u32);
-
-    pub const A: InputKey = InputKey::new('A' as u32);
-    pub const B: InputKey = InputKey::new('B' as u32);
-    pub const C: InputKey = InputKey::new('C' as u32);
-    pub const D: InputKey = InputKey::new('D' as u32);
-    pub const E: InputKey = InputKey::new('E' as u32);
-    pub const F: InputKey = InputKey::new('F' as u32);
-    pub const G: InputKey = InputKey::new('G' as u32);
-    pub const H: InputKey = InputKey::new('H' as u32);
-    pub const I: InputKey = InputKey::new('I' as u32);
-    pub const J: InputKey = InputKey::new('J' as u32);
-    pub const K: InputKey = InputKey::new('K' as u32);
-    pub const L: InputKey = InputKey::new('L' as u32);
-    pub const M: InputKey = InputKey::new('M' as u32);
-    pub const N: InputKey = InputKey::new('N' as u32);
-    pub const O: InputKey = InputKey::new('O' as u32);
-    pub const P: InputKey = InputKey::new('P' as u32);
-    pub const Q: InputKey = InputKey::new('Q' as u32);
-    pub const R: InputKey = InputKey::new('R' as u32);
-    pub const S: InputKey = InputKey::new('S' as u32);
-    pub const T: InputKey = InputKey::new('T' as u32);
-    pub const U: InputKey = InputKey::new('U' as u32);
-    pub const V: InputKey = InputKey::new('V' as u32);
-    pub const W: InputKey = InputKey::new('W' as u32);
-    pub const X: InputKey = InputKey::new('X' as u32);
-    pub const Y: InputKey = InputKey::new('Y' as u32);
-    pub const Z: InputKey = InputKey::new('Z' as u32);
-
-    pub const NUMPAD0: InputKey = InputKey::new(0x60);
-    pub const NUMPAD1: InputKey = InputKey::new(0x61);
-    pub const NUMPAD2: InputKey = InputKey::new(0x62);
-    pub const NUMPAD3: InputKey = InputKey::new(0x63);
-    pub const NUMPAD4: InputKey = InputKey::new(0x64);
-    pub const NUMPAD5: InputKey = InputKey::new(0x65);
-    pub const NUMPAD6: InputKey = InputKey::new(0x66);
-    pub const NUMPAD7: InputKey = InputKey::new(0x67);
-    pub const NUMPAD8: InputKey = InputKey::new(0x68);
-    pub const NUMPAD9: InputKey = InputKey::new(0x69);
-    pub const MULTIPLY: InputKey = InputKey::new(0x6A);
-    pub const ADD: InputKey = InputKey::new(0x6B);
-    pub const SEPARATOR: InputKey = InputKey::new(0x6C);
-    pub const SUBTRACT: InputKey = InputKey::new(0x6D);
-    pub const DECIMAL: InputKey = InputKey::new(0x6E);
-    pub const DIVIDE: InputKey = InputKey::new(0x6F);
-
-    pub const F1: InputKey = InputKey::new(0x70);
-    pub const F2: InputKey = InputKey::new(0x71);
-    pub const F3: InputKey = InputKey::new(0x72);
-    pub const F4: InputKey = InputKey::new(0x73);
-    pub const F5: InputKey = InputKey::new(0x74);
-    pub const F6: InputKey = InputKey::new(0x75);
-    pub const F7: InputKey = InputKey::new(0x76);
-    pub const F8: InputKey = InputKey::new(0x77);
-    pub const F9: InputKey = InputKey::new(0x78);
-    pub const F10: InputKey = InputKey::new(0x79);
-    pub const F11: InputKey = InputKey::new(0x7A);
-    pub const F12: InputKey = InputKey::new(0x7B);
-    pub const F13: InputKey = InputKey::new(0x7C);
-    pub const F14: InputKey = InputKey::new(0x7D);
-    pub const F15: InputKey = InputKey::new(0x7E);
-    pub const F16: InputKey = InputKey::new(0x7F);
-    pub const F17: InputKey = InputKey::new(0x80);
-    pub const F18: InputKey = InputKey::new(0x81);
-    pub const F19: InputKey = InputKey::new(0x82);
-    pub const F20: InputKey = InputKey::new(0x83);
-    pub const F21: InputKey = InputKey::new(0x84);
-    pub const F22: InputKey = InputKey::new(0x85);
-    pub const F23: InputKey = InputKey::new(0x86);
-    pub const F24: InputKey = InputKey::new(0x87);
-}
-
-/// Keyboard modifiers.
-pub mod kbmod {
-    use super::InputKeyMod;
-
-    pub const NONE: InputKeyMod = InputKeyMod::new(0x00000000);
-    pub const CTRL: InputKeyMod = InputKeyMod::new(0x01000000);
-    pub const ALT: InputKeyMod = InputKeyMod::new(0x02000000);
-    pub const SHIFT: InputKeyMod = InputKeyMod::new(0x04000000);
-
-    pub const CTRL_ALT: InputKeyMod = InputKeyMod::new(0x03000000);
-    pub const CTRL_SHIFT: InputKeyMod = InputKeyMod::new(0x05000000);
-    pub const ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x06000000);
-    pub const CTRL_ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x07000000);
+impl fmt::Debug for InputKeyMod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut sep = "";
+        for (modifier, name) in [(MOD_CTRL, "CTRL"), (MOD_ALT, "ALT"), (MOD_SHIFT, "SHIFT")] {
+            if self.contains(modifier) {
+                write!(f, "{}{}", sep, name)?;
+                sep = " | ";
+            }
+        }
+        if sep.is_empty() {
+            f.write_str("NONE")?;
+        }
+        Ok(())
+    }
 }
 
 /// Mouse input state. Up/Down, Left/Right, etc.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum InputMouseState {
     #[default]
     None,
@@ -236,7 +188,7 @@ pub enum InputMouseState {
 }
 
 /// Mouse input.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct InputMouse {
     /// The state of the mouse.Up/Down, Left/Right, etc.
     pub state: InputMouseState,
@@ -316,14 +268,14 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
             }
 
             const KEYPAD_LUT: [u8; 8] = [
-                vk::UP.value() as u8,    // A
-                vk::DOWN.value() as u8,  // B
-                vk::RIGHT.value() as u8, // C
-                vk::LEFT.value() as u8,  // D
-                0,                       // E
-                vk::END.value() as u8,   // F
-                0,                       // G
-                vk::HOME.value() as u8,  // H
+                VK_UP.value() as u8,    // A
+                VK_DOWN.value() as u8,  // B
+                VK_RIGHT.value() as u8, // C
+                VK_LEFT.value() as u8,  // D
+                0,                      // E
+                VK_END.value() as u8,   // F
+                0,                      // G
+                VK_HOME.value() as u8,  // H
             ];
 
             match self.stream.next()? {
@@ -332,24 +284,24 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                 }
                 vt::Token::Ctrl(ch) => match ch {
                     '\0' | '\t' | '\r' => return Some(Input::Keyboard(InputKey::new(ch as u32))),
-                    '\n' => return Some(Input::Keyboard(kbmod::CTRL | vk::RETURN)),
+                    '\n' => return Some(Input::Keyboard(MOD_CTRL | VK_RETURN)),
                     ..='\x1a' => {
                         // Shift control code to A-Z
                         let key = ch as u32 | 0x40;
-                        return Some(Input::Keyboard(kbmod::CTRL | InputKey::new(key)));
+                        return Some(Input::Keyboard(MOD_CTRL | InputKey::new(key)));
                     }
-                    '\x7f' => return Some(Input::Keyboard(vk::BACK)),
+                    '\x7f' => return Some(Input::Keyboard(VK_BACK)),
                     _ => {}
                 },
                 vt::Token::Esc(ch) => {
                     match ch {
-                        '\0' => return Some(Input::Keyboard(vk::ESCAPE)),
-                        '\n' => return Some(Input::Keyboard(kbmod::CTRL_ALT | vk::RETURN)),
+                        '\0' => return Some(Input::Keyboard(VK_ESCAPE)),
+                        '\n' => return Some(Input::Keyboard(MOD_CTRL | MOD_ALT | VK_RETURN)),
                         ' '..='~' => {
                             let ch = ch as u32;
                             let key = ch & !0x20; // Shift a-z to A-Z
                             let modifiers =
-                                if (ch & 0x20) != 0 { kbmod::ALT } else { kbmod::ALT_SHIFT };
+                                if (ch & 0x20) != 0 { MOD_ALT } else { MOD_ALT | MOD_SHIFT };
                             return Some(Input::Keyboard(modifiers | InputKey::new(key)));
                         }
                         _ => {}
@@ -363,7 +315,7 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                         }
                     }
                     'P'..='S' => {
-                        let key = vk::F1.value() + ch as u32 - 'P' as u32;
+                        let key = VK_F1.value() + ch as u32 - 'P' as u32;
                         return Some(Input::Keyboard(InputKey::new(key)));
                     }
                     _ => {}
@@ -378,16 +330,16 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                                 ));
                             }
                         }
-                        'Z' => return Some(Input::Keyboard(kbmod::SHIFT | vk::TAB)),
+                        'Z' => return Some(Input::Keyboard(MOD_SHIFT | VK_TAB)),
                         '~' => {
                             const LUT: [u8; 35] = [
                                 0,
-                                vk::HOME.value() as u8,   // 1
-                                vk::INSERT.value() as u8, // 2
-                                vk::DELETE.value() as u8, // 3
-                                vk::END.value() as u8,    // 4
-                                vk::PRIOR.value() as u8,  // 5
-                                vk::NEXT.value() as u8,   // 6
+                                VK_HOME.value() as u8,   // 1
+                                VK_INSERT.value() as u8, // 2
+                                VK_DELETE.value() as u8, // 3
+                                VK_END.value() as u8,    // 4
+                                VK_PRIOR.value() as u8,  // 5
+                                VK_NEXT.value() as u8,   // 6
                                 0,
                                 0,
                                 0,
@@ -396,26 +348,26 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                                 0,
                                 0,
                                 0,
-                                vk::F5.value() as u8, // 15
+                                VK_F5.value() as u8, // 15
                                 0,
-                                vk::F6.value() as u8,  // 17
-                                vk::F7.value() as u8,  // 18
-                                vk::F8.value() as u8,  // 19
-                                vk::F9.value() as u8,  // 20
-                                vk::F10.value() as u8, // 21
+                                VK_F6.value() as u8,  // 17
+                                VK_F7.value() as u8,  // 18
+                                VK_F8.value() as u8,  // 19
+                                VK_F9.value() as u8,  // 20
+                                VK_F10.value() as u8, // 21
                                 0,
-                                vk::F11.value() as u8, // 23
-                                vk::F12.value() as u8, // 24
-                                vk::F13.value() as u8, // 25
-                                vk::F14.value() as u8, // 26
+                                VK_F11.value() as u8, // 23
+                                VK_F12.value() as u8, // 24
+                                VK_F13.value() as u8, // 25
+                                VK_F14.value() as u8, // 26
                                 0,
-                                vk::F15.value() as u8, // 28
-                                vk::F16.value() as u8, // 29
+                                VK_F15.value() as u8, // 28
+                                VK_F16.value() as u8, // 29
                                 0,
-                                vk::F17.value() as u8, // 31
-                                vk::F18.value() as u8, // 32
-                                vk::F19.value() as u8, // 33
-                                vk::F20.value() as u8, // 34
+                                VK_F17.value() as u8, // 31
+                                VK_F18.value() as u8, // 32
+                                VK_F19.value() as u8, // 33
+                                VK_F20.value() as u8, // 34
                             ];
                             const LUT_LEN: u16 = LUT.len() as u16;
 
@@ -436,7 +388,7 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                             let btn = csi.params[0];
                             let mut mouse = InputMouse {
                                 state: InputMouseState::None,
-                                modifiers: kbmod::NONE,
+                                modifiers: MOD_NONE,
                                 position: Default::default(),
                                 scroll: Default::default(),
                             };
@@ -455,13 +407,10 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                                 mouse.state = STATES[(btn as usize) & 0x03];
                             }
 
-                            mouse.modifiers = kbmod::NONE;
-                            mouse.modifiers |=
-                                if (btn & 0x04) != 0 { kbmod::SHIFT } else { kbmod::NONE };
-                            mouse.modifiers |=
-                                if (btn & 0x08) != 0 { kbmod::ALT } else { kbmod::NONE };
-                            mouse.modifiers |=
-                                if (btn & 0x10f) != 0 { kbmod::CTRL } else { kbmod::NONE };
+                            mouse.modifiers = MOD_NONE;
+                            mouse.modifiers |= if (btn & 0x04) != 0 { MOD_SHIFT } else { MOD_NONE };
+                            mouse.modifiers |= if (btn & 0x08) != 0 { MOD_ALT } else { MOD_NONE };
+                            mouse.modifiers |= if (btn & 0x10) != 0 { MOD_CTRL } else { MOD_NONE };
 
                             mouse.position.x = csi.params[1] as CoordType - 1;
                             mouse.position.y = csi.params[2] as CoordType - 1;
@@ -552,10 +501,10 @@ impl<'input> Stream<'_, '_, 'input> {
             _ => InputMouseState::None,
         };
         let modifiers = match modifier {
-            4 => kbmod::SHIFT,
-            8 => kbmod::ALT,
-            16 => kbmod::CTRL,
-            _ => kbmod::NONE,
+            4 => MOD_SHIFT,
+            8 => MOD_ALT,
+            16 => MOD_CTRL,
+            _ => MOD_NONE,
         };
 
         self.parser.x10_mouse_want = false;
@@ -570,16 +519,16 @@ impl<'input> Stream<'_, '_, 'input> {
     }
 
     fn parse_modifiers(csi: &vt::Csi) -> InputKeyMod {
-        let mut modifiers = kbmod::NONE;
+        let mut modifiers = MOD_NONE;
         let p1 = csi.params[1].saturating_sub(1);
         if (p1 & 0x01) != 0 {
-            modifiers |= kbmod::SHIFT;
+            modifiers |= MOD_SHIFT;
         }
         if (p1 & 0x02) != 0 {
-            modifiers |= kbmod::ALT;
+            modifiers |= MOD_ALT;
         }
         if (p1 & 0x04) != 0 {
-            modifiers |= kbmod::CTRL;
+            modifiers |= MOD_CTRL;
         }
         modifiers
     }

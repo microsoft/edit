@@ -32,6 +32,7 @@ pub mod hash;
 pub mod helpers;
 pub mod icu;
 pub mod input;
+pub mod kbd;
 pub mod oklab;
 pub mod path;
 pub mod simd;

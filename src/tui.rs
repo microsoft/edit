@@ -157,13 +157,13 @@ use crate::document::WriteableDocument;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::hash::*;
 use crate::helpers::*;
-use crate::input::{InputKeyMod, kbmod, vk};
+use crate::input::InputKeyMod;
+use crate::kbd::*;
 use crate::{apperr, arena_format, input, simd, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
-const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
-const KBMOD_FOR_WORD_NAV: InputKeyMod =
-    if cfg!(target_os = "macos") { kbmod::ALT } else { kbmod::CTRL };
+const SHIFT_TAB: InputKey = VK_TAB.with_modifiers(MOD_SHIFT);
+const KBMOD_FOR_WORD_NAV: InputKeyMod = if cfg!(target_os = "macos") { MOD_ALT } else { MOD_CTRL };
 
 type Input<'input> = input::Input<'input>;
 type InputKey = input::InputKey;
@@ -520,7 +520,7 @@ impl Tui {
         let now = std::time::Instant::now();
         let mut input_text = None;
         let mut input_keyboard = None;
-        let mut input_mouse_modifiers = kbmod::NONE;
+        let mut input_mouse_modifiers = MOD_NONE;
         let mut input_mouse_click = 0;
         let mut input_scroll_delta = Point { x: 0, y: 0 };
         // `input_consumed` should be `true` if we're in the settling phase which is indicated by
@@ -556,7 +556,7 @@ impl Tui {
                 let clipboard = self.clipboard_mut();
                 clipboard.write(paste);
                 clipboard.mark_as_synchronized();
-                input_keyboard = Some(kbmod::CTRL | vk::V);
+                input_keyboard = Some(MOD_CTRL | VK_V);
             }
             Some(Input::Keyboard(keyboard)) => {
                 input_keyboard = Some(keyboard);
@@ -743,7 +743,7 @@ impl Tui {
 
         let mut focus_path_pop_min = 0;
         // If the user pressed Escape, we move the focus to a parent node.
-        if !ctx.input_consumed && ctx.consume_shortcut(vk::ESCAPE) {
+        if !ctx.input_consumed && ctx.consume_shortcut(VK_ESCAPE) {
             focus_path_pop_min = 1;
         }
 
@@ -1463,11 +1463,11 @@ impl<'a> Context<'a, '_> {
         let Some(input) = self.input_keyboard else {
             return;
         };
-        if !matches!(input, SHIFT_TAB | vk::TAB) {
+        if !matches!(input, SHIFT_TAB | VK_TAB) {
             return;
         }
 
-        let forward = input == vk::TAB;
+        let forward = input == VK_TAB;
         let mut focused_start = focused;
         let mut focused_next = focused;
 
@@ -1749,7 +1749,7 @@ impl<'a> Context<'a, '_> {
         // Consume the input unconditionally, so that the root (the "main window")
         // doesn't accidentally receive any input via `consume_shortcut()`.
         if self.contains_focus() {
-            let exit = !self.input_consumed && self.input_keyboard == Some(vk::ESCAPE);
+            let exit = !self.input_consumed && self.input_keyboard == Some(VK_ESCAPE);
             self.set_input_consumed_unchecked();
             exit
         } else {
@@ -1820,7 +1820,7 @@ impl<'a> Context<'a, '_> {
     }
 
     fn table_end_row(&mut self) {
-        self.table_move_focus(vk::LEFT, vk::RIGHT);
+        self.table_move_focus(VK_LEFT, VK_RIGHT);
     }
 
     /// Ends the current table block.
@@ -1835,7 +1835,7 @@ impl<'a> Context<'a, '_> {
         }
 
         self.block_end(); // table
-        self.table_move_focus(vk::UP, vk::DOWN);
+        self.table_move_focus(VK_UP, VK_DOWN);
     }
 
     fn table_move_focus(&mut self, prev_key: InputKey, next_key: InputKey) {
@@ -2031,8 +2031,8 @@ impl<'a> Context<'a, '_> {
     fn button_activated(&mut self) -> bool {
         if !self.input_consumed
             && ((self.input_mouse_click != 0 && self.contains_mouse_down())
-                || self.input_keyboard == Some(vk::RETURN)
-                || self.input_keyboard == Some(vk::SPACE))
+                || self.input_keyboard == Some(VK_RETURN)
+                || self.input_keyboard == Some(VK_SPACE))
             && self.is_focused()
         {
             self.set_input_consumed();
@@ -2267,7 +2267,7 @@ impl<'a> Context<'a, '_> {
                         2 => tb.select_word(),
                         _ => match self.tui.mouse_state {
                             InputMouseState::Left => {
-                                if self.input_mouse_modifiers.contains(kbmod::SHIFT) {
+                                if self.input_mouse_modifiers.contains(MOD_SHIFT) {
                                     // TODO: Untested because Windows Terminal surprisingly doesn't support Shift+Click.
                                     tb.selection_update_visual(pos);
                                 } else {
@@ -2321,29 +2321,29 @@ impl<'a> Context<'a, '_> {
             make_cursor_visible = true;
 
             match key {
-                vk::BACK => {
-                    let granularity = if modifiers == kbmod::CTRL {
+                VK_BACK => {
+                    let granularity = if modifiers == MOD_CTRL {
                         CursorMovement::Word
                     } else {
                         CursorMovement::Grapheme
                     };
                     tb.delete(granularity, -1);
                 }
-                vk::TAB => {
+                VK_TAB => {
                     if single_line {
                         // If this is just a simple input field, don't consume Tab (= early return).
                         return false;
                     }
-                    tb.indent_change(if modifiers == kbmod::SHIFT { -1 } else { 1 });
+                    tb.indent_change(if modifiers == MOD_SHIFT { -1 } else { 1 });
                 }
-                vk::RETURN => {
+                VK_RETURN => {
                     if single_line {
                         // If this is just a simple input field, don't consume Enter (= early return).
                         return false;
                     }
                     write = b"\n";
                 }
-                vk::ESCAPE => {
+                VK_ESCAPE => {
                     // If there was a selection, clear it and show the cursor (= fallthrough).
                     if !tb.clear_selection() {
                         if single_line {
@@ -2357,7 +2357,7 @@ impl<'a> Context<'a, '_> {
                         make_cursor_visible = false;
                     }
                 }
-                vk::PRIOR => {
+                VK_PRIOR => {
                     let height = node_prev.inner.height() - 1;
 
                     // If the cursor was already on the first line,
@@ -2366,7 +2366,7 @@ impl<'a> Context<'a, '_> {
                         tc.preferred_column = 0;
                     }
 
-                    if modifiers == kbmod::SHIFT {
+                    if modifiers == MOD_SHIFT {
                         tb.selection_update_visual(Point {
                             x: tc.preferred_column,
                             y: tb.cursor_visual_pos().y - height,
@@ -2378,7 +2378,7 @@ impl<'a> Context<'a, '_> {
                         });
                     }
                 }
-                vk::NEXT => {
+                VK_NEXT => {
                     let height = node_prev.inner.height() - 1;
 
                     // If the cursor was already on the last line,
@@ -2387,7 +2387,7 @@ impl<'a> Context<'a, '_> {
                         tc.preferred_column = CoordType::MAX;
                     }
 
-                    if modifiers == kbmod::SHIFT {
+                    if modifiers == MOD_SHIFT {
                         tb.selection_update_visual(Point {
                             x: tc.preferred_column,
                             y: tb.cursor_visual_pos().y + height,
@@ -2403,28 +2403,28 @@ impl<'a> Context<'a, '_> {
                         tc.preferred_column = tb.cursor_visual_pos().x;
                     }
                 }
-                vk::END => {
+                VK_END => {
                     let logical_before = tb.cursor_logical_pos();
-                    let destination = if modifiers.contains(kbmod::CTRL) {
+                    let destination = if modifiers.contains(MOD_CTRL) {
                         Point::MAX
                     } else {
                         Point { x: CoordType::MAX, y: tb.cursor_visual_pos().y }
                     };
 
-                    if modifiers.contains(kbmod::SHIFT) {
+                    if modifiers.contains(MOD_SHIFT) {
                         tb.selection_update_visual(destination);
                     } else {
                         tb.cursor_move_to_visual(destination);
                     }
 
-                    if !modifiers.contains(kbmod::CTRL) {
+                    if !modifiers.contains(MOD_CTRL) {
                         let logical_after = tb.cursor_logical_pos();
 
                         // If word-wrap is enabled and the user presses End the first time,
                         // it moves to the start of the visual line. The second time they
                         // press it, it moves to the start of the logical line.
                         if tb.is_word_wrap_enabled() && logical_after == logical_before {
-                            if modifiers == kbmod::SHIFT {
+                            if modifiers == MOD_SHIFT {
                                 tb.selection_update_logical(Point {
                                     x: CoordType::MAX,
                                     y: tb.cursor_logical_pos().y,
@@ -2438,28 +2438,28 @@ impl<'a> Context<'a, '_> {
                         }
                     }
                 }
-                vk::HOME => {
+                VK_HOME => {
                     let logical_before = tb.cursor_logical_pos();
-                    let destination = if modifiers.contains(kbmod::CTRL) {
+                    let destination = if modifiers.contains(MOD_CTRL) {
                         Default::default()
                     } else {
                         Point { x: 0, y: tb.cursor_visual_pos().y }
                     };
 
-                    if modifiers.contains(kbmod::SHIFT) {
+                    if modifiers.contains(MOD_SHIFT) {
                         tb.selection_update_visual(destination);
                     } else {
                         tb.cursor_move_to_visual(destination);
                     }
 
-                    if !modifiers.contains(kbmod::CTRL) {
+                    if !modifiers.contains(MOD_CTRL) {
                         let mut logical_after = tb.cursor_logical_pos();
 
                         // If word-wrap is enabled and the user presses Home the first time,
                         // it moves to the start of the visual line. The second time they
                         // press it, it moves to the start of the logical line.
                         if tb.is_word_wrap_enabled() && logical_after == logical_before {
-                            if modifiers == kbmod::SHIFT {
+                            if modifiers == MOD_SHIFT {
                                 tb.selection_update_logical(Point {
                                     x: 0,
                                     y: tb.cursor_logical_pos().y,
@@ -2483,7 +2483,7 @@ impl<'a> Context<'a, '_> {
                             && let indent_end = tb.indent_end_logical_pos()
                             && (logical_before > indent_end || logical_before.x == 0)
                         {
-                            if modifiers == kbmod::SHIFT {
+                            if modifiers == MOD_SHIFT {
                                 tb.selection_update_logical(indent_end);
                             } else {
                                 tb.cursor_move_to_logical(indent_end);
@@ -2491,13 +2491,13 @@ impl<'a> Context<'a, '_> {
                         }
                     }
                 }
-                vk::LEFT => {
+                VK_LEFT => {
                     let granularity = if modifiers.contains(KBMOD_FOR_WORD_NAV) {
                         CursorMovement::Word
                     } else {
                         CursorMovement::Grapheme
                     };
-                    if modifiers.contains(kbmod::SHIFT) {
+                    if modifiers.contains(MOD_SHIFT) {
                         tb.selection_update_delta(granularity, -1);
                     } else if let Some((beg, _)) = tb.selection_range() {
                         unsafe { tb.set_cursor(beg) };
@@ -2505,12 +2505,12 @@ impl<'a> Context<'a, '_> {
                         tb.cursor_move_delta(granularity, -1);
                     }
                 }
-                vk::UP => {
+                VK_UP => {
                     if single_line {
                         return false;
                     }
                     match modifiers {
-                        kbmod::NONE => {
+                        MOD_NONE => {
                             let mut x = tc.preferred_column;
                             let mut y = tb.cursor_visual_pos().y - 1;
 
@@ -2530,11 +2530,11 @@ impl<'a> Context<'a, '_> {
 
                             tb.cursor_move_to_visual(Point { x, y });
                         }
-                        kbmod::CTRL => {
+                        MOD_CTRL => {
                             tc.scroll_offset.y -= 1;
                             make_cursor_visible = false;
                         }
-                        kbmod::SHIFT => {
+                        MOD_SHIFT => {
                             // If the cursor was already on the first line,
                             // move it to the start of the buffer.
                             if tb.cursor_visual_pos().y == 0 {
@@ -2546,20 +2546,20 @@ impl<'a> Context<'a, '_> {
                                 y: tb.cursor_visual_pos().y - 1,
                             });
                         }
-                        kbmod::ALT => tb.move_selected_lines(MoveLineDirection::Up),
-                        kbmod::CTRL_ALT => {
+                        MOD_ALT => tb.move_selected_lines(MoveLineDirection::Up),
+                        MOD_CTRL_ALT => {
                             // TODO: Add cursor above
                         }
                         _ => return false,
                     }
                 }
-                vk::RIGHT => {
+                VK_RIGHT => {
                     let granularity = if modifiers.contains(KBMOD_FOR_WORD_NAV) {
                         CursorMovement::Word
                     } else {
                         CursorMovement::Grapheme
                     };
-                    if modifiers.contains(kbmod::SHIFT) {
+                    if modifiers.contains(MOD_SHIFT) {
                         tb.selection_update_delta(granularity, 1);
                     } else if let Some((_, end)) = tb.selection_range() {
                         unsafe { tb.set_cursor(end) };
@@ -2567,12 +2567,12 @@ impl<'a> Context<'a, '_> {
                         tb.cursor_move_delta(granularity, 1);
                     }
                 }
-                vk::DOWN => {
+                VK_DOWN => {
                     if single_line {
                         return false;
                     }
                     match modifiers {
-                        kbmod::NONE => {
+                        MOD_NONE => {
                             let mut x = tc.preferred_column;
                             let mut y = tb.cursor_visual_pos().y + 1;
 
@@ -2597,11 +2597,11 @@ impl<'a> Context<'a, '_> {
                                 tc.preferred_column = tb.cursor_visual_pos().x;
                             }
                         }
-                        kbmod::CTRL => {
+                        MOD_CTRL => {
                             tc.scroll_offset.y += 1;
                             make_cursor_visible = false;
                         }
-                        kbmod::SHIFT => {
+                        MOD_SHIFT => {
                             // If the cursor was already on the last line,
                             // move it to the end of the buffer.
                             if tb.cursor_visual_pos().y >= tb.visual_line_count() - 1 {
@@ -2617,77 +2617,77 @@ impl<'a> Context<'a, '_> {
                                 tc.preferred_column = tb.cursor_visual_pos().x;
                             }
                         }
-                        kbmod::ALT => tb.move_selected_lines(MoveLineDirection::Down),
-                        kbmod::CTRL_ALT => {
+                        MOD_ALT => tb.move_selected_lines(MoveLineDirection::Down),
+                        MOD_CTRL_ALT => {
                             // TODO: Add cursor above
                         }
                         _ => return false,
                     }
                 }
-                vk::INSERT => match modifiers {
-                    kbmod::SHIFT => tb.paste(self.clipboard_ref()),
-                    kbmod::CTRL => tb.copy(self.clipboard_mut()),
+                VK_INSERT => match modifiers {
+                    MOD_SHIFT => tb.paste(self.clipboard_ref()),
+                    MOD_CTRL => tb.copy(self.clipboard_mut()),
                     _ => tb.set_overtype(!tb.is_overtype()),
                 },
-                vk::DELETE => match modifiers {
-                    kbmod::SHIFT => tb.cut(self.clipboard_mut()),
-                    kbmod::CTRL => tb.delete(CursorMovement::Word, 1),
+                VK_DELETE => match modifiers {
+                    MOD_SHIFT => tb.cut(self.clipboard_mut()),
+                    MOD_CTRL => tb.delete(CursorMovement::Word, 1),
                     _ => tb.delete(CursorMovement::Grapheme, 1),
                 },
-                vk::A => match modifiers {
-                    kbmod::CTRL => tb.select_all(),
+                VK_A => match modifiers {
+                    MOD_CTRL => tb.select_all(),
                     _ => return false,
                 },
-                vk::B => match modifiers {
-                    kbmod::ALT if cfg!(target_os = "macos") => {
+                VK_B => match modifiers {
+                    MOD_ALT if cfg!(target_os = "macos") => {
                         // On macOS, terminals commonly emit the Emacs style
                         // Alt+B (ESC b) sequence for Alt+Left.
                         tb.cursor_move_delta(CursorMovement::Word, -1);
                     }
                     _ => return false,
                 },
-                vk::F => match modifiers {
-                    kbmod::ALT if cfg!(target_os = "macos") => {
+                VK_F => match modifiers {
+                    MOD_ALT if cfg!(target_os = "macos") => {
                         // On macOS, terminals commonly emit the Emacs style
                         // Alt+F (ESC f) sequence for Alt+Right.
                         tb.cursor_move_delta(CursorMovement::Word, 1);
                     }
                     _ => return false,
                 },
-                vk::H => match modifiers {
-                    kbmod::CTRL => tb.delete(CursorMovement::Word, -1),
+                VK_H => match modifiers {
+                    MOD_CTRL => tb.delete(CursorMovement::Word, -1),
                     _ => return false,
                 },
-                vk::L => match modifiers {
-                    kbmod::CTRL => tb.select_line(),
+                VK_L => match modifiers {
+                    MOD_CTRL => tb.select_line(),
                     _ => return false,
                 },
-                vk::X => match modifiers {
-                    kbmod::CTRL => tb.cut(self.clipboard_mut()),
+                VK_X => match modifiers {
+                    MOD_CTRL => tb.cut(self.clipboard_mut()),
                     _ => return false,
                 },
-                vk::C => match modifiers {
-                    kbmod::CTRL => tb.copy(self.clipboard_mut()),
+                VK_C => match modifiers {
+                    MOD_CTRL => tb.copy(self.clipboard_mut()),
                     _ => return false,
                 },
-                vk::V => match modifiers {
-                    kbmod::CTRL => tb.paste(self.clipboard_ref()),
+                VK_V => match modifiers {
+                    MOD_CTRL => tb.paste(self.clipboard_ref()),
                     _ => return false,
                 },
-                vk::Y => match modifiers {
-                    kbmod::CTRL => tb.redo(),
+                VK_Y => match modifiers {
+                    MOD_CTRL => tb.redo(),
                     _ => return false,
                 },
-                vk::Z => match modifiers {
-                    kbmod::CTRL => tb.undo(),
-                    kbmod::CTRL_SHIFT => tb.redo(),
-                    kbmod::ALT => tb.set_word_wrap(!tb.is_word_wrap_enabled()),
+                VK_Z => match modifiers {
+                    MOD_CTRL => tb.undo(),
+                    MOD_CTRL_SHIFT => tb.redo(),
+                    MOD_ALT => tb.set_word_wrap(!tb.is_word_wrap_enabled()),
                     _ => return false,
                 },
                 _ => return false,
             }
 
-            change_preferred_column = !matches!(key, vk::PRIOR | vk::NEXT | vk::UP | vk::DOWN);
+            change_preferred_column = !matches!(key, VK_PRIOR | VK_NEXT | VK_UP | VK_DOWN);
         } else {
             return false;
         }
@@ -2863,10 +2863,10 @@ impl<'a> Context<'a, '_> {
                 && let Some(key) = self.input_keyboard
             {
                 match key {
-                    vk::PRIOR => sc.scroll_offset.y -= prev_container.inner_clipped.height(),
-                    vk::NEXT => sc.scroll_offset.y += prev_container.inner_clipped.height(),
-                    vk::END => sc.scroll_offset.y = CoordType::MAX,
-                    vk::HOME => sc.scroll_offset.y = 0,
+                    VK_PRIOR => sc.scroll_offset.y -= prev_container.inner_clipped.height(),
+                    VK_NEXT => sc.scroll_offset.y += prev_container.inner_clipped.height(),
+                    VK_END => sc.scroll_offset.y = CoordType::MAX,
+                    VK_HOME => sc.scroll_offset.y = 0,
                     _ => return,
                 }
                 self.set_input_consumed();
@@ -2956,7 +2956,7 @@ impl<'a> Context<'a, '_> {
         let entered = focused
             && selected_before
             && !self.input_consumed
-            && matches!(self.input_keyboard, Some(vk::RETURN));
+            && matches!(self.input_keyboard, Some(VK_RETURN));
         let activated = clicked || entered;
         if activated {
             self.set_input_consumed();
@@ -3020,7 +3020,7 @@ impl<'a> Context<'a, '_> {
                 let mut consumed = true;
 
                 match key {
-                    vk::PRIOR => {
+                    VK_PRIOR => {
                         selected_next = selected_now;
                         for _ in 0..prev_container.borrow().inner_clipped.height() - 1 {
                             let node = selected_next.borrow();
@@ -3030,7 +3030,7 @@ impl<'a> Context<'a, '_> {
                             };
                         }
                     }
-                    vk::NEXT => {
+                    VK_NEXT => {
                         selected_next = selected_now;
                         for _ in 0..prev_container.borrow().inner_clipped.height() - 1 {
                             let node = selected_next.borrow();
@@ -3040,13 +3040,13 @@ impl<'a> Context<'a, '_> {
                             };
                         }
                     }
-                    vk::END => {
+                    VK_END => {
                         selected_next = list.children.last.unwrap_or(selected_next);
                     }
-                    vk::HOME => {
+                    VK_HOME => {
                         selected_next = list.children.first.unwrap_or(selected_next);
                     }
-                    vk::UP => {
+                    VK_UP => {
                         selected_next = selected_now
                             .borrow()
                             .siblings
@@ -3054,7 +3054,7 @@ impl<'a> Context<'a, '_> {
                             .or(list.children.last)
                             .unwrap_or(selected_next);
                     }
-                    vk::DOWN => {
+                    VK_DOWN => {
                         selected_next = selected_now
                             .borrow()
                             .siblings
@@ -3122,7 +3122,7 @@ impl<'a> Context<'a, '_> {
         let contains_focus = self.contains_focus();
         let keyboard_focus = accelerator != '\0'
             && !contains_focus
-            && self.consume_shortcut(kbmod::ALT | InputKey::new(accelerator as u32));
+            && self.consume_shortcut(MOD_ALT | InputKey::new(accelerator as u32));
 
         if contains_focus || keyboard_focus {
             self.attr_background_rgba(self.tui.floater_default_bg);
@@ -3212,15 +3212,15 @@ impl<'a> Context<'a, '_> {
 
         if !self.input_consumed
             && let Some(key) = self.input_keyboard
-            && matches!(key, vk::ESCAPE | vk::UP | vk::DOWN)
+            && matches!(key, VK_ESCAPE | VK_UP | VK_DOWN)
         {
-            if matches!(key, vk::UP | vk::DOWN) {
+            if matches!(key, VK_UP | VK_DOWN) {
                 // If the focus is on the menubar, and the user presses up/down,
                 // focus the first/last item of the flyout respectively.
                 let ln = self.tree.last_node.borrow();
                 if self.tui.is_node_focused(ln.parent.map_or(0, |n| n.borrow().id)) {
                     let selected_next =
-                        if key == vk::UP { ln.children.last } else { ln.children.first };
+                        if key == VK_UP { ln.children.last } else { ln.children.first };
                     if let Some(selected_next) = selected_next {
                         self.steal_focus_for(selected_next);
                         self.set_input_consumed();
@@ -3303,15 +3303,15 @@ impl<'a> Context<'a, '_> {
         let shortcut_letter = shortcut.value() as u8 as char;
         if shortcut_letter.is_ascii_uppercase() {
             let mut shortcut_text = ArenaString::new_in(self.arena());
-            if shortcut.modifiers_contains(kbmod::CTRL) {
+            if shortcut.modifiers_contains(MOD_CTRL) {
                 shortcut_text.push_str(self.tui.modifier_translations.ctrl);
                 shortcut_text.push('+');
             }
-            if shortcut.modifiers_contains(kbmod::ALT) {
+            if shortcut.modifiers_contains(MOD_ALT) {
                 shortcut_text.push_str(self.tui.modifier_translations.alt);
                 shortcut_text.push('+');
             }
-            if shortcut.modifiers_contains(kbmod::SHIFT) {
+            if shortcut.modifiers_contains(MOD_SHIFT) {
                 shortcut_text.push_str(self.tui.modifier_translations.shift);
                 shortcut_text.push('+');
             }

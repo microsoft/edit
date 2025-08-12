@@ -5,7 +5,7 @@ use edit::arena::scratch_arena;
 use edit::framebuffer::{Attributes, IndexedColor};
 use edit::fuzzy::score_fuzzy;
 use edit::helpers::*;
-use edit::input::vk;
+use edit::kbd::*;
 use edit::tui::*;
 use edit::{arena_format, icu};
 
@@ -97,7 +97,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             ctx.attr_padding(Rect::two(0, 1));
             ctx.table_set_cell_gap(Size { width: 1, height: 0 });
             {
-                if ctx.contains_focus() && ctx.consume_shortcut(vk::RETURN) {
+                if ctx.contains_focus() && ctx.consume_shortcut(VK_RETURN) {
                     ctx.toss_focus_up();
                 }
 

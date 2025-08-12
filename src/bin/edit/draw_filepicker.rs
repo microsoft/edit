@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use edit::arena::scratch_arena;
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
-use edit::input::{kbmod, vk};
+use edit::kbd::*;
 use edit::tui::*;
 use edit::{icu, path};
 
@@ -75,9 +75,9 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             if !state.file_picker_autocomplete.is_empty() {
                 let bg = ctx.indexed_alpha(IndexedColor::Background, 3, 4);
                 let fg = ctx.contrasted(bg);
-                let focus_list_beg = ctx.is_focused() && ctx.consume_shortcut(vk::DOWN);
-                let focus_list_end = ctx.is_focused() && ctx.consume_shortcut(vk::UP);
-                let mut autocomplete_done = ctx.consume_shortcut(vk::ESCAPE);
+                let focus_list_beg = ctx.is_focused() && ctx.consume_shortcut(VK_DOWN);
+                let focus_list_end = ctx.is_focused() && ctx.consume_shortcut(VK_UP);
+                let mut autocomplete_done = ctx.consume_shortcut(VK_ESCAPE);
 
                 ctx.list_begin("suggestions");
                 ctx.attr_float(FloatSpec {
@@ -105,8 +105,8 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                         if (is_first && focus_list_beg) || (is_last && focus_list_end) {
                             ctx.list_item_steal_focus();
                         } else if ctx.is_focused()
-                            && ((is_first && ctx.consume_shortcut(vk::UP))
-                                || (is_last && ctx.consume_shortcut(vk::DOWN)))
+                            && ((is_first && ctx.consume_shortcut(VK_UP))
+                                || (is_last && ctx.consume_shortcut(VK_DOWN)))
                         {
                             ctx.toss_focus_up();
                         }
@@ -126,7 +126,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 }
             }
 
-            if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
+            if ctx.is_focused() && ctx.consume_shortcut(VK_RETURN) {
                 activated = true;
             }
         }
@@ -170,7 +170,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         ctx.scrollarea_end();
 
         if contains_focus
-            && (ctx.consume_shortcut(vk::BACK) || ctx.consume_shortcut(kbmod::ALT | vk::UP))
+            && (ctx.consume_shortcut(VK_BACK) || ctx.consume_shortcut(MOD_ALT | VK_UP))
         {
             state.file_picker_pending_name = "..".into();
             activated = true;
@@ -224,8 +224,8 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.table_end();
 
             if contains_focus {
-                save |= ctx.consume_shortcut(vk::Y);
-                if ctx.consume_shortcut(vk::N) {
+                save |= ctx.consume_shortcut(VK_Y);
+                if ctx.consume_shortcut(VK_N) {
                     state.file_picker_overwrite_warning = None;
                 }
             }

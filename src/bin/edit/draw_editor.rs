@@ -6,7 +6,7 @@ use std::num::ParseIntError;
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::icu;
-use edit::input::{kbmod, vk};
+use edit::kbd::*;
 use edit::tui::*;
 
 use crate::localization::*;
@@ -68,7 +68,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
     ctx.attr_background_rgba(ctx.indexed(IndexedColor::White));
     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
     {
-        if ctx.contains_focus() && ctx.consume_shortcut(vk::ESCAPE) {
+        if ctx.contains_focus() && ctx.consume_shortcut(VK_ESCAPE) {
             state.wants_search.kind = StateSearchKind::Hidden;
         }
 
@@ -90,7 +90,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                 if focus == StateSearchKind::Search {
                     ctx.steal_focus();
                 }
-                if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
+                if ctx.is_focused() && ctx.consume_shortcut(VK_RETURN) {
                     action = Some(SearchAction::Search);
                 }
             }
@@ -105,9 +105,9 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                     ctx.steal_focus();
                 }
                 if ctx.is_focused() {
-                    if ctx.consume_shortcut(vk::RETURN) {
+                    if ctx.consume_shortcut(VK_RETURN) {
                         action = Some(SearchAction::Replace);
-                    } else if ctx.consume_shortcut(kbmod::CTRL_ALT | vk::RETURN) {
+                    } else if ctx.consume_shortcut(MOD_CTRL | MOD_ALT | VK_RETURN) {
                         action = Some(SearchAction::ReplaceAll);
                     }
                 }
@@ -271,9 +271,9 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
 
             // Handle accelerator shortcuts
             if contains_focus {
-                if ctx.consume_shortcut(vk::S) {
+                if ctx.consume_shortcut(VK_S) {
                     action = Action::Save;
-                } else if ctx.consume_shortcut(vk::N) {
+                } else if ctx.consume_shortcut(VK_N) {
                     action = Action::Discard;
                 }
             }
@@ -319,7 +319,7 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
             ctx.attr_intrinsic_size(Size { width: 24, height: 1 });
             ctx.steal_focus();
 
-            if ctx.consume_shortcut(vk::RETURN) {
+            if ctx.consume_shortcut(VK_RETURN) {
                 match validate_goto_point(&state.goto_target) {
                     Ok(point) => {
                         let mut buf = doc.buffer.borrow_mut();

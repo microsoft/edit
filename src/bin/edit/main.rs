@@ -25,11 +25,11 @@ use draw_statusbar::*;
 use edit::arena::{self, Arena, ArenaString, scratch_arena};
 use edit::framebuffer::{self, IndexedColor};
 use edit::helpers::{CoordType, KIBI, MEBI, MetricFormatter, Rect, Size};
-use edit::input::{self, kbmod, vk};
+use edit::kbd::*;
 use edit::oklab::oklab_blend;
 use edit::tui::*;
 use edit::vt::{self, Token};
-use edit::{apperr, arena_format, base64, path, sys, unicode};
+use edit::{apperr, arena_format, base64, input, path, sys, unicode};
 use localization::*;
 use state::*;
 
@@ -322,31 +322,29 @@ fn draw(ctx: &mut Context, state: &mut State) {
     if let Some(key) = ctx.keyboard_input() {
         // Shortcuts that are not handled as part of the textarea, etc.
 
-        if key == kbmod::CTRL | vk::N {
+        if key == MOD_CTRL | VK_N {
             draw_add_untitled_document(ctx, state);
-        } else if key == kbmod::CTRL | vk::O {
+        } else if key == MOD_CTRL | VK_O {
             state.wants_file_picker = StateFilePicker::Open;
-        } else if key == kbmod::CTRL | vk::S {
+        } else if key == MOD_CTRL | VK_S {
             state.wants_save = true;
-        } else if key == kbmod::CTRL_SHIFT | vk::S {
+        } else if key == MOD_CTRL | MOD_SHIFT | VK_S {
             state.wants_file_picker = StateFilePicker::SaveAs;
-        } else if key == kbmod::CTRL | vk::W {
+        } else if key == MOD_CTRL | VK_W {
             state.wants_close = true;
-        } else if key == kbmod::CTRL | vk::P {
+        } else if key == MOD_CTRL | VK_P {
             state.wants_go_to_file = true;
-        } else if key == kbmod::CTRL | vk::Q {
+        } else if key == MOD_CTRL | VK_Q {
             state.wants_exit = true;
-        } else if key == kbmod::CTRL | vk::G {
+        } else if key == MOD_CTRL | VK_G {
             state.wants_goto = true;
-        } else if key == kbmod::CTRL | vk::F && state.wants_search.kind != StateSearchKind::Disabled
-        {
+        } else if key == MOD_CTRL | VK_F && state.wants_search.kind != StateSearchKind::Disabled {
             state.wants_search.kind = StateSearchKind::Search;
             state.wants_search.focus = true;
-        } else if key == kbmod::CTRL | vk::R && state.wants_search.kind != StateSearchKind::Disabled
-        {
+        } else if key == MOD_CTRL | VK_R && state.wants_search.kind != StateSearchKind::Disabled {
             state.wants_search.kind = StateSearchKind::Replace;
             state.wants_search.focus = true;
-        } else if key == vk::F3 {
+        } else if key == VK_F3 {
             search_execute(ctx, state, SearchAction::Search);
         } else {
             return;
