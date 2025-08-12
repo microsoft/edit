@@ -38,8 +38,13 @@ lto = "thin"                # Similarly, speed up linking by a ton
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[build-dependencies]
+# The default toml crate bundles its dependencies with bad compile times. Thanks.
+# Thankfully toml-span exists. FWIW the alternative is yaml-rust (without the 2 suffix).
+toml-span = { version = "0.5", default-features = false }
+
 [target.'cfg(windows)'.build-dependencies]
-winresource = "0.1.22"
+winresource = { version = "0.1.22", default-features = false }
 
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.59"
@@ -56,7 +61,7 @@ features = [
 ]
 
 [dev-dependencies]
-criterion = { version = "0.6", features = ["html_reports"] }
+criterion = { version = "0.7", features = ["html_reports"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 zstd = { version = "0.13", default-features = false }

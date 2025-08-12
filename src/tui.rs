@@ -2331,11 +2331,7 @@ impl<'a> Context<'a, '_> {
                         // If this is just a simple input field, don't consume Tab (= early return).
                         return false;
                     }
-                    if modifiers == kbmod::SHIFT {
-                        tb.unindent();
-                    } else {
-                        write = b"\t";
-                    }
+                    tb.indent_change(if modifiers == kbmod::SHIFT { -1 } else { 1 });
                 }
                 vk::RETURN => {
                     if single_line {
@@ -2657,6 +2653,10 @@ impl<'a> Context<'a, '_> {
                 },
                 vk::H => match modifiers {
                     kbmod::CTRL => tb.delete(CursorMovement::Word, -1),
+                    _ => return false,
+                },
+                vk::L => match modifiers {
+                    kbmod::CTRL => tb.select_line(),
                     _ => return false,
                 },
                 vk::X => match modifiers {
