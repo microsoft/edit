@@ -251,7 +251,11 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
 
         let p = cwd.join(Path::new(&arg));
         let p = path::normalize(&p);
-        if !p.is_dir() {
+        if p.is_dir() {
+            state.wants_file_picker = StateFilePicker::Open;
+            state.file_picker_pending_dir = DisplayablePathBuf::from_path(p);
+            return Ok(false);
+        } else {
             paths.push(p);
         }
     }
