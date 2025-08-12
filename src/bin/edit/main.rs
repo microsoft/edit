@@ -226,40 +226,26 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     let scratch = scratch_arena(None);
     let mut paths: Vec<PathBuf, &Arena> = Vec::new_in(&*scratch);
     let mut cwd = env::current_dir()?;
-    let mut args = env::args_os().skip(1);
-    let mut allow_positional = false;
+    let mut parse_args = true;
 
     // The best CLI argument parser in the world.
-    while let Some(arg) = args.next() {
-        if !allow_positional {
-            match arg.to_str() {
-                Some("-h") | Some("--help") => {
-                    print_help();
-                    return Ok(true);
-                }
-                Some("/?") if cfg!(windows) => {
-                    print_help();
-                    return Ok(true);
-                }
-                Some("-v") | Some("--version") => {
-                    print_version();
-                    return Ok(true);
-                }
-                Some("--") => {
-                    allow_positional = true;
-                    continue;
-                }
-                Some("-") => {
-                    allow_positional = true;
-                    paths.clear();
-                    continue;
-                }
-                Some(s) if s.starts_with('-') => {
-                    sys::write_stdout(&format!("Invalid option: {}\r\n", s));
-                    print_help();
-                    return Ok(true);
-                }
-                _ => {}
+    for arg in env::args_os().skip(1) {
+        if parse_args {
+            if arg == "--" {
+                parse_args = false;
+                continue;
+            }
+            if arg == "-" {
+                paths.clear();
+                break;
+            }
+            if arg == "-h" || arg == "--help" || (cfg!(windows) && arg == "/?") {
+                print_help();
+                return Ok(true);
+            }
+            if arg == "-v" || arg == "--version" {
+                print_version();
+                return Ok(true);
             }
         }
 
