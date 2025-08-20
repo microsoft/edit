@@ -34,26 +34,26 @@ const LANG_GIT_COMMIT: Language = Language {
         State {
             name: "ground",
             rules: &[
-                re(r#"#"#).is(Comment).then_push("comment"),
+                re(r#"#"#).is(Comment).then_call("comment"),
                 re(r#"diff \-\-git.*"#)
                     .is(Direct(BrightBlue))
-                    .then_push("diff_transition"),
+                    .then_call("diff_transition"),
                 re(r#""#).then_goto("ignore"),
             ],
         },
         State {
             name: "comment",
             rules: &[
-                re(r#"\tdeleted:.*"#).is(Direct(BrightRed)).then_pop(),
-                re(r#"\tmodified:.*"#).is(Direct(BrightBlue)).then_pop(),
-                re(r#"\tnew file:.*"#).is(Direct(BrightGreen)).then_pop(),
-                re(r#"\trenamed:.*"#).is(Direct(BrightBlue)).then_pop(),
-                re(r#".*"#).then_pop(),
+                re(r#"\tdeleted:.*"#).is(Direct(BrightRed)).then_return(),
+                re(r#"\tmodified:.*"#).is(Direct(BrightBlue)).then_return(),
+                re(r#"\tnew file:.*"#).is(Direct(BrightGreen)).then_return(),
+                re(r#"\trenamed:.*"#).is(Direct(BrightBlue)).then_return(),
+                re(r#".*"#).then_return(),
             ],
         },
         State {
             name: "diff_transition",
-            rules: &[re(r#""#).is(Other).then_push("diff")],
+            rules: &[re(r#""#).is(Other).then_call("diff")],
         },
         // TODO: The ability to invoke another language (here: LANG_DIFF). :)
         State {
@@ -81,14 +81,25 @@ const LANG_GIT_REBASE: Language = Language {
         State {
             name: "ground",
             rules: &[
-                re(r#"(?:break|drop|exec|b|d|x)\b{end-half}"#).is(Keyword),
-                re(r#"(?:edit|fixup|pick|reword|squash|e|f|p|r|s)\b{end-half}"#).is(Keyword),
+                re(r#"(?:break|drop|exec|b|d|x)\b{end-half}"#)
+                    .is(Keyword)
+                    .then_call("comment"),
+                re(r#"(?:edit|fixup|pick|reword|squash|e|f|p|r|s)\b{end-half}"#)
+                    .is(Keyword)
+                    .then_call("hash"),
                 re(r#"#.*"#).is(Comment),
             ],
         },
         State {
             name: "hash",
-            rules: &[re(r#"\S+"#).is(Variable).then_pop(), re(r#""#).then_pop()],
+            rules: &[
+                re(r#"\S+"#).is(Variable).then_call("comment"),
+                re(r#".*"#).then_return(),
+            ],
+        },
+        State {
+            name: "comment",
+            rules: &[re(r#".*"#).is(Comment).then_return()],
         },
     ],
 };
@@ -101,7 +112,7 @@ const LANG_JSON: Language = Language {
             name: "ground",
             rules: &[
                 re(r#"//.*"#).is(Comment),
-                re(r#"/\*"#).is(Comment).then_push("comment"),
+                re(r#"/\*"#).is(Comment).then_call("comment"),
                 re(r#"""#).is(String).then_goto("string_double"),
                 re(r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#)
                     .is(Number)
@@ -117,7 +128,7 @@ const LANG_JSON: Language = Language {
         },
         State {
             name: "comment",
-            rules: &[re(r#"\*/"#).then_pop()],
+            rules: &[re(r#"\*/"#).then_return()],
         },
         State {
             name: "string_double",
@@ -181,9 +192,9 @@ const LANG_BASH: Language = Language {
             name: "ground",
             rules: &[
                 re(r#"#.*"#).is(Comment),
-                re(r#"'"#).is(String).then_push("string_single"),
-                re(r#"""#).is(String).then_push("string_double"),
-                re(r#"\$"#).is(Variable).then_push("variable"),
+                re(r#"'"#).is(String).then_call("string_single"),
+                re(r#"""#).is(String).then_call("string_double"),
+                re(r#"\$"#).is(Variable).then_call("variable"),
                 re(r#"[!*/%+<=>|]"#).is(Operator),
                 re(r"(?i:break)").is(Keyword).then_goto("resolve_type"),
                 re(r"(?i:case)").is(Keyword).then_goto("resolve_type"),
@@ -210,25 +221,25 @@ const LANG_BASH: Language = Language {
         State {
             name: "string_single",
             rules: &[
-                re(r#"'"#).then_pop(),
+                re(r#"'"#).then_return(),
                 re(r#"\\."#).then_goto("string_single"),
             ],
         },
         State {
             name: "string_double",
             rules: &[
-                re(r#"""#).then_pop(),
+                re(r#"""#).then_return(),
                 re(r#"\\."#).then_goto("string_double"),
-                re(r#"\$"#).is(Other).then_push("variable"),
+                re(r#"\$"#).is(Other).then_call("variable"),
             ],
         },
         State {
             name: "variable",
             rules: &[
-                re(r#"[#?]"#).is(Variable).then_pop(),
-                re(r#"\{[^}]*\}"#).is(Variable).then_pop(),
-                re(r#"\w+"#).is(Variable).then_pop(),
-                re(r#""#).is(Other).then_pop(),
+                re(r#"[#?]"#).is(Variable).then_return(),
+                re(r#"\{[^}]*\}"#).is(Variable).then_return(),
+                re(r#"\w+"#).is(Variable).then_return(),
+                re(r#""#).is(Other).then_return(),
             ],
         },
         State {
@@ -246,13 +257,13 @@ const LANG_POWERSHELL: Language = Language {
             name: "ground",
             rules: &[
                 re(r#"#.*"#).is(Comment),
-                re(r#"<#"#).is(Comment).then_push("comment"),
-                re(r#"'"#).is(String).then_push("string_single"),
-                re(r#"\""#).is(String).then_push("string_double"),
-                re(r#"\$\("#).is(Other).then_push("ground"),
-                re(r#"\$"#).is(Variable).then_push("variable"),
-                re(r#"\("#).is(Other).then_push("ground"),
-                re(r#"\)"#).is(Other).then_pop(),
+                re(r#"<#"#).is(Comment).then_call("comment"),
+                re(r#"'"#).is(String).then_call("string_single"),
+                re(r#"\""#).is(String).then_call("string_double"),
+                re(r#"\$\("#).is(Other).then_call("ground"),
+                re(r#"\$"#).is(Variable).then_call("variable"),
+                re(r#"\("#).is(Other).then_call("ground"),
+                re(r#"\)"#).is(Other).then_return(),
                 re(r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#).is(Number),
                 re(r#"-\w+"#).is(Operator),
                 re(r#"[!*/%+<=>|]"#).is(Operator),
@@ -278,31 +289,31 @@ const LANG_POWERSHELL: Language = Language {
         },
         State {
             name: "comment",
-            rules: &[re(r#"#>"#).is(Comment).then_pop()],
+            rules: &[re(r#"#>"#).is(Comment).then_return()],
         },
         State {
             name: "string_single",
             rules: &[
-                re(r#"'"#).then_pop(),
+                re(r#"'"#).then_return(),
                 re(r#"`."#).then_goto("string_single"),
             ],
         },
         State {
             name: "string_double",
             rules: &[
-                re(r#"""#).then_pop(),
+                re(r#"""#).then_return(),
                 re(r#"`."#).then_goto("string_double"),
-                re(r#"\$\("#).is(Other).then_push("ground"),
-                re(r#"\$"#).is(Variable).then_push("variable"),
+                re(r#"\$\("#).is(Other).then_call("ground"),
+                re(r#"\$"#).is(Variable).then_call("variable"),
             ],
         },
         State {
             name: "variable",
             rules: &[
-                re(r#"[$^?]"#).then_pop(),
-                re(r#"\{[^}]*\}"#).then_pop(),
-                re(r#"\w+"#).then_pop(),
-                re(r#""#).is(Other).then_pop(),
+                re(r#"[$^?]"#).then_return(),
+                re(r#"\{[^}]*\}"#).then_return(),
+                re(r#"\w+"#).then_return(),
+                re(r#""#).is(Other).then_return(),
             ],
         },
         State {
@@ -322,9 +333,9 @@ const LANG_BATCH: Language = Language {
                 re(r#"(?i:rem)\S+"#).is(Other),
                 re(r#"(?i:rem).*"#).is(Comment),
                 re(r#"::.*"#).is(Comment),
-                re(r#"""#).is(String).then_push("string_double"),
+                re(r#"""#).is(String).then_call("string_double"),
                 re(r#"%%"#).is(Other),
-                re(r#"%"#).is(Variable).then_push("variable"),
+                re(r#"%"#).is(Variable).then_call("variable"),
                 re(r#"[!*/+<=>|]"#).is(Operator),
                 re(r"(?i:break)").is(Keyword).then_goto("resolve_type"),
                 re(r"(?i:call)").is(Keyword).then_goto("resolve_type"),
@@ -351,13 +362,13 @@ const LANG_BATCH: Language = Language {
         State {
             name: "string_double",
             rules: &[
-                re(r#"""#).then_pop(),
+                re(r#"""#).then_return(),
                 re(r#"\\."#).then_goto("string_double"),
             ],
         },
         State {
             name: "variable",
-            rules: &[re(r#"%"#).then_pop()],
+            rules: &[re(r#"%"#).then_return()],
         },
         State {
             name: "resolve_type",
@@ -421,7 +432,7 @@ const fn re(s: &'static str) -> Rule {
     Rule {
         pattern: s,
         kind: None,
-        action: ActionDefinition::Done,
+        action: ActionDefinition::Continue,
     }
 }
 
@@ -436,12 +447,12 @@ impl Rule {
         self
     }
 
-    const fn then_push(mut self, target: &'static str) -> Self {
+    const fn then_call(mut self, target: &'static str) -> Self {
         self.action = ActionDefinition::Push(target);
         self
     }
 
-    const fn then_pop(mut self) -> Self {
+    const fn then_return(mut self) -> Self {
         self.action = ActionDefinition::Pop;
         self
     }
@@ -449,8 +460,8 @@ impl Rule {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ActionDefinition {
+    Continue,
     Change(&'static str),
-    Done,
     Push(&'static str),
     Pop,
 }

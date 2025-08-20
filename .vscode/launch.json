@@ -10,13 +10,8 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "assets/highlighting-tests/bash.sh",
-                "assets/highlighting-tests/batch.bat",
                 "assets/highlighting-tests/COMMIT_EDITMSG",
-                "assets/highlighting-tests/diff.diff",
-                "assets/highlighting-tests/json.json",
-                "assets/highlighting-tests/powershell.ps1",
-                "assets/highlighting-tests/yaml.yml",
+                "assets/highlighting-tests/git-rebase-todo",
             ],
         },
         {
@@ -27,13 +22,8 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "assets/highlighting-tests/bash.sh",
-                "assets/highlighting-tests/batch.bat",
                 "assets/highlighting-tests/COMMIT_EDITMSG",
-                "assets/highlighting-tests/diff.diff",
-                "assets/highlighting-tests/json.json",
-                "assets/highlighting-tests/powershell.ps1",
-                "assets/highlighting-tests/yaml.yml",
+                "assets/highlighting-tests/git-rebase-todo",
             ],
         },
         {
@@ -44,13 +34,8 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "assets/highlighting-tests/bash.sh",
-                "assets/highlighting-tests/batch.bat",
                 "assets/highlighting-tests/COMMIT_EDITMSG",
-                "assets/highlighting-tests/diff.diff",
-                "assets/highlighting-tests/json.json",
-                "assets/highlighting-tests/powershell.ps1",
-                "assets/highlighting-tests/yaml.yml",
+                "assets/highlighting-tests/git-rebase-todo",
             ],
         }
     ]

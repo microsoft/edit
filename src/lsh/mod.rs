@@ -6,6 +6,7 @@ use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::ops::RangeInclusive;
 use std::path::Path;
+use std::slice;
 
 pub use definitions::{HighlightKind, Language};
 
@@ -58,7 +59,7 @@ pub struct Highlighter<'a> {
 
     state: usize,
     kind: HighlightKind,
-    state_stack: Vec<(usize, HighlightKind)>,
+    state_stack: Vec<(u8, HighlightKind)>,
 }
 
 impl<'doc> Highlighter<'doc> {
@@ -135,82 +136,81 @@ impl<'doc> Highlighter<'doc> {
         let mut off = 0usize;
         let mut start = 0usize;
 
-        let mut root = (self.state, self.kind);
         let mut state = self.state;
         let mut kind = self.kind;
 
-        'outer: loop {
-            let beg = off;
+        state = state.wrapping_sub(1);
 
-            for t in unsafe { *self.language.states.get_unchecked(state) } {
-                match t.test {
-                    Test::Chars(n) => {
-                        off = off + n.min(line_buf.len() - off);
-                    }
-                    Test::Prefix(str) => {
-                        let str =
-                            unsafe { std::slice::from_raw_parts(str.add(1), str.read() as usize) };
-                        if !Self::inlined_memcmp(line_buf, off, str) {
-                            continue;
-                        }
-                        off += str.len();
-                    }
-                    Test::PrefixInsensitive(str) => {
-                        let str =
-                            unsafe { std::slice::from_raw_parts(str.add(1), str.read() as usize) };
-                        if !Self::inlined_memicmp(line_buf, off, str) {
-                            continue;
-                        }
-                        off += str.len();
-                    }
-                    Test::Charset(cs) => {
-                        // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
-                        if off >= line_buf.len() || !Self::in_set(cs, line_buf[off]) {
-                            continue;
-                        }
-                        while {
-                            off += 1;
-                            off < line_buf.len() && Self::in_set(cs, line_buf[off])
-                        } {}
-                    }
+        loop {
+            state = state.wrapping_add(1);
+            let t = unsafe { self.language.transitions.get_unchecked(state) };
+
+            match t.test {
+                Test::Chars(n) => {
+                    off = off + n.min(line_buf.len() - off);
                 }
-
-                match t.action {
-                    Action::Change(to) => {
-                        state = to as usize;
-                        kind = t.kind.unwrap_or(kind);
+                Test::Prefix(str) => {
+                    let str = unsafe { slice::from_raw_parts(str.add(1), str.read() as usize) };
+                    if !Self::inlined_memcmp(line_buf, off, str) {
+                        continue;
                     }
-                    Action::Push(to) => {
-                        self.state_stack.push(root);
-
-                        state = to as usize;
-                        kind = t.kind.unwrap_or(kind);
-                        res.push(Higlight { start, kind });
-
-                        root = (state, kind);
-                        start = off;
-                    }
-                    Action::Pop(n) => {
-                        if n != 0 {
-                            root = self.state_stack.last().copied().unwrap_or_default();
-                            self.state_stack
-                                .truncate(self.state_stack.len().saturating_sub(n as usize));
-                        }
-
-                        kind = t.kind.unwrap_or(kind);
-                        res.push(Higlight { start, kind });
-
-                        (state, kind) = root;
-                        start = off;
-
-                        if off >= line_buf.len() {
-                            break 'outer;
-                        }
-                    }
+                    off += str.len();
                 }
-
-                break;
+                Test::PrefixInsensitive(str) => {
+                    let str = unsafe { slice::from_raw_parts(str.add(1), str.read() as usize) };
+                    if !Self::inlined_memicmp(line_buf, off, str) {
+                        continue;
+                    }
+                    off += str.len();
+                }
+                Test::Charset(cs) => {
+                    // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
+                    if off >= line_buf.len() || !Self::in_set(cs, line_buf[off]) {
+                        continue;
+                    }
+                    while {
+                        off += 1;
+                        off < line_buf.len() && Self::in_set(cs, line_buf[off])
+                    } {}
+                }
             }
+
+            match t.action {
+                Action::Change(dst) => {
+                    state = dst as usize;
+                    kind = t.kind.unwrap_or(kind);
+                }
+                Action::Push(dst, pop_dst) => {
+                    self.state_stack.push((pop_dst, kind));
+
+                    state = dst as usize;
+                    kind = t.kind.unwrap_or(kind);
+                    res.push(Higlight { start, kind });
+
+                    start = off;
+                }
+                Action::Pop(n) => {
+                    kind = t.kind.unwrap_or(kind);
+                    res.push(Higlight { start, kind });
+
+                    let l = self.state_stack.last().copied().unwrap_or_default();
+                    state = l.0 as usize;
+                    kind = l.1;
+
+                    if n != 0 {
+                        self.state_stack
+                            .truncate(self.state_stack.len().saturating_sub(n as usize));
+                    }
+
+                    start = off;
+
+                    if n == 0 && off >= line_buf.len() {
+                        break;
+                    }
+                }
+            }
+
+            state = state.wrapping_sub(1);
         }
 
         if res.last().is_none_or(|h| h.start != start) {

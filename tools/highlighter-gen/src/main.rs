@@ -43,7 +43,7 @@ fn main() {
         pub struct Language {
             pub name: &'static str,
             pub filenames: &'static [&'static str],
-            pub states: &'static [&'static [Transition<'static>]],
+            pub transitions: &'static [Transition<'static>],
         }
 
         pub struct Transition<'a> {
@@ -96,7 +96,7 @@ fn main() {
 
         pub enum Action {
             Change(u8),
-            Push(u8),
+            Push(u8, u8),
             Pop(u8),
         }
 
@@ -146,12 +146,11 @@ fn main() {
             builder.format_as_mermaid()
         );
 
-        for cs in builder.charsets() {
+        for cs in builder.extract_charsets() {
             _ = writedoc!(
                 output,
                 "
-                #[rustfmt::skip]
-                const LANG_{}_CHARSET_{:016X}: &[u16; 16] = &[",
+                #[rustfmt::skip] const LANG_{}_CHARSET_{:016X}: &[u16; 16] = &[",
                 name_uppercase,
                 calculate_hash(&cs)
             );
@@ -168,11 +167,11 @@ fn main() {
             _ = writeln!(output, "];");
         }
 
-        for s in builder.strings() {
+        for s in builder.extract_strings() {
             _ = writedoc!(
                 output,
                 "
-                const LANG_{}_STRING_{:016X}: *const u8 = [",
+                #[rustfmt::skip] const LANG_{}_STRING_{:016X}: *const u8 = [",
                 name_uppercase,
                 calculate_hash(&s),
             );
@@ -186,62 +185,55 @@ fn main() {
         _ = writedoc!(
             output,
             r#"
-            #[rustfmt::skip]
-            pub const LANG_{name_uppercase}: &Language = &Language {{
+            #[rustfmt::skip] pub const LANG_{name_uppercase}: &Language = &Language {{
                 name: "{name}",
                 filenames: &{filenames:?},
-                states: &[
+                transitions: &[
             "#,
             name = lang.name,
             name_uppercase = name_uppercase,
             filenames = lang.filenames,
         );
 
-        for src in builder.states() {
-            _ = writeln!(output, r#"        &["#);
-
-            for t in builder.transitions_from_state(src) {
-                let test = match &t.test {
-                    GraphTest::Chars(usize::MAX) => "Chars(usize::MAX)".to_string(),
-                    GraphTest::Chars(n) => {
-                        format!("Chars({n})")
-                    }
-                    GraphTest::Charset(cs) => {
-                        format!(
-                            "Charset(LANG_{}_CHARSET_{:016X})",
-                            name_uppercase,
-                            calculate_hash(&cs)
-                        )
-                    }
-                    GraphTest::Prefix(s) => {
-                        format!(
-                            "Prefix(LANG_{}_STRING_{:016X})",
-                            name_uppercase,
-                            calculate_hash(&s)
-                        )
-                    }
-                    GraphTest::PrefixInsensitive(s) => {
-                        format!(
-                            "PrefixInsensitive(LANG_{}_STRING_{:016X})",
-                            name_uppercase,
-                            calculate_hash(&s)
-                        )
-                    }
-                };
-                let action = match &t.dst {
-                    GraphAction::Change(next) => format!("Change({})", next.0),
-                    GraphAction::Push(next) => format!("Push({})", next.0),
-                    GraphAction::Pop(count) => format!("Pop({})", count),
-                    GraphAction::Fallback => unreachable!(),
-                };
-                _ = writeln!(
-                    output,
-                    r#"            t({test}, {kind:?}, {action}),"#,
-                    kind = t.kind,
-                );
-            }
-
-            _ = writeln!(output, r#"        ],"#);
+        for t in builder.extract_transitions() {
+            let test = match &t.test {
+                GraphTest::Chars(usize::MAX) => "Chars(usize::MAX)".to_string(),
+                GraphTest::Chars(n) => {
+                    format!("Chars({n})")
+                }
+                GraphTest::Charset(cs) => {
+                    format!(
+                        "Charset(LANG_{}_CHARSET_{:016X})",
+                        name_uppercase,
+                        calculate_hash(&cs)
+                    )
+                }
+                GraphTest::Prefix(s) => {
+                    format!(
+                        "Prefix(LANG_{}_STRING_{:016X})",
+                        name_uppercase,
+                        calculate_hash(&s)
+                    )
+                }
+                GraphTest::PrefixInsensitive(s) => {
+                    format!(
+                        "PrefixInsensitive(LANG_{}_STRING_{:016X})",
+                        name_uppercase,
+                        calculate_hash(&s)
+                    )
+                }
+            };
+            let action = match &t.dst {
+                GraphAction::Change(dst) => format!("Change({})", dst.0),
+                GraphAction::Push(dst, pop_dst) => format!("Push({}, {})", dst.0, pop_dst.0),
+                GraphAction::Pop(count) => format!("Pop({})", count),
+                GraphAction::Fallback => unreachable!(),
+            };
+            _ = writeln!(
+                output,
+                r#"        t({test}, {kind:?}, {action}),"#,
+                kind = t.kind,
+            );
         }
 
         _ = writedoc!(
@@ -257,8 +249,7 @@ fn main() {
     _ = writedoc!(
         output,
         r#"
-        #[rustfmt::skip]
-        pub const LANGUAGES: &[&Language] = &[
+        #[rustfmt::skip] pub const LANGUAGES: &[&Language] = &[
         "#
     );
     for lang in LANGUAGES {

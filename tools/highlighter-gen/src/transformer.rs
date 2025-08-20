@@ -68,11 +68,13 @@ impl GraphBuilder {
             _ => panic!("Unexpected transform result: {dst:?}"),
         };
         let actual_dst = match rule.action {
-            ActionDefinition::Done => GraphAction::Pop(0),
+            ActionDefinition::Continue => GraphAction::Pop(0),
             ActionDefinition::Change(name) => {
                 GraphAction::Change(self.roots.find_alias_by_name(name))
             }
-            ActionDefinition::Push(name) => GraphAction::Push(self.roots.find_alias_by_name(name)),
+            ActionDefinition::Push(name) => {
+                GraphAction::Push(self.roots.find_alias_by_name(name), src)
+            }
             ActionDefinition::Pop => GraphAction::Pop(1),
         };
         self.add_transition(rule.kind, dst, actual_dst, GraphTest::Chars(0));
@@ -356,6 +358,7 @@ impl GraphBuilder {
         self.states.push(GraphState {
             name: None,
             coverage: Charset::default(),
+            offset: usize::MAX,
         })
     }
 
@@ -425,14 +428,23 @@ impl GraphBuilder {
         self.finalize_simplify_indirections();
         self.finalize_remove_unreachable();
         self.finalize_sort();
+        self.finalize_compute_flattened_offsets();
     }
 
     fn finalize_resolve_root_aliases(&mut self) {
         for t in &mut self.transitions {
             match &mut t.dst {
-                GraphAction::Change(dst) | GraphAction::Push(dst) => {
+                GraphAction::Change(dst) => {
                     if let Some(actual) = self.roots.try_find_actual_by_alias(*dst) {
                         *dst = actual;
+                    }
+                }
+                GraphAction::Push(dst, pop_dst) => {
+                    if let Some(actual) = self.roots.try_find_actual_by_alias(*dst) {
+                        *dst = actual;
+                    }
+                    if let Some(actual) = self.roots.try_find_actual_by_alias(*pop_dst) {
+                        *pop_dst = actual;
                     }
                 }
                 GraphAction::Pop(_) | GraphAction::Fallback => {}
@@ -680,7 +692,7 @@ impl GraphBuilder {
         while let Some(src) = stack.pop() {
             for t in self.transitions_from_state(src) {
                 let dst = match t.dst {
-                    GraphAction::Change(d) | GraphAction::Push(d) => d,
+                    GraphAction::Change(d) | GraphAction::Push(d, _) => d,
                     GraphAction::Pop(_) | GraphAction::Fallback => continue,
                 };
                 if !visited[dst.0] {
@@ -715,11 +727,21 @@ impl GraphBuilder {
             };
 
             match &mut t.dst {
-                GraphAction::Change(d) | GraphAction::Push(d) => {
-                    *d = match new_indices[d.0] {
+                GraphAction::Change(dst) => {
+                    *dst = match new_indices[dst.0] {
                         StateHandle::MAX => return false,
                         new => new,
-                    }
+                    };
+                }
+                GraphAction::Push(dst, pop_dst) => {
+                    *dst = match new_indices[dst.0] {
+                        StateHandle::MAX => return false,
+                        new => new,
+                    };
+                    *pop_dst = match new_indices[pop_dst.0] {
+                        StateHandle::MAX => return false,
+                        new => new,
+                    };
                 }
                 GraphAction::Pop(_) | GraphAction::Fallback => {}
             }
@@ -732,6 +754,20 @@ impl GraphBuilder {
         self.transitions.sort_by_key(|t| t.src);
     }
 
+    fn finalize_compute_flattened_offsets(&mut self) {
+        let mut states_offsets = vec![0; self.states.len()];
+        let mut off = 0usize;
+
+        for t in &self.transitions {
+            states_offsets[t.src.0] += 1;
+        }
+
+        for (s, &count) in self.states.iter_mut().zip(states_offsets.iter()) {
+            s.offset = off;
+            off += count;
+        }
+    }
+
     pub fn format_as_mermaid(&self) -> String {
         let mut output = String::new();
         let mut visited = vec![false; self.states.len()];
@@ -740,11 +776,21 @@ impl GraphBuilder {
 
         let mut iter = self.transitions.iter().peekable();
         while let Some(t) = iter.next() {
+            let src_offset = self.states[t.src].offset;
+            let dst_offset = self.states[match &t.dst {
+                GraphAction::Change(dst) => *dst,
+                GraphAction::Push(dst, _) => *dst,
+                GraphAction::Pop(_) => StateHandle(0),
+                GraphAction::Fallback => unreachable!(),
+            }]
+            .offset;
+
             if !visited[t.src.0] {
                 visited[t.src.0] = true;
+
                 let s = &self.states[t.src];
                 if let Some(name) = s.name {
-                    _ = writeln!(&mut output, "    {0}[\"{0} ({1})\"]", t.src.0, name);
+                    _ = writeln!(&mut output, "    {0}[\"{0} ({1})\"]", src_offset, name);
                 }
             }
 
@@ -799,18 +845,18 @@ impl GraphBuilder {
             };
 
             let dst = match &t.dst {
-                GraphAction::Change(dst) => {
-                    format!("{}", dst.0)
+                GraphAction::Change(_) => {
+                    format!("{}", dst_offset)
                 }
-                GraphAction::Push(dst) => {
+                GraphAction::Push(dst, _) => {
                     format!(
                         "push{}[/\"{}\"/]",
-                        t.src.0 << 16 | dst.0,
+                        src_offset << 16 | dst_offset,
                         self.states[*dst].name.unwrap()
                     )
                 }
                 GraphAction::Pop(_) => {
-                    format!("pop{}@{{ shape: stop }}", t.src.0 << 16)
+                    format!("pop{}@{{ shape: stop }}", src_offset << 16)
                 }
                 GraphAction::Fallback => unreachable!(),
             };
@@ -830,7 +876,7 @@ impl GraphBuilder {
             _ = writeln!(
                 &mut output,
                 "    {src} -->|\"{label}<br/>{kind:?}\"| {dst}",
-                src = t.src.0,
+                src = src_offset,
                 kind = t.kind,
             );
         }
@@ -839,22 +885,38 @@ impl GraphBuilder {
         output
     }
 
-    pub fn charsets(&self) -> Vec<Rc<Charset>> {
+    pub fn extract_charsets(&self) -> Vec<Rc<Charset>> {
         self.charsets.extract()
     }
 
-    pub fn strings(&self) -> Vec<Rc<String>> {
+    pub fn extract_strings(&self) -> Vec<Rc<String>> {
         self.strings.extract()
     }
 
-    pub fn states(&self) -> impl Iterator<Item = StateHandle> {
-        (0..self.states.len()).map(StateHandle)
+    /// Up to this point we've thought of this as a graph, but now we'll flatten
+    /// it to a plain list. We'll change Change/Push actions from state indices
+    /// into flattened transition list indices. This works because [`finalize()`]
+    /// ensures that all states have full "coverage" of all input characters.
+    pub fn extract_transitions(&self) -> Vec<GraphTransition> {
+        let mut transitions = self.transitions.clone();
+
+        for t in &mut transitions {
+            match &mut t.dst {
+                GraphAction::Change(dst) => {
+                    dst.0 = self.states[*dst].offset;
+                }
+                GraphAction::Push(dst, pop_dst) => {
+                    dst.0 = self.states[*dst].offset;
+                    pop_dst.0 = self.states[*pop_dst].offset;
+                }
+                GraphAction::Pop(_) | GraphAction::Fallback => {}
+            }
+        }
+
+        transitions
     }
 
-    pub fn transitions_from_state(
-        &self,
-        src: StateHandle,
-    ) -> impl Iterator<Item = &GraphTransition> {
+    fn transitions_from_state(&self, src: StateHandle) -> impl Iterator<Item = &GraphTransition> {
         self.transitions.iter().filter(move |&t| t.src == src)
     }
 }
@@ -915,14 +977,16 @@ pub struct GraphState {
     name: Option<&'static str>,
     /// The sum of chars that transition going out of this state cover.
     coverage: Charset,
+    /// Offset in the flattened transition list.
+    offset: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GraphAction {
-    Change(StateHandle),
-    Push(StateHandle),
-    Pop(usize),
-    Fallback,
+    Change(StateHandle),            // change to
+    Push(StateHandle, StateHandle), // (push to, pop back to)
+    Pop(usize),                     // pop back this many
+    Fallback,                       // replace with a fallback transition (for look-aheads like \b)
 }
 
 #[derive(Debug, Clone)]
