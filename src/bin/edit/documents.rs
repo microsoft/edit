@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
+use edit::sys::Syscall;
 use edit::{apperr, path, sys};
 
 use crate::state::DisplayablePathBuf;
@@ -31,7 +32,7 @@ impl Document {
             tb.write_file(&mut file)?;
         }
 
-        if let Ok(id) = sys::file_id(None, path) {
+        if let Ok(id) = sys::syscall::file_id(None, path) {
             self.file_id = Some(id);
         }
 
@@ -51,7 +52,7 @@ impl Document {
             tb.read_file(&mut file, encoding)?;
         }
 
-        if let Ok(id) = sys::file_id(None, path) {
+        if let Ok(id) = sys::syscall::file_id(None, path) {
             self.file_id = Some(id);
         }
 
@@ -145,11 +146,12 @@ impl DocumentManager {
 
         let mut file = match Self::open_for_reading(&path) {
             Ok(file) => Some(file),
-            Err(err) if sys::apperr_is_not_found(err) => None,
+            Err(err) if sys::syscall::apperr_is_not_found(err) => None,
             Err(err) => return Err(err),
         };
 
-        let file_id = if file.is_some() { Some(sys::file_id(file.as_ref(), &path)?) } else { None };
+        let file_id =
+            if file.is_some() { Some(sys::syscall::file_id(file.as_ref(), &path)?) } else { None };
 
         // Check if the file is already open.
         if file_id.is_some() && self.update_active(|doc| doc.file_id == file_id) {

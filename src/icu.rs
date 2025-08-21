@@ -12,6 +12,7 @@ use std::ptr::{null, null_mut};
 
 use crate::arena::{Arena, ArenaString, scratch_arena};
 use crate::buffer::TextBuffer;
+use crate::sys::Syscall;
 use crate::unicode::Utf8Chars;
 use crate::{apperr, arena_format, sys};
 
@@ -978,7 +979,7 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
         unsafe {
             LIBRARY_FUNCTIONS = LibraryFunctionsState::Failed;
 
-            let Ok(icu) = sys::load_icu() else {
+            let Ok(icu) = sys::syscall::load_icu() else {
                 return;
             };
 
@@ -1017,7 +1018,7 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
                     #[cfg(edit_icu_renaming_auto_detect)]
                     let name = sys::icu_add_renaming_suffix(&scratch, name, &suffix);
 
-                    let Ok(func) = sys::get_proc_address(handle, name) else {
+                    let Ok(func) = sys::syscall::get_proc_address(handle, name) else {
                         debug_assert!(
                             false,
                             "Failed to load ICU function: {:?}",

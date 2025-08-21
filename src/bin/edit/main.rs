@@ -27,6 +27,7 @@ use edit::framebuffer::{self, IndexedColor};
 use edit::helpers::{CoordType, KIBI, MEBI, MetricFormatter, Rect, Size};
 use edit::input::{self, kbmod, vk};
 use edit::oklab::StraightRgba;
+use edit::sys::Syscall;
 use edit::tui::*;
 use edit::vt::{self, Token};
 use edit::{apperr, arena_format, base64, path, sys, unicode};
@@ -51,7 +52,7 @@ fn main() -> process::ExitCode {
     match run() {
         Ok(()) => process::ExitCode::SUCCESS,
         Err(err) => {
-            sys::write_stdout(&format!("{}\n", FormatApperr::from(err)));
+            sys::syscall::write_stdout(&format!("{}\n", FormatApperr::from(err)));
             process::ExitCode::FAILURE
         }
     }
@@ -59,7 +60,7 @@ fn main() -> process::ExitCode {
 
 fn run() -> apperr::Result<()> {
     // Init `sys` first, as everything else may depend on its functionality (IO, function pointers, etc.).
-    let _sys_deinit = sys::init();
+    let _sys_deinit = sys::syscall::init();
     // Next init `arena`, so that `scratch_arena` works. `loc` depends on it.
     arena::init(SCRATCH_ARENA_CAPACITY)?;
     // Init the `loc` module, so that error messages are localized.
@@ -75,7 +76,7 @@ fn run() -> apperr::Result<()> {
     // `handle_args` may want to print a help message (must not fail),
     // and reads files (may hang; should be cancelable with Ctrl+C).
     // As such, we call this after `handle_args`.
-    sys::switch_modes()?;
+    sys::syscall::switch_modes()?;
 
     let mut vt_parser = vt::Parser::new();
     let mut input_parser = input::Parser::new();
@@ -103,7 +104,7 @@ fn run() -> apperr::Result<()> {
     tui.set_modal_default_bg(floater_bg);
     tui.set_modal_default_fg(floater_fg);
 
-    sys::inject_window_size_into_stdin();
+    sys::syscall::inject_window_size_into_stdin();
 
     #[cfg(feature = "debug-latency")]
     let mut last_latency_width = 0;
@@ -118,7 +119,7 @@ fn run() -> apperr::Result<()> {
         {
             let scratch = scratch_arena(None);
             let read_timeout = vt_parser.read_timeout().min(tui.read_timeout());
-            let Some(input) = sys::read_stdin(&scratch, read_timeout) else {
+            let Some(input) = sys::syscall::read_stdin(&scratch, read_timeout) else {
                 break;
             };
 
@@ -214,7 +215,7 @@ fn run() -> apperr::Result<()> {
                 last_latency_width = cols;
             }
 
-            sys::write_stdout(&output);
+            sys::syscall::write_stdout(&output);
         }
     }
 
@@ -263,7 +264,7 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         cwd = parent.to_path_buf();
     }
 
-    if let Some(mut file) = sys::open_stdin_if_redirected() {
+    if let Some(mut file) = sys::syscall::open_stdin_if_redirected() {
         let doc = state.documents.add_untitled()?;
         let mut tb = doc.buffer.borrow_mut();
         tb.read_file(&mut file, None)?;
@@ -278,7 +279,7 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
 }
 
 fn print_help() {
-    sys::write_stdout(concat!(
+    sys::syscall::write_stdout(concat!(
         "Usage: edit [OPTIONS] [FILE[:LINE[:COLUMN]]]\n",
         "Options:\n",
         "    -h, --help       Print this help message\n",
@@ -290,7 +291,7 @@ fn print_help() {
 }
 
 fn print_version() {
-    sys::write_stdout(concat!("edit version ", env!("CARGO_PKG_VERSION"), "\n"));
+    sys::syscall::write_stdout(concat!("edit version ", env!("CARGO_PKG_VERSION"), "\n"));
 }
 
 fn draw(ctx: &mut Context, state: &mut State) {
@@ -527,12 +528,12 @@ impl Drop for RestoreModes {
         // Same as in the beginning but in the reverse order.
         // It also includes DECSCUSR 0 to reset the cursor style and DECTCEM to show the cursor.
         // We specifically don't reset mode 1036, because most applications expect it to be set nowadays.
-        sys::write_stdout("\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1002;1006;2004l\x1b[?1049l");
+        sys::syscall::write_stdout("\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1002;1006;2004l\x1b[?1049l");
     }
 }
 
 fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) -> RestoreModes {
-    sys::write_stdout(concat!(
+    sys::syscall::write_stdout(concat!(
         // 1049: Alternative Screen Buffer
         //   I put the ASB switch in the beginning, just in case the terminal performs
         //   some additional state tracking beyond the modes we enable/disable.
@@ -570,7 +571,7 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         // We explicitly set a high read timeout, because we're not
         // waiting for user keyboard input. If we encounter a lone ESC,
         // it's unlikely to be from a ESC keypress, but rather from a VT sequence.
-        let Some(input) = sys::read_stdin(&scratch, Duration::from_secs(3)) else {
+        let Some(input) = sys::syscall::read_stdin(&scratch, Duration::from_secs(3)) else {
             break;
         };
 

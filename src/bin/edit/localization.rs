@@ -3,7 +3,7 @@
 
 use edit::arena::scratch_arena;
 use edit::helpers::AsciiStringHelpers;
-use edit::sys;
+use edit::sys::{self, Syscall};
 
 include!(concat!(env!("OUT_DIR"), "/i18n_edit.rs"));
 
@@ -11,7 +11,7 @@ static mut S_LANG: LangId = LangId::en;
 
 pub fn init() {
     let scratch = scratch_arena(None);
-    let langs = sys::preferred_languages(&scratch);
+    let langs = sys::syscall::preferred_languages(&scratch);
     let mut lang = LangId::en;
 
     'outer: for l in langs {

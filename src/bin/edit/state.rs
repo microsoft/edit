@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::oklab::StraightRgba;
+use edit::sys::Syscall;
 use edit::tui::*;
 use edit::{apperr, buffer, icu, sys};
 
@@ -30,7 +31,7 @@ impl std::fmt::Display for FormatApperr {
             apperr::APP_ICU_MISSING => f.write_str(loc(LocId::ErrorIcuMissing)),
             apperr::Error::App(code) => write!(f, "Unknown app error code: {code}"),
             apperr::Error::Icu(code) => icu::apperr_format(f, code),
-            apperr::Error::Sys(code) => sys::apperr_format(f, code),
+            apperr::Error::Sys(code) => sys::syscall::apperr_format(f, code),
         }
     }
 }

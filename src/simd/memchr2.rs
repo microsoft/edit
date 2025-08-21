@@ -226,7 +226,7 @@ mod tests {
     use std::slice;
 
     use super::*;
-    use crate::sys;
+    use crate::sys::{self, Syscall};
 
     #[test]
     fn test_empty() {
@@ -265,8 +265,8 @@ mod tests {
             const PAGE_SIZE: usize = 64 * 1024; // 64 KiB to cover many architectures.
 
             // 3 pages: uncommitted, committed, uncommitted
-            let ptr = sys::virtual_reserve(PAGE_SIZE * 3).unwrap();
-            sys::virtual_commit(ptr.add(PAGE_SIZE), PAGE_SIZE).unwrap();
+            let ptr = sys::syscall::virtual_reserve(PAGE_SIZE * 3).unwrap();
+            sys::syscall::virtual_commit(ptr.add(PAGE_SIZE), PAGE_SIZE).unwrap();
             slice::from_raw_parts_mut(ptr.add(PAGE_SIZE).as_ptr(), PAGE_SIZE)
         };
 
