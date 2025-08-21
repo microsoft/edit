@@ -42,6 +42,7 @@ use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
+use crate::lsh::cache::HighlighterCache;
 use crate::lsh::{HighlightKind, Highlighter, Language};
 use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
@@ -219,6 +220,7 @@ pub struct TextBuffer {
     active_edit_line_info: Option<ActiveEditLineInfo>,
     active_edit_depth: i32,
     active_edit_off: usize,
+    active_edit_first_line_y: Option<CoordType>,
 
     stats: TextBufferStatistics,
     cursor: Cursor,
@@ -230,6 +232,7 @@ pub struct TextBuffer {
     selection: Option<TextBufferSelection>,
     selection_generation: u32,
     search: Option<UnsafeCell<ActiveSearch>>,
+    highlighter_cache: HighlighterCache,
 
     width: CoordType,
     margin_width: CoordType,
@@ -272,6 +275,7 @@ impl TextBuffer {
             active_edit_line_info: None,
             active_edit_depth: 0,
             active_edit_off: 0,
+            active_edit_first_line_y: None,
 
             stats: TextBufferStatistics { logical_lines: 1, visual_lines: 1 },
             cursor: Default::default(),
@@ -279,6 +283,7 @@ impl TextBuffer {
             selection: None,
             selection_generation: 0,
             search: None,
+            highlighter_cache: HighlighterCache::new(),
 
             width: 0,
             margin_width: 0,
@@ -581,8 +586,13 @@ impl TextBuffer {
         self.line_highlight_enabled = enabled;
     }
 
+    pub fn language(&self) -> Option<&'static Language> {
+        self.language
+    }
+
     pub fn set_language(&mut self, language: Option<&'static Language>) {
         self.language = language;
+        self.highlighter_cache.clear_all();
     }
 
     /// Sets a ruler column, e.g. 80.
@@ -663,6 +673,7 @@ impl TextBuffer {
         self.set_selection(None);
         self.mark_as_clean();
         self.reflow();
+        self.highlighter_cache.clear_all();
     }
 
     /// Copies the contents of the buffer into a string.
@@ -1738,6 +1749,14 @@ impl TextBuffer {
             if da < db { a } else { b }
         };
 
+        // If we have a highlighter and a cache, fast-forward to the last checkpoint before
+        // the first line of the viewport to reduce the amount of work needed.
+        if let Some(h) = &mut highlighter {
+            let first_line_cursor =
+                self.cursor_move_to_visual_internal(cursor, Point { x: origin.x, y: origin.y });
+            self.highlighter_cache.prepare(h, first_line_cursor.logical_pos.y);
+        }
+
         let [selection_beg, selection_end] = match self.selection {
             None => [Point::MIN, Point::MIN],
             Some(TextBufferSelection { beg, end }) => minmax(beg, end),
@@ -1970,9 +1989,11 @@ impl TextBuffer {
                     while h.logical_pos_y() < cursor_beg.logical_pos.y - 1 {
                         let scratch_alt = scratch_arena(Some(&scratch));
                         _ = h.parse_next_line(&scratch_alt);
+                        self.highlighter_cache.maybe_store_after_parse(h);
                     }
 
                     let highlights = h.parse_next_line(&scratch);
+                    self.highlighter_cache.maybe_store_after_parse(h);
                     let mut highlights = highlights.iter();
 
                     if let Some(first) = highlights.next() {
@@ -2609,6 +2630,13 @@ impl TextBuffer {
         let cursor_before = self.cursor;
         self.set_cursor_internal(cursor);
 
+        // Track the first logical line affected by this edit so we can invalidate
+        // cached highlighter state starting from here.
+        if self.active_edit_first_line_y.is_none() {
+            let y = self.goto_line_start(cursor, cursor.logical_pos.y).logical_pos.y;
+            self.active_edit_first_line_y = Some(y);
+        }
+
         // If both the last and this are a Write/Delete operation, we skip allocating a new undo history item.
         if history_type != self.last_history_type
             || !matches!(history_type, HistoryType::Write | HistoryType::Delete)
@@ -2753,6 +2781,11 @@ impl TextBuffer {
         } else {
             // If word-wrap is disabled the visual line count always matches the logical one.
             self.stats.visual_lines = self.stats.logical_lines;
+        }
+
+        // Invalidate cached highlighter state starting from the first changed line.
+        if let Some(y) = self.active_edit_first_line_y.take() {
+            self.highlighter_cache.invalidate_from(y);
         }
 
         self.recalc_after_content_changed();

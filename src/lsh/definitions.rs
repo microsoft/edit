@@ -14,6 +14,12 @@ pub struct Language {
     pub transitions: &'static [Transition<'static>],
 }
 
+impl PartialEq for Language {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+
 pub struct Transition<'a> {
     pub test: Test<'a>,
     pub kind: Option<HighlightKind>,
@@ -104,40 +110,40 @@ flowchart TD
     20["20 (ignore)"]
     20 -->|"Chars(Line)<br/>None"| pop1310720@{ shape: stop }
 **/
-#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_520FD55FC3E4BA24: *const u8 = [1, 0x23].as_ptr();
-#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_121F4AB352225114: *const u8 = [10, 0x64, 0x69, 0x66, 0x66, 0x20, 0x2d, 0x2d, 0x67, 0x69, 0x74].as_ptr();
-#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_EC6DE3D5B94B5BD1: *const u8 = [9, 0x09, 0x64, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x64, 0x3a].as_ptr();
-#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_6A3FE2F75546B408: *const u8 = [10, 0x09, 0x6d, 0x6f, 0x64, 0x69, 0x66, 0x69, 0x65, 0x64, 0x3a].as_ptr();
-#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_1218C90A43640858: *const u8 = [10, 0x09, 0x6e, 0x65, 0x77, 0x20, 0x66, 0x69, 0x6c, 0x65, 0x3a].as_ptr();
-#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_8E3289E428F770E2: *const u8 = [9, 0x09, 0x72, 0x65, 0x6e, 0x61, 0x6d, 0x65, 0x64, 0x3a].as_ptr();
-#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_589722BCE95B4F03: *const u8 = [4, 0x64, 0x69, 0x66, 0x66].as_ptr();
-#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_89C86C21681CF1DD: *const u8 = [3, 0x2d, 0x2d, 0x2d].as_ptr();
-#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_24BADF678A331FDC: *const u8 = [3, 0x2b, 0x2b, 0x2b].as_ptr();
-#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_BBDBF9E07DEFE5B5: *const u8 = [1, 0x2d].as_ptr();
-#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_6D48C1B7C2CD9E76: *const u8 = [1, 0x2b].as_ptr();
+#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_0: *const u8 = [1, 0x23].as_ptr();
+#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_1: *const u8 = [10, 0x64, 0x69, 0x66, 0x66, 0x20, 0x2d, 0x2d, 0x67, 0x69, 0x74].as_ptr();
+#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_2: *const u8 = [9, 0x09, 0x64, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x64, 0x3a].as_ptr();
+#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_3: *const u8 = [10, 0x09, 0x6d, 0x6f, 0x64, 0x69, 0x66, 0x69, 0x65, 0x64, 0x3a].as_ptr();
+#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_4: *const u8 = [10, 0x09, 0x6e, 0x65, 0x77, 0x20, 0x66, 0x69, 0x6c, 0x65, 0x3a].as_ptr();
+#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_5: *const u8 = [9, 0x09, 0x72, 0x65, 0x6e, 0x61, 0x6d, 0x65, 0x64, 0x3a].as_ptr();
+#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_6: *const u8 = [4, 0x64, 0x69, 0x66, 0x66].as_ptr();
+#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_7: *const u8 = [3, 0x2d, 0x2d, 0x2d].as_ptr();
+#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_8: *const u8 = [3, 0x2b, 0x2b, 0x2b].as_ptr();
+#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_9: *const u8 = [1, 0x2d].as_ptr();
+#[rustfmt::skip] const LANG_GIT_COMMIT_MESSAGE_STRING_10: *const u8 = [1, 0x2b].as_ptr();
 #[rustfmt::skip] pub const LANG_GIT_COMMIT_MESSAGE: &Language = &Language {
     name: "Git Commit Message",
     filenames: &["COMMIT_EDITMSG", "MERGE_MSG"],
     transitions: &[
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_520FD55FC3E4BA24), Some(Comment), Push(4, 0)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_121F4AB352225114), None, Change(3)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_0), Some(Comment), Push(4, 0)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_1), None, Change(3)),
         t(Chars(0), None, Change(20)),
         t(Chars(usize::MAX), Some(Direct(BrightBlue)), Push(13, 0)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_EC6DE3D5B94B5BD1), None, Change(9)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_6A3FE2F75546B408), None, Change(10)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_1218C90A43640858), None, Change(11)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_8E3289E428F770E2), None, Change(12)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_2), None, Change(9)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_3), None, Change(10)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_4), None, Change(11)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_5), None, Change(12)),
         t(Chars(usize::MAX), None, Pop(1)),
         t(Chars(usize::MAX), Some(Direct(BrightRed)), Pop(1)),
         t(Chars(usize::MAX), Some(Direct(BrightBlue)), Pop(1)),
         t(Chars(usize::MAX), Some(Direct(BrightGreen)), Pop(1)),
         t(Chars(usize::MAX), Some(Direct(BrightBlue)), Pop(1)),
         t(Chars(0), Some(Other), Push(14, 13)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_589722BCE95B4F03), Some(Direct(BrightBlue)), Change(20)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_89C86C21681CF1DD), Some(Direct(BrightBlue)), Change(20)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_24BADF678A331FDC), Some(Direct(BrightBlue)), Change(20)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_BBDBF9E07DEFE5B5), Some(Direct(BrightRed)), Change(20)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_6D48C1B7C2CD9E76), Some(Direct(BrightGreen)), Change(20)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_6), Some(Direct(BrightBlue)), Change(20)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_7), Some(Direct(BrightBlue)), Change(20)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_8), Some(Direct(BrightBlue)), Change(20)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_9), Some(Direct(BrightRed)), Change(20)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_10), Some(Direct(BrightGreen)), Change(20)),
         t(Chars(0), None, Change(20)),
         t(Chars(usize::MAX), None, Pop(0)),
     ],
@@ -153,71 +159,74 @@ config:
 ---
 flowchart TD
     0["0 (ground)"]
-    0 -->|"Prefix(break, drop, exec, b, d, x)<br/>None"| 19
-    0 -->|"Prefix(edit, fixup, pick, reword, squash, e, f, p, r, s)<br/>None"| 21
+    0 -->|"Prefix(break, exec, b, x)<br/>None"| 19
+    0 -->|"Prefix(drop, edit, fixup, pick, reword, squash, d, e, f, p, r, s)<br/>None"| 21
     0 -->|"Prefix(#)<br/>None"| 23
     0 -->|"Charset([0x00-&quot;, $-a, c, g-o, q, t-w, y-0xFF])<br/>None"| pop0@{ shape: stop }
     0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
     19 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>None"| pop1245184@{ shape: stop }
-    19 -->|"Chars(0)<br/>Some(Keyword)"| push1245210[/"comment"/]
+    19 -->|"Chars(0)<br/>Some(Keyword)"| push1245211[/"comment"/]
     21 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>None"| pop1376256@{ shape: stop }
     21 -->|"Chars(0)<br/>Some(Keyword)"| push1376280[/"hash"/]
     23 -->|"Chars(Line)<br/>Some(Comment)"| pop1507328@{ shape: stop }
     24["24 (hash)"]
-    24 -->|"Charset([0x00-0x08, 0x0E-0x1F, !-0xFF])<br/>Some(Variable)"| push1572890[/"comment"/]
+    24 -->|"Charset([0x00-0x08, 0x0E-0x1F, !-0xFF])<br/>Some(Variable)"| push1572891[/"comment"/]
+    24 -->|"Charset([0x09-0x0D, 0x20])<br/>None"| pop1572864@{ shape: stop }
     24 -->|"Chars(Line)<br/>None"| pop1572864@{ shape: stop }
-    26["26 (comment)"]
-    26 -->|"Chars(Line)<br/>Some(Comment)"| pop1703936@{ shape: stop }
+    27["27 (comment)"]
+    27 -->|"Chars(Line)<br/>Some(Comment)"| pop1769472@{ shape: stop }
 **/
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_CHARSET_B8C5CFDCF118A06C: &[u16; 16] = &[0xe0a8, 0xe0f8, 0xf0f8, 0xf0f8, 0xf0f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f0, 0x7050, 0x7050, 0x7050, 0x7050, 0x7070];
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_CHARSET_5194EFCD4A36EDF4: &[u16; 16] = &[0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xffff, 0xffff];
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_CHARSET_3E7F9F69BC96DA4F: &[u16; 16] = &[0xff7f, 0xffff, 0xff3f, 0xff7b, 0xffbf, 0xffbf, 0xffbf, 0xffff, 0xff7f, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff];
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_303BCC458DA59CA8: *const u8 = [5, 0x62, 0x72, 0x65, 0x61, 0x6b].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_0C6400D6B9B47208: *const u8 = [4, 0x64, 0x72, 0x6f, 0x70].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_61385E31CBE176AD: *const u8 = [4, 0x65, 0x78, 0x65, 0x63].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_EBD3E4FD8943240A: *const u8 = [1, 0x62].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_669BD43167599AB5: *const u8 = [1, 0x64].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_735B2F4734CDA621: *const u8 = [1, 0x78].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_8FC5A350E96EF029: *const u8 = [4, 0x65, 0x64, 0x69, 0x74].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_F21A2AE3814D4D54: *const u8 = [5, 0x66, 0x69, 0x78, 0x75, 0x70].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_A678DDDA0C17324F: *const u8 = [4, 0x70, 0x69, 0x63, 0x6b].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_691484CDDA2E5DBA: *const u8 = [6, 0x72, 0x65, 0x77, 0x6f, 0x72, 0x64].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_A8F3DDD2082E2211: *const u8 = [6, 0x73, 0x71, 0x75, 0x61, 0x73, 0x68].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_E561AACBDF93CFD2: *const u8 = [1, 0x65].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_56C0C61729ED1B19: *const u8 = [1, 0x66].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_1DD05CCF89ABD763: *const u8 = [1, 0x70].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_915744BB66D98775: *const u8 = [1, 0x72].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_58F0D67C30FD13C8: *const u8 = [1, 0x73].as_ptr();
-#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_520FD55FC3E4BA24: *const u8 = [1, 0x23].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_CHARSET_0: &[u16; 16] = &[0xe0a8, 0xe0f8, 0xf0f8, 0xf0f8, 0xf0f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f0, 0x7050, 0x7050, 0x7050, 0x7050, 0x7070];
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_CHARSET_1: &[u16; 16] = &[0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xffff, 0xffff];
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_CHARSET_2: &[u16; 16] = &[0x0004, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0000, 0x0000];
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_CHARSET_3: &[u16; 16] = &[0xff7f, 0xffff, 0xff3f, 0xff7b, 0xffbf, 0xffbf, 0xffbf, 0xffff, 0xff7f, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff];
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_0: *const u8 = [5, 0x62, 0x72, 0x65, 0x61, 0x6b].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_1: *const u8 = [4, 0x65, 0x78, 0x65, 0x63].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_2: *const u8 = [1, 0x62].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_3: *const u8 = [1, 0x78].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_4: *const u8 = [4, 0x64, 0x72, 0x6f, 0x70].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_5: *const u8 = [4, 0x65, 0x64, 0x69, 0x74].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_6: *const u8 = [5, 0x66, 0x69, 0x78, 0x75, 0x70].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_7: *const u8 = [4, 0x70, 0x69, 0x63, 0x6b].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_8: *const u8 = [6, 0x72, 0x65, 0x77, 0x6f, 0x72, 0x64].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_9: *const u8 = [6, 0x73, 0x71, 0x75, 0x61, 0x73, 0x68].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_10: *const u8 = [1, 0x64].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_11: *const u8 = [1, 0x65].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_12: *const u8 = [1, 0x66].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_13: *const u8 = [1, 0x70].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_14: *const u8 = [1, 0x72].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_15: *const u8 = [1, 0x73].as_ptr();
+#[rustfmt::skip] const LANG_GIT_REBASE_MESSAGE_STRING_16: *const u8 = [1, 0x23].as_ptr();
 #[rustfmt::skip] pub const LANG_GIT_REBASE_MESSAGE: &Language = &Language {
     name: "Git Rebase Message",
     filenames: &["git-rebase-todo"],
     transitions: &[
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_303BCC458DA59CA8), None, Change(19)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_0C6400D6B9B47208), None, Change(19)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_61385E31CBE176AD), None, Change(19)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_EBD3E4FD8943240A), None, Change(19)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_669BD43167599AB5), None, Change(19)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_735B2F4734CDA621), None, Change(19)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_8FC5A350E96EF029), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_F21A2AE3814D4D54), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_A678DDDA0C17324F), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_691484CDDA2E5DBA), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_A8F3DDD2082E2211), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_E561AACBDF93CFD2), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_56C0C61729ED1B19), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_1DD05CCF89ABD763), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_915744BB66D98775), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_58F0D67C30FD13C8), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_520FD55FC3E4BA24), None, Change(23)),
-        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_3E7F9F69BC96DA4F), None, Pop(0)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_0), None, Change(19)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_1), None, Change(19)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_2), None, Change(19)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_3), None, Change(19)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_4), None, Change(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_5), None, Change(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_6), None, Change(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_7), None, Change(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_8), None, Change(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_9), None, Change(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_10), None, Change(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_11), None, Change(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_12), None, Change(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_13), None, Change(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_14), None, Change(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_15), None, Change(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_16), None, Change(23)),
+        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_3), None, Pop(0)),
         t(Chars(1), None, Pop(0)),
-        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_B8C5CFDCF118A06C), None, Pop(0)),
-        t(Chars(0), Some(Keyword), Push(26, 0)),
-        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_B8C5CFDCF118A06C), None, Pop(0)),
+        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_0), None, Pop(0)),
+        t(Chars(0), Some(Keyword), Push(27, 0)),
+        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_0), None, Pop(0)),
         t(Chars(0), Some(Keyword), Push(24, 0)),
         t(Chars(usize::MAX), Some(Comment), Pop(0)),
-        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_5194EFCD4A36EDF4), Some(Variable), Push(26, 24)),
+        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_1), Some(Variable), Push(27, 24)),
+        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_2), None, Pop(0)),
         t(Chars(usize::MAX), None, Pop(1)),
         t(Chars(usize::MAX), Some(Comment), Pop(1)),
     ],

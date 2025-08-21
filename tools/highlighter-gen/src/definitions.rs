@@ -81,10 +81,10 @@ const LANG_GIT_REBASE: Language = Language {
         State {
             name: "ground",
             rules: &[
-                re(r#"(?:break|drop|exec|b|d|x)\b{end-half}"#)
+                re(r#"(?:break|exec|b|x)\b{end-half}"#)
                     .is(Keyword)
                     .then_call("comment"),
-                re(r#"(?:edit|fixup|pick|reword|squash|e|f|p|r|s)\b{end-half}"#)
+                re(r#"(?:drop|edit|fixup|pick|reword|squash|d|e|f|p|r|s)\b{end-half}"#)
                     .is(Keyword)
                     .then_call("hash"),
                 re(r#"#.*"#).is(Comment),
@@ -94,6 +94,7 @@ const LANG_GIT_REBASE: Language = Language {
             name: "hash",
             rules: &[
                 re(r#"\S+"#).is(Variable).then_call("comment"),
+                re(r#"\s+"#),
                 re(r#".*"#).then_return(),
             ],
         },
@@ -420,6 +421,13 @@ pub struct Language {
 pub struct State {
     pub name: &'static str,
     pub rules: &'static [Rule],
+}
+
+pub enum Instruction {
+    Continue,
+    Change(&'static str),
+    Push(&'static str),
+    Pop,
 }
 
 pub struct Rule {

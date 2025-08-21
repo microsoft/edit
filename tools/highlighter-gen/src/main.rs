@@ -13,11 +13,9 @@
 
 mod definitions;
 mod handles;
-mod interner;
 mod transformer;
 
 use std::fmt::Write as _;
-use std::hash::{DefaultHasher, Hash, Hasher as _};
 use std::io::Write as _;
 
 use indoc::{indoc, writedoc};
@@ -44,6 +42,12 @@ fn main() {
             pub name: &'static str,
             pub filenames: &'static [&'static str],
             pub transitions: &'static [Transition<'static>],
+        }
+
+        impl PartialEq for Language {
+            fn eq(&self, other: &Self) -> bool {
+                std::ptr::eq(self, other)
+            }
         }
 
         pub struct Transition<'a> {
@@ -146,13 +150,13 @@ fn main() {
             builder.format_as_mermaid()
         );
 
-        for cs in builder.extract_charsets() {
+        for (h, cs) in builder.extract_charsets() {
             _ = writedoc!(
                 output,
                 "
-                #[rustfmt::skip] const LANG_{}_CHARSET_{:016X}: &[u16; 16] = &[",
+                #[rustfmt::skip] const LANG_{}_CHARSET_{}: &[u16; 16] = &[",
                 name_uppercase,
-                calculate_hash(&cs)
+                h.0,
             );
             for lo in 0..16 {
                 if lo > 0 {
@@ -167,13 +171,13 @@ fn main() {
             _ = writeln!(output, "];");
         }
 
-        for s in builder.extract_strings() {
+        for (h, s) in builder.extract_strings() {
             _ = writedoc!(
                 output,
                 "
-                #[rustfmt::skip] const LANG_{}_STRING_{:016X}: *const u8 = [",
+                #[rustfmt::skip] const LANG_{}_STRING_{}: *const u8 = [",
                 name_uppercase,
-                calculate_hash(&s),
+                h.0,
             );
             _ = write!(output, "{}", s.len());
             for &c in s.as_bytes() {
@@ -202,25 +206,13 @@ fn main() {
                     format!("Chars({n})")
                 }
                 GraphTest::Charset(cs) => {
-                    format!(
-                        "Charset(LANG_{}_CHARSET_{:016X})",
-                        name_uppercase,
-                        calculate_hash(&cs)
-                    )
+                    format!("Charset(LANG_{}_CHARSET_{})", name_uppercase, cs.0)
                 }
                 GraphTest::Prefix(s) => {
-                    format!(
-                        "Prefix(LANG_{}_STRING_{:016X})",
-                        name_uppercase,
-                        calculate_hash(&s)
-                    )
+                    format!("Prefix(LANG_{}_STRING_{})", name_uppercase, s.0)
                 }
                 GraphTest::PrefixInsensitive(s) => {
-                    format!(
-                        "PrefixInsensitive(LANG_{}_STRING_{:016X})",
-                        name_uppercase,
-                        calculate_hash(&s)
-                    )
+                    format!("PrefixInsensitive(LANG_{}_STRING_{})", name_uppercase, s.0)
                 }
             };
             let action = match &t.dst {
@@ -270,10 +262,4 @@ fn main() {
     _ = writeln!(output, "];");
 
     _ = std::io::stdout().write_all(output.as_bytes());
-}
-
-fn calculate_hash<T: Hash>(t: &T) -> u64 {
-    let mut s = DefaultHasher::new();
-    t.hash(&mut s);
-    s.finish()
 }
