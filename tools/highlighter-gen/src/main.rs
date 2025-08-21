@@ -99,9 +99,10 @@ fn main() {
         }
 
         pub enum Action {
-            Change(u8),
-            Push(u8, u8),
+            Jump(u8),
+            Push(u8),
             Pop(u8),
+            Loop(u8),
         }
 
         const fn t<'a>(test: Test<'a>, kind: Option<HighlightKind>, action: Action) -> Transition<'a> {
@@ -216,9 +217,10 @@ fn main() {
                 }
             };
             let action = match &t.dst {
-                GraphAction::Change(dst) => format!("Change({})", dst.0),
-                GraphAction::Push(dst, pop_dst) => format!("Push({}, {})", dst.0, pop_dst.0),
+                GraphAction::Jump(dst) => format!("Jump({})", dst.0),
+                GraphAction::Push(dst) => format!("Push({})", dst.0),
                 GraphAction::Pop(count) => format!("Pop({})", count),
+                GraphAction::Loop(dst) => format!("Loop({})", dst.0),
                 GraphAction::Fallback => unreachable!(),
             };
             _ = writeln!(

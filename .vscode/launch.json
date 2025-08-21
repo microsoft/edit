@@ -10,8 +10,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "assets/highlighting-tests/COMMIT_EDITMSG",
-                "assets/highlighting-tests/git-rebase-todo",
+                "assets/highlighting-tests/json.json"
             ],
         },
         {
@@ -22,8 +21,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "assets/highlighting-tests/COMMIT_EDITMSG",
-                "assets/highlighting-tests/git-rebase-todo",
+                "assets/highlighting-tests/json.json"
             ],
         },
         {
@@ -34,8 +32,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "assets/highlighting-tests/COMMIT_EDITMSG",
-                "assets/highlighting-tests/git-rebase-todo",
+                "assets/highlighting-tests/json.json"
             ],
         }
     ]

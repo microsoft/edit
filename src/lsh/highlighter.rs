@@ -218,27 +218,28 @@ impl<'doc> Highlighter<'doc> {
                 }
             }
 
-            match t.action {
-                Action::Change(dst) => {
-                    state = dst as usize;
-                    kind = t.kind.unwrap_or(kind);
-                }
-                Action::Push(dst, _) => {
-                    self.state_stack.push((dst, kind));
+            if let Some(k) = t.kind {
+                kind = k;
+            }
 
+            match t.action {
+                Action::Jump(dst) => {
                     state = dst as usize;
-                    kind = t.kind.unwrap_or(kind);
+                }
+                Action::Push(dst) => {
+                    state = dst as usize;
                     push(start, kind);
+
+                    self.state_stack.push((dst, kind));
 
                     start = off;
                 }
-                Action::Pop(n) => {
-                    kind = t.kind.unwrap_or(kind);
+                Action::Pop(count) => {
                     push(start, kind);
 
-                    if n != 0 {
+                    if count != 0 {
                         self.state_stack
-                            .truncate(self.state_stack.len().saturating_sub(n as usize));
+                            .truncate(self.state_stack.len().saturating_sub(count as usize));
                     }
 
                     let v = self.state_stack.last().cloned().unwrap_or_default();
@@ -247,7 +248,17 @@ impl<'doc> Highlighter<'doc> {
 
                     start = off;
 
-                    if n == 0 && off >= line.len() {
+                    if count == 0 && off >= line.len() {
+                        break;
+                    }
+                }
+                Action::Loop(dst) => {
+                    push(start, kind);
+
+                    state = dst as usize;
+                    start = off;
+
+                    if off >= line.len() {
                         break;
                     }
                 }
@@ -257,7 +268,7 @@ impl<'doc> Highlighter<'doc> {
         }
 
         push(start, kind);
-        push(line.len(), kind);
+        res.push(Higlight { start: line.len(), kind: HighlightKind::Other });
 
         // Adjust the range to account for the line offset.
         for h in &mut res {

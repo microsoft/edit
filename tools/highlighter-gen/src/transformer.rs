@@ -62,19 +62,15 @@ impl GraphBuilder {
         // During `simplify_indirections()` we'll then clean those up again, by connection
         // nodes together directly if they're joined by just a `Chars(0)` transition.
         let dst = self.add_state();
-        let dst = self.transform(None, src, GraphAction::Change(dst), &hir);
+        let dst = self.transform(None, src, GraphAction::Jump(dst), &hir);
         let dst = match dst {
-            GraphAction::Change(dst) => dst,
+            GraphAction::Jump(dst) => dst,
             _ => panic!("Unexpected transform result: {dst:?}"),
         };
         let actual_dst = match rule.action {
             ActionDefinition::Continue => GraphAction::Pop(0),
-            ActionDefinition::Change(name) => {
-                GraphAction::Change(self.roots.find_alias_by_name(name))
-            }
-            ActionDefinition::Push(name) => {
-                GraphAction::Push(self.roots.find_alias_by_name(name), src)
-            }
+            ActionDefinition::Jump(name) => GraphAction::Jump(self.roots.find_alias_by_name(name)),
+            ActionDefinition::Push(name) => GraphAction::Push(self.roots.find_alias_by_name(name)),
             ActionDefinition::Pop => GraphAction::Pop(1),
         };
         self.add_transition(rule.kind, dst, actual_dst, GraphTest::Chars(0));
@@ -269,11 +265,11 @@ impl GraphBuilder {
         }
 
         let mut it = hirs.iter().peekable();
-        let mut src = GraphAction::Change(src);
+        let mut src = GraphAction::Jump(src);
 
         while let Some(hir) = it.next() {
             let src_idx = match src {
-                GraphAction::Change(idx) => idx,
+                GraphAction::Jump(idx) => idx,
                 _ => panic!("Unexpected action in transform_concat"),
             };
 
@@ -298,7 +294,7 @@ impl GraphBuilder {
             let more = it.peek().is_some();
             let kind = if more { None } else { kind };
             let dst = if more {
-                GraphAction::Change(self.add_state())
+                GraphAction::Jump(self.add_state())
             } else {
                 dst
             };
@@ -458,17 +454,9 @@ impl GraphBuilder {
     fn finalize_resolve_root_aliases(&mut self) {
         for t in &mut self.transitions {
             match &mut t.dst {
-                GraphAction::Change(dst) => {
+                GraphAction::Jump(dst) | GraphAction::Push(dst) | GraphAction::Loop(dst) => {
                     if let Some(actual) = self.roots.try_find_actual_by_alias(*dst) {
                         *dst = actual;
-                    }
-                }
-                GraphAction::Push(dst, pop_dst) => {
-                    if let Some(actual) = self.roots.try_find_actual_by_alias(*dst) {
-                        *dst = actual;
-                    }
-                    if let Some(actual) = self.roots.try_find_actual_by_alias(*pop_dst) {
-                        *pop_dst = actual;
                     }
                 }
                 GraphAction::Pop(_) | GraphAction::Fallback => {}
@@ -535,14 +523,14 @@ impl GraphBuilder {
                     src,
                     test: GraphTest::Charset(cs),
                     kind: None,
-                    dst: GraphAction::Pop(0),
+                    dst: GraphAction::Loop(src),
                 });
                 self.transitions.push(GraphTransition {
                     origin: -1,
                     src,
                     test: GraphTest::Chars(1),
                     kind: None,
-                    dst: GraphAction::Pop(0),
+                    dst: GraphAction::Loop(src),
                 });
             }
         }
@@ -607,7 +595,7 @@ impl GraphBuilder {
                             t.test = fallback.test;
                             t.dst = fallback.dst;
                         }
-                        GraphAction::Change(dst) if !visited[dst.0] => {
+                        GraphAction::Jump(dst) if !visited[dst.0] => {
                             visited[dst.0] = true;
 
                             // Check if the fallback is a superset of this transition.
@@ -644,14 +632,14 @@ impl GraphBuilder {
                     src,
                     test: GraphTest::Chars(0),
                     kind: None,
-                    dst: GraphAction::Pop(0),
+                    dst: GraphAction::Loop(src),
                 });
             }
         }
 
         for t in &mut self.transitions {
             if t.dst == GraphAction::Fallback {
-                t.dst = GraphAction::Pop(0);
+                t.dst = GraphAction::Loop(t.src);
                 t.kind = None;
             }
         }
@@ -684,7 +672,7 @@ impl GraphBuilder {
                 };
 
                 for t in &mut self.transitions {
-                    if t.dst == GraphAction::Change(src) {
+                    if t.dst == GraphAction::Jump(src) {
                         if kind.is_some() {
                             if t.kind.is_some() && t.kind != kind {
                                 panic!(
@@ -717,7 +705,7 @@ impl GraphBuilder {
         while let Some(src) = stack.pop() {
             for t in self.transitions_from_state(src) {
                 let dst = match t.dst {
-                    GraphAction::Change(d) | GraphAction::Push(d, _) => d,
+                    GraphAction::Jump(d) | GraphAction::Push(d) | GraphAction::Loop(d) => d,
                     GraphAction::Pop(_) | GraphAction::Fallback => continue,
                 };
                 if !visited[dst.0] {
@@ -752,18 +740,8 @@ impl GraphBuilder {
             };
 
             match &mut t.dst {
-                GraphAction::Change(dst) => {
+                GraphAction::Jump(dst) | GraphAction::Push(dst) | GraphAction::Loop(dst) => {
                     *dst = match new_indices[dst.0] {
-                        StateHandle::MAX => return false,
-                        new => new,
-                    };
-                }
-                GraphAction::Push(dst, pop_dst) => {
-                    *dst = match new_indices[dst.0] {
-                        StateHandle::MAX => return false,
-                        new => new,
-                    };
-                    *pop_dst = match new_indices[pop_dst.0] {
                         StateHandle::MAX => return false,
                         new => new,
                     };
@@ -803,8 +781,7 @@ impl GraphBuilder {
         while let Some(t) = iter.next() {
             let src_offset = self.states[t.src].offset;
             let dst_offset = self.states[match &t.dst {
-                GraphAction::Change(dst) => *dst,
-                GraphAction::Push(dst, _) => *dst,
+                GraphAction::Jump(dst) | GraphAction::Push(dst) | GraphAction::Loop(dst) => *dst,
                 GraphAction::Pop(_) => StateHandle(0),
                 GraphAction::Fallback => unreachable!(),
             }]
@@ -855,11 +832,11 @@ impl GraphBuilder {
                 }
             };
 
-            let dst = match &t.dst {
-                GraphAction::Change(_) => {
+            let dst_str = match &t.dst {
+                GraphAction::Jump(_) => {
                     format!("{}", dst_offset)
                 }
-                GraphAction::Push(dst, _) => {
+                GraphAction::Push(dst) => {
                     format!(
                         "push{}[/\"{}\"/]",
                         src_offset << 16 | dst_offset,
@@ -868,6 +845,9 @@ impl GraphBuilder {
                 }
                 GraphAction::Pop(_) => {
                     format!("pop{}@{{ shape: stop }}", src_offset << 16)
+                }
+                GraphAction::Loop(_) => {
+                    format!("{dst_offset}")
                 }
                 GraphAction::Fallback => unreachable!(),
             };
@@ -886,8 +866,7 @@ impl GraphBuilder {
             };
             _ = writeln!(
                 &mut output,
-                "    {src} -->|\"{label}<br/>{kind:?}\"| {dst}",
-                src = src_offset,
+                "    {src_offset} -->|\"{label}<br/>{kind:?}\"| {dst_str}",
                 kind = t.kind,
             );
         }
@@ -931,7 +910,7 @@ impl GraphBuilder {
     }
 
     /// Up to this point we've thought of this as a graph, but now we'll flatten
-    /// it to a plain list. We'll change Change/Push actions from state indices
+    /// it to a plain list. We'll change Jump/Push actions from state indices
     /// into flattened transition list indices. This works because [`finalize()`]
     /// ensures that all states have full "coverage" of all input characters.
     pub fn extract_transitions(&self) -> Vec<GraphTransition> {
@@ -939,12 +918,8 @@ impl GraphBuilder {
 
         for t in &mut transitions {
             match &mut t.dst {
-                GraphAction::Change(dst) => {
+                GraphAction::Jump(dst) | GraphAction::Push(dst) | GraphAction::Loop(dst) => {
                     dst.0 = self.states[*dst].offset;
-                }
-                GraphAction::Push(dst, pop_dst) => {
-                    dst.0 = self.states[*dst].offset;
-                    pop_dst.0 = self.states[*pop_dst].offset;
                 }
                 GraphAction::Pop(_) | GraphAction::Fallback => {}
             }
@@ -1020,10 +995,11 @@ pub struct GraphState {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GraphAction {
-    Change(StateHandle),            // change to
-    Push(StateHandle, StateHandle), // (push to, pop back to)
-    Pop(usize),                     // pop back this many
-    Fallback,                       // replace with a fallback transition (for look-aheads like \b)
+    Jump(StateHandle), // change to
+    Push(StateHandle), // push to
+    Pop(usize),        // pop 1
+    Loop(StateHandle), // loop to the start of the state & do an exit check
+    Fallback,          // replace with a fallback transition (for look-aheads like \b)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -3,7 +3,7 @@
 use HighlightKind::*;
 use IndexedColor::*;
 
-pub const LANGUAGES: &[&Language] = &[&LANG_GIT_COMMIT, &LANG_GIT_REBASE];
+pub const LANGUAGES: &[&Language] = &[&LANG_GIT_COMMIT, &LANG_GIT_REBASE, &LANG_JSON];
 
 const LANG_DIFF: Language = Language {
     name: "Diff",
@@ -12,12 +12,12 @@ const LANG_DIFF: Language = Language {
         State {
             name: "ground",
             rules: &[
-                re(r#"diff"#).is(Direct(BrightBlue)).then_goto("ignore"),
-                re(r#"---"#).is(Direct(BrightBlue)).then_goto("ignore"),
-                re(r#"\+\+\+"#).is(Direct(BrightBlue)).then_goto("ignore"),
-                re(r#"-"#).is(Direct(BrightRed)).then_goto("ignore"),
-                re(r#"\+"#).is(Direct(BrightGreen)).then_goto("ignore"),
-                re(r#""#).then_goto("ignore"),
+                re(r#"diff"#).is(Direct(BrightBlue)).then_jump("ignore"),
+                re(r#"---"#).is(Direct(BrightBlue)).then_jump("ignore"),
+                re(r#"\+\+\+"#).is(Direct(BrightBlue)).then_jump("ignore"),
+                re(r#"-"#).is(Direct(BrightRed)).then_jump("ignore"),
+                re(r#"\+"#).is(Direct(BrightGreen)).then_jump("ignore"),
+                re(r#""#).then_jump("ignore"),
             ],
         },
         State {
@@ -38,7 +38,7 @@ const LANG_GIT_COMMIT: Language = Language {
                 re(r#"diff \-\-git.*"#)
                     .is(Direct(BrightBlue))
                     .then_call("diff_transition"),
-                re(r#""#).then_goto("ignore"),
+                re(r#""#).then_jump("ignore"),
             ],
         },
         State {
@@ -59,12 +59,12 @@ const LANG_GIT_COMMIT: Language = Language {
         State {
             name: "diff",
             rules: &[
-                re(r#"diff"#).is(Direct(BrightBlue)).then_goto("ignore"),
-                re(r#"---"#).is(Direct(BrightBlue)).then_goto("ignore"),
-                re(r#"\+\+\+"#).is(Direct(BrightBlue)).then_goto("ignore"),
-                re(r#"-"#).is(Direct(BrightRed)).then_goto("ignore"),
-                re(r#"\+"#).is(Direct(BrightGreen)).then_goto("ignore"),
-                re(r#""#).then_goto("ignore"),
+                re(r#"diff"#).is(Direct(BrightBlue)).then_jump("ignore"),
+                re(r#"---"#).is(Direct(BrightBlue)).then_jump("ignore"),
+                re(r#"\+\+\+"#).is(Direct(BrightBlue)).then_jump("ignore"),
+                re(r#"-"#).is(Direct(BrightRed)).then_jump("ignore"),
+                re(r#"\+"#).is(Direct(BrightGreen)).then_jump("ignore"),
+                re(r#""#).then_jump("ignore"),
             ],
         },
         State {
@@ -114,13 +114,13 @@ const LANG_JSON: Language = Language {
             rules: &[
                 re(r#"//.*"#).is(Comment),
                 re(r#"/\*"#).is(Comment).then_call("comment"),
-                re(r#"""#).is(String).then_goto("string_double"),
+                re(r#"""#).is(String).then_jump("string_double"),
                 re(r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#)
                     .is(Number)
-                    .then_goto("resolve_type"),
-                re(r#"(?i:false)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:null)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:true)"#).is(Keyword).then_goto("resolve_type"),
+                    .then_jump("resolve_type"),
+                re(r#"(?i:false)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:null)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:true)"#).is(Keyword).then_jump("resolve_type"),
             ],
         },
         State {
@@ -133,7 +133,7 @@ const LANG_JSON: Language = Language {
         },
         State {
             name: "string_double",
-            rules: &[re(r#"""#), re(r#"\\."#).then_goto("string_double")],
+            rules: &[re(r#"""#), re(r#"\\."#).then_jump("string_double")],
         },
     ],
 };
@@ -146,15 +146,15 @@ const LANG_YAML: Language = Language {
             name: "ground",
             rules: &[
                 re(r#"#.*"#).is(Comment),
-                re(r#"""#).is(String).then_goto("string_double"),
-                re(r#"'"#).is(String).then_goto("string_single"),
+                re(r#"""#).is(String).then_jump("string_double"),
+                re(r#"'"#).is(String).then_jump("string_single"),
                 re(r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#)
                     .is(Number)
-                    .then_goto("resolve_type"),
-                re(r#"(?i:false)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:null)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:true)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"\w+"#).is(String).then_goto("resolve_type"),
+                    .then_jump("resolve_type"),
+                re(r#"(?i:false)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:null)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:true)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"\w+"#).is(String).then_jump("resolve_type"),
             ],
         },
         State {
@@ -162,11 +162,11 @@ const LANG_YAML: Language = Language {
             rules: &[
                 re(r#"\s*[^\s#:]+:"#)
                     .is(Keyword)
-                    .then_goto("resolve_type_maybe_keyword"),
+                    .then_jump("resolve_type_maybe_keyword"),
                 re(r#"\s*[^\s#:]+"#).is(String),
                 re(r#"\s*:"#)
                     .is(Keyword)
-                    .then_goto("resolve_type_maybe_keyword"),
+                    .then_jump("resolve_type_maybe_keyword"),
                 re(r#""#),
             ],
         },
@@ -176,11 +176,11 @@ const LANG_YAML: Language = Language {
         },
         State {
             name: "string_double",
-            rules: &[re(r#"""#), re(r#"\\."#).then_goto("string_double")],
+            rules: &[re(r#"""#), re(r#"\\."#).then_jump("string_double")],
         },
         State {
             name: "string_single",
-            rules: &[re(r#"'"#), re(r#"\\."#).then_goto("string_single")],
+            rules: &[re(r#"'"#), re(r#"\\."#).then_jump("string_single")],
         },
     ],
 };
@@ -197,24 +197,24 @@ const LANG_BASH: Language = Language {
                 re(r#"""#).is(String).then_call("string_double"),
                 re(r#"\$"#).is(Variable).then_call("variable"),
                 re(r#"[!*/%+<=>|]"#).is(Operator),
-                re(r"(?i:break)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:case)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:continue)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:done)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:do)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:elif)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:else)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:esac)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:fi)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:for)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:function)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:if)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:in)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:return)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:select)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:then)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:until)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:while)").is(Keyword).then_goto("resolve_type"),
+                re(r"(?i:break)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:case)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:continue)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:done)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:do)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:elif)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:else)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:esac)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:fi)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:for)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:function)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:if)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:in)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:return)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:select)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:then)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:until)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:while)").is(Keyword).then_jump("resolve_type"),
                 re(r#"\d+"#).is(Number),
                 re(r"\w+").is(Method),
             ],
@@ -223,14 +223,14 @@ const LANG_BASH: Language = Language {
             name: "string_single",
             rules: &[
                 re(r#"'"#).then_return(),
-                re(r#"\\."#).then_goto("string_single"),
+                re(r#"\\."#).then_jump("string_single"),
             ],
         },
         State {
             name: "string_double",
             rules: &[
                 re(r#"""#).then_return(),
-                re(r#"\\."#).then_goto("string_double"),
+                re(r#"\\."#).then_jump("string_double"),
                 re(r#"\$"#).is(Other).then_call("variable"),
             ],
         },
@@ -268,23 +268,23 @@ const LANG_POWERSHELL: Language = Language {
                 re(r#"(?:-\d+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"#).is(Number),
                 re(r#"-\w+"#).is(Operator),
                 re(r#"[!*/%+<=>|]"#).is(Operator),
-                re(r#"(?i:break)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:catch)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:continue)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:do)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:elseif)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:else)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:finally)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:foreach)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:for)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:function)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:if)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:return)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:switch)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:throw)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:try)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:using)"#).is(Keyword).then_goto("resolve_type"),
-                re(r#"(?i:while)"#).is(Keyword).then_goto("resolve_type"),
+                re(r#"(?i:break)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:catch)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:continue)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:do)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:elseif)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:else)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:finally)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:foreach)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:for)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:function)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:if)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:return)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:switch)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:throw)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:try)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:using)"#).is(Keyword).then_jump("resolve_type"),
+                re(r#"(?i:while)"#).is(Keyword).then_jump("resolve_type"),
                 re(r#"[\w-]+"#).is(Method),
             ],
         },
@@ -296,14 +296,14 @@ const LANG_POWERSHELL: Language = Language {
             name: "string_single",
             rules: &[
                 re(r#"'"#).then_return(),
-                re(r#"`."#).then_goto("string_single"),
+                re(r#"`."#).then_jump("string_single"),
             ],
         },
         State {
             name: "string_double",
             rules: &[
                 re(r#"""#).then_return(),
-                re(r#"`."#).then_goto("string_double"),
+                re(r#"`."#).then_jump("string_double"),
                 re(r#"\$\("#).is(Other).then_call("ground"),
                 re(r#"\$"#).is(Variable).then_call("variable"),
             ],
@@ -338,25 +338,25 @@ const LANG_BATCH: Language = Language {
                 re(r#"%%"#).is(Other),
                 re(r#"%"#).is(Variable).then_call("variable"),
                 re(r#"[!*/+<=>|]"#).is(Operator),
-                re(r"(?i:break)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:call)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:cd)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:chdir)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:cls)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:copy)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:del)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:dir)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:echo)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:exit)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:for)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:goto)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:if)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:md)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:mkdir)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:move)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:pause)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:ren)").is(Keyword).then_goto("resolve_type"),
-                re(r"(?i:set)").is(Keyword).then_goto("resolve_type"),
+                re(r"(?i:break)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:call)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:cd)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:chdir)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:cls)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:copy)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:del)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:dir)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:echo)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:exit)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:for)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:goto)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:if)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:md)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:mkdir)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:move)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:pause)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:ren)").is(Keyword).then_jump("resolve_type"),
+                re(r"(?i:set)").is(Keyword).then_jump("resolve_type"),
                 re(r#"\d+"#).is(Number),
             ],
         },
@@ -364,7 +364,7 @@ const LANG_BATCH: Language = Language {
             name: "string_double",
             rules: &[
                 re(r#"""#).then_return(),
-                re(r#"\\."#).then_goto("string_double"),
+                re(r#"\\."#).then_jump("string_double"),
             ],
         },
         State {
@@ -425,7 +425,7 @@ pub struct State {
 
 pub enum Instruction {
     Continue,
-    Change(&'static str),
+    Jump(&'static str),
     Push(&'static str),
     Pop,
 }
@@ -450,8 +450,8 @@ impl Rule {
         self
     }
 
-    const fn then_goto(mut self, target: &'static str) -> Self {
-        self.action = ActionDefinition::Change(target);
+    const fn then_jump(mut self, target: &'static str) -> Self {
+        self.action = ActionDefinition::Jump(target);
         self
     }
 
@@ -469,7 +469,7 @@ impl Rule {
 #[derive(Debug, Clone, Copy)]
 pub enum ActionDefinition {
     Continue,
-    Change(&'static str),
+    Jump(&'static str),
     Push(&'static str),
     Pop,
 }

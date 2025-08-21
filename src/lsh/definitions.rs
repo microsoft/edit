@@ -69,9 +69,10 @@ pub enum HighlightKind {
 }
 
 pub enum Action {
-    Change(u8),
-    Push(u8, u8),
+    Jump(u8),
+    Push(u8),
     Pop(u8),
+    Loop(u8),
 }
 
 const fn t<'a>(test: Test<'a>, kind: Option<HighlightKind>, action: Action) -> Transition<'a> {
@@ -125,26 +126,26 @@ flowchart TD
     name: "Git Commit Message",
     filenames: &["COMMIT_EDITMSG", "MERGE_MSG"],
     transitions: &[
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_0), Some(Comment), Push(4, 0)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_1), None, Change(3)),
-        t(Chars(0), None, Change(20)),
-        t(Chars(usize::MAX), Some(Direct(BrightBlue)), Push(13, 0)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_2), None, Change(9)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_3), None, Change(10)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_4), None, Change(11)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_5), None, Change(12)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_0), Some(Comment), Push(4)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_1), None, Jump(3)),
+        t(Chars(0), None, Jump(20)),
+        t(Chars(usize::MAX), Some(Direct(BrightBlue)), Push(13)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_2), None, Jump(9)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_3), None, Jump(10)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_4), None, Jump(11)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_5), None, Jump(12)),
         t(Chars(usize::MAX), None, Pop(1)),
         t(Chars(usize::MAX), Some(Direct(BrightRed)), Pop(1)),
         t(Chars(usize::MAX), Some(Direct(BrightBlue)), Pop(1)),
         t(Chars(usize::MAX), Some(Direct(BrightGreen)), Pop(1)),
         t(Chars(usize::MAX), Some(Direct(BrightBlue)), Pop(1)),
-        t(Chars(0), Some(Other), Push(14, 13)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_6), Some(Direct(BrightBlue)), Change(20)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_7), Some(Direct(BrightBlue)), Change(20)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_8), Some(Direct(BrightBlue)), Change(20)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_9), Some(Direct(BrightRed)), Change(20)),
-        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_10), Some(Direct(BrightGreen)), Change(20)),
-        t(Chars(0), None, Change(20)),
+        t(Chars(0), Some(Other), Push(14)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_6), Some(Direct(BrightBlue)), Jump(20)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_7), Some(Direct(BrightBlue)), Jump(20)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_8), Some(Direct(BrightBlue)), Jump(20)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_9), Some(Direct(BrightRed)), Jump(20)),
+        t(Prefix(LANG_GIT_COMMIT_MESSAGE_STRING_10), Some(Direct(BrightGreen)), Jump(20)),
+        t(Chars(0), None, Jump(20)),
         t(Chars(usize::MAX), None, Pop(0)),
     ],
 };
@@ -162,11 +163,11 @@ flowchart TD
     0 -->|"Prefix(break, exec, b, x)<br/>None"| 19
     0 -->|"Prefix(drop, edit, fixup, pick, reword, squash, d, e, f, p, r, s)<br/>None"| 21
     0 -->|"Prefix(#)<br/>None"| 23
-    0 -->|"Charset([0x00-&quot;, $-a, c, g-o, q, t-w, y-0xFF])<br/>None"| pop0@{ shape: stop }
-    0 -->|"Chars(1)<br/>None"| pop0@{ shape: stop }
-    19 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>None"| pop1245184@{ shape: stop }
+    0 -->|"Charset([0x00-&quot;, $-a, c, g-o, q, t-w, y-0xFF])<br/>None"| 0
+    0 -->|"Chars(1)<br/>None"| 0
+    19 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>None"| 19
     19 -->|"Chars(0)<br/>Some(Keyword)"| push1245211[/"comment"/]
-    21 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>None"| pop1376256@{ shape: stop }
+    21 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>None"| 21
     21 -->|"Chars(0)<br/>Some(Keyword)"| push1376280[/"hash"/]
     23 -->|"Chars(Line)<br/>Some(Comment)"| pop1507328@{ shape: stop }
     24["24 (hash)"]
@@ -201,38 +202,142 @@ flowchart TD
     name: "Git Rebase Message",
     filenames: &["git-rebase-todo"],
     transitions: &[
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_0), None, Change(19)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_1), None, Change(19)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_2), None, Change(19)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_3), None, Change(19)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_4), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_5), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_6), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_7), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_8), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_9), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_10), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_11), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_12), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_13), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_14), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_15), None, Change(21)),
-        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_16), None, Change(23)),
-        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_3), None, Pop(0)),
-        t(Chars(1), None, Pop(0)),
-        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_0), None, Pop(0)),
-        t(Chars(0), Some(Keyword), Push(27, 0)),
-        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_0), None, Pop(0)),
-        t(Chars(0), Some(Keyword), Push(24, 0)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_0), None, Jump(19)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_1), None, Jump(19)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_2), None, Jump(19)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_3), None, Jump(19)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_4), None, Jump(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_5), None, Jump(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_6), None, Jump(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_7), None, Jump(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_8), None, Jump(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_9), None, Jump(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_10), None, Jump(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_11), None, Jump(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_12), None, Jump(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_13), None, Jump(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_14), None, Jump(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_15), None, Jump(21)),
+        t(Prefix(LANG_GIT_REBASE_MESSAGE_STRING_16), None, Jump(23)),
+        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_3), None, Loop(0)),
+        t(Chars(1), None, Loop(0)),
+        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_0), None, Loop(19)),
+        t(Chars(0), Some(Keyword), Push(27)),
+        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_0), None, Loop(21)),
+        t(Chars(0), Some(Keyword), Push(24)),
         t(Chars(usize::MAX), Some(Comment), Pop(0)),
-        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_1), Some(Variable), Push(27, 24)),
+        t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_1), Some(Variable), Push(27)),
         t(Charset(LANG_GIT_REBASE_MESSAGE_CHARSET_2), None, Pop(0)),
         t(Chars(usize::MAX), None, Pop(1)),
         t(Chars(usize::MAX), Some(Comment), Pop(1)),
     ],
 };
 
+/**
+---
+title: JSON
+config:
+  layout: elk
+  elk:
+    considerModelOrder: NONE
+---
+flowchart TD
+    0["0 (ground)"]
+    0 -->|"Prefix(//)<br/>None"| 10
+    0 -->|"Prefix(/*)<br/>Some(Comment)"| push26[/"comment"/]
+    0 -->|"Prefix(&quot;)<br/>Some(String)"| 29
+    0 -->|"Prefix(-)<br/>None"| 13
+    0 -->|"Charset([0-9])<br/>None"| 11
+    0 -->|"PrefixInsensitive(false, null, true)<br/>Some(Keyword)"| 24
+    0 -->|"Charset([0x00-!, #-,, ., :-E, G-M, O-S, U-e, g-m, o-s, u-0xFF])<br/>None"| 0
+    0 -->|"Chars(1)<br/>None"| 0
+    10 -->|"Chars(Line)<br/>Some(Comment)"| pop655360@{ shape: stop }
+    11 -->|"Prefix(.)<br/>None"| 17
+    11 -->|"Chars(0)<br/>None"| 15
+    13 -->|"Charset([0-9])<br/>None"| 11
+    13 -->|"Chars(0)<br/>None"| 13
+    15 -->|"PrefixInsensitive(e)<br/>None"| 19
+    15 -->|"Chars(0)<br/>Some(Number)"| 24
+    17 -->|"Charset([0-9])<br/>None"| 15
+    17 -->|"Chars(0)<br/>None"| 17
+    19 -->|"Prefix(+, -)<br/>None"| 22
+    19 -->|"Chars(0)<br/>None"| 22
+    22 -->|"Charset([0-9])<br/>Some(Number)"| 24
+    22 -->|"Chars(0)<br/>None"| 22
+    24["24 (resolve_type)"]
+    24 -->|"Charset([0-9, A-Z, _, a-z, 0xC2-0xF4])<br/>Some(Other)"| pop1572864@{ shape: stop }
+    24 -->|"Chars(0)<br/>None"| pop1572864@{ shape: stop }
+    26["26 (comment)"]
+    26 -->|"Prefix(*/)<br/>None"| pop1703936@{ shape: stop }
+    26 -->|"Charset([0x00-), +-0xFF])<br/>None"| 26
+    26 -->|"Chars(1)<br/>None"| 26
+    29["29 (string_double)"]
+    29 -->|"Prefix(&quot;)<br/>None"| pop1900544@{ shape: stop }
+    29 -->|"Prefix(\\)<br/>None"| 33
+    29 -->|"Charset([0x00-!, #-[, ]-0xFF])<br/>None"| 29
+    29 -->|"Chars(1)<br/>None"| 29
+    33 -->|"Chars(1)<br/>None"| 29
+**/
+#[rustfmt::skip] const LANG_JSON_CHARSET_0: &[u16; 16] = &[0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0008, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000];
+#[rustfmt::skip] const LANG_JSON_CHARSET_1: &[u16; 16] = &[0xe0a8, 0xe0f8, 0xf0f8, 0xf0f8, 0xf0f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f8, 0x70f0, 0x7050, 0x7050, 0x7050, 0x7050, 0x7070];
+#[rustfmt::skip] const LANG_JSON_CHARSET_2: &[u16; 16] = &[0xfff7, 0xfff7, 0xfff3, 0xfff7, 0xff57, 0xfff7, 0xffa7, 0xfff7, 0xfff7, 0xfff7, 0xffff, 0xffff, 0xffff, 0xfffb, 0xffaf, 0xfffb];
+#[rustfmt::skip] const LANG_JSON_CHARSET_3: &[u16; 16] = &[0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff];
+#[rustfmt::skip] const LANG_JSON_CHARSET_4: &[u16; 16] = &[0xffff, 0xffff, 0xfffb, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffdf, 0xffff, 0xffff, 0xffff];
+#[rustfmt::skip] const LANG_JSON_STRING_0: *const u8 = [2, 0x2f, 0x2f].as_ptr();
+#[rustfmt::skip] const LANG_JSON_STRING_1: *const u8 = [2, 0x2f, 0x2a].as_ptr();
+#[rustfmt::skip] const LANG_JSON_STRING_2: *const u8 = [1, 0x22].as_ptr();
+#[rustfmt::skip] const LANG_JSON_STRING_3: *const u8 = [1, 0x2d].as_ptr();
+#[rustfmt::skip] const LANG_JSON_STRING_4: *const u8 = [1, 0x2e].as_ptr();
+#[rustfmt::skip] const LANG_JSON_STRING_5: *const u8 = [1, 0x65].as_ptr();
+#[rustfmt::skip] const LANG_JSON_STRING_6: *const u8 = [1, 0x2b].as_ptr();
+#[rustfmt::skip] const LANG_JSON_STRING_7: *const u8 = [5, 0x66, 0x61, 0x6c, 0x73, 0x65].as_ptr();
+#[rustfmt::skip] const LANG_JSON_STRING_8: *const u8 = [4, 0x6e, 0x75, 0x6c, 0x6c].as_ptr();
+#[rustfmt::skip] const LANG_JSON_STRING_9: *const u8 = [4, 0x74, 0x72, 0x75, 0x65].as_ptr();
+#[rustfmt::skip] const LANG_JSON_STRING_10: *const u8 = [2, 0x2a, 0x2f].as_ptr();
+#[rustfmt::skip] const LANG_JSON_STRING_11: *const u8 = [1, 0x5c].as_ptr();
+#[rustfmt::skip] pub const LANG_JSON: &Language = &Language {
+    name: "JSON",
+    filenames: &["*.json", "*.jsonc"],
+    transitions: &[
+        t(Prefix(LANG_JSON_STRING_0), None, Jump(10)),
+        t(Prefix(LANG_JSON_STRING_1), Some(Comment), Push(26)),
+        t(Prefix(LANG_JSON_STRING_2), Some(String), Jump(29)),
+        t(Prefix(LANG_JSON_STRING_3), None, Jump(13)),
+        t(Charset(LANG_JSON_CHARSET_0), None, Jump(11)),
+        t(PrefixInsensitive(LANG_JSON_STRING_7), Some(Keyword), Jump(24)),
+        t(PrefixInsensitive(LANG_JSON_STRING_8), Some(Keyword), Jump(24)),
+        t(PrefixInsensitive(LANG_JSON_STRING_9), Some(Keyword), Jump(24)),
+        t(Charset(LANG_JSON_CHARSET_2), None, Loop(0)),
+        t(Chars(1), None, Loop(0)),
+        t(Chars(usize::MAX), Some(Comment), Pop(0)),
+        t(Prefix(LANG_JSON_STRING_4), None, Jump(17)),
+        t(Chars(0), None, Jump(15)),
+        t(Charset(LANG_JSON_CHARSET_0), None, Jump(11)),
+        t(Chars(0), None, Loop(13)),
+        t(PrefixInsensitive(LANG_JSON_STRING_5), None, Jump(19)),
+        t(Chars(0), Some(Number), Jump(24)),
+        t(Charset(LANG_JSON_CHARSET_0), None, Jump(15)),
+        t(Chars(0), None, Loop(17)),
+        t(Prefix(LANG_JSON_STRING_6), None, Jump(22)),
+        t(Prefix(LANG_JSON_STRING_3), None, Jump(22)),
+        t(Chars(0), None, Jump(22)),
+        t(Charset(LANG_JSON_CHARSET_0), Some(Number), Jump(24)),
+        t(Chars(0), None, Loop(22)),
+        t(Charset(LANG_JSON_CHARSET_1), Some(Other), Pop(0)),
+        t(Chars(0), None, Pop(0)),
+        t(Prefix(LANG_JSON_STRING_10), None, Pop(1)),
+        t(Charset(LANG_JSON_CHARSET_3), None, Loop(26)),
+        t(Chars(1), None, Loop(26)),
+        t(Prefix(LANG_JSON_STRING_2), None, Pop(0)),
+        t(Prefix(LANG_JSON_STRING_11), None, Jump(33)),
+        t(Charset(LANG_JSON_CHARSET_4), None, Loop(29)),
+        t(Chars(1), None, Loop(29)),
+        t(Chars(1), None, Jump(29)),
+    ],
+};
+
 #[rustfmt::skip] pub const LANGUAGES: &[&Language] = &[
     LANG_GIT_COMMIT_MESSAGE,
     LANG_GIT_REBASE_MESSAGE,
+    LANG_JSON,
 ];
