@@ -1,21 +1,16 @@
+use crate::arena::{Arena, scratch_arena};
 use crate::helpers::CoordType;
-use crate::lsh::highlighter::{Highlighter, ParserState};
+use crate::lsh::Higlight;
+use crate::lsh::highlighter::{Highlighter, HighlighterState};
 
-#[derive(Clone)]
-struct Checkpoint {
-    line: CoordType, // snapshot corresponds to the start of this logical line
-    state: ParserState,
-}
+#[cfg(debug_assertions)]
+const INTERVAL: CoordType = 16;
+#[cfg(not(debug_assertions))]
+const INTERVAL: CoordType = 1024;
 
+#[derive(Default)]
 pub struct HighlighterCache {
-    checkpoints: Vec<Checkpoint>,
-    interval: CoordType,
-}
-
-impl Default for HighlighterCache {
-    fn default() -> Self {
-        Self { checkpoints: Vec::new(), interval: 1000 }
-    }
+    checkpoints: Vec<HighlighterState>,
 }
 
 impl HighlighterCache {
@@ -23,55 +18,65 @@ impl HighlighterCache {
         Self::default()
     }
 
-    pub fn set_interval(&mut self, interval: CoordType) {
-        self.interval = interval.max(1);
-    }
-
-    pub fn clear_all(&mut self) {
-        self.checkpoints.clear();
-    }
-
-    /// Drop any cached state starting at the given logical line.
+    /// Drop any cached states starting at (including) the given logical line.
     pub fn invalidate_from(&mut self, line: CoordType) {
-        if self.checkpoints.is_empty() {
-            return;
-        }
-        let idx = match self.checkpoints.binary_search_by_key(&line, |c| c.line) {
-            Ok(i) => i,
-            Err(i) => i, // first checkpoint with line > given `line` is at position i
-        };
-        self.checkpoints.truncate(idx);
+        self.checkpoints.truncate(Self::ceil_line_to_offset(line));
     }
 
-    /// Prepare the highlighter to start parsing from the last checkpoint before or at `target_line`.
-    /// If none exists, do nothing (the caller will parse from the start).
-    pub fn prepare(&self, h: &mut Highlighter, target_line: CoordType) {
-        if self.checkpoints.is_empty() {
-            return;
+    /// Parse the given logical line. Returns the highlight spans.
+    pub fn parse_line<'a>(
+        &mut self,
+        arena: &'a Arena,
+        highlighter: &mut Highlighter,
+        line: CoordType,
+    ) -> Vec<Higlight, &'a Arena> {
+        // Do we need to random seek?
+        if line != highlighter.logical_pos_y() {
+            // If so, restore the nearest, preceeding checkpoint...
+            if !self.checkpoints.is_empty() {
+                let n = Self::floor_line_to_offset(line);
+                let n = n.min(self.checkpoints.len() - 1);
+                highlighter.restore(&self.checkpoints[n]);
+            } else {
+                // The assumption is that you pass in a default constructed highlighter,
+                // and this class handles random seeking for you. As such, there should
+                // never be a case where we don't have a checkpoint for line 0,
+                // but you have a highlighter for line >0.
+                debug_assert!(highlighter.logical_pos_y() == 0);
+            }
+
+            // ...and then seek in front of the requested line.
+            while highlighter.logical_pos_y() < line {
+                // There's a bit of waste here, because we just throw away the results,
+                // but that's better than duplicating the logic. The arena is very fast.
+                let scratch = scratch_arena(Some(arena));
+                _ = self.parse_line_impl(&scratch, highlighter);
+            }
         }
-        let idx = match self.checkpoints.binary_search_by_key(&target_line, |c| c.line) {
-            Ok(i) => Some(i),
-            Err(0) => None,
-            Err(i) => Some(i - 1),
-        };
-        if let Some(i) = idx {
-            h.restore(&self.checkpoints[i].state);
-        }
+
+        self.parse_line_impl(arena, highlighter)
     }
 
-    /// After parsing a line, maybe store a checkpoint. The snapshot at this time
-    /// corresponds to the start of the next logical line, which is ideal for resuming.
-    pub fn maybe_store_after_parse(&mut self, h: &Highlighter) {
-        let next_line = h.logical_pos_y().saturating_add(1);
-        if next_line < 0 {
-            return;
+    fn parse_line_impl<'a>(
+        &mut self,
+        arena: &'a Arena,
+        highlighter: &mut Highlighter,
+    ) -> Vec<Higlight, &'a Arena> {
+        // If we need to store a checkpoint for the start of the next line, do so now.
+        if Self::floor_line_to_offset(highlighter.logical_pos_y()) == self.checkpoints.len() {
+            self.checkpoints.push(highlighter.snapshot());
         }
-        if next_line % self.interval != 0 {
-            return;
-        }
-        if self.checkpoints.last().is_some_and(|c| c.line == next_line) {
-            return;
-        }
-        self.checkpoints.push(Checkpoint { line: next_line, state: h.snapshot() });
+
+        highlighter.parse_next_line(arena)
+    }
+
+    /// Since this line cache is super simplistic (no insertions, only append),
+    /// we can directly map from line numbers to offsets in the cache.
+    fn floor_line_to_offset(line: CoordType) -> usize {
+        (line / INTERVAL).try_into().unwrap_or(0)
+    }
+
+    fn ceil_line_to_offset(line: CoordType) -> usize {
+        ((line + INTERVAL - 1) / INTERVAL).try_into().unwrap_or(0)
     }
 }

@@ -55,7 +55,7 @@ pub struct Highlighter<'a> {
 }
 
 #[derive(Clone)]
-pub struct ParserState {
+pub struct HighlighterState {
     pub offset: usize,
     pub logical_pos_y: CoordType,
     pub state_stack: Vec<(u8, HighlightKind)>,
@@ -63,13 +63,7 @@ pub struct ParserState {
 
 impl<'doc> Highlighter<'doc> {
     pub fn new(doc: &'doc dyn ReadableDocument, language: &'static Language) -> Self {
-        Self {
-            doc,
-            language,
-            offset: 0,
-            logical_pos_y: 0,
-            state_stack: vec![(0, HighlightKind::Other)],
-        }
+        Self { doc, language, offset: 0, logical_pos_y: 0, state_stack: Vec::new() }
     }
 
     pub fn logical_pos_y(&self) -> CoordType {
@@ -78,8 +72,8 @@ impl<'doc> Highlighter<'doc> {
 
     /// Create a restorable snapshot of the current highlighter state
     /// so we can resume highlighting from this point later.
-    pub fn snapshot(&self) -> ParserState {
-        ParserState {
+    pub fn snapshot(&self) -> HighlighterState {
+        HighlighterState {
             offset: self.offset,
             logical_pos_y: self.logical_pos_y,
             state_stack: self.state_stack.clone(),
@@ -87,7 +81,7 @@ impl<'doc> Highlighter<'doc> {
     }
 
     /// Restore the highlighter state from a previously captured snapshot.
-    pub fn restore(&mut self, snapshot: &ParserState) {
+    pub fn restore(&mut self, snapshot: &HighlighterState) {
         self.offset = snapshot.offset;
         self.logical_pos_y = snapshot.logical_pos_y;
         self.state_stack = snapshot.state_stack.clone();
@@ -100,9 +94,7 @@ impl<'doc> Highlighter<'doc> {
         let line_beg = self.offset;
         let mut res = Vec::new_in(arena);
 
-        if self.offset != 0 {
-            self.logical_pos_y += 1;
-        }
+        self.logical_pos_y += 1;
 
         // Accumulate a line of text into `line_buf`.
         let line = 'read: {
@@ -175,7 +167,7 @@ impl<'doc> Highlighter<'doc> {
         let mut off = 0usize;
         let mut start = 0usize;
 
-        let &(state, mut kind) = unsafe { self.state_stack.last().unwrap_unchecked() };
+        let (state, mut kind) = self.state_stack.last().cloned().unwrap_or_default();
         let mut state = state as usize;
 
         let mut push = |start: usize, kind: HighlightKind| {
@@ -245,11 +237,11 @@ impl<'doc> Highlighter<'doc> {
                     push(start, kind);
 
                     if n != 0 {
-                        let n = n as usize;
-                        self.state_stack.truncate(self.state_stack.len().max(n + 1) - n);
+                        self.state_stack
+                            .truncate(self.state_stack.len().saturating_sub(n as usize));
                     }
 
-                    let v = unsafe { self.state_stack.last().unwrap_unchecked() };
+                    let v = self.state_stack.last().cloned().unwrap_or_default();
                     state = v.0 as usize;
                     kind = v.1;
 
