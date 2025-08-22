@@ -11,7 +11,7 @@ use std::slice::ChunksExact;
 
 use crate::arena::{Arena, ArenaString};
 use crate::helpers::{CoordType, Point, Rect, Size};
-use crate::oklab::{oklab_blend, srgb_to_oklab};
+use crate::oklab::StraightRgba;
 use crate::simd::{MemsetSafe, memset};
 use crate::unicode::MeasurementConfig;
 
@@ -57,26 +57,26 @@ pub enum IndexedColor {
 pub const INDEXED_COLORS_COUNT: usize = 18;
 
 /// Fallback theme. Matches Windows Terminal's Ottosson theme.
-pub const DEFAULT_THEME: [u32; INDEXED_COLORS_COUNT] = [
-    0xff000000, // Black
-    0xff212cbe, // Red
-    0xff3aae3f, // Green
-    0xff4a9abe, // Yellow
-    0xffbe4d20, // Blue
-    0xffbe54bb, // Magenta
-    0xffb2a700, // Cyan
-    0xffbebebe, // White
-    0xff808080, // BrightBlack
-    0xff303eff, // BrightRed
-    0xff51ea58, // BrightGreen
-    0xff44c9ff, // BrightYellow
-    0xffff6a2f, // BrightBlue
-    0xffff74fc, // BrightMagenta
-    0xfff0e100, // BrightCyan
-    0xffffffff, // BrightWhite
+pub const DEFAULT_THEME: [StraightRgba; INDEXED_COLORS_COUNT] = [
+    StraightRgba::from_be(0x000000ff), // Black
+    StraightRgba::from_be(0xbe2c21ff), // Red
+    StraightRgba::from_be(0x3fae3aff), // Green
+    StraightRgba::from_be(0xbe9a4aff), // Yellow
+    StraightRgba::from_be(0x204dbeff), // Blue
+    StraightRgba::from_be(0xbb54beff), // Magenta
+    StraightRgba::from_be(0x00a7b2ff), // Cyan
+    StraightRgba::from_be(0xbebebeff), // White
+    StraightRgba::from_be(0x808080ff), // BrightBlack
+    StraightRgba::from_be(0xff3e30ff), // BrightRed
+    StraightRgba::from_be(0x58ea51ff), // BrightGreen
+    StraightRgba::from_be(0xffc944ff), // BrightYellow
+    StraightRgba::from_be(0x2f6affff), // BrightBlue
+    StraightRgba::from_be(0xfc74ffff), // BrightMagenta
+    StraightRgba::from_be(0x00e1f0ff), // BrightCyan
+    StraightRgba::from_be(0xffffffff), // BrightWhite
     // --------
-    0xff000000, // Background
-    0xffbebebe, // Foreground
+    StraightRgba::from_be(0x000000ff), // Background
+    StraightRgba::from_be(0xbebebeff), // Foreground
 ];
 
 /// A shoddy framebuffer for terminal applications.
@@ -91,7 +91,7 @@ pub const DEFAULT_THEME: [u32; INDEXED_COLORS_COUNT] = [
 /// the screen all the time.
 pub struct Framebuffer {
     /// Store the color palette.
-    indexed_colors: [u32; INDEXED_COLORS_COUNT],
+    indexed_colors: [StraightRgba; INDEXED_COLORS_COUNT],
     /// Front and back buffers. Indexed by `frame_counter & 1`.
     buffers: [Buffer; 2],
     /// The current frame counter. Increments on every `flip` call.
@@ -99,12 +99,12 @@ pub struct Framebuffer {
     /// The colors used for `contrast()`. It stores the default colors
     /// of the palette as [dark, light], unless the palette is recognized
     /// as a light them, in which case it swaps them.
-    auto_colors: [u32; 2],
+    auto_colors: [StraightRgba; 2],
     /// A cache table for previously contrasted colors.
     /// See: <https://fgiesen.wordpress.com/2019/02/11/cache-tables/>
-    contrast_colors: [Cell<(u32, u32)>; CACHE_TABLE_SIZE],
-    background_fill: u32,
-    foreground_fill: u32,
+    contrast_colors: [Cell<(StraightRgba, StraightRgba)>; CACHE_TABLE_SIZE],
+    background_fill: StraightRgba,
+    foreground_fill: StraightRgba,
 }
 
 impl Framebuffer {
@@ -118,7 +118,8 @@ impl Framebuffer {
                 DEFAULT_THEME[IndexedColor::Black as usize],
                 DEFAULT_THEME[IndexedColor::BrightWhite as usize],
             ],
-            contrast_colors: [const { Cell::new((0, 0)) }; CACHE_TABLE_SIZE],
+            contrast_colors: [const { Cell::new((StraightRgba::zero(), StraightRgba::zero())) };
+                CACHE_TABLE_SIZE],
             background_fill: DEFAULT_THEME[IndexedColor::Background as usize],
             foreground_fill: DEFAULT_THEME[IndexedColor::Foreground as usize],
         }
@@ -128,10 +129,10 @@ impl Framebuffer {
     ///
     /// If you call this method, [`Framebuffer`] expects that you
     /// successfully detect the light/dark mode of the terminal.
-    pub fn set_indexed_colors(&mut self, colors: [u32; INDEXED_COLORS_COUNT]) {
+    pub fn set_indexed_colors(&mut self, colors: [StraightRgba; INDEXED_COLORS_COUNT]) {
         self.indexed_colors = colors;
-        self.background_fill = 0;
-        self.foreground_fill = 0;
+        self.background_fill = StraightRgba::zero();
+        self.foreground_fill = StraightRgba::zero();
 
         self.auto_colors = [
             self.indexed_colors[IndexedColor::Black as usize],
@@ -154,7 +155,7 @@ impl Framebuffer {
 
             let front = &mut self.buffers[self.frame_counter & 1];
             // Trigger a full redraw. (Yes, it's a hack.)
-            front.fg_bitmap.fill(1);
+            front.fg_bitmap.fill(StraightRgba::from_le(1));
             // Trigger a cursor update as well, just to be sure.
             front.cursor = Cursor::new_invalid();
         }
@@ -308,7 +309,7 @@ impl Framebuffer {
     }
 
     #[inline]
-    pub fn indexed(&self, index: IndexedColor) -> u32 {
+    pub fn indexed(&self, index: IndexedColor) -> StraightRgba {
         self.indexed_colors[index as usize]
     }
 
@@ -317,39 +318,41 @@ impl Framebuffer {
     /// To facilitate constant folding by the compiler,
     /// alpha is given as a fraction (`numerator` / `denominator`).
     #[inline]
-    pub fn indexed_alpha(&self, index: IndexedColor, numerator: u32, denominator: u32) -> u32 {
-        let c = self.indexed_colors[index as usize];
+    pub fn indexed_alpha(
+        &self,
+        index: IndexedColor,
+        numerator: u32,
+        denominator: u32,
+    ) -> StraightRgba {
+        let c = self.indexed_colors[index as usize].to_le();
         let a = 255 * numerator / denominator;
-        let r = (((c >> 16) & 0xFF) * numerator) / denominator;
-        let g = (((c >> 8) & 0xFF) * numerator) / denominator;
-        let b = ((c & 0xFF) * numerator) / denominator;
-        a << 24 | r << 16 | g << 8 | b
+        StraightRgba::from_le(a << 24 | (c & 0x00ffffff))
     }
 
     /// Returns a color opposite to the brightness of the given `color`.
-    pub fn contrasted(&self, color: u32) -> u32 {
-        let idx = (color as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
+    pub fn contrasted(&self, color: StraightRgba) -> StraightRgba {
+        let idx = (color.to_ne() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
         let slot = self.contrast_colors[idx].get();
         if slot.0 == color { slot.1 } else { self.contrasted_slow(color) }
     }
 
     #[cold]
-    fn contrasted_slow(&self, color: u32) -> u32 {
-        let idx = (color as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
+    fn contrasted_slow(&self, color: StraightRgba) -> StraightRgba {
+        let idx = (color.to_ne() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
         let contrast = self.auto_colors[Self::is_dark(color) as usize];
         self.contrast_colors[idx].set((color, contrast));
         contrast
     }
 
-    fn is_dark(color: u32) -> bool {
-        srgb_to_oklab(color).l < 0.5
+    fn is_dark(color: StraightRgba) -> bool {
+        color.as_oklab().lightness() < 0.5
     }
 
     /// Blends the given sRGB color onto the background bitmap.
     ///
     /// TODO: The current approach blends foreground/background independently,
     /// but ideally `blend_bg` with semi-transparent dark should also darken text below it.
-    pub fn blend_bg(&mut self, target: Rect, bg: u32) {
+    pub fn blend_bg(&mut self, target: Rect, bg: StraightRgba) {
         let back = &mut self.buffers[self.frame_counter & 1];
         back.bg_bitmap.blend(target, bg);
     }
@@ -358,7 +361,7 @@ impl Framebuffer {
     ///
     /// TODO: The current approach blends foreground/background independently,
     /// but ideally `blend_fg` should blend with the background color below it.
-    pub fn blend_fg(&mut self, target: Rect, fg: u32) {
+    pub fn blend_fg(&mut self, target: Rect, fg: StraightRgba) {
         let back = &mut self.buffers[self.frame_counter & 1];
         back.fg_bitmap.blend(target, fg);
     }
@@ -476,13 +479,13 @@ impl Framebuffer {
                         && back_attr[chunk_end] == attr
                 } {}
 
-                if last_bg != bg as u64 {
-                    last_bg = bg as u64;
+                if last_bg != bg.to_ne() as u64 {
+                    last_bg = bg.to_ne() as u64;
                     self.format_color(&mut result, false, bg);
                 }
 
-                if last_fg != fg as u64 {
-                    last_fg = fg as u64;
+                if last_fg != fg.to_ne() as u64 {
+                    last_fg = fg.to_ne() as u64;
                     self.format_color(&mut result, true, fg);
                 }
 
@@ -537,7 +540,7 @@ impl Framebuffer {
         result
     }
 
-    fn format_color(&self, dst: &mut ArenaString, fg: bool, mut color: u32) {
+    fn format_color(&self, dst: &mut ArenaString, fg: bool, mut color: StraightRgba) {
         let typ = if fg { '3' } else { '4' };
 
         // Some terminals support transparent backgrounds which are used
@@ -553,20 +556,20 @@ impl Framebuffer {
         // the output slightly and ensures that we keep "default foreground"
         // and "color that happens to be default foreground" separate.
         // (This also applies to the background color by the way.)
-        if color == 0 {
+        if color.to_ne() == 0 {
             _ = write!(dst, "\x1b[{typ}9m");
             return;
         }
 
-        if (color & 0xff000000) != 0xff000000 {
+        if color.alpha() != 0xff {
             let idx = if fg { IndexedColor::Foreground } else { IndexedColor::Background };
             let dst = self.indexed(idx);
-            color = oklab_blend(dst, color);
+            color = dst.oklab_blend(color);
         }
 
-        let r = color & 0xff;
-        let g = (color >> 8) & 0xff;
-        let b = (color >> 16) & 0xff;
+        let r = color.red();
+        let g = color.green();
+        let b = color.blue();
         _ = write!(dst, "\x1b[{typ}8;2;{r};{g};{b}m");
     }
 }
@@ -730,16 +733,16 @@ impl LineBuffer {
 /// An sRGB bitmap.
 #[derive(Default)]
 struct Bitmap {
-    data: Vec<u32>,
+    data: Vec<StraightRgba>,
     size: Size,
 }
 
 impl Bitmap {
     fn new(size: Size) -> Self {
-        Self { data: vec![0; (size.width * size.height) as usize], size }
+        Self { data: vec![StraightRgba::zero(); (size.width * size.height) as usize], size }
     }
 
-    fn fill(&mut self, color: u32) {
+    fn fill(&mut self, color: StraightRgba) {
         memset(&mut self.data, color);
     }
 
@@ -747,8 +750,8 @@ impl Bitmap {
     ///
     /// This uses the `oklab` color space for blending so the
     /// resulting colors may look different from what you'd expect.
-    fn blend(&mut self, target: Rect, color: u32) {
-        if (color & 0xff000000) == 0x00000000 {
+    fn blend(&mut self, target: Rect, color: StraightRgba) {
+        if color.alpha() == 0 {
             return;
         }
 
@@ -768,7 +771,7 @@ impl Bitmap {
             let end = y * stride + right;
             let data = &mut self.data[beg..end];
 
-            if (color & 0xff000000) == 0xff000000 {
+            if color.alpha() == 0xff {
                 memset(data, color);
             } else {
                 let end = data.len();
@@ -785,7 +788,7 @@ impl Bitmap {
                     } {}
                     let chunk_end = off;
 
-                    let c = oklab_blend(c, color);
+                    let c = c.oklab_blend(color);
                     memset(&mut data[chunk_beg..chunk_end], c);
 
                     off < end
@@ -795,7 +798,7 @@ impl Bitmap {
     }
 
     /// Iterates over each row in the bitmap.
-    fn iter(&self) -> ChunksExact<'_, u32> {
+    fn iter(&self) -> ChunksExact<'_, StraightRgba> {
         self.data.chunks_exact(self.size.width as usize)
     }
 }

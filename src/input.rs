@@ -461,7 +461,7 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                             mouse.modifiers |=
                                 if (btn & 0x08) != 0 { kbmod::ALT } else { kbmod::NONE };
                             mouse.modifiers |=
-                                if (btn & 0x10f) != 0 { kbmod::CTRL } else { kbmod::NONE };
+                                if (btn & 0x10) != 0 { kbmod::CTRL } else { kbmod::NONE };
 
                             mouse.position.x = csi.params[1] as CoordType - 1;
                             mouse.position.y = csi.params[2] as CoordType - 1;

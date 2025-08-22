@@ -26,7 +26,7 @@ use edit::arena::{self, Arena, ArenaString, scratch_arena};
 use edit::framebuffer::{self, IndexedColor};
 use edit::helpers::{CoordType, KIBI, MEBI, MetricFormatter, Rect, Size};
 use edit::input::{self, kbmod, vk};
-use edit::oklab::oklab_blend;
+use edit::oklab::StraightRgba;
 use edit::tui::*;
 use edit::vt::{self, Token};
 use edit::{apperr, arena_format, base64, path, sys, unicode};
@@ -83,15 +83,15 @@ fn run() -> apperr::Result<()> {
 
     let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
 
-    state.menubar_color_bg = oklab_blend(
-        tui.indexed(IndexedColor::Background),
-        tui.indexed_alpha(IndexedColor::BrightBlue, 1, 2),
-    );
+    state.menubar_color_bg = tui.indexed(IndexedColor::Background).oklab_blend(tui.indexed_alpha(
+        IndexedColor::BrightBlue,
+        1,
+        2,
+    ));
     state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
-    let floater_bg = oklab_blend(
-        tui.indexed_alpha(IndexedColor::Background, 2, 3),
-        tui.indexed_alpha(IndexedColor::Foreground, 1, 3),
-    );
+    let floater_bg = tui
+        .indexed_alpha(IndexedColor::Background, 2, 3)
+        .oklab_blend(tui.indexed_alpha(IndexedColor::Foreground, 1, 3));
     let floater_fg = tui.contrasted(floater_bg);
     tui.setup_modifier_translations(ModifierTranslations {
         ctrl: loc(LocId::Ctrl),
@@ -226,19 +226,29 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     let scratch = scratch_arena(None);
     let mut paths: Vec<PathBuf, &Arena> = Vec::new_in(&*scratch);
     let mut cwd = env::current_dir()?;
+    let mut parse_args = true;
 
     // The best CLI argument parser in the world.
     for arg in env::args_os().skip(1) {
-        if arg == "-h" || arg == "--help" || (cfg!(windows) && arg == "/?") {
-            print_help();
-            return Ok(true);
-        } else if arg == "-v" || arg == "--version" {
-            print_version();
-            return Ok(true);
-        } else if arg == "-" {
-            paths.clear();
-            break;
+        if parse_args {
+            if arg == "--" {
+                parse_args = false;
+                continue;
+            }
+            if arg == "-" {
+                paths.clear();
+                break;
+            }
+            if arg == "-h" || arg == "--help" || (cfg!(windows) && arg == "/?") {
+                print_help();
+                return Ok(true);
+            }
+            if arg == "-v" || arg == "--version" {
+                print_version();
+                return Ok(true);
+            }
         }
+
         let p = cwd.join(Path::new(&arg));
         let p = path::normalize(&p);
         if !p.is_dir() {
@@ -620,7 +630,7 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
                         }
                     }
 
-                    *color = rgb | 0xff000000;
+                    *color = StraightRgba::from_le(rgb | 0xff000000);
                     color_responses += 1;
                     osc_buffer.clear();
                 }

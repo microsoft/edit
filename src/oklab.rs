@@ -7,76 +7,176 @@
 
 #![allow(clippy::excessive_precision)]
 
-/// An Oklab color with alpha.
-pub struct Lab {
-    pub l: f32,
-    pub a: f32,
-    pub b: f32,
-    pub alpha: f32,
-}
+use std::fmt::Debug;
 
-/// Converts a 32-bit sRGB color to Oklab.
-pub fn srgb_to_oklab(color: u32) -> Lab {
-    let r = SRGB_TO_RGB_LUT[(color & 0xff) as usize];
-    let g = SRGB_TO_RGB_LUT[((color >> 8) & 0xff) as usize];
-    let b = SRGB_TO_RGB_LUT[((color >> 16) & 0xff) as usize];
-    let alpha = (color >> 24) as f32 * (1.0 / 255.0);
+use crate::simd::MemsetSafe;
 
-    let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
-    let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
-    let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+/// A sRGB color with straight (= not premultiplied) alpha.
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct StraightRgba(u32);
 
-    let l_ = cbrtf_est(l);
-    let m_ = cbrtf_est(m);
-    let s_ = cbrtf_est(s);
+impl StraightRgba {
+    #[inline]
+    pub const fn zero() -> Self {
+        StraightRgba(0)
+    }
 
-    Lab {
-        l: 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
-        a: 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
-        b: 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
-        alpha,
+    #[inline]
+    pub const fn from_le(color: u32) -> Self {
+        StraightRgba(u32::from_le(color))
+    }
+
+    #[inline]
+    pub const fn from_be(color: u32) -> Self {
+        StraightRgba(u32::from_be(color))
+    }
+
+    #[inline]
+    pub const fn to_ne(self) -> u32 {
+        self.0
+    }
+
+    #[inline]
+    pub const fn to_le(self) -> u32 {
+        self.0.to_le()
+    }
+
+    #[inline]
+    pub const fn to_be(self) -> u32 {
+        self.0.to_be()
+    }
+
+    #[inline]
+    pub const fn red(self) -> u32 {
+        self.0 & 0xff
+    }
+
+    #[inline]
+    pub const fn green(self) -> u32 {
+        (self.0 >> 8) & 0xff
+    }
+
+    #[inline]
+    pub const fn blue(self) -> u32 {
+        (self.0 >> 16) & 0xff
+    }
+
+    #[inline]
+    pub const fn alpha(self) -> u32 {
+        self.0 >> 24
+    }
+
+    pub fn oklab_blend(self, top: StraightRgba) -> StraightRgba {
+        let bottom = self.as_oklab();
+        let top = top.as_oklab();
+        let result = bottom.blend(&top);
+        result.as_rgba()
+    }
+
+    pub fn as_oklab(self) -> Oklab {
+        let r = srgb_to_linear(self.red());
+        let g = srgb_to_linear(self.green());
+        let b = srgb_to_linear(self.blue());
+        let alpha = self.alpha() as f32 * (1.0 / 255.0);
+
+        let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
+        let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
+        let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+
+        let l_ = cbrtf_est(l);
+        let m_ = cbrtf_est(m);
+        let s_ = cbrtf_est(s);
+
+        let l = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
+        let a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
+        let b = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+
+        Oklab([l, a, b, alpha])
     }
 }
 
-/// Converts an Oklab color to a 32-bit sRGB color.
-pub fn oklab_to_srgb(c: Lab) -> u32 {
-    let l_ = c.l + 0.3963377774 * c.a + 0.2158037573 * c.b;
-    let m_ = c.l - 0.1055613458 * c.a - 0.0638541728 * c.b;
-    let s_ = c.l - 0.0894841775 * c.a - 1.2914855480 * c.b;
-
-    let l = l_ * l_ * l_;
-    let m = m_ * m_ * m_;
-    let s = s_ * s_ * s_;
-
-    let r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
-    let g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
-    let b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
-
-    let r = r.clamp(0.0, 1.0);
-    let g = g.clamp(0.0, 1.0);
-    let b = b.clamp(0.0, 1.0);
-    let alpha = c.alpha.clamp(0.0, 1.0);
-
-    let r = linear_to_srgb(r);
-    let g = linear_to_srgb(g);
-    let b = linear_to_srgb(b);
-    let a = (alpha * 255.0) as u32;
-
-    r | (g << 8) | (b << 16) | (a << 24)
+impl Debug for StraightRgba {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{:08x}", self.0.to_be()) // Display as a hex color
+    }
 }
 
-/// Blends two 32-bit sRGB colors in the Oklab color space.
-pub fn oklab_blend(dst: u32, src: u32) -> u32 {
-    let dst = srgb_to_oklab(dst);
-    let src = srgb_to_oklab(src);
+unsafe impl MemsetSafe for StraightRgba {}
 
-    let inv_a = 1.0 - src.alpha;
-    let l = src.l + dst.l * inv_a;
-    let a = src.a + dst.a * inv_a;
-    let b = src.b + dst.b * inv_a;
-    let alpha = src.alpha + dst.alpha * inv_a;
+/// An Oklab color with alpha. By convention, it uses straight alpha.
+#[derive(Clone, Copy)]
+pub struct Oklab([f32; 4]);
 
-    oklab_to_srgb(Lab { l, a, b, alpha })
+impl Oklab {
+    #[inline]
+    pub const fn lightness(self) -> f32 {
+        self.0[0]
+    }
+
+    #[inline]
+    pub const fn a(self) -> f32 {
+        self.0[1]
+    }
+
+    #[inline]
+    pub const fn b(self) -> f32 {
+        self.0[2]
+    }
+
+    #[inline]
+    pub const fn alpha(self) -> f32 {
+        self.0[3]
+    }
+
+    pub fn as_rgba(&self) -> StraightRgba {
+        let l_ = self.lightness() + 0.3963377774 * self.a() + 0.2158037573 * self.b();
+        let m_ = self.lightness() - 0.1055613458 * self.a() - 0.0638541728 * self.b();
+        let s_ = self.lightness() - 0.0894841775 * self.a() - 1.2914855480 * self.b();
+
+        let l = l_ * l_ * l_;
+        let m = m_ * m_ * m_;
+        let s = s_ * s_ * s_;
+
+        let r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+        let g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+        let b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+
+        let r = r.clamp(0.0, 1.0);
+        let g = g.clamp(0.0, 1.0);
+        let b = b.clamp(0.0, 1.0);
+        let alpha = self.alpha().clamp(0.0, 1.0);
+
+        let r = linear_to_srgb(r);
+        let g = linear_to_srgb(g);
+        let b = linear_to_srgb(b);
+        let a = (alpha * 255.0) as u32;
+
+        StraightRgba(r | (g << 8) | (b << 16) | (a << 24))
+    }
+
+    /// Porter-Duff "over" composition. It's for Lab, but it works just like with RGB.
+    /// The benefit of the Oklab colorspace is its perceptual uniformity, which RGB lacks.
+    /// This can be observed easily when blending red and green for instance.
+    pub fn blend(&self, top: &Self) -> Self {
+        let top_a = top.alpha();
+        let bottom_a = self.alpha() * (1.0 - top_a);
+        let l = top.lightness() * top_a + self.lightness() * bottom_a;
+        let a = top.a() * top_a + self.a() * bottom_a;
+        let b = top.b() * top_a + self.b() * bottom_a;
+        let alpha = top_a + bottom_a;
+
+        let inv_alpha = if alpha > 0.0 { 1.0 / alpha } else { 0.0 };
+        let l = l * inv_alpha;
+        let a = a * inv_alpha;
+        let b = b * inv_alpha;
+
+        Self([l, a, b, alpha])
+    }
+}
+
+fn srgb_to_linear(c: u32) -> f32 {
+    SRGB_TO_RGB_LUT[(c & 0xff) as usize]
 }
 
 fn linear_to_srgb(c: f32) -> u32 {
@@ -126,3 +226,17 @@ const SRGB_TO_RGB_LUT: [f32; 256] = [
     0.7454043627, 0.7529423237, 0.7605246305, 0.7681512833, 0.7758223414, 0.7835379243, 0.7912980318, 0.7991028428, 0.8069523573, 0.8148466945, 0.8227858543, 0.8307699561, 0.8387991190, 0.8468732834, 0.8549926877, 0.8631572723,
     0.8713672161, 0.8796223402, 0.8879231811, 0.8962693810, 0.9046613574, 0.9130986929, 0.9215820432, 0.9301108718, 0.9386858940, 0.9473065734, 0.9559735060, 0.9646862745, 0.9734454751, 0.9822505713, 0.9911022186, 1.0000000000,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_blending() {
+        let lower = StraightRgba::from_be(0x3498dbff);
+        let upper = StraightRgba::from_be(0xe74c3c7f);
+        let expected = StraightRgba::from_be(0xa67f93ff);
+        let blended = lower.oklab_blend(upper);
+        assert_eq!(blended, expected);
+    }
+}
