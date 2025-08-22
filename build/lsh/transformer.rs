@@ -4,8 +4,8 @@ use std::ops::{Index, IndexMut};
 
 use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind, Look};
 
-use crate::definitions::*;
-use crate::handles::{HandleVec, declare_handle};
+use super::definitions::*;
+use super::handles::{HandleVec, declare_handle};
 
 declare_handle!(pub StateHandle(usize));
 declare_handle!(pub TransitionHandle(usize));
@@ -62,7 +62,7 @@ impl GraphBuilder {
         // During `simplify_indirections()` we'll then clean those up again, by connection
         // nodes together directly if they're joined by just a `Chars(0)` transition.
         let dst = self.add_state();
-        let dst = self.transform(None, src, GraphAction::Jump(dst), &hir);
+        let dst = self.transform(HighlightKindOp::None, src, GraphAction::Jump(dst), &hir);
         let dst = match dst {
             GraphAction::Jump(dst) => dst,
             _ => panic!("Unexpected transform result: {dst:?}"),
@@ -78,7 +78,7 @@ impl GraphBuilder {
 
     fn transform(
         &mut self,
-        kind: Option<HighlightKind>,
+        kind: HighlightKindOp,
         src: StateHandle,
         dst: GraphAction,
         hir: &Hir,
@@ -141,7 +141,7 @@ impl GraphBuilder {
     // string
     fn transform_literal(
         &mut self,
-        kind: Option<HighlightKind>,
+        kind: HighlightKindOp,
         src: StateHandle,
         dst: GraphAction,
         lit: &[u8],
@@ -154,7 +154,7 @@ impl GraphBuilder {
     // [a-z]+
     fn transform_class_plus(
         &mut self,
-        kind: Option<HighlightKind>,
+        kind: HighlightKindOp,
         src: StateHandle,
         dst: GraphAction,
         class: &ClassBytes,
@@ -167,7 +167,7 @@ impl GraphBuilder {
     // [eE]
     fn transform_class(
         &mut self,
-        kind: Option<HighlightKind>,
+        kind: HighlightKindOp,
         src: StateHandle,
         dst: GraphAction,
         class: &ClassBytes,
@@ -213,7 +213,7 @@ impl GraphBuilder {
     // .?
     fn transform_option(
         &mut self,
-        kind: Option<HighlightKind>,
+        kind: HighlightKindOp,
         src: StateHandle,
         dst: GraphAction,
     ) -> GraphAction {
@@ -223,7 +223,7 @@ impl GraphBuilder {
     // .*
     fn transform_any_star(
         &mut self,
-        kind: Option<HighlightKind>,
+        kind: HighlightKindOp,
         src: StateHandle,
         dst: GraphAction,
     ) -> GraphAction {
@@ -233,7 +233,7 @@ impl GraphBuilder {
     // .
     fn transform_any(
         &mut self,
-        kind: Option<HighlightKind>,
+        kind: HighlightKindOp,
         src: StateHandle,
         dst: GraphAction,
     ) -> GraphAction {
@@ -243,7 +243,7 @@ impl GraphBuilder {
     // (a)(b)
     fn transform_concat(
         &mut self,
-        kind: Option<HighlightKind>,
+        kind: HighlightKindOp,
         src: StateHandle,
         dst: GraphAction,
         hirs: &[Hir],
@@ -292,12 +292,8 @@ impl GraphBuilder {
             });
 
             let more = it.peek().is_some();
-            let kind = if more { None } else { kind };
-            let dst = if more {
-                GraphAction::Jump(self.add_state())
-            } else {
-                dst
-            };
+            let kind = if more { HighlightKindOp::None } else { kind };
+            let dst = if more { GraphAction::Jump(self.add_state()) } else { dst };
 
             if let Some(str) = prefix_insensitive {
                 let str = self.intern_string(str);
@@ -313,7 +309,7 @@ impl GraphBuilder {
     // (a|b)
     fn transform_alt(
         &mut self,
-        kind: Option<HighlightKind>,
+        kind: HighlightKindOp,
         src: StateHandle,
         dst: GraphAction,
         hirs: &[Hir],
@@ -360,7 +356,7 @@ impl GraphBuilder {
 
     fn add_transition(
         &mut self,
-        kind: Option<HighlightKind>,
+        kind: HighlightKindOp,
         src: StateHandle,
         dst: GraphAction,
         test: GraphTest,
@@ -375,10 +371,7 @@ impl GraphBuilder {
                 return t.dst;
             }
 
-            panic!(
-                "Diverging actions for the same test: {:?} -> {:?} vs {:?}",
-                t.test, t.dst, dst
-            );
+            panic!("Diverging actions for the same test: {:?} -> {:?} vs {:?}", t.test, t.dst, dst);
         }
 
         // Check for plausibility: if any prior test encompasses the new test, panic.
@@ -409,13 +402,7 @@ impl GraphBuilder {
             }
         }
 
-        self.transitions.push(GraphTransition {
-            origin: self.origin,
-            src,
-            test,
-            kind,
-            dst,
-        });
+        self.transitions.push(GraphTransition { origin: self.origin, src, test, kind, dst });
         dst
     }
 
@@ -522,14 +509,14 @@ impl GraphBuilder {
                     origin: -1,
                     src,
                     test: GraphTest::Charset(cs),
-                    kind: None,
+                    kind: HighlightKindOp::None,
                     dst: GraphAction::Loop(src),
                 });
                 self.transitions.push(GraphTransition {
                     origin: -1,
                     src,
                     test: GraphTest::Chars(1),
-                    kind: None,
+                    kind: HighlightKindOp::None,
                     dst: GraphAction::Loop(src),
                 });
             }
@@ -631,7 +618,7 @@ impl GraphBuilder {
                     origin: -1,
                     src,
                     test: GraphTest::Chars(0),
-                    kind: None,
+                    kind: HighlightKindOp::None,
                     dst: GraphAction::Loop(src),
                 });
             }
@@ -640,7 +627,7 @@ impl GraphBuilder {
         for t in &mut self.transitions {
             if t.dst == GraphAction::Fallback {
                 t.dst = GraphAction::Loop(t.src);
-                t.kind = None;
+                t.kind = HighlightKindOp::None;
             }
         }
     }
@@ -673,8 +660,8 @@ impl GraphBuilder {
 
                 for t in &mut self.transitions {
                     if t.dst == GraphAction::Jump(src) {
-                        if kind.is_some() {
-                            if t.kind.is_some() && t.kind != kind {
+                        if kind != HighlightKindOp::None {
+                            if t.kind != HighlightKindOp::None && t.kind != kind {
                                 panic!(
                                     "Inconsistent highlight kinds for indirection: {:?} vs {:?}",
                                     t.kind, kind
@@ -885,11 +872,7 @@ impl GraphBuilder {
             }
         }
 
-        self.charsets
-            .enumerate()
-            .filter(|&(h, _)| used[h.0])
-            .map(|(h, v)| (h, v.clone()))
-            .collect()
+        self.charsets.enumerate().filter(|&(h, _)| used[h.0]).map(|(h, v)| (h, v.clone())).collect()
     }
 
     /// Filtered down to only those that are still used.
@@ -902,11 +885,7 @@ impl GraphBuilder {
             }
         }
 
-        self.strings
-            .enumerate()
-            .filter(|&(h, _)| used[h.0])
-            .map(|(h, v)| (h, v.clone()))
-            .collect()
+        self.strings.enumerate().filter(|&(h, _)| used[h.0]).map(|(h, v)| (h, v.clone())).collect()
     }
 
     /// Up to this point we've thought of this as a graph, but now we'll flatten
@@ -1015,7 +994,7 @@ pub struct GraphTransition {
     origin: i32,
     pub src: StateHandle,
     pub test: GraphTest,
-    pub kind: Option<HighlightKind>,
+    pub kind: HighlightKindOp,
     pub dst: GraphAction,
 }
 

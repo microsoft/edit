@@ -412,6 +412,12 @@ pub enum HighlightKind {
     Method,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HighlightKindOp {
+    None,
+    Some(HighlightKind),
+}
+
 pub struct Language {
     pub name: &'static str,
     pub filenames: &'static [&'static str],
@@ -432,21 +438,21 @@ pub enum Instruction {
 
 pub struct Rule {
     pub pattern: &'static str,
-    pub kind: Option<HighlightKind>,
+    pub kind: HighlightKindOp,
     pub action: ActionDefinition,
 }
 
 const fn re(s: &'static str) -> Rule {
     Rule {
         pattern: s,
-        kind: None,
+        kind: HighlightKindOp::None,
         action: ActionDefinition::Continue,
     }
 }
 
 impl Rule {
     const fn is(mut self, kind: HighlightKind) -> Self {
-        self.kind = Some(kind);
+        self.kind = HighlightKindOp::Some(kind);
         self
     }
 
