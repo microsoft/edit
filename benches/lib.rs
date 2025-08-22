@@ -128,13 +128,13 @@ fn bench_hash(c: &mut Criterion) {
 }
 
 fn bench_lsh(c: &mut Criterion) {
-    let bytes = include_bytes!("../assets/highlighting-tests/powershell.ps1");
+    let bytes = include_bytes!("../assets/highlighting-tests/COMMIT_EDITMSG");
     let bytes = &bytes[..];
-    let lang = lsh::language_from_path(Path::new("powershell.ps1")).unwrap();
+    let lang = lsh::language_from_path(Path::new("COMMIT_EDITMSG")).unwrap();
     let highlighter = lsh::Highlighter::new(black_box(&bytes), lang);
 
     c.benchmark_group("lsh").throughput(Throughput::Bytes(bytes.len() as u64)).bench_function(
-        "powershell",
+        "COMMIT_EDITMSG",
         |b| {
             b.iter(|| {
                 let mut h = highlighter.clone();

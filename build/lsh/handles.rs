@@ -28,10 +28,7 @@ where
 
 impl<H, T> Default for HandleVec<H, T> {
     fn default() -> Self {
-        HandleVec {
-            list: Vec::new(),
-            _handle: PhantomData,
-        }
+        HandleVec { list: Vec::new(), _handle: PhantomData }
     }
 }
 
@@ -89,7 +86,8 @@ where
 
 macro_rules! declare_handle {
     ($vis:vis $name:ident($type:ident)) => {
-        #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[repr(transparent)]
+        #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
         $vis struct $name(pub $type);
 
         impl $name {
@@ -99,13 +97,19 @@ macro_rules! declare_handle {
 
         impl From<$name> for usize {
             fn from(value: $name) -> Self {
-                value.0 as usize
+                value.0.try_into().unwrap()
             }
         }
 
         impl From<usize> for $name {
             fn from(value: usize) -> Self {
                 Self(value.try_into().unwrap())
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt(f)
             }
         }
     };

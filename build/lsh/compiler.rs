@@ -7,12 +7,55 @@ use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind, Look};
 use super::definitions::*;
 use super::handles::{HandleVec, declare_handle};
 
-declare_handle!(pub StateHandle(usize));
-declare_handle!(pub TransitionHandle(usize));
 declare_handle!(pub CharsetHandle(usize));
+declare_handle!(pub StateHandle(usize));
 declare_handle!(pub StringHandle(usize));
+declare_handle!(pub TransitionHandle(usize));
 
-pub struct GraphBuilder {
+pub const REG_ZERO: u8 = 0;
+pub const REG_PROGRAM_COUNTER: u8 = 1;
+pub const REG_INPUT_OFFSET: u8 = 2;
+pub const REG_HIGHLIGHT_START: u8 = 3;
+pub const REG_HIGHLIGHT_KIND: u8 = 4;
+
+#[allow(dead_code)]
+pub type Registers = [usize; 5];
+
+#[derive(Debug, Clone)]
+pub enum Instruction {
+    // .0 (reg) = .1 (reg) + .2 (constant)
+    // Note that this allows for jumps as well, by manipulating REG_PROGRAM_COUNTER.
+    Add(u8, u8, usize),
+
+    // Typical call/ret instructions.
+    // The VM takes care of saving the return address.
+    Call(u16),
+    Return,
+
+    // Test (and consume) the given character(s) in `.1`.
+    // If the test fails, jump to `.0`.
+    JumpIfNotMatchCharset(u16, CharsetHandle),
+    JumpIfNotMatchPrefix(u16, StringHandle),
+    JumpIfNotMatchPrefixInsensitive(u16, StringHandle),
+
+    // Flush the current HighlightKind to the output.
+    FlushHighlight,
+
+    // Check if we're at the end and exit if so.
+    SuspendOpportunity,
+}
+
+/// The result of the compilation process:
+/// * Constant strings
+/// * Constant charsets (bitfields)
+/// * VM instructions
+pub struct Assembly {
+    pub strings: Vec<(StringHandle, String)>,
+    pub charsets: Vec<(CharsetHandle, Charset)>,
+    pub instructions: Vec<Instruction>,
+}
+
+pub struct Compiler {
     roots: RootList,
     states: HandleVec<StateHandle, GraphState>,
     transitions: HandleVec<TransitionHandle, GraphTransition>,
@@ -21,9 +64,9 @@ pub struct GraphBuilder {
     origin: i32,
 }
 
-impl GraphBuilder {
+impl Compiler {
     pub fn new() -> Self {
-        GraphBuilder {
+        Compiler {
             roots: Default::default(),
             states: Default::default(),
             transitions: Default::default(),
@@ -350,7 +393,7 @@ impl GraphBuilder {
         self.states.push(GraphState {
             name: None,
             coverage: Charset::default(),
-            offset: usize::MAX,
+            instruction_offset: usize::MAX,
         })
     }
 
@@ -422,11 +465,11 @@ impl GraphBuilder {
         }
     }
 
-    pub fn finalize(&mut self) {
-        if self.states.is_empty() {
-            return;
-        }
+    fn transitions_from_state(&self, src: StateHandle) -> impl Iterator<Item = &GraphTransition> {
+        self.transitions.iter().filter(move |&t| t.src == src)
+    }
 
+    pub fn compile(&mut self) -> Assembly {
         self.finalize_resolve_root_aliases();
         self.finalize_compute_charset_coverage();
         self.finalize_add_root_loops();
@@ -435,7 +478,122 @@ impl GraphBuilder {
         self.finalize_simplify_indirections();
         self.finalize_remove_unreachable();
         self.finalize_sort();
-        self.finalize_compute_flattened_offsets();
+
+        let strings = self.extract_strings();
+        let charsets = self.extract_charsets();
+
+        let mut instructions = Vec::new();
+
+        enum RelocationTarget {
+            None,
+            State(StateHandle),
+            Transition(TransitionHandle),
+        }
+
+        for t in &self.transitions {
+            use Instruction::*;
+            use RelocationTarget::*;
+
+            if self.states[t.src].instruction_offset == usize::MAX {
+                self.states[t.src].instruction_offset = instructions.len();
+            }
+
+            match t.test {
+                GraphTest::Chars(n) => {
+                    instructions.push((None, Add(REG_INPUT_OFFSET, REG_INPUT_OFFSET, n)));
+                }
+                GraphTest::Charset(h) => {
+                    instructions
+                        .push((Transition(TransitionHandle(123)), JumpIfNotMatchCharset(0, h)));
+                }
+                GraphTest::Prefix(h) => {
+                    instructions
+                        .push((Transition(TransitionHandle(1234)), JumpIfNotMatchPrefix(0, h)));
+                }
+                GraphTest::PrefixInsensitive(h) => {
+                    instructions.push((
+                        Transition(TransitionHandle(1234)),
+                        JumpIfNotMatchPrefixInsensitive(0, h),
+                    ));
+                }
+            }
+
+            match t.kind {
+                HighlightKindOp::None => {}
+                HighlightKindOp::Some(kind) => {
+                    instructions.push((None, Add(REG_HIGHLIGHT_KIND, REG_ZERO, kind.as_usize())));
+                }
+            }
+
+            match t.dst {
+                GraphAction::Jump(dst) => {
+                    instructions.push((
+                        Transition(TransitionHandle(1234)),
+                        Add(REG_PROGRAM_COUNTER, REG_ZERO, 0),
+                    ));
+                }
+                GraphAction::Push(dst) => {
+                    instructions.push((Transition(TransitionHandle(1234)), Call(0))); // TODO: The position of the `dst` state.
+                    instructions.push((
+                        Transition(TransitionHandle(1234)),
+                        Add(REG_PROGRAM_COUNTER, REG_ZERO, 0),
+                    )); // TODO: The position of the `t.src` state.
+                }
+                GraphAction::Pop(_) => {
+                    instructions.push((None, Return));
+                }
+                GraphAction::Loop(dst) => {
+                    instructions.push((
+                        Transition(TransitionHandle(1234)),
+                        Add(REG_PROGRAM_COUNTER, REG_ZERO, 0),
+                    )); // TODO: The position of the `t.src` state.
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        // Up to this point we created jump instructions with targets referring to states.
+        // We now patch TODO
+        //for i in &mut instructions {
+        //    match i {
+        //        Instruction::JumpIfNotMatchCharset(dst, _)
+        //        | Instruction::JumpIfNotMatchPrefix(dst, _)
+        //        | Instruction::JumpIfNotMatchPrefixInsensitive(dst, _) => {
+        //            *dst = self.states[StateHandle(*dst as usize)].instruction_offset as u16;
+        //        }
+        //        _ => {}
+        //    }
+        //}
+
+        let instructions = instructions.into_iter().map(|(_, i)| i).collect();
+
+        Assembly { strings, charsets, instructions }
+    }
+
+    /// Filtered down to only those that are still used.
+    fn extract_charsets(&self) -> Vec<(CharsetHandle, Charset)> {
+        let mut used = vec![false; self.charsets.len()];
+
+        for t in &self.transitions {
+            if let GraphTest::Charset(c) = t.test {
+                used[c.0] = true;
+            }
+        }
+
+        self.charsets.enumerate().filter(|&(h, _)| used[h.0]).map(|(h, v)| (h, v.clone())).collect()
+    }
+
+    /// Filtered down to only those that are still used.
+    fn extract_strings(&self) -> Vec<(StringHandle, String)> {
+        let mut used = vec![false; self.strings.len()];
+
+        for t in &self.transitions {
+            if let GraphTest::Prefix(s) | GraphTest::PrefixInsensitive(s) = t.test {
+                used[s.0] = true;
+            }
+        }
+
+        self.strings.enumerate().filter(|&(h, _)| used[h.0]).map(|(h, v)| (h, v.clone())).collect()
     }
 
     fn finalize_resolve_root_aliases(&mut self) {
@@ -744,20 +902,6 @@ impl GraphBuilder {
         self.transitions.sort_by_key(|t| t.src);
     }
 
-    fn finalize_compute_flattened_offsets(&mut self) {
-        let mut states_offsets = vec![0; self.states.len()];
-        let mut off = 0usize;
-
-        for t in &self.transitions {
-            states_offsets[t.src.0] += 1;
-        }
-
-        for (s, &count) in self.states.iter_mut().zip(states_offsets.iter()) {
-            s.offset = off;
-            off += count;
-        }
-    }
-
     pub fn format_as_mermaid(&self) -> String {
         let mut output = String::new();
         let mut visited = vec![false; self.states.len()];
@@ -766,13 +910,13 @@ impl GraphBuilder {
 
         let mut iter = self.transitions.iter().peekable();
         while let Some(t) = iter.next() {
-            let src_offset = self.states[t.src].offset;
+            let src_offset = self.states[t.src].instruction_offset;
             let dst_offset = self.states[match &t.dst {
                 GraphAction::Jump(dst) | GraphAction::Push(dst) | GraphAction::Loop(dst) => *dst,
                 GraphAction::Pop(_) => StateHandle(0),
                 GraphAction::Fallback => unreachable!(),
             }]
-            .offset;
+            .instruction_offset;
 
             if !visited[t.src.0] {
                 visited[t.src.0] = true;
@@ -861,55 +1005,6 @@ impl GraphBuilder {
         output.pop(); // Remove the last newline character.
         output
     }
-
-    /// Filtered down to only those that are still used.
-    pub fn extract_charsets(&self) -> Vec<(CharsetHandle, Charset)> {
-        let mut used = vec![false; self.charsets.len()];
-
-        for t in &self.transitions {
-            if let GraphTest::Charset(c) = t.test {
-                used[c.0] = true;
-            }
-        }
-
-        self.charsets.enumerate().filter(|&(h, _)| used[h.0]).map(|(h, v)| (h, v.clone())).collect()
-    }
-
-    /// Filtered down to only those that are still used.
-    pub fn extract_strings(&self) -> Vec<(StringHandle, String)> {
-        let mut used = vec![false; self.strings.len()];
-
-        for t in &self.transitions {
-            if let GraphTest::Prefix(s) | GraphTest::PrefixInsensitive(s) = t.test {
-                used[s.0] = true;
-            }
-        }
-
-        self.strings.enumerate().filter(|&(h, _)| used[h.0]).map(|(h, v)| (h, v.clone())).collect()
-    }
-
-    /// Up to this point we've thought of this as a graph, but now we'll flatten
-    /// it to a plain list. We'll change Jump/Push actions from state indices
-    /// into flattened transition list indices. This works because [`finalize()`]
-    /// ensures that all states have full "coverage" of all input characters.
-    pub fn extract_transitions(&self) -> Vec<GraphTransition> {
-        let mut transitions = self.transitions.clone();
-
-        for t in &mut transitions {
-            match &mut t.dst {
-                GraphAction::Jump(dst) | GraphAction::Push(dst) | GraphAction::Loop(dst) => {
-                    dst.0 = self.states[*dst].offset;
-                }
-                GraphAction::Pop(_) | GraphAction::Fallback => {}
-            }
-        }
-
-        transitions
-    }
-
-    fn transitions_from_state(&self, src: StateHandle) -> impl Iterator<Item = &GraphTransition> {
-        self.transitions.iter().filter(move |&t| t.src == src)
-    }
 }
 
 #[derive(Default)]
@@ -969,14 +1064,14 @@ pub struct GraphState {
     /// The sum of chars that transition going out of this state cover.
     coverage: Charset,
     /// Offset in the flattened transition list.
-    offset: usize,
+    instruction_offset: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GraphAction {
     Jump(StateHandle), // change to
     Push(StateHandle), // push to
-    Pop(usize),        // pop 1
+    Pop(usize),        // pop this many
     Loop(StateHandle), // loop to the start of the state & do an exit check
     Fallback,          // replace with a fallback transition (for look-aheads like \b)
 }

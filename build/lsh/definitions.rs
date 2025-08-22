@@ -1,9 +1,8 @@
 #![allow(dead_code)]
 
 use HighlightKind::*;
-use IndexedColor::*;
 
-pub const LANGUAGES: &[&Language] = &[&LANG_GIT_COMMIT, &LANG_GIT_REBASE, &LANG_JSON];
+pub const LANGUAGES: &[&Language] = &[&LANG_GIT_COMMIT, &LANG_GIT_REBASE];
 
 const LANG_DIFF: Language = Language {
     name: "Diff",
@@ -12,18 +11,15 @@ const LANG_DIFF: Language = Language {
         State {
             name: "ground",
             rules: &[
-                re(r#"diff"#).is(Direct(BrightBlue)).then_jump("ignore"),
-                re(r#"---"#).is(Direct(BrightBlue)).then_jump("ignore"),
-                re(r#"\+\+\+"#).is(Direct(BrightBlue)).then_jump("ignore"),
-                re(r#"-"#).is(Direct(BrightRed)).then_jump("ignore"),
-                re(r#"\+"#).is(Direct(BrightGreen)).then_jump("ignore"),
+                re(r#"diff"#).is(BrightBlue).then_jump("ignore"),
+                re(r#"---"#).is(BrightBlue).then_jump("ignore"),
+                re(r#"\+\+\+"#).is(BrightBlue).then_jump("ignore"),
+                re(r#"-"#).is(BrightRed).then_jump("ignore"),
+                re(r#"\+"#).is(BrightGreen).then_jump("ignore"),
                 re(r#""#).then_jump("ignore"),
             ],
         },
-        State {
-            name: "ignore",
-            rules: &[re(r#".*"#)],
-        },
+        State { name: "ignore", rules: &[re(r#".*"#)] },
     ],
 };
 
@@ -35,42 +31,34 @@ const LANG_GIT_COMMIT: Language = Language {
             name: "ground",
             rules: &[
                 re(r#"#"#).is(Comment).then_call("comment"),
-                re(r#"diff \-\-git.*"#)
-                    .is(Direct(BrightBlue))
-                    .then_call("diff_transition"),
+                re(r#"diff \-\-git.*"#).is(BrightBlue).then_call("diff_transition"),
                 re(r#""#).then_jump("ignore"),
             ],
         },
         State {
             name: "comment",
             rules: &[
-                re(r#"\tdeleted:.*"#).is(Direct(BrightRed)).then_return(),
-                re(r#"\tmodified:.*"#).is(Direct(BrightBlue)).then_return(),
-                re(r#"\tnew file:.*"#).is(Direct(BrightGreen)).then_return(),
-                re(r#"\trenamed:.*"#).is(Direct(BrightBlue)).then_return(),
+                re(r#"\tdeleted:.*"#).is(BrightRed).then_return(),
+                re(r#"\tmodified:.*"#).is(BrightBlue).then_return(),
+                re(r#"\tnew file:.*"#).is(BrightGreen).then_return(),
+                re(r#"\trenamed:.*"#).is(BrightBlue).then_return(),
                 re(r#".*"#).then_return(),
             ],
         },
-        State {
-            name: "diff_transition",
-            rules: &[re(r#""#).is(Other).then_call("diff")],
-        },
+        State { name: "diff_transition", rules: &[re(r#""#).is(Other).then_call("diff")] },
         // TODO: The ability to invoke another language (here: LANG_DIFF). :)
         State {
             name: "diff",
             rules: &[
-                re(r#"diff"#).is(Direct(BrightBlue)).then_jump("ignore"),
-                re(r#"---"#).is(Direct(BrightBlue)).then_jump("ignore"),
-                re(r#"\+\+\+"#).is(Direct(BrightBlue)).then_jump("ignore"),
-                re(r#"-"#).is(Direct(BrightRed)).then_jump("ignore"),
-                re(r#"\+"#).is(Direct(BrightGreen)).then_jump("ignore"),
+                re(r#"diff"#).is(BrightBlue).then_jump("ignore"),
+                re(r#"---"#).is(BrightBlue).then_jump("ignore"),
+                re(r#"\+\+\+"#).is(BrightBlue).then_jump("ignore"),
+                re(r#"-"#).is(BrightRed).then_jump("ignore"),
+                re(r#"\+"#).is(BrightGreen).then_jump("ignore"),
                 re(r#""#).then_jump("ignore"),
             ],
         },
-        State {
-            name: "ignore",
-            rules: &[re(r#".*"#)],
-        },
+        State { name: "ignore", rules: &[re(r#".*"#)] },
     ],
 };
 
@@ -81,9 +69,7 @@ const LANG_GIT_REBASE: Language = Language {
         State {
             name: "ground",
             rules: &[
-                re(r#"(?:break|exec|b|x)\b{end-half}"#)
-                    .is(Keyword)
-                    .then_call("comment"),
+                re(r#"(?:break|exec|b|x)\b{end-half}"#).is(Keyword).then_call("comment"),
                 re(r#"(?:drop|edit|fixup|pick|reword|squash|d|e|f|p|r|s)\b{end-half}"#)
                     .is(Keyword)
                     .then_call("hash"),
@@ -98,10 +84,7 @@ const LANG_GIT_REBASE: Language = Language {
                 re(r#".*"#).then_return(),
             ],
         },
-        State {
-            name: "comment",
-            rules: &[re(r#".*"#).is(Comment).then_return()],
-        },
+        State { name: "comment", rules: &[re(r#".*"#).is(Comment).then_return()] },
     ],
 };
 
@@ -123,14 +106,8 @@ const LANG_JSON: Language = Language {
                 re(r#"(?i:true)"#).is(Keyword).then_jump("resolve_type"),
             ],
         },
-        State {
-            name: "resolve_type",
-            rules: &[re(r#"\w+"#).is(Other), re(r#""#)],
-        },
-        State {
-            name: "comment",
-            rules: &[re(r#"\*/"#).then_return()],
-        },
+        State { name: "resolve_type", rules: &[re(r#"\w+"#).is(Other), re(r#""#)] },
+        State { name: "comment", rules: &[re(r#"\*/"#).then_return()] },
         State {
             name: "string_double",
             rules: &[re(r#"""#), re(r#"\\."#).then_jump("string_double")],
@@ -160,13 +137,9 @@ const LANG_YAML: Language = Language {
         State {
             name: "resolve_type",
             rules: &[
-                re(r#"\s*[^\s#:]+:"#)
-                    .is(Keyword)
-                    .then_jump("resolve_type_maybe_keyword"),
+                re(r#"\s*[^\s#:]+:"#).is(Keyword).then_jump("resolve_type_maybe_keyword"),
                 re(r#"\s*[^\s#:]+"#).is(String),
-                re(r#"\s*:"#)
-                    .is(Keyword)
-                    .then_jump("resolve_type_maybe_keyword"),
+                re(r#"\s*:"#).is(Keyword).then_jump("resolve_type_maybe_keyword"),
                 re(r#""#),
             ],
         },
@@ -221,10 +194,7 @@ const LANG_BASH: Language = Language {
         },
         State {
             name: "string_single",
-            rules: &[
-                re(r#"'"#).then_return(),
-                re(r#"\\."#).then_jump("string_single"),
-            ],
+            rules: &[re(r#"'"#).then_return(), re(r#"\\."#).then_jump("string_single")],
         },
         State {
             name: "string_double",
@@ -243,10 +213,7 @@ const LANG_BASH: Language = Language {
                 re(r#""#).is(Other).then_return(),
             ],
         },
-        State {
-            name: "resolve_type",
-            rules: &[re(r#"\w+"#).is(Other), re(r#""#)],
-        },
+        State { name: "resolve_type", rules: &[re(r#"\w+"#).is(Other), re(r#""#)] },
     ],
 };
 
@@ -288,16 +255,10 @@ const LANG_POWERSHELL: Language = Language {
                 re(r#"[\w-]+"#).is(Method),
             ],
         },
-        State {
-            name: "comment",
-            rules: &[re(r#"#>"#).is(Comment).then_return()],
-        },
+        State { name: "comment", rules: &[re(r#"#>"#).is(Comment).then_return()] },
         State {
             name: "string_single",
-            rules: &[
-                re(r#"'"#).then_return(),
-                re(r#"`."#).then_jump("string_single"),
-            ],
+            rules: &[re(r#"'"#).then_return(), re(r#"`."#).then_jump("string_single")],
         },
         State {
             name: "string_double",
@@ -317,10 +278,7 @@ const LANG_POWERSHELL: Language = Language {
                 re(r#""#).is(Other).then_return(),
             ],
         },
-        State {
-            name: "resolve_type",
-            rules: &[re(r#"[\w-]+"#).is(Other), re(r#""#)],
-        },
+        State { name: "resolve_type", rules: &[re(r#"[\w-]+"#).is(Other), re(r#""#)] },
     ],
 };
 
@@ -362,25 +320,15 @@ const LANG_BATCH: Language = Language {
         },
         State {
             name: "string_double",
-            rules: &[
-                re(r#"""#).then_return(),
-                re(r#"\\."#).then_jump("string_double"),
-            ],
+            rules: &[re(r#"""#).then_return(), re(r#"\\."#).then_jump("string_double")],
         },
-        State {
-            name: "variable",
-            rules: &[re(r#"%"#).then_return()],
-        },
-        State {
-            name: "resolve_type",
-            rules: &[re(r#"\w+"#).is(Other), re(r#""#)],
-        },
+        State { name: "variable", rules: &[re(r#"%"#).then_return()] },
+        State { name: "resolve_type", rules: &[re(r#"\w+"#).is(Other), re(r#""#)] },
     ],
 };
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndexedColor {
+pub enum HighlightKind {
     Black,
     Red,
     Green,
@@ -397,12 +345,8 @@ pub enum IndexedColor {
     BrightMagenta,
     BrightCyan,
     BrightWhite,
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HighlightKind {
     Other,
-    Direct(IndexedColor),
     Comment,
     Number,
     String,
@@ -410,6 +354,17 @@ pub enum HighlightKind {
     Operator,
     Keyword,
     Method,
+}
+
+impl HighlightKind {
+    pub const fn as_usize(self) -> usize {
+        unsafe { std::mem::transmute::<HighlightKind, u8>(self) as usize }
+    }
+
+    pub const unsafe fn from_usize(value: usize) -> Self {
+        debug_assert!(value <= Method.as_usize());
+        unsafe { std::mem::transmute::<u8, HighlightKind>(value as u8) }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -429,7 +384,7 @@ pub struct State {
     pub rules: &'static [Rule],
 }
 
-pub enum Instruction {
+pub enum Action {
     Continue,
     Jump(&'static str),
     Push(&'static str),
@@ -443,11 +398,7 @@ pub struct Rule {
 }
 
 const fn re(s: &'static str) -> Rule {
-    Rule {
-        pattern: s,
-        kind: HighlightKindOp::None,
-        action: ActionDefinition::Continue,
-    }
+    Rule { pattern: s, kind: HighlightKindOp::None, action: ActionDefinition::Continue }
 }
 
 impl Rule {

@@ -11,14 +11,14 @@
 //! whereas the additional states will try to match the next character without seeking.
 //! If it doesn't match, it will fall back to the next possible defined regular expression.
 
+mod compiler;
 mod definitions;
 mod handles;
-mod transformer;
 
 use std::fmt::Write as _;
 
+use compiler::*;
 use definitions::*;
-use transformer::*;
 
 pub fn generate() -> String {
     let mut output = String::new();
@@ -29,15 +29,13 @@ pub fn generate() -> String {
 
 use std::ops::RangeInclusive;
 
-use Action::*;
 use HighlightKind::*;
-use IndexedColor::*;
-use Test::*;
+use Instruction::*;
 
 pub struct Language {
     pub name: &'static str,
     pub filenames: &'static [&'static str],
-    pub transitions: &'static [Transition<'static>],
+    pub instructions: &'static [Instruction],
 }
 
 impl PartialEq for Language {
@@ -46,22 +44,8 @@ impl PartialEq for Language {
     }
 }
 
-pub struct Transition<'a> {
-    pub test: Test<'a>,
-    pub kind: Option<HighlightKind>,
-    pub action: Action,
-}
-
-pub enum Test<'a> {
-    Chars(usize),
-    Charset(&'a [u16; 16]),
-    Prefix(*const u8),
-    PrefixInsensitive(*const u8),
-}
-
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndexedColor {
+pub enum HighlightKind {
     Black,
     Red,
     Green,
@@ -78,13 +62,8 @@ pub enum IndexedColor {
     BrightMagenta,
     BrightCyan,
     BrightWhite,
-}
 
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HighlightKind {
-    #[default]
     Other,
-    Direct(IndexedColor),
     Comment,
     Number,
     String,
@@ -94,15 +73,47 @@ pub enum HighlightKind {
     Method,
 }
 
-pub enum Action {
-    Jump(u8),
-    Push(u8),
-    Pop(u8),
-    Loop(u8),
+impl HighlightKind {
+    pub const fn as_usize(self) -> usize {
+        unsafe { std::mem::transmute::<HighlightKind, u8>(self) as usize }
+    }
+
+    pub const unsafe fn from_usize(value: usize) -> Self {
+        debug_assert!(value <= Method.as_usize());
+        unsafe { std::mem::transmute::<u8, HighlightKind>(value as u8) }
+    }
 }
 
-const fn t<'a>(test: Test<'a>, kind: Option<HighlightKind>, action: Action) -> Transition<'a> {
-    Transition { test, kind, action }
+pub const REG_ZERO: u8 = 0;
+pub const REG_PROGRAM_COUNTER: u8 = 1;
+pub const REG_INPUT_OFFSET: u8 = 2;
+pub const REG_HIGHLIGHT_START: u8 = 3;
+pub const REG_HIGHLIGHT_KIND: u8 = 4;
+
+pub type Registers = [usize; 5];
+
+#[derive(Debug, Clone)]
+pub enum Instruction {
+    // .0 (reg) = .1 (reg) + .2 (constant)
+    // Note that this allows for jumps as well, by manipulating REG_PROGRAM_COUNTER.
+    Add(u8, u8, usize),
+
+    // Typical call/ret instructions.
+    // The VM takes care of saving the return address.
+    Call(u16),
+    Return,
+
+    // Test (and consume) the given character(s) in `.1`.
+    // If the test fails, jump to `.0`.
+    JumpIfNotMatchCharset(u16, CharsetHandle),
+    JumpIfNotMatchPrefix(u16, StringHandle),
+    JumpIfNotMatchPrefixInsensitive(u16, StringHandle),
+
+    // Flush the current HighlightKind to the output.
+    FlushHighlight,
+
+    // Check if we're at the end and exit if so.
+    SuspendOpportunity,
 }
 
 ",
@@ -118,7 +129,7 @@ const fn t<'a>(test: Test<'a>, kind: Option<HighlightKind>, action: Action) -> T
             acc
         });
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = Compiler::new();
         for s in lang.states {
             builder.declare_root(s.name);
         }
@@ -127,7 +138,7 @@ const fn t<'a>(test: Test<'a>, kind: Option<HighlightKind>, action: Action) -> T
                 builder.parse(state.name, rule);
             }
         }
-        builder.finalize();
+        let assembly = builder.compile();
 
         _ = write!(
             output,
@@ -147,7 +158,20 @@ config:
             builder.format_as_mermaid()
         );
 
-        for (h, cs) in builder.extract_charsets() {
+        for (h, s) in &assembly.strings {
+            _ = write!(
+                output,
+                "#[rustfmt::skip] const LANG_{}_STRING_{}: *const u8 = [",
+                name_uppercase, h.0,
+            );
+            _ = write!(output, "{}", s.len());
+            for &c in s.as_bytes() {
+                _ = write!(output, ", 0x{:02x}", c);
+            }
+            _ = writeln!(output, "].as_ptr();");
+        }
+
+        for (h, cs) in &assembly.charsets {
             _ = write!(
                 output,
                 "#[rustfmt::skip] const LANG_{}_CHARSET_{}: &[u16; 16] = &[",
@@ -166,56 +190,43 @@ config:
             _ = writeln!(output, "];");
         }
 
-        for (h, s) in builder.extract_strings() {
-            _ = write!(
-                output,
-                "#[rustfmt::skip] const LANG_{}_STRING_{}: *const u8 = [",
-                name_uppercase, h.0,
-            );
-            _ = write!(output, "{}", s.len());
-            for &c in s.as_bytes() {
-                _ = write!(output, ", 0x{:02x}", c);
-            }
-            _ = writeln!(output, "].as_ptr();");
-        }
-
         _ = write!(
             output,
             "\
 #[rustfmt::skip] pub const LANG_{name_uppercase}: &Language = &Language {{
     name: {name:?},
     filenames: &{filenames:?},
-    transitions: &[
+    instructions: &[
 ",
             name = lang.name,
             name_uppercase = name_uppercase,
             filenames = lang.filenames,
         );
 
-        for t in builder.extract_transitions() {
-            let test = match &t.test {
-                GraphTest::Chars(usize::MAX) => "Chars(usize::MAX)".to_string(),
-                GraphTest::Chars(n) => {
-                    format!("Chars({n})")
+        for op in &assembly.instructions {
+            match op {
+                Instruction::JumpIfNotMatchCharset(addr, h) => {
+                    _ = writeln!(
+                        output,
+                        "        JumpIfNotMatchCharset({addr}, LANG_{name_uppercase}_CHARSET_{h}),"
+                    );
                 }
-                GraphTest::Charset(cs) => {
-                    format!("Charset(LANG_{}_CHARSET_{})", name_uppercase, cs.0)
+                Instruction::JumpIfNotMatchPrefix(addr, h) => {
+                    _ = writeln!(
+                        output,
+                        "        JumpIfNotMatchPrefix({addr}, LANG_{name_uppercase}_STRING_{h}),"
+                    );
                 }
-                GraphTest::Prefix(s) => {
-                    format!("Prefix(LANG_{}_STRING_{})", name_uppercase, s.0)
+                Instruction::JumpIfNotMatchPrefixInsensitive(addr, h) => {
+                    _ = writeln!(
+                        output,
+                        "        JumpIfNotMatchPrefixInsensitive({addr}, LANG_{name_uppercase}_STRING_{h}),"
+                    );
                 }
-                GraphTest::PrefixInsensitive(s) => {
-                    format!("PrefixInsensitive(LANG_{}_STRING_{})", name_uppercase, s.0)
+                _ => {
+                    _ = writeln!(output, "        {op:?},");
                 }
-            };
-            let action = match &t.dst {
-                GraphAction::Jump(dst) => format!("Jump({})", dst.0),
-                GraphAction::Push(dst) => format!("Push({})", dst.0),
-                GraphAction::Pop(count) => format!("Pop({})", count),
-                GraphAction::Loop(dst) => format!("Loop({})", dst.0),
-                GraphAction::Fallback => unreachable!(),
-            };
-            _ = writeln!(output, "        t({test}, {kind:?}, {action}),", kind = t.kind,);
+            }
         }
 
         _ = write!(output, "    ],\n}};\n\n");
