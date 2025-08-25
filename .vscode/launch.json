@@ -10,7 +10,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "assets/highlighting-tests/json.json"
+                "${workspaceFolder}/assets/highlighting-tests/COMMIT_EDITMSG"
             ],
         },
         {
@@ -21,7 +21,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "assets/highlighting-tests/json.json"
+                "${workspaceFolder}/assets/highlighting-tests/COMMIT_EDITMSG"
             ],
         },
         {
@@ -32,7 +32,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "assets/highlighting-tests/json.json"
+                "${workspaceFolder}/assets/highlighting-tests/COMMIT_EDITMSG"
             ],
         }
     ]

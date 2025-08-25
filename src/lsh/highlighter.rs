@@ -1,7 +1,4 @@
-use std::borrow::Cow;
-use std::ffi::OsStr;
 use std::fmt::Debug;
-use std::ops::RangeInclusive;
 use std::path::Path;
 use std::slice;
 
@@ -276,8 +273,8 @@ impl<'doc> Highlighter<'doc> {
                 return false;
             }
 
-            let mut a = haystack.as_ptr().add(off);
-            let mut b = needle.as_ptr();
+            let a = haystack.as_ptr().add(off);
+            let b = needle.as_ptr();
             let mut i = 0;
 
             while i < needle_len {
@@ -302,8 +299,8 @@ impl<'doc> Highlighter<'doc> {
                 return false;
             }
 
-            let mut a = haystack.as_ptr().add(off);
-            let mut b = needle.as_ptr();
+            let a = haystack.as_ptr().add(off);
+            let b = needle.as_ptr();
             let mut i = 0;
 
             while i < needle_len {

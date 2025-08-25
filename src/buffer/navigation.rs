@@ -34,7 +34,7 @@ const fn construct_classifier(separators: &[u8]) -> [CharClass; 256] {
 }
 
 const WORD_CLASSIFIER: [CharClass; 256] =
-    construct_classifier(br##"!"#$%&'()*+,-./:;<=>?@[\]^`{|}~"##);
+    construct_classifier(br#"`~!@#$%^&*()-=+[{]}\|;:'",.<>/?"#);
 
 /// Finds the next word boundary given a document cursor offset.
 /// Returns the offset of the next word boundary.

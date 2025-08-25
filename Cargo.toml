@@ -49,7 +49,7 @@ toml-span = { version = "0.5", default-features = false }
 winresource = { version = "0.1.22", default-features = false }
 
 [target.'cfg(windows)'.dependencies.windows-sys]
-version = "0.59"
+version = "0.60"
 features = [
     "Win32_Globalization",
     "Win32_Security",

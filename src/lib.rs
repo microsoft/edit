@@ -8,21 +8,14 @@
     linked_list_cursors,
     maybe_uninit_fill,
     maybe_uninit_slice,
-    maybe_uninit_uninit_array_transpose,
-    maybe_uninit_write_slice
+    maybe_uninit_uninit_array_transpose
 )]
 #![cfg_attr(
     target_arch = "loongarch64",
     feature(stdarch_loongarch, stdarch_loongarch_feature_detection, loongarch_target_feature),
     allow(clippy::incompatible_msrv)
 )]
-#![allow(
-    clippy::missing_transmute_annotations,
-    clippy::new_without_default,
-    stable_features,
-    unused,
-    unused_imports
-)]
+#![allow(clippy::missing_transmute_annotations, clippy::new_without_default, stable_features)]
 
 #[macro_use]
 pub mod arena;
