@@ -42,6 +42,8 @@ use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
+use crate::lsh::cache::HighlighterCache;
+use crate::lsh::{HighlightKind, Highlighter, Language};
 use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
 use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
@@ -229,6 +231,7 @@ pub struct TextBuffer {
     selection: Option<TextBufferSelection>,
     selection_generation: u32,
     search: Option<UnsafeCell<ActiveSearch>>,
+    highlighter_cache: HighlighterCache,
 
     width: CoordType,
     margin_width: CoordType,
@@ -238,6 +241,7 @@ pub struct TextBuffer {
     tab_size: CoordType,
     indent_with_tabs: bool,
     line_highlight_enabled: bool,
+    language: Option<&'static Language>,
     ruler: CoordType,
     encoding: &'static str,
     newlines_are_crlf: bool,
@@ -277,6 +281,7 @@ impl TextBuffer {
             selection: None,
             selection_generation: 0,
             search: None,
+            highlighter_cache: HighlighterCache::new(),
 
             width: 0,
             margin_width: 0,
@@ -286,6 +291,7 @@ impl TextBuffer {
             tab_size: 4,
             indent_with_tabs: false,
             line_highlight_enabled: false,
+            language: None,
             ruler: 0,
             encoding: "UTF-8",
             newlines_are_crlf: cfg!(windows), // Windows users want CRLF
@@ -578,6 +584,15 @@ impl TextBuffer {
         self.line_highlight_enabled = enabled;
     }
 
+    pub fn language(&self) -> Option<&'static Language> {
+        self.language
+    }
+
+    pub fn set_language(&mut self, language: Option<&'static Language>) {
+        self.language = language;
+        self.highlighter_cache.invalidate_from(0);
+    }
+
     /// Sets a ruler column, e.g. 80.
     pub fn set_ruler(&mut self, column: CoordType) {
         self.ruler = column;
@@ -656,6 +671,7 @@ impl TextBuffer {
         self.set_selection(None);
         self.mark_as_clean();
         self.reflow();
+        self.highlighter_cache.invalidate_from(0);
     }
 
     /// Copies the contents of the buffer into a string.
@@ -1714,14 +1730,13 @@ impl TextBuffer {
             return None;
         }
 
-        let scratch = scratch_arena(None);
         let width = destination.width();
         let height = destination.height();
         let line_number_width = self.margin_width.max(3) as usize - 3;
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
-        let mut line = ArenaString::new_in(&scratch);
         let mut visual_pos_x_max = 0;
+        let mut highlighter = self.language.map(|l| Highlighter::new(&self.buffer, l));
 
         // Pick the cursor closer to the `origin.y`.
         let mut cursor = {
@@ -1737,10 +1752,10 @@ impl TextBuffer {
             Some(TextBufferSelection { beg, end }) => minmax(beg, end),
         };
 
-        line.reserve(width as usize * 2);
-
         for y in 0..height {
-            line.clear();
+            let scratch = scratch_arena(None);
+            let mut line = ArenaString::new_in(&scratch);
+            line.reserve(width as usize * 2);
 
             let visual_line = origin.y + y;
             let mut cursor_beg =
@@ -1958,6 +1973,53 @@ impl TextBuffer {
                     }
 
                     global_off += chunk.len();
+                }
+
+                if let Some(highlighter) = &mut highlighter {
+                    let highlights = self.highlighter_cache.parse_line(
+                        &scratch,
+                        highlighter,
+                        cursor_beg.logical_pos.y,
+                    );
+                    let mut highlights = highlights.iter();
+
+                    if let Some(first) = highlights.next() {
+                        let mut highlight_kind = first.kind;
+                        let mut highlight_beg =
+                            self.cursor_move_to_offset_internal(cursor_beg, first.start);
+
+                        for next in highlights {
+                            let kind = highlight_kind;
+                            highlight_kind = next.kind;
+
+                            let beg = highlight_beg.visual_pos;
+                            highlight_beg =
+                                self.cursor_move_to_offset_internal(highlight_beg, next.start);
+                            let end = highlight_beg.visual_pos;
+
+                            let color = match kind {
+                                _ if (kind as u8) < 16 => IndexedColor::from(kind as u8),
+                                HighlightKind::Comment => IndexedColor::Green,
+                                HighlightKind::Number => IndexedColor::BrightGreen,
+                                HighlightKind::String => IndexedColor::BrightRed,
+                                HighlightKind::Variable => IndexedColor::BrightBlue,
+                                HighlightKind::Operator => IndexedColor::White,
+                                HighlightKind::Keyword => IndexedColor::BrightMagenta,
+                                HighlightKind::Method => IndexedColor::BrightYellow,
+                                _ => continue,
+                            };
+
+                            fb.blend_fg(
+                                Rect {
+                                    left: destination.left + self.margin_width + beg.x - origin.x,
+                                    top: destination.top + y,
+                                    right: destination.left + self.margin_width + end.x - origin.x,
+                                    bottom: destination.top + y + 1,
+                                },
+                                fb.indexed(color),
+                            );
+                        }
+                    }
                 }
 
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
@@ -2587,6 +2649,7 @@ impl TextBuffer {
         }
 
         self.active_edit_off = cursor.offset;
+        self.highlighter_cache.invalidate_from(cursor.logical_pos.y);
 
         // If word-wrap is enabled, the visual layout of all logical lines affected by the write
         // may have changed. This includes even text before the insertion point up to the line
@@ -2717,6 +2780,7 @@ impl TextBuffer {
     fn undo_redo(&mut self, undo: bool) {
         let buffer_generation = self.buffer.generation();
         let mut entry_buffer_generation = None;
+        let mut damage_start = CoordType::MAX;
 
         loop {
             // Transfer the last entry from the undo stack to the redo stack or vice versa.
@@ -2760,6 +2824,8 @@ impl TextBuffer {
             } else {
                 cursor
             };
+
+            damage_start = damage_start.min(cursor.logical_pos.y);
 
             {
                 let mut change = change.borrow_mut();
@@ -2829,6 +2895,13 @@ impl TextBuffer {
                 }
             }
         }
+
+        if damage_start == CoordType::MAX {
+            // There weren't any undo/redo entries.
+            return;
+        }
+
+        self.highlighter_cache.invalidate_from(damage_start);
 
         if entry_buffer_generation.is_some() {
             self.recalc_after_content_changed();

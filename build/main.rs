@@ -7,6 +7,7 @@ use crate::helpers::env_opt;
 
 mod helpers;
 mod i18n;
+mod lsh;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TargetOs {
@@ -22,10 +23,18 @@ fn main() {
         _ => TargetOs::Unix,
     };
 
+    compile_lsh();
     compile_i18n();
     configure_icu(target_os);
     #[cfg(windows)]
     configure_windows_binary(target_os);
+}
+
+fn compile_lsh() {
+    let contents = lsh::generate();
+    let out_dir = env_opt("OUT_DIR");
+    let path = format!("{out_dir}/lsh_definitions.rs");
+    std::fs::write(path, contents).unwrap();
 }
 
 fn compile_i18n() {

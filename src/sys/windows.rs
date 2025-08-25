@@ -14,7 +14,7 @@ use windows_sys::Win32::Storage::FileSystem;
 use windows_sys::Win32::System::Diagnostics::Debug;
 use windows_sys::Win32::System::{Console, IO, LibraryLoader, Memory, Threading};
 use windows_sys::Win32::{Foundation, Globalization};
-use windows_sys::w;
+use windows_sys::core::*;
 
 use crate::apperr;
 use crate::arena::{Arena, ArenaString, scratch_arena};
@@ -55,7 +55,7 @@ type ReadConsoleInputExW = unsafe extern "system" fn(
     n_length: u32,
     lp_number_of_events_read: *mut u32,
     w_flags: u16,
-) -> Foundation::BOOL;
+) -> BOOL;
 
 unsafe extern "system" fn read_console_input_ex_placeholder(
     _: Foundation::HANDLE,
@@ -63,7 +63,7 @@ unsafe extern "system" fn read_console_input_ex_placeholder(
     _: u32,
     _: *mut u32,
     _: u16,
-) -> Foundation::BOOL {
+) -> BOOL {
     panic!();
 }
 
@@ -97,7 +97,7 @@ static mut STATE: State = State {
     wants_exit: false,
 };
 
-extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> Foundation::BOOL {
+extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> BOOL {
     unsafe {
         STATE.wants_exit = true;
         IO::CancelIoEx(STATE.stdin, null());
@@ -757,7 +757,7 @@ pub fn apperr_is_not_found(err: apperr::Error) -> bool {
     err == gle_to_apperr(Foundation::ERROR_FILE_NOT_FOUND)
 }
 
-fn check_bool_return(ret: Foundation::BOOL) -> apperr::Result<()> {
+fn check_bool_return(ret: BOOL) -> apperr::Result<()> {
     if ret == 0 { Err(get_last_error()) } else { Ok(()) }
 }
 
