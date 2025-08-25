@@ -160,7 +160,7 @@ where
 
 #[inline(always)]
 #[allow(clippy::ptr_eq)]
-fn opt_ptr<T>(a: Option<&T>) -> *const T {
+pub fn opt_ptr<T>(a: Option<&T>) -> *const T {
     unsafe { mem::transmute(a) }
 }
 

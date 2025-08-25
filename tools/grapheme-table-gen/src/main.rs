@@ -805,7 +805,7 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
                 "LV" => ClusterBreak::HangulLV,      // Hangul Syllable Type LV
                 "LVT" => ClusterBreak::HangulLVT,    // Hangul Syllable Type LVT
                 _ => bail!(
-                    "Unrecognized GCB {:?} for U+{:04X} to U+{:04X}",
+                    "Unrecognized GCB={} for U+{:04X} to U+{:04X}",
                     char_attributes.grapheme_cluster_break,
                     range.start(),
                     range.end()
@@ -818,7 +818,7 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
                 // and treat it as an alias of EXTEND, but with the special GB11 properties.
                 if cb != ClusterBreak::Other {
                     bail!(
-                        "Unexpected GCB {:?} with ExtPict=Y for U+{:04X} to U+{:04X}",
+                        "Unexpected GCB={} with ExtPict=Y for U+{:04X} to U+{:04X}",
                         char_attributes.grapheme_cluster_break,
                         range.start(),
                         range.end()
@@ -828,24 +828,37 @@ fn extract_values_from_ucd(doc: &roxmltree::Document, out: &Output) -> anyhow::R
                 cb = ClusterBreak::ExtPic;
             }
 
-            cb = match char_attributes.indic_conjunct_break {
-                "None" | "Extend" => cb,
-                "Linker" => ClusterBreak::InCBLinker,
-                "Consonant" => ClusterBreak::InCBConsonant,
-                _ => bail!(
-                    "Unrecognized InCB {:?} for U+{:04X} to U+{:04X}",
-                    char_attributes.indic_conjunct_break,
-                    range.start(),
-                    range.end()
-                ),
-            };
+            if !matches!(char_attributes.indic_conjunct_break, "None" | "Extend") {
+                // If it's not None/Extend, it's Linker/Consonant, and currently
+                // all of them are GCB=EX/XX. Since we treat them almost like extenders,
+                // we need to revisit our assumptions if this ever changes.
+                if !matches!(cb, ClusterBreak::Other | ClusterBreak::Extend) {
+                    bail!(
+                        "Unexpected GCB={} with InCB={} for U+{:04X} to U+{:04X}",
+                        char_attributes.grapheme_cluster_break,
+                        char_attributes.indic_conjunct_break,
+                        range.start(),
+                        range.end()
+                    );
+                }
+                cb = match char_attributes.indic_conjunct_break {
+                    "Linker" => ClusterBreak::InCBLinker,
+                    "Consonant" => ClusterBreak::InCBConsonant,
+                    _ => bail!(
+                        "Unrecognized InCB={} for U+{:04X} to U+{:04X}",
+                        char_attributes.indic_conjunct_break,
+                        range.start(),
+                        range.end()
+                    ),
+                };
+            }
 
             let mut cw = match char_attributes.east_asian {
                 "N" | "Na" | "H" => CharacterWidth::Narrow, // Half-width, Narrow, Neutral
                 "F" | "W" => CharacterWidth::Wide,          // Wide, Full-width
                 "A" => ambiguous_value,                     // Ambiguous
                 _ => bail!(
-                    "Unrecognized ea {:?} for U+{:04X} to U+{:04X}",
+                    "Unrecognized ea={} for U+{:04X} to U+{:04X}",
                     char_attributes.east_asian,
                     range.start(),
                     range.end()
