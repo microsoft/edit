@@ -8,6 +8,7 @@ repository = "https://github.com/microsoft/edit"
 homepage = "https://github.com/microsoft/edit"
 license = "MIT"
 categories = ["text-editors"]
+build = "build/main.rs"
 
 [[bench]]
 name = "lib"
