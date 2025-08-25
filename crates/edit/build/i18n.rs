@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 

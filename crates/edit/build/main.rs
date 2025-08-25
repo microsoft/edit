@@ -22,10 +22,18 @@ fn main() {
         _ => TargetOs::Unix,
     };
 
+    compile_lsh();
     compile_i18n();
     configure_icu(target_os);
     #[cfg(windows)]
     configure_windows_binary(target_os);
+}
+
+fn compile_lsh() {
+    let contents = lsh_gen::generate();
+    let out_dir = env_opt("OUT_DIR");
+    let path = format!("{out_dir}/lsh_definitions.rs");
+    std::fs::write(path, contents).unwrap();
 }
 
 fn compile_i18n() {
