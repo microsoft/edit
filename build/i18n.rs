@@ -1,0 +1,201 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::Write as _;
+
+use crate::helpers::env_opt;
+
+pub fn generate(definitions: &str) -> String {
+    let i18n = toml_span::parse(definitions).expect("Failed to parse i18n file");
+    let root = i18n.as_table().unwrap();
+    let mut languages = Vec::new();
+    let mut aliases = Vec::new();
+    let mut translations: BTreeMap<String, HashMap<String, String>> = BTreeMap::new();
+
+    for (k, v) in root.iter() {
+        match &k.name[..] {
+            "__default__" => {
+                const ERROR: &str = "i18n: __default__ must be [str]";
+                languages = Vec::from_iter(
+                    v.as_array()
+                        .expect(ERROR)
+                        .iter()
+                        .map(|lang| lang.as_str().expect(ERROR).to_string()),
+                );
+            }
+            "__alias__" => {
+                const ERROR: &str = "i18n: __alias__ must be str->str";
+                aliases.extend(v.as_table().expect(ERROR).iter().map(|(alias, lang)| {
+                    (alias.to_string(), lang.as_str().expect(ERROR).to_string())
+                }));
+            }
+            _ => {
+                const ERROR: &str = "i18n: LocId must be str->str";
+                translations.insert(
+                    k.name.to_string(),
+                    HashMap::from_iter(
+                        v.as_table().expect(ERROR).iter().map(|(k, v)| {
+                            (k.name.to_string(), v.as_str().expect(ERROR).to_string())
+                        }),
+                    ),
+                );
+            }
+        }
+    }
+
+    // Use EDIT_CFG_LANGUAGES for the language list if it is set.
+    if let cfg_languages = env_opt("EDIT_CFG_LANGUAGES")
+        && !cfg_languages.is_empty()
+    {
+        languages = cfg_languages.split(',').map(|lang| lang.to_string()).collect();
+    }
+
+    // Ensure English as the fallback language is always present.
+    if !languages.iter().any(|l| l == "en") {
+        languages.push("en".to_string());
+    }
+
+    // Normalize language tags for use in source code (i.e. no "-").
+    for lang in &mut languages {
+        if lang.is_empty() {
+            panic!("i18n: empty language tag");
+        }
+        for c in unsafe { lang.as_bytes_mut() } {
+            *c = match *c {
+                b'A'..=b'Z' | b'a'..=b'z' => c.to_ascii_lowercase(),
+                b'-' => b'_',
+                b'_' => b'_',
+                _ => panic!("i18n: language tag \"{lang}\" must be [a-zA-Z_-]"),
+            }
+        }
+    }
+
+    // * Validate that there are no duplicate language tags.
+    // * Validate that all language tags are valid.
+    // * Merge the aliases into the languages list.
+    let mut languages_with_aliases: Vec<_>;
+    {
+        let mut specified = HashSet::new();
+        for lang in &languages {
+            if !specified.insert(lang.as_str()) {
+                panic!("i18n: duplicate language tag \"{lang}\"");
+            }
+        }
+
+        let mut available = HashSet::new();
+        for v in translations.values() {
+            for lang in v.keys() {
+                available.insert(lang.as_str());
+            }
+        }
+
+        let mut invalid = Vec::new();
+        for lang in &languages {
+            if !available.contains(lang.as_str()) {
+                invalid.push(lang.as_str());
+            }
+        }
+        if !invalid.is_empty() {
+            panic!("i18n: invalid language tags {invalid:?}");
+        }
+
+        languages_with_aliases = languages.iter().map(|l| (l.clone(), l.clone())).collect();
+        for (alias, lang) in aliases {
+            if specified.contains(lang.as_str()) && !specified.contains(alias.as_str()) {
+                languages_with_aliases.push((alias, lang));
+            }
+        }
+    }
+
+    // Sort languages by:
+    // - "en" first, because it'll map to `LangId::en == 0`, which is the default.
+    // - then alphabetically
+    // - but tags with subtags (e.g. "zh_hans") before those without (e.g. "zh").
+    {
+        fn sort(a: &String, b: &String) -> std::cmp::Ordering {
+            match (a == "en", b == "en") {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    let (a0, a1) = a.split_once('_').unwrap_or((a, "xxxxxx"));
+                    let (b0, b1) = b.split_once('_').unwrap_or((b, "xxxxxx"));
+                    match a0.cmp(b0) {
+                        std::cmp::Ordering::Equal => a1.cmp(b1),
+                        ord => ord,
+                    }
+                }
+            }
+        }
+        languages.sort_unstable_by(sort);
+        languages_with_aliases.sort_unstable_by(|a, b| sort(&a.0, &b.0));
+    }
+
+    let mut out = String::new();
+
+    // Generate the source code for the i18n data.
+    {
+        _ = write!(
+            out,
+            "\
+// This file is generated by build.rs. Do not edit it manually.
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LocId {{",
+        );
+
+        for (k, _) in translations.iter() {
+            _ = writeln!(out, "    {k},");
+        }
+
+        _ = write!(
+            out,
+            "\
+}}
+
+#[allow(non_camel_case_types)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LangId {{
+",
+        );
+
+        for lang in &languages {
+            _ = writeln!(out, "    {lang},");
+        }
+
+        _ = write!(
+            out,
+            "\
+}}
+
+const LANGUAGES: &[(&str, LangId)] = &[
+"
+        );
+
+        for (alias, lang) in &languages_with_aliases {
+            _ = writeln!(out, "    ({alias:?}, LangId::{lang}),");
+        }
+
+        _ = write!(
+            out,
+            "\
+];
+
+const TRANSLATIONS: [[&str; {}]; {}] = [
+",
+            translations.len(),
+            languages.len(),
+        );
+
+        for lang in &languages {
+            _ = writeln!(out, "    [");
+            for (_, v) in translations.iter() {
+                const DEFAULT: &String = &String::new();
+                let v = v.get(lang).or_else(|| v.get("en")).unwrap_or(DEFAULT);
+                _ = writeln!(out, "        {v:?},");
+            }
+            _ = writeln!(out, "    ],");
+        }
+
+        _ = writeln!(out, "];");
+    }
+
+    out
+}
