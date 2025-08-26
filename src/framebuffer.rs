@@ -90,8 +90,10 @@ pub const DEFAULT_THEME: [StraightRgba; INDEXED_COLORS_COUNT] = [
 /// of `vim` for instance, you'll notice that it redraws unrelated parts of
 /// the screen all the time.
 pub struct Framebuffer {
-    /// Store the color palette.
+    /// The terminal color palette (or some fallback).
     indexed_colors: [StraightRgba; INDEXED_COLORS_COUNT],
+    /// Whether the terminal supports 24-bit colors.
+    supports_24bit_colors: bool,
     /// Front and back buffers. Indexed by `frame_counter & 1`.
     buffers: [Buffer; 2],
     /// The current frame counter. Increments on every `flip` call.
@@ -112,6 +114,7 @@ impl Framebuffer {
     pub fn new() -> Self {
         Self {
             indexed_colors: DEFAULT_THEME,
+            supports_24bit_colors: false,
             buffers: Default::default(),
             frame_counter: 0,
             auto_colors: [
@@ -130,6 +133,9 @@ impl Framebuffer {
     /// If you call this method, [`Framebuffer`] expects that you
     /// successfully detect the light/dark mode of the terminal.
     pub fn set_indexed_colors(&mut self, colors: [StraightRgba; INDEXED_COLORS_COUNT]) {
+        // If the terminal supports color queries, shouldn't it also support 24-bit colors?
+        self.supports_24bit_colors = true;
+
         self.indexed_colors = colors;
         self.background_fill = StraightRgba::zero();
         self.foreground_fill = StraightRgba::zero();
@@ -567,10 +573,82 @@ impl Framebuffer {
             color = dst.oklab_blend(color);
         }
 
-        let r = color.red();
-        let g = color.green();
-        let b = color.blue();
-        _ = write!(dst, "\x1b[{typ}8;2;{r};{g};{b}m");
+        if self.supports_24bit_colors {
+            let r = color.red();
+            let g = color.green();
+            let b = color.blue();
+            _ = write!(dst, "\x1b[{typ}8;2;{r};{g};{b}m");
+            return;
+        }
+
+        let mut colors = [StraightRgba::zero(); 258];
+
+        // First 2 colors are the default background/foreground (indices 0..1)
+        colors[0] = self.indexed(IndexedColor::Foreground);
+        colors[1] = self.indexed(IndexedColor::Background);
+        // Then the 16 indexed colors (indices 2..18)
+        colors[2..18].copy_from_slice(&self.indexed_colors[..16]);
+        // Build 6x6x6 cube (indices 18..234)
+        let mut i = 18usize;
+        for r in 0..6 {
+            for g in 0..6 {
+                for b in 0..6 {
+                    let vr = if r == 0 { 0 } else { 55 + 40 * r };
+                    let vg = if g == 0 { 0 } else { 55 + 40 * g };
+                    let vb = if b == 0 { 0 } else { 55 + 40 * b };
+                    let v =
+                        ((vr as u32) << 24) | ((vg as u32) << 16) | ((vb as u32) << 8) | 0xffu32;
+                    colors[i] = StraightRgba::from_be(v);
+                    i += 1;
+                }
+            }
+        }
+        // Grayscale ramp (indices 234..258): 24 shades from 8 to 238 inclusive (step 10)
+        for k in 0..24 {
+            let gray = 8 + 10 * k;
+            let v = ((gray as u32) << 24) | ((gray as u32) << 16) | ((gray as u32) << 8) | 0xffu32;
+            colors[i] = StraightRgba::from_be(v);
+            i += 1;
+        }
+
+        // Find nearest color in the 256-color table (euclidean RGB distance)
+        let color = color.as_oklab();
+        let mut best_idx = 0usize;
+        let mut best_dist = f32::INFINITY;
+        for (i, c) in colors.iter().enumerate() {
+            if i == fg as usize {
+                // If `fg` is true, skip index 1, because emitting
+                // "CSI 49 m" has no effect on the foreground color.
+                // Vice versa for fg=false and index=0.
+                continue;
+            }
+
+            let c = c.as_oklab();
+            let l = color.lightness() - c.lightness();
+            let a = color.a() - c.a();
+            let b = color.b() - c.b();
+            let dist = l * l + a * a * 2.0 + b * b * 2.0;
+
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = i;
+            }
+        }
+
+        _ = match best_idx {
+            0 => write!(dst, "\x1b[39m"),
+            1 => write!(dst, "\x1b[49m"),
+            2..18 => {
+                let best_idx = best_idx - 2;
+                let code = if best_idx < 8 {
+                    best_idx + (if fg { 30 } else { 40 })
+                } else {
+                    best_idx + (if fg { 82 } else { 92 })
+                };
+                write!(dst, "\x1b[{code}m")
+            }
+            18.. => write!(dst, "\x1b[{typ}8;5;{}m", best_idx - 2),
+        }
     }
 }
 

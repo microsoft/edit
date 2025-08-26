@@ -22,11 +22,16 @@ impl StraightRgba {
         StraightRgba(0)
     }
 
+    /// Expects a color in lower-endian RGBA format (R is the lowest and A the highest byte).
     #[inline]
     pub const fn from_le(color: u32) -> Self {
         StraightRgba(u32::from_le(color))
     }
 
+    /// Expects a color in big-endian RGBA format (A is the lowest and R the highest byte).
+    ///
+    /// This is useful for color constants, because "#RRGGBBAA" is the notation used for CSS colors.
+    /// It allows you to copy such colors between websites (e.g. color generators) and this source code.
     #[inline]
     pub const fn from_be(color: u32) -> Self {
         StraightRgba(u32::from_be(color))

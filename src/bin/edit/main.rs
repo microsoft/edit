@@ -83,11 +83,7 @@ fn run() -> apperr::Result<()> {
 
     let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
 
-    state.menubar_color_bg = tui.indexed(IndexedColor::Background).oklab_blend(tui.indexed_alpha(
-        IndexedColor::BrightBlue,
-        1,
-        2,
-    ));
+    state.menubar_color_bg = tui.indexed(IndexedColor::Blue);
     state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
     let floater_bg = tui
         .indexed_alpha(IndexedColor::Background, 2, 3)
