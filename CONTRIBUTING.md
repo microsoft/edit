@@ -2,7 +2,7 @@
 
 ## Translation improvements
 
-You can find our translations in [`src/bin/edit/localization.rs`](./src/bin/edit/localization.rs).
+You can find our translations in [`i18n/edit.toml`](./i18n/edit.toml).
 Please feel free to open a pull request with your changes at any time.
 If you'd like to discuss your changes first, please feel free to open an issue.
 

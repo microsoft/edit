@@ -158,6 +158,7 @@ use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedC
 use crate::hash::*;
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
+use crate::oklab::StraightRgba;
 use crate::{apperr, arena_format, input, simd, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
@@ -315,10 +316,10 @@ pub struct Tui {
     framebuffer: Framebuffer,
 
     modifier_translations: ModifierTranslations,
-    floater_default_bg: u32,
-    floater_default_fg: u32,
-    modal_default_bg: u32,
-    modal_default_fg: u32,
+    floater_default_bg: StraightRgba,
+    floater_default_fg: StraightRgba,
+    modal_default_bg: StraightRgba,
+    modal_default_fg: StraightRgba,
 
     /// Last known terminal size.
     ///
@@ -391,10 +392,10 @@ impl Tui {
                 alt: "Alt",
                 shift: "Shift",
             },
-            floater_default_bg: 0,
-            floater_default_fg: 0,
-            modal_default_bg: 0,
-            modal_default_fg: 0,
+            floater_default_bg: StraightRgba::zero(),
+            floater_default_fg: StraightRgba::zero(),
+            modal_default_bg: StraightRgba::zero(),
+            modal_default_fg: StraightRgba::zero(),
 
             size: Size { width: 0, height: 0 },
             mouse_position: Point::MIN,
@@ -425,7 +426,7 @@ impl Tui {
     }
 
     /// Sets up the framebuffer's color palette.
-    pub fn setup_indexed_colors(&mut self, colors: [u32; INDEXED_COLORS_COUNT]) {
+    pub fn setup_indexed_colors(&mut self, colors: [StraightRgba; INDEXED_COLORS_COUNT]) {
         self.framebuffer.set_indexed_colors(colors);
     }
 
@@ -435,22 +436,22 @@ impl Tui {
     }
 
     /// Set the default background color for floaters (dropdowns, etc.).
-    pub fn set_floater_default_bg(&mut self, color: u32) {
+    pub fn set_floater_default_bg(&mut self, color: StraightRgba) {
         self.floater_default_bg = color;
     }
 
     /// Set the default foreground color for floaters (dropdowns, etc.).
-    pub fn set_floater_default_fg(&mut self, color: u32) {
+    pub fn set_floater_default_fg(&mut self, color: StraightRgba) {
         self.floater_default_fg = color;
     }
 
     /// Set the default background color for modals.
-    pub fn set_modal_default_bg(&mut self, color: u32) {
+    pub fn set_modal_default_bg(&mut self, color: StraightRgba) {
         self.modal_default_bg = color;
     }
 
     /// Set the default foreground color for modals.
-    pub fn set_modal_default_fg(&mut self, color: u32) {
+    pub fn set_modal_default_fg(&mut self, color: StraightRgba) {
         self.modal_default_fg = color;
     }
 
@@ -469,20 +470,25 @@ impl Tui {
 
     /// Returns an indexed color from the framebuffer.
     #[inline]
-    pub fn indexed(&self, index: IndexedColor) -> u32 {
+    pub fn indexed(&self, index: IndexedColor) -> StraightRgba {
         self.framebuffer.indexed(index)
     }
 
     /// Returns an indexed color from the framebuffer with the given alpha.
     /// See [`Framebuffer::indexed_alpha()`].
     #[inline]
-    pub fn indexed_alpha(&self, index: IndexedColor, numerator: u32, denominator: u32) -> u32 {
+    pub fn indexed_alpha(
+        &self,
+        index: IndexedColor,
+        numerator: u32,
+        denominator: u32,
+    ) -> StraightRgba {
         self.framebuffer.indexed_alpha(index, numerator, denominator)
     }
 
     /// Returns a color in contrast with the given color.
     /// See [`Framebuffer::contrasted()`].
-    pub fn contrasted(&self, color: u32) -> u32 {
+    pub fn contrasted(&self, color: StraightRgba) -> StraightRgba {
         self.framebuffer.contrasted(color)
     }
 
@@ -569,6 +575,7 @@ impl Tui {
                     && next_state != InputMouseState::None;
                 let mouse_up = self.mouse_state != InputMouseState::None
                     && next_state == InputMouseState::None;
+                let is_scroll = next_scroll != Point::default();
                 let is_drag = self.mouse_state == InputMouseState::Left
                     && next_state == InputMouseState::Left
                     && next_position != self.mouse_position;
@@ -607,7 +614,11 @@ impl Tui {
                     }
                 }
 
-                if mouse_down {
+                if is_scroll {
+                    next_state = self.mouse_state;
+                } else if is_drag {
+                    self.mouse_is_drag = true;
+                } else if mouse_down {
                     // Transition from no mouse input to some mouse input --> Record the mouse down position.
                     Self::build_node_path(hovered_node, &mut self.mouse_down_node_path);
 
@@ -662,8 +673,6 @@ impl Tui {
                     }
 
                     self.mouse_up_timestamp = now;
-                } else if is_drag {
-                    self.mouse_is_drag = true;
                 }
 
                 input_mouse_modifiers = mouse.modifiers;
@@ -1172,14 +1181,14 @@ impl Tui {
                     result.push_str("  bordered:     true\r\n");
                 }
 
-                if node.attributes.bg != 0 {
+                if node.attributes.bg.to_ne() != 0 {
                     result.push_repeat(' ', depth * 2);
-                    _ = write!(result, "  bg:           #{:08x}\r\n", node.attributes.bg);
+                    _ = write!(result, "  bg:           {:?}\r\n", node.attributes.bg);
                 }
 
-                if node.attributes.fg != 0 {
+                if node.attributes.fg.to_ne() != 0 {
                     result.push_repeat(' ', depth * 2);
-                    _ = write!(result, "  fg:           #{:08x}\r\n", node.attributes.fg);
+                    _ = write!(result, "  fg:           {:?}\r\n", node.attributes.fg);
                 }
 
                 if self.is_node_focused(node.id) {
@@ -1359,20 +1368,25 @@ impl<'a> Context<'a, '_> {
 
     /// Returns an indexed color from the framebuffer.
     #[inline]
-    pub fn indexed(&self, index: IndexedColor) -> u32 {
+    pub fn indexed(&self, index: IndexedColor) -> StraightRgba {
         self.tui.framebuffer.indexed(index)
     }
 
     /// Returns an indexed color from the framebuffer with the given alpha.
     /// See [`Framebuffer::indexed_alpha()`].
     #[inline]
-    pub fn indexed_alpha(&self, index: IndexedColor, numerator: u32, denominator: u32) -> u32 {
+    pub fn indexed_alpha(
+        &self,
+        index: IndexedColor,
+        numerator: u32,
+        denominator: u32,
+    ) -> StraightRgba {
         self.tui.framebuffer.indexed_alpha(index, numerator, denominator)
     }
 
     /// Returns a color in contrast with the given color.
     /// See [`Framebuffer::contrasted()`].
-    pub fn contrasted(&self, color: u32) -> u32 {
+    pub fn contrasted(&self, color: StraightRgba) -> StraightRgba {
         self.tui.framebuffer.contrasted(color)
     }
 
@@ -1642,13 +1656,13 @@ impl<'a> Context<'a, '_> {
     }
 
     /// Assigns a sRGB background color to the current node.
-    pub fn attr_background_rgba(&mut self, bg: u32) {
+    pub fn attr_background_rgba(&mut self, bg: StraightRgba) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.bg = bg;
     }
 
     /// Assigns a sRGB foreground color to the current node.
-    pub fn attr_foreground_rgba(&mut self, fg: u32) {
+    pub fn attr_foreground_rgba(&mut self, fg: StraightRgba) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.fg = fg;
     }
@@ -1927,7 +1941,7 @@ impl<'a> Context<'a, '_> {
     }
 
     /// Changes the active pencil color of the current label.
-    pub fn styled_label_set_foreground(&mut self, fg: u32) {
+    pub fn styled_label_set_foreground(&mut self, fg: StraightRgba) {
         let mut node = self.tree.last_node.borrow_mut();
         let NodeContent::Text(content) = &mut node.content else {
             unreachable!();
@@ -2186,120 +2200,120 @@ impl<'a> Context<'a, '_> {
         let mut make_cursor_visible = false;
         let mut change_preferred_column = false;
 
-        if self.tui.mouse_state != InputMouseState::None
-            && self.tui.was_mouse_down_on_node(node_prev.id)
+        // Scrolling works even if the node isn't focused.
+        if self.input_scroll_delta != Point::default()
+            && node_prev.inner_clipped.contains(self.tui.mouse_position)
         {
-            // Scrolling works even if the node isn't focused.
-            if self.tui.mouse_state == InputMouseState::Scroll {
-                tc.scroll_offset.x += self.input_scroll_delta.x;
-                tc.scroll_offset.y += self.input_scroll_delta.y;
-                self.set_input_consumed();
-            } else if self.tui.is_node_focused(node_prev.id) {
-                let mouse = self.tui.mouse_position;
-                let inner = node_prev.inner;
-                let text_rect = Rect {
-                    left: inner.left + tb.margin_width(),
-                    top: inner.top,
-                    right: inner.right - !single_line as CoordType,
-                    bottom: inner.bottom,
-                };
-                let track_rect = Rect {
-                    left: text_rect.right,
-                    top: inner.top,
-                    right: inner.right,
-                    bottom: inner.bottom,
-                };
-                let pos = Point {
-                    x: mouse.x - inner.left - tb.margin_width() + tc.scroll_offset.x,
-                    y: mouse.y - inner.top + tc.scroll_offset.y,
-                };
+            tc.scroll_offset.x += self.input_scroll_delta.x;
+            tc.scroll_offset.y += self.input_scroll_delta.y;
+            self.set_input_consumed();
+            return make_cursor_visible;
+        } else if self.tui.mouse_state != InputMouseState::None
+            && self.tui.is_node_focused(node_prev.id)
+        {
+            let mouse = self.tui.mouse_position;
+            let inner = node_prev.inner;
+            let text_rect = Rect {
+                left: inner.left + tb.margin_width(),
+                top: inner.top,
+                right: inner.right - !single_line as CoordType,
+                bottom: inner.bottom,
+            };
+            let track_rect = Rect {
+                left: text_rect.right,
+                top: inner.top,
+                right: inner.right,
+                bottom: inner.bottom,
+            };
+            let pos = Point {
+                x: mouse.x - inner.left - tb.margin_width() + tc.scroll_offset.x,
+                y: mouse.y - inner.top + tc.scroll_offset.y,
+            };
 
-                if text_rect.contains(self.tui.mouse_down_position) {
-                    if self.tui.mouse_is_drag {
-                        tb.selection_update_visual(pos);
-                        tc.preferred_column = tb.cursor_visual_pos().x;
+            if text_rect.contains(self.tui.mouse_down_position) {
+                if self.tui.mouse_is_drag {
+                    tb.selection_update_visual(pos);
+                    tc.preferred_column = tb.cursor_visual_pos().x;
 
-                        let height = inner.height();
+                    let height = inner.height();
 
-                        // If the editor is only 1 line tall we can't possibly scroll up or down.
-                        if height >= 2 {
-                            fn calc(min: CoordType, max: CoordType, mouse: CoordType) -> CoordType {
-                                // Otherwise, the scroll zone is up to 3 lines at the top/bottom.
-                                let zone_height = ((max - min) / 2).min(3);
+                    // If the editor is only 1 line tall we can't possibly scroll up or down.
+                    if height >= 2 {
+                        fn calc(min: CoordType, max: CoordType, mouse: CoordType) -> CoordType {
+                            // Otherwise, the scroll zone is up to 3 lines at the top/bottom.
+                            let zone_height = ((max - min) / 2).min(3);
 
-                                // The .y positions where the scroll zones begin:
-                                // Mouse coordinates above top and below bottom respectively.
-                                let scroll_min = min + zone_height;
-                                let scroll_max = max - zone_height - 1;
+                            // The .y positions where the scroll zones begin:
+                            // Mouse coordinates above top and below bottom respectively.
+                            let scroll_min = min + zone_height;
+                            let scroll_max = max - zone_height - 1;
 
-                                // Calculate the delta for scrolling up or down.
-                                let delta_min = (mouse - scroll_min).clamp(-zone_height, 0);
-                                let delta_max = (mouse - scroll_max).clamp(0, zone_height);
+                            // Calculate the delta for scrolling up or down.
+                            let delta_min = (mouse - scroll_min).clamp(-zone_height, 0);
+                            let delta_max = (mouse - scroll_max).clamp(0, zone_height);
 
-                                // If I didn't mess up my logic here, only one of the two values can possibly be !=0.
-                                let idx = 3 + delta_min + delta_max;
+                            // If I didn't mess up my logic here, only one of the two values can possibly be !=0.
+                            let idx = 3 + delta_min + delta_max;
 
-                                const SPEEDS: [CoordType; 7] = [-9, -3, -1, 0, 1, 3, 9];
-                                let idx = idx.clamp(0, SPEEDS.len() as CoordType) as usize;
-                                SPEEDS[idx]
-                            }
-
-                            let delta_x = calc(text_rect.left, text_rect.right, mouse.x);
-                            let delta_y = calc(text_rect.top, text_rect.bottom, mouse.y);
-
-                            tc.scroll_offset.x += delta_x;
-                            tc.scroll_offset.y += delta_y;
-
-                            if delta_x != 0 || delta_y != 0 {
-                                self.tui.read_timeout = time::Duration::from_millis(25);
-                            }
+                            const SPEEDS: [CoordType; 7] = [-9, -3, -1, 0, 1, 3, 9];
+                            let idx = idx.clamp(0, SPEEDS.len() as CoordType) as usize;
+                            SPEEDS[idx]
                         }
-                    } else {
-                        match self.input_mouse_click {
-                            5.. => {}
-                            4 => tb.select_all(),
-                            3 => tb.select_line(),
-                            2 => tb.select_word(),
-                            _ => match self.tui.mouse_state {
-                                InputMouseState::Left => {
-                                    if self.input_mouse_modifiers.contains(kbmod::SHIFT) {
-                                        // TODO: Untested because Windows Terminal surprisingly doesn't support Shift+Click.
-                                        tb.selection_update_visual(pos);
-                                    } else {
-                                        tb.cursor_move_to_visual(pos);
-                                    }
-                                    tc.preferred_column = tb.cursor_visual_pos().x;
-                                    make_cursor_visible = true;
-                                }
-                                _ => return false,
-                            },
+
+                        let delta_x = calc(text_rect.left, text_rect.right, mouse.x);
+                        let delta_y = calc(text_rect.top, text_rect.bottom, mouse.y);
+
+                        tc.scroll_offset.x += delta_x;
+                        tc.scroll_offset.y += delta_y;
+
+                        if delta_x != 0 || delta_y != 0 {
+                            self.tui.read_timeout = time::Duration::from_millis(25);
                         }
                     }
-                } else if track_rect.contains(self.tui.mouse_down_position) {
-                    if self.tui.mouse_state == InputMouseState::Release {
-                        tc.scroll_offset_y_drag_start = CoordType::MIN;
-                    } else if self.tui.mouse_is_drag {
-                        if tc.scroll_offset_y_drag_start == CoordType::MIN {
-                            tc.scroll_offset_y_drag_start = tc.scroll_offset.y;
-                        }
-
-                        // The textarea supports 1 height worth of "scrolling beyond the end".
-                        // `track_height` is the same as the viewport height.
-                        let scrollable_height = tb.visual_line_count() - 1;
-
-                        if scrollable_height > 0 {
-                            let trackable = track_rect.height() - tc.thumb_height;
-                            let delta_y = mouse.y - self.tui.mouse_down_position.y;
-                            tc.scroll_offset.y = tc.scroll_offset_y_drag_start
-                                + (delta_y as i64 * scrollable_height as i64 / trackable as i64)
-                                    as CoordType;
-                        }
+                } else {
+                    match self.input_mouse_click {
+                        5.. => {}
+                        4 => tb.select_all(),
+                        3 => tb.select_line(),
+                        2 => tb.select_word(),
+                        _ => match self.tui.mouse_state {
+                            InputMouseState::Left => {
+                                if self.input_mouse_modifiers.contains(kbmod::SHIFT) {
+                                    // TODO: Untested because Windows Terminal surprisingly doesn't support Shift+Click.
+                                    tb.selection_update_visual(pos);
+                                } else {
+                                    tb.cursor_move_to_visual(pos);
+                                }
+                                tc.preferred_column = tb.cursor_visual_pos().x;
+                                make_cursor_visible = true;
+                            }
+                            _ => return false,
+                        },
                     }
                 }
+            } else if track_rect.contains(self.tui.mouse_down_position) {
+                if self.tui.mouse_state == InputMouseState::Release {
+                    tc.scroll_offset_y_drag_start = CoordType::MIN;
+                } else if self.tui.mouse_is_drag {
+                    if tc.scroll_offset_y_drag_start == CoordType::MIN {
+                        tc.scroll_offset_y_drag_start = tc.scroll_offset.y;
+                    }
 
-                self.set_input_consumed();
+                    // The textarea supports 1 height worth of "scrolling beyond the end".
+                    // `track_height` is the same as the viewport height.
+                    let scrollable_height = tb.visual_line_count() - 1;
+
+                    if scrollable_height > 0 {
+                        let trackable = track_rect.height() - tc.thumb_height;
+                        let delta_y = mouse.y - self.tui.mouse_down_position.y;
+                        tc.scroll_offset.y = tc.scroll_offset_y_drag_start
+                            + (delta_y as i64 * scrollable_height as i64 / trackable as i64)
+                                as CoordType;
+                    }
+                }
             }
 
+            self.set_input_consumed();
             return make_cursor_visible;
         }
 
@@ -2806,9 +2820,15 @@ impl<'a> Context<'a, '_> {
         }
 
         if !self.input_consumed {
-            if self.tui.mouse_state != InputMouseState::None {
-                let container_rect = prev_container.inner;
+            let container_rect = prev_container.inner;
 
+            if self.input_scroll_delta != Point::default()
+                && container_rect.contains(self.tui.mouse_position)
+            {
+                sc.scroll_offset.x += self.input_scroll_delta.x;
+                sc.scroll_offset.y += self.input_scroll_delta.y;
+                self.set_input_consumed();
+            } else if self.tui.mouse_state != InputMouseState::None {
                 match self.tui.mouse_state {
                     InputMouseState::Left => {
                         if self.tui.mouse_is_drag {
@@ -2847,13 +2867,6 @@ impl<'a> Context<'a, '_> {
                     }
                     InputMouseState::Release => {
                         sc.scroll_offset_y_drag_start = CoordType::MIN;
-                    }
-                    InputMouseState::Scroll => {
-                        if container_rect.contains(self.tui.mouse_position) {
-                            sc.scroll_offset.x += self.input_scroll_delta.x;
-                            sc.scroll_offset.y += self.input_scroll_delta.y;
-                            self.set_input_consumed();
-                        }
                     }
                     _ => {}
                 }
@@ -3586,7 +3599,7 @@ impl<'a> NodeMap<'a> {
     }
 
     /// Gets a node by its ID.
-    fn get(&mut self, id: u64) -> Option<&'a NodeCell<'a>> {
+    fn get(&self, id: u64) -> Option<&'a NodeCell<'a>> {
         let shift = self.shift;
         let mask = self.mask;
         let mut slot = id >> shift;
@@ -3616,8 +3629,8 @@ struct NodeAttributes {
     float: Option<FloatAttributes>,
     position: Position,
     padding: Rect,
-    bg: u32,
-    fg: u32,
+    bg: StraightRgba,
+    fg: StraightRgba,
     reverse: bool,
     bordered: bool,
     focusable: bool,
@@ -3641,12 +3654,12 @@ struct TableContent<'a> {
 /// NOTE: Must not contain items that require drop().
 struct StyledTextChunk {
     offset: usize,
-    fg: u32,
+    fg: StraightRgba,
     attr: Attributes,
 }
 
 const INVALID_STYLED_TEXT_CHUNK: StyledTextChunk =
-    StyledTextChunk { offset: usize::MAX, fg: 0, attr: Attributes::None };
+    StyledTextChunk { offset: usize::MAX, fg: StraightRgba::zero(), attr: Attributes::None };
 
 /// NOTE: Must not contain items that require drop().
 struct TextContent<'a> {
