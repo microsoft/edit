@@ -19,6 +19,19 @@ You can install the latest version with WinGet:
 winget install Microsoft.Edit
 ```
 
+### Linux
+
+You can install the latest version by pasting this into the linux terminal:
+```sh
+curl -fsSL https://raw.githubusercontent.com/JaredTweed/edit/main/tools/install.sh | bash
+```
+or via git cloning: 
+```sh
+git clone git@github.com:microsoft/edit.git
+cd edit
+curl -fsSL file://"$PWD/tools/install.sh" | bash
+```
+
 ## Build Instructions
 
 * [Install Rust](https://www.rust-lang.org/tools/install)
