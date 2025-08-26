@@ -23,7 +23,7 @@ winget install Microsoft.Edit
 
 You can install the latest version by pasting this into the linux terminal:
 ```sh
-curl -fsSL https://raw.githubusercontent.com/JaredTweed/edit/main/tools/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/microsoft/edit/main/tools/install.sh | bash
 ```
 or via git cloning: 
 ```sh
