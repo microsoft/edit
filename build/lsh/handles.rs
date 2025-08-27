@@ -24,6 +24,10 @@ where
     pub fn enumerate(&self) -> impl DoubleEndedIterator<Item = (H, &T)> {
         self.list.iter().enumerate().map(|(i, v)| (H::from(i), v))
     }
+
+    pub fn enumerate_mut(&mut self) -> impl DoubleEndedIterator<Item = (H, &mut T)> {
+        self.list.iter_mut().enumerate().map(|(i, v)| (H::from(i), v))
+    }
 }
 
 impl<H, T> Default for HandleVec<H, T> {

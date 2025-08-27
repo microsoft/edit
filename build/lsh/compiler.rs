@@ -12,20 +12,43 @@ declare_handle!(pub StateHandle(usize));
 declare_handle!(pub StringHandle(usize));
 declare_handle!(pub TransitionHandle(usize));
 
-pub const REG_ZERO: u8 = 0;
-pub const REG_PROGRAM_COUNTER: u8 = 1;
-pub const REG_INPUT_OFFSET: u8 = 2;
-pub const REG_HIGHLIGHT_START: u8 = 3;
-pub const REG_HIGHLIGHT_KIND: u8 = 4;
+#[derive(Clone, Copy)]
+pub enum Register {
+    Zero,
+    ProgramCounter,
+    ProcedureStart,
+    InputOffset,
+    HighlightStart,
+    HighlightKind,
+
+    #[allow(clippy::upper_case_acronyms)]
+    COUNT,
+}
+
+impl fmt::Debug for Register {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Register::Zero => "Register::Zero",
+            Register::ProgramCounter => "Register::ProgramCounter",
+            Register::ProcedureStart => "Register::ProcedureStart",
+            Register::InputOffset => "Register::InputOffset",
+            Register::HighlightStart => "Register::HighlightStart",
+            Register::HighlightKind => "Register::HighlightKind",
+
+            Register::COUNT => "Register::COUNT",
+        })
+    }
+}
 
 #[allow(dead_code)]
-pub type Registers = [usize; 5];
+pub type Registers = [usize; Register::COUNT as usize];
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum Instruction {
     // .0 (reg) = .1 (reg) + .2 (constant)
     // Note that this allows for jumps as well, by manipulating REG_PROGRAM_COUNTER.
-    Add(u8, u8, usize),
+    Add(Register, Register, usize),
 
     // Typical call/ret instructions.
     // The VM takes care of saving the return address.
@@ -445,7 +468,14 @@ impl Compiler {
             }
         }
 
-        self.transitions.push(GraphTransition { origin: self.origin, src, test, kind, dst });
+        self.transitions.push(GraphTransition {
+            origin: self.origin,
+            instruction_offset: usize::MAX,
+            src,
+            test,
+            kind,
+            dst,
+        });
         dst
     }
 
@@ -482,90 +512,178 @@ impl Compiler {
         let strings = self.extract_strings();
         let charsets = self.extract_charsets();
 
-        let mut instructions = Vec::new();
-
+        #[derive(Clone, Copy)]
         enum RelocationTarget {
-            None,
-            State(StateHandle),
-            Transition(TransitionHandle),
+            RelState(StateHandle),
+            RelTransition(TransitionHandle),
         }
 
-        for t in &self.transitions {
-            use Instruction::*;
-            use RelocationTarget::*;
+        struct Compiler<'a> {
+            states: &'a mut HandleVec<StateHandle, GraphState>,
+            transitions: &'a mut HandleVec<TransitionHandle, GraphTransition>,
+            instructions: Vec<Instruction>,
+            relocations: Vec<(usize, RelocationTarget)>,
+        }
 
-            if self.states[t.src].instruction_offset == usize::MAX {
-                self.states[t.src].instruction_offset = instructions.len();
+        impl Compiler<'_> {
+            fn compile(mut self) -> Vec<Instruction> {
+                use RelocationTarget::*;
+
+                for th in self.transitions.indices() {
+                    let th_next = TransitionHandle(th.0 + 1);
+                    let t = self.transitions[th].clone();
+
+                    self.transitions[th].instruction_offset = self.instructions.len();
+                    if self.states[t.src].instruction_offset == usize::MAX {
+                        self.states[t.src].instruction_offset = self.instructions.len();
+                    }
+
+                    match t.test {
+                        GraphTest::Chars(0) => {}
+                        GraphTest::Chars(usize::MAX) => {
+                            self.assign(Register::InputOffset, usize::MAX);
+                        }
+                        GraphTest::Chars(n) => {
+                            self.add_assign(Register::InputOffset, n);
+                        }
+                        GraphTest::Charset(h) => {
+                            self.jump_if_not_match_charset(RelTransition(th_next), h);
+                        }
+                        GraphTest::Prefix(h) => {
+                            self.jump_if_not_match_prefix(RelTransition(th_next), h);
+                        }
+                        GraphTest::PrefixInsensitive(h) => {
+                            self.jump_if_not_match_prefix_insensitive(RelTransition(th_next), h);
+                        }
+                    }
+
+                    match t.kind {
+                        HighlightKindOp::None => {}
+                        HighlightKindOp::Some(kind) => {
+                            self.assign(Register::HighlightKind, kind.as_usize());
+                        }
+                    }
+
+                    match t.dst {
+                        GraphAction::Jump(dst) => {
+                            self.jump(RelState(dst));
+                        }
+                        GraphAction::Push(dst) => {
+                            self.flush_highlight();
+                            self.copy(Register::HighlightStart, Register::InputOffset);
+                            self.jump(RelState(dst));
+                        }
+                        GraphAction::Pop(0) => {
+                            self.flush_highlight();
+                            self.suspend_opportunity();
+                            self.copy(Register::ProgramCounter, Register::ProcedureStart);
+                        }
+                        GraphAction::Pop(1) => {
+                            self.flush_highlight();
+                            self.ret();
+                        }
+                        GraphAction::Loop(dst) => {
+                            self.suspend_opportunity();
+                            self.jump(RelState(dst));
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+
+                for &(off, dst) in &self.relocations {
+                    let instruction_offset = match dst {
+                        RelState(h) => self.states[h].instruction_offset,
+                        RelTransition(h) => self.transitions[h].instruction_offset,
+                    };
+                    let instruction_offset: u16 = instruction_offset.try_into().unwrap();
+                    match &mut self.instructions[off] {
+                        Instruction::Add(Register::ProgramCounter, Register::Zero, d) => {
+                            *d = instruction_offset as usize;
+                        }
+                        Instruction::JumpIfNotMatchCharset(d, _)
+                        | Instruction::JumpIfNotMatchPrefix(d, _)
+                        | Instruction::JumpIfNotMatchPrefixInsensitive(d, _) => {
+                            *d = instruction_offset;
+                        }
+                        i => panic!("Unexpected relocation target: {i:?}"),
+                    }
+                }
+
+                self.instructions
             }
 
-            match t.test {
-                GraphTest::Chars(n) => {
-                    instructions.push((None, Add(REG_INPUT_OFFSET, REG_INPUT_OFFSET, n)));
-                }
-                GraphTest::Charset(h) => {
-                    instructions
-                        .push((Transition(TransitionHandle(123)), JumpIfNotMatchCharset(0, h)));
-                }
-                GraphTest::Prefix(h) => {
-                    instructions
-                        .push((Transition(TransitionHandle(1234)), JumpIfNotMatchPrefix(0, h)));
-                }
-                GraphTest::PrefixInsensitive(h) => {
-                    instructions.push((
-                        Transition(TransitionHandle(1234)),
-                        JumpIfNotMatchPrefixInsensitive(0, h),
-                    ));
-                }
+            fn add_assign(&mut self, reg: Register, val: usize) {
+                self.instructions.push(Instruction::Add(reg, reg, val));
             }
 
-            match t.kind {
-                HighlightKindOp::None => {}
-                HighlightKindOp::Some(kind) => {
-                    instructions.push((None, Add(REG_HIGHLIGHT_KIND, REG_ZERO, kind.as_usize())));
-                }
+            fn assign(&mut self, reg: Register, val: usize) {
+                self.instructions.push(Instruction::Add(reg, Register::Zero, val));
             }
 
-            match t.dst {
-                GraphAction::Jump(dst) => {
-                    instructions.push((
-                        Transition(TransitionHandle(1234)),
-                        Add(REG_PROGRAM_COUNTER, REG_ZERO, 0),
-                    ));
+            fn copy(&mut self, dst: Register, src: Register) {
+                self.instructions.push(Instruction::Add(dst, src, 0));
+            }
+
+            fn jump(&mut self, dst: RelocationTarget) {
+                let dst = self.resolve_relocation(dst);
+                self.assign(Register::ProgramCounter, dst as usize);
+            }
+
+            fn jump_if_not_match_charset(&mut self, dst: RelocationTarget, h: CharsetHandle) {
+                let dst = self.resolve_relocation(dst);
+                self.instructions.push(Instruction::JumpIfNotMatchCharset(dst, h));
+            }
+
+            fn jump_if_not_match_prefix(&mut self, dst: RelocationTarget, h: StringHandle) {
+                let dst = self.resolve_relocation(dst);
+                self.instructions.push(Instruction::JumpIfNotMatchPrefix(dst, h));
+            }
+
+            fn jump_if_not_match_prefix_insensitive(
+                &mut self,
+                dst: RelocationTarget,
+                h: StringHandle,
+            ) {
+                let dst = self.resolve_relocation(dst);
+                self.instructions.push(Instruction::JumpIfNotMatchPrefixInsensitive(dst, h));
+            }
+
+            fn ret(&mut self) {
+                self.instructions.push(Instruction::Return);
+            }
+
+            fn flush_highlight(&mut self) {
+                self.instructions.push(Instruction::FlushHighlight);
+            }
+
+            fn suspend_opportunity(&mut self) {
+                self.instructions.push(Instruction::SuspendOpportunity);
+            }
+
+            fn resolve_relocation(&mut self, dst: RelocationTarget) -> u16 {
+                use RelocationTarget::*;
+
+                let instruction_offset = match dst {
+                    RelState(h) => self.states[h].instruction_offset,
+                    RelTransition(h) => self.transitions[h].instruction_offset,
+                };
+
+                if instruction_offset != usize::MAX {
+                    instruction_offset.try_into().unwrap()
+                } else {
+                    self.relocations.push((self.instructions.len(), dst));
+                    0
                 }
-                GraphAction::Push(dst) => {
-                    instructions.push((Transition(TransitionHandle(1234)), Call(0))); // TODO: The position of the `dst` state.
-                    instructions.push((
-                        Transition(TransitionHandle(1234)),
-                        Add(REG_PROGRAM_COUNTER, REG_ZERO, 0),
-                    )); // TODO: The position of the `t.src` state.
-                }
-                GraphAction::Pop(_) => {
-                    instructions.push((None, Return));
-                }
-                GraphAction::Loop(dst) => {
-                    instructions.push((
-                        Transition(TransitionHandle(1234)),
-                        Add(REG_PROGRAM_COUNTER, REG_ZERO, 0),
-                    )); // TODO: The position of the `t.src` state.
-                }
-                _ => unreachable!(),
             }
         }
 
-        // Up to this point we created jump instructions with targets referring to states.
-        // We now patch TODO
-        //for i in &mut instructions {
-        //    match i {
-        //        Instruction::JumpIfNotMatchCharset(dst, _)
-        //        | Instruction::JumpIfNotMatchPrefix(dst, _)
-        //        | Instruction::JumpIfNotMatchPrefixInsensitive(dst, _) => {
-        //            *dst = self.states[StateHandle(*dst as usize)].instruction_offset as u16;
-        //        }
-        //        _ => {}
-        //    }
-        //}
-
-        let instructions = instructions.into_iter().map(|(_, i)| i).collect();
+        let compiler = Compiler {
+            states: &mut self.states,
+            transitions: &mut self.transitions,
+            instructions: Default::default(),
+            relocations: Default::default(),
+        };
+        let instructions = compiler.compile();
 
         Assembly { strings, charsets, instructions }
     }
@@ -665,6 +783,7 @@ impl Compiler {
                 let cs = self.intern_charset(&cs);
                 self.transitions.push(GraphTransition {
                     origin: -1,
+                    instruction_offset: usize::MAX,
                     src,
                     test: GraphTest::Charset(cs),
                     kind: HighlightKindOp::None,
@@ -672,6 +791,7 @@ impl Compiler {
                 });
                 self.transitions.push(GraphTransition {
                     origin: -1,
+                    instruction_offset: usize::MAX,
                     src,
                     test: GraphTest::Chars(1),
                     kind: HighlightKindOp::None,
@@ -774,6 +894,7 @@ impl Compiler {
             if !s.coverage.covers_all() {
                 self.transitions.push(GraphTransition {
                     origin: -1,
+                    instruction_offset: usize::MAX,
                     src,
                     test: GraphTest::Chars(0),
                     kind: HighlightKindOp::None,
@@ -1087,6 +1208,7 @@ pub enum GraphTest {
 #[derive(Debug, Clone)]
 pub struct GraphTransition {
     origin: i32,
+    instruction_offset: usize,
     pub src: StateHandle,
     pub test: GraphTest,
     pub kind: HighlightKindOp,

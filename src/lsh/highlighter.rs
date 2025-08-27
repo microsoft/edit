@@ -67,7 +67,11 @@ impl<'doc> Highlighter<'doc> {
             offset: 0,
             logical_pos_y: 0,
             call_stack: Default::default(),
-            registers: Default::default(),
+            registers: {
+                let mut r = Registers::default();
+                r[Register::HighlightKind as usize] = HighlightKind::Other.as_usize();
+                r
+            },
         }
     }
 
@@ -170,23 +174,22 @@ impl<'doc> Highlighter<'doc> {
 
         let line = unicode::strip_newline(line);
 
-        let mut push = |start: usize, kind: HighlightKind| {};
+        self.set_reg(Register::InputOffset, 0);
+        self.set_reg(Register::HighlightStart, 0);
 
         loop {
             unsafe {
-                match *self
-                    .language
-                    .instructions
-                    .get_unchecked(self.registers[REG_PROGRAM_COUNTER as usize])
-                {
+                let pc = self.get_reg(Register::ProgramCounter);
+                self.set_reg(Register::ProgramCounter, pc + 1);
+
+                match *self.language.instructions.get_unchecked(pc) {
                     Instruction::Add(dst, src, add) => {
-                        let src = *self.registers.get_unchecked(src as usize);
-                        let dst = self.registers.get_unchecked_mut(dst as usize);
-                        *dst = src.saturating_add(add);
+                        self.registers[dst as usize] = self.registers[src as usize] + add;
                     }
                     Instruction::Call(dst) => {
                         self.call_stack.push(self.registers);
-                        self.registers[REG_PROGRAM_COUNTER as usize] = dst as usize;
+                        self.set_reg(Register::ProgramCounter, dst as usize);
+                        self.set_reg(Register::ProcedureStart, dst as usize);
                     }
                     Instruction::Return => {
                         if let Some(last) = self.call_stack.last() {
@@ -197,40 +200,39 @@ impl<'doc> Highlighter<'doc> {
                         }
                     }
                     Instruction::JumpIfNotMatchCharset(dst, cs) => {
-                        let mut off = self.registers[REG_INPUT_OFFSET as usize];
+                        let mut off = self.get_reg(Register::InputOffset);
                         // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
                         if off >= line.len() || !Self::in_set(cs, line[off]) {
-                            self.registers[REG_PROGRAM_COUNTER as usize] = dst as usize;
+                            self.set_reg(Register::ProgramCounter, dst as usize);
                         } else {
                             while {
                                 off += 1;
                                 off < line.len() && Self::in_set(cs, line[off])
                             } {}
-                            self.registers[REG_INPUT_OFFSET as usize] = off;
+                            self.set_reg(Register::InputOffset, off);
                         }
                     }
                     Instruction::JumpIfNotMatchPrefix(dst, s) => {
-                        let off = self.registers[REG_INPUT_OFFSET as usize];
-                        let str = unsafe { slice::from_raw_parts(s.add(1), s.read() as usize) };
+                        let off = self.get_reg(Register::InputOffset);
+                        let str = slice::from_raw_parts(s.add(1), s.read() as usize);
                         if !Self::inlined_memcmp(line, off, str) {
-                            self.registers[REG_PROGRAM_COUNTER as usize] = dst as usize;
+                            self.set_reg(Register::ProgramCounter, dst as usize);
                         } else {
-                            self.registers[REG_INPUT_OFFSET as usize] = off + str.len();
+                            self.set_reg(Register::InputOffset, off + str.len());
                         }
                     }
                     Instruction::JumpIfNotMatchPrefixInsensitive(dst, s) => {
-                        let off = self.registers[REG_INPUT_OFFSET as usize];
-                        let str = unsafe { slice::from_raw_parts(s.add(1), s.read() as usize) };
+                        let off = self.get_reg(Register::InputOffset);
+                        let str = slice::from_raw_parts(s.add(1), s.read() as usize);
                         if !Self::inlined_memicmp(line, off, str) {
-                            self.registers[REG_PROGRAM_COUNTER as usize] = dst as usize;
+                            self.set_reg(Register::ProgramCounter, dst as usize);
                         } else {
-                            self.registers[REG_INPUT_OFFSET as usize] = off + str.len();
+                            self.set_reg(Register::InputOffset, off + str.len());
                         }
                     }
                     Instruction::FlushHighlight => {
-                        let start = self.registers[REG_HIGHLIGHT_START as usize];
-                        let kind =
-                            HighlightKind::from_usize(self.registers[REG_HIGHLIGHT_KIND as usize]);
+                        let start = self.get_reg(Register::HighlightStart);
+                        let kind = HighlightKind::from_usize(self.get_reg(Register::HighlightKind));
 
                         if let Some(last) = res.last_mut()
                             && (last.start == start || last.kind == kind)
@@ -240,11 +242,10 @@ impl<'doc> Highlighter<'doc> {
                             res.push(Higlight { start, kind });
                         }
 
-                        self.registers[REG_HIGHLIGHT_START as usize] =
-                            self.registers[REG_INPUT_OFFSET as usize];
+                        self.set_reg(Register::HighlightStart, self.get_reg(Register::InputOffset));
                     }
                     Instruction::SuspendOpportunity => {
-                        let off = self.registers[REG_INPUT_OFFSET as usize];
+                        let off = self.get_reg(Register::InputOffset);
                         if off >= line.len() {
                             break;
                         }
@@ -268,8 +269,7 @@ impl<'doc> Highlighter<'doc> {
     #[inline]
     fn inlined_memcmp(haystack: &[u8], off: usize, needle: &[u8]) -> bool {
         unsafe {
-            let needle_len = needle.len();
-            if haystack.len() - off < needle_len {
+            if haystack.len() - off < needle.len() {
                 return false;
             }
 
@@ -277,7 +277,7 @@ impl<'doc> Highlighter<'doc> {
             let b = needle.as_ptr();
             let mut i = 0;
 
-            while i < needle_len {
+            while i < needle.len() {
                 let a = *a.add(i);
                 let b = *b.add(i);
                 i += 1;
@@ -294,8 +294,7 @@ impl<'doc> Highlighter<'doc> {
     #[inline]
     fn inlined_memicmp(haystack: &[u8], off: usize, needle: &[u8]) -> bool {
         unsafe {
-            let needle_len = needle.len();
-            if haystack.len() - off < needle_len {
+            if haystack.len() - off < needle.len() {
                 return false;
             }
 
@@ -303,7 +302,7 @@ impl<'doc> Highlighter<'doc> {
             let b = needle.as_ptr();
             let mut i = 0;
 
-            while i < needle_len {
+            while i < needle.len() {
                 // str in PrefixInsensitive(str) is expected to be lowercase, printable ASCII.
                 let a = a.add(i).read().to_ascii_lowercase();
                 let b = b.add(i).read();
@@ -326,6 +325,16 @@ impl<'doc> Highlighter<'doc> {
         let bitmask = 1u16 << hi_nibble;
 
         (bitset & bitmask) != 0
+    }
+
+    #[inline(always)]
+    fn get_reg(&self, reg: Register) -> usize {
+        self.registers[reg as usize]
+    }
+
+    #[inline(always)]
+    fn set_reg(&mut self, reg: Register, val: usize) {
+        self.registers[reg as usize] = val;
     }
 }
 
