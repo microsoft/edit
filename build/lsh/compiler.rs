@@ -12,7 +12,7 @@ declare_handle!(pub StateHandle(usize));
 declare_handle!(pub StringHandle(usize));
 declare_handle!(pub TransitionHandle(usize));
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum Register {
     Zero,
     ProgramCounter,
@@ -25,57 +25,142 @@ pub enum Register {
     COUNT,
 }
 
-impl fmt::Debug for Register {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Register::Zero => "Register::Zero",
-            Register::ProgramCounter => "Register::ProgramCounter",
-            Register::ProcedureStart => "Register::ProcedureStart",
-            Register::InputOffset => "Register::InputOffset",
-            Register::HighlightStart => "Register::HighlightStart",
-            Register::HighlightKind => "Register::HighlightKind",
+impl Register {
+    pub fn mnemonic(&self) -> &'static str {
+        match self {
+            Register::Zero => "zero",
+            Register::ProgramCounter => "pc",
+            Register::ProcedureStart => "ps",
+            Register::InputOffset => "off",
+            Register::HighlightStart => "hs",
+            Register::HighlightKind => "hk",
 
-            Register::COUNT => "Register::COUNT",
-        })
+            Register::COUNT => unreachable!(),
+        }
     }
 }
 
 #[allow(dead_code)]
-pub type Registers = [usize; Register::COUNT as usize];
+pub type Registers = [u32; Register::COUNT as usize];
 
+#[derive(Debug, Clone, Copy)]
+enum RelocationTarget {
+    State(StateHandle),
+    Transition(TransitionHandle),
+}
+
+// General encoding:
+// * Instructions are 32 bit
+// * The opcode is 4 bits at opcode[3:0]
+// * Register constants are 4 bits
+// *
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    // .0 (reg) = .1 (reg) + .2 (constant)
-    // Note that this allows for jumps as well, by manipulating REG_PROGRAM_COUNTER.
-    Add(Register, Register, usize),
+    // Encoding:
+    //   imm[31:12] | src[11:8] | dst[7:4] | 0000
+    //
+    // NOTE: This allows for jumps as well by manipulating REG_PROGRAM_COUNTER.
+    Add { dst: Register, src: Register, imm: usize },
 
-    // Typical call/ret instructions.
-    // The VM takes care of saving the return address.
-    Call(u16),
+    // Encoding:
+    //   dst[31:12] |      idx[11:4]       | 0001
+    //
+    // NOTE: The VM takes care of saving the return address.
+    Call { dst: usize },
+
+    // Encoding:
+    //                                       0010
     Return,
 
-    // Test (and consume) the given character(s) in `.1`.
-    // If the test fails, jump to `.0`.
-    JumpIfNotMatchCharset(u16, CharsetHandle),
-    JumpIfNotMatchPrefix(u16, StringHandle),
-    JumpIfNotMatchPrefixInsensitive(u16, StringHandle),
+    // Encoding:
+    //   dst[31:12] |      idx[11:4]       | 0011
+    //
+    // Jumps to `dst` if the test fails.
+    JumpIfNotMatchCharset { idx: CharsetHandle, dst: usize },
 
-    // Flush the current HighlightKind to the output.
+    // Encoding:
+    //   dst[31:12] |      idx[11:4]       | 0100
+    JumpIfNotMatchPrefix { idx: StringHandle, dst: usize },
+
+    // Encoding:
+    //   dst[31:12] |      idx[11:4]       | 0101
+    JumpIfNotMatchPrefixInsensitive { idx: StringHandle, dst: usize },
+
+    // Encoding:
+    //                                       0110
+    //
+    // Flushes the current HighlightKind to the output.
     FlushHighlight,
 
-    // Check if we're at the end and exit if so.
+    // Encoding:
+    //                                       0111
+    //
+    // Checks if we're at the end and exit if so.
     SuspendOpportunity,
 }
 
-/// The result of the compilation process:
-/// * Constant strings
-/// * Constant charsets (bitfields)
-/// * VM instructions
-pub struct Assembly {
-    pub strings: Vec<(StringHandle, String)>,
-    pub charsets: Vec<(CharsetHandle, Charset)>,
-    pub instructions: Vec<Instruction>,
+impl Instruction {
+    const IMM_MAX: usize = (1 << 20) - 1;
+
+    #[allow(clippy::identity_op)]
+    pub fn encode(&self) -> u32 {
+        match *self {
+            Instruction::Add { dst, src, imm } => {
+                Self::cast_imm(imm) | (src as u32) << 8 | (dst as u32) << 4 | 0b0000
+            }
+            Instruction::Call { dst } => Self::cast_imm(dst) | 0b0001,
+            Instruction::Return => 0b0010,
+            Instruction::JumpIfNotMatchCharset { idx, dst } => {
+                Self::cast_imm(dst) | (idx.0 as u32) << 4 | 0b0011
+            }
+            Instruction::JumpIfNotMatchPrefix { idx, dst } => {
+                Self::cast_imm(dst) | (idx.0 as u32) << 4 | 0b0100
+            }
+            Instruction::JumpIfNotMatchPrefixInsensitive { idx, dst } => {
+                Self::cast_imm(dst) | (idx.0 as u32) << 4 | 0b0101
+            }
+            Instruction::FlushHighlight => 0b0110,
+            Instruction::SuspendOpportunity => 0b0111,
+        }
+    }
+
+    pub fn mnemonic(&self) -> String {
+        match *self {
+            Instruction::Add { dst, src, imm } => {
+                let mut str = String::with_capacity(48);
+                _ = write!(str, "add   {}, {}, ", dst.mnemonic(), src.mnemonic());
+                if imm > 1024 * 1024 {
+                    _ = write!(str, "{:#x}", imm & Self::IMM_MAX);
+                } else {
+                    _ = write!(str, "{imm}");
+                }
+                str
+            }
+            Instruction::Call { dst } => format!("call  {dst}"),
+            Instruction::Return => "ret".to_string(),
+            Instruction::JumpIfNotMatchCharset { idx, dst } => {
+                format!("jnc   {:?}, {dst}", idx.0)
+            }
+            Instruction::JumpIfNotMatchPrefix { idx, dst } => {
+                format!("jnp   {:?}, {dst}", idx.0)
+            }
+            Instruction::JumpIfNotMatchPrefixInsensitive { idx, dst } => {
+                format!("jnpi  {:?}, {dst}", idx.0)
+            }
+            Instruction::FlushHighlight => "flush".to_string(),
+            Instruction::SuspendOpportunity => "susp".to_string(),
+        }
+    }
+
+    fn cast_imm(imm: usize) -> u32 {
+        if imm == usize::MAX {
+            (Self::IMM_MAX << 12) as u32
+        } else {
+            assert!(imm <= Self::IMM_MAX);
+            (imm << 12) as u32
+        }
+    }
 }
 
 pub struct Compiler {
@@ -499,7 +584,7 @@ impl Compiler {
         self.transitions.iter().filter(move |&t| t.src == src)
     }
 
-    pub fn compile(&mut self) -> Assembly {
+    pub fn compile(&mut self) -> Vec<Instruction> {
         self.finalize_resolve_root_aliases();
         self.finalize_compute_charset_coverage();
         self.finalize_add_root_loops();
@@ -508,15 +593,8 @@ impl Compiler {
         self.finalize_simplify_indirections();
         self.finalize_remove_unreachable();
         self.finalize_sort();
-
-        let strings = self.extract_strings();
-        let charsets = self.extract_charsets();
-
-        #[derive(Clone, Copy)]
-        enum RelocationTarget {
-            RelState(StateHandle),
-            RelTransition(TransitionHandle),
-        }
+        self.finalize_strings();
+        self.finalize_charsets();
 
         struct Compiler<'a> {
             states: &'a mut HandleVec<StateHandle, GraphState>,
@@ -547,13 +625,13 @@ impl Compiler {
                             self.add_assign(Register::InputOffset, n);
                         }
                         GraphTest::Charset(h) => {
-                            self.jump_if_not_match_charset(RelTransition(th_next), h);
+                            self.jump_if_not_match_charset(h, Transition(th_next));
                         }
                         GraphTest::Prefix(h) => {
-                            self.jump_if_not_match_prefix(RelTransition(th_next), h);
+                            self.jump_if_not_match_prefix(h, Transition(th_next));
                         }
                         GraphTest::PrefixInsensitive(h) => {
-                            self.jump_if_not_match_prefix_insensitive(RelTransition(th_next), h);
+                            self.jump_if_not_match_prefix_insensitive(h, Transition(th_next));
                         }
                     }
 
@@ -566,12 +644,12 @@ impl Compiler {
 
                     match t.dst {
                         GraphAction::Jump(dst) => {
-                            self.jump(RelState(dst));
+                            self.jump(State(dst));
                         }
                         GraphAction::Push(dst) => {
                             self.flush_highlight();
                             self.copy(Register::HighlightStart, Register::InputOffset);
-                            self.jump(RelState(dst));
+                            self.jump(State(dst));
                         }
                         GraphAction::Pop(0) => {
                             self.flush_highlight();
@@ -584,7 +662,7 @@ impl Compiler {
                         }
                         GraphAction::Loop(dst) => {
                             self.suspend_opportunity();
-                            self.jump(RelState(dst));
+                            self.jump(State(dst));
                         }
                         _ => unreachable!(),
                     }
@@ -592,18 +670,21 @@ impl Compiler {
 
                 for &(off, dst) in &self.relocations {
                     let instruction_offset = match dst {
-                        RelState(h) => self.states[h].instruction_offset,
-                        RelTransition(h) => self.transitions[h].instruction_offset,
+                        State(h) => self.states[h].instruction_offset,
+                        Transition(h) => self.transitions[h].instruction_offset,
                     };
-                    let instruction_offset: u16 = instruction_offset.try_into().unwrap();
                     match &mut self.instructions[off] {
-                        Instruction::Add(Register::ProgramCounter, Register::Zero, d) => {
-                            *d = instruction_offset as usize;
+                        Instruction::Add {
+                            dst: Register::ProgramCounter,
+                            src: Register::Zero,
+                            imm,
+                        } => {
+                            *imm = instruction_offset;
                         }
-                        Instruction::JumpIfNotMatchCharset(d, _)
-                        | Instruction::JumpIfNotMatchPrefix(d, _)
-                        | Instruction::JumpIfNotMatchPrefixInsensitive(d, _) => {
-                            *d = instruction_offset;
+                        Instruction::JumpIfNotMatchCharset { dst, .. }
+                        | Instruction::JumpIfNotMatchPrefix { dst, .. }
+                        | Instruction::JumpIfNotMatchPrefixInsensitive { dst, .. } => {
+                            *dst = instruction_offset;
                         }
                         i => panic!("Unexpected relocation target: {i:?}"),
                     }
@@ -612,40 +693,40 @@ impl Compiler {
                 self.instructions
             }
 
-            fn add_assign(&mut self, reg: Register, val: usize) {
-                self.instructions.push(Instruction::Add(reg, reg, val));
+            fn add_assign(&mut self, dst: Register, imm: usize) {
+                self.instructions.push(Instruction::Add { dst, src: dst, imm });
             }
 
-            fn assign(&mut self, reg: Register, val: usize) {
-                self.instructions.push(Instruction::Add(reg, Register::Zero, val));
+            fn assign(&mut self, dst: Register, imm: usize) {
+                self.instructions.push(Instruction::Add { dst, src: Register::Zero, imm });
             }
 
             fn copy(&mut self, dst: Register, src: Register) {
-                self.instructions.push(Instruction::Add(dst, src, 0));
+                self.instructions.push(Instruction::Add { dst, src, imm: 0 });
             }
 
             fn jump(&mut self, dst: RelocationTarget) {
                 let dst = self.resolve_relocation(dst);
-                self.assign(Register::ProgramCounter, dst as usize);
+                self.assign(Register::ProgramCounter, dst);
             }
 
-            fn jump_if_not_match_charset(&mut self, dst: RelocationTarget, h: CharsetHandle) {
+            fn jump_if_not_match_charset(&mut self, idx: CharsetHandle, dst: RelocationTarget) {
                 let dst = self.resolve_relocation(dst);
-                self.instructions.push(Instruction::JumpIfNotMatchCharset(dst, h));
+                self.instructions.push(Instruction::JumpIfNotMatchCharset { idx, dst });
             }
 
-            fn jump_if_not_match_prefix(&mut self, dst: RelocationTarget, h: StringHandle) {
+            fn jump_if_not_match_prefix(&mut self, idx: StringHandle, dst: RelocationTarget) {
                 let dst = self.resolve_relocation(dst);
-                self.instructions.push(Instruction::JumpIfNotMatchPrefix(dst, h));
+                self.instructions.push(Instruction::JumpIfNotMatchPrefix { idx, dst });
             }
 
             fn jump_if_not_match_prefix_insensitive(
                 &mut self,
+                idx: StringHandle,
                 dst: RelocationTarget,
-                h: StringHandle,
             ) {
                 let dst = self.resolve_relocation(dst);
-                self.instructions.push(Instruction::JumpIfNotMatchPrefixInsensitive(dst, h));
+                self.instructions.push(Instruction::JumpIfNotMatchPrefixInsensitive { idx, dst });
             }
 
             fn ret(&mut self) {
@@ -660,16 +741,16 @@ impl Compiler {
                 self.instructions.push(Instruction::SuspendOpportunity);
             }
 
-            fn resolve_relocation(&mut self, dst: RelocationTarget) -> u16 {
+            fn resolve_relocation(&mut self, dst: RelocationTarget) -> usize {
                 use RelocationTarget::*;
 
                 let instruction_offset = match dst {
-                    RelState(h) => self.states[h].instruction_offset,
-                    RelTransition(h) => self.transitions[h].instruction_offset,
+                    State(h) => self.states[h].instruction_offset,
+                    Transition(h) => self.transitions[h].instruction_offset,
                 };
 
                 if instruction_offset != usize::MAX {
-                    instruction_offset.try_into().unwrap()
+                    instruction_offset
                 } else {
                     self.relocations.push((self.instructions.len(), dst));
                     0
@@ -683,35 +764,7 @@ impl Compiler {
             instructions: Default::default(),
             relocations: Default::default(),
         };
-        let instructions = compiler.compile();
-
-        Assembly { strings, charsets, instructions }
-    }
-
-    /// Filtered down to only those that are still used.
-    fn extract_charsets(&self) -> Vec<(CharsetHandle, Charset)> {
-        let mut used = vec![false; self.charsets.len()];
-
-        for t in &self.transitions {
-            if let GraphTest::Charset(c) = t.test {
-                used[c.0] = true;
-            }
-        }
-
-        self.charsets.enumerate().filter(|&(h, _)| used[h.0]).map(|(h, v)| (h, v.clone())).collect()
-    }
-
-    /// Filtered down to only those that are still used.
-    fn extract_strings(&self) -> Vec<(StringHandle, String)> {
-        let mut used = vec![false; self.strings.len()];
-
-        for t in &self.transitions {
-            if let GraphTest::Prefix(s) | GraphTest::PrefixInsensitive(s) = t.test {
-                used[s.0] = true;
-            }
-        }
-
-        self.strings.enumerate().filter(|&(h, _)| used[h.0]).map(|(h, v)| (h, v.clone())).collect()
+        compiler.compile()
     }
 
     fn finalize_resolve_root_aliases(&mut self) {
@@ -1023,6 +1076,68 @@ impl Compiler {
         self.transitions.sort_by_key(|t| t.src);
     }
 
+    fn finalize_strings(&mut self) {
+        let mut used = vec![false; self.strings.len()];
+        let mut new_indices = vec![StringHandle::MAX; self.strings.len()];
+
+        for t in &self.transitions {
+            if let GraphTest::Prefix(s) | GraphTest::PrefixInsensitive(s) = t.test {
+                used[s.0] = true;
+            }
+        }
+
+        let mut old_idx = 0;
+        let mut new_idx = 0;
+        self.strings.retain(|_| {
+            let v = used[old_idx];
+
+            if v {
+                new_indices[old_idx] = StringHandle(new_idx);
+                new_idx += 1;
+            }
+
+            old_idx += 1;
+            v
+        });
+
+        for t in &mut self.transitions {
+            if let GraphTest::Prefix(h) | GraphTest::PrefixInsensitive(h) = &mut t.test {
+                *h = new_indices[h.0];
+            }
+        }
+    }
+
+    fn finalize_charsets(&mut self) {
+        let mut used = vec![false; self.charsets.len()];
+        let mut new_indices = vec![CharsetHandle::MAX; self.charsets.len()];
+
+        for t in &self.transitions {
+            if let GraphTest::Charset(c) = t.test {
+                used[c.0] = true;
+            }
+        }
+
+        let mut old_idx = 0;
+        let mut new_idx = 0;
+        self.charsets.retain(|_| {
+            let v = used[old_idx];
+
+            if v {
+                new_indices[old_idx] = CharsetHandle(new_idx);
+                new_idx += 1;
+            }
+
+            old_idx += 1;
+            v
+        });
+
+        for t in &mut self.transitions {
+            if let GraphTest::Charset(h) = &mut t.test {
+                *h = new_indices[h.0];
+            }
+        }
+    }
+
     pub fn format_as_mermaid(&self) -> String {
         let mut output = String::new();
         let mut visited = vec![false; self.states.len()];
@@ -1125,6 +1240,14 @@ impl Compiler {
 
         output.pop(); // Remove the last newline character.
         output
+    }
+
+    pub fn charsets(&self) -> &HandleVec<CharsetHandle, Charset> {
+        &self.charsets
+    }
+
+    pub fn strings(&self) -> &HandleVec<StringHandle, String> {
+        &self.strings
     }
 }
 

@@ -357,10 +357,12 @@ pub enum HighlightKind {
 }
 
 impl HighlightKind {
+    #[inline]
     pub const fn as_usize(self) -> usize {
         unsafe { std::mem::transmute::<HighlightKind, u8>(self) as usize }
     }
 
+    #[inline]
     pub const unsafe fn from_usize(value: usize) -> Self {
         debug_assert!(value <= Method.as_usize());
         unsafe { std::mem::transmute::<u8, HighlightKind>(value as u8) }
