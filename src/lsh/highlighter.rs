@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::mem;
 use std::path::Path;
 
 use crate::arena::{Arena, scratch_arena};
@@ -66,10 +67,9 @@ impl<'doc> Highlighter<'doc> {
             offset: 0,
             logical_pos_y: 0,
             call_stack: Default::default(),
-            registers: {
-                let mut r = Registers::default();
-                r[Register::HighlightKind as usize] = HighlightKind::Other.as_usize() as u32;
-                r
+            registers: Registers {
+                hk: HighlightKind::Other.as_usize() as u32,
+                ..Default::default()
             },
         }
     }
@@ -100,7 +100,6 @@ impl<'doc> Highlighter<'doc> {
 
         let scratch = scratch_arena(Some(arena));
         let line_beg = self.offset;
-        let mut res = Vec::new_in(arena);
 
         self.logical_pos_y += 1;
 
@@ -163,7 +162,9 @@ impl<'doc> Highlighter<'doc> {
             line_buf.leak()
         };
 
-        // If the line is empty, we reached the end of the document.
+        let mut res = Vec::new_in(arena);
+
+        // Empty lines can be somewhat common.
         //
         // If the line is too long, we don't highlight it.
         // This is to prevent performance issues with very long lines.
@@ -171,17 +172,17 @@ impl<'doc> Highlighter<'doc> {
             return res;
         }
 
-        let line = unicode::strip_newline(line);
+        self.registers.off = 0;
+        self.registers.hs = 0;
 
-        self.set_reg(Register::InputOffset, 0);
-        self.set_reg(Register::HighlightStart, 0);
+        let line = unicode::strip_newline(line);
 
         loop {
             unsafe {
-                let pc = self.get_reg(Register::ProgramCounter);
+                let pc = self.registers.pc;
                 let op = *self.language.instructions.get_unchecked(pc as usize);
 
-                self.set_reg(Register::ProgramCounter, pc + 1);
+                self.registers.pc += 1;
 
                 match op & 0xf {
                     0 => {
@@ -189,16 +190,14 @@ impl<'doc> Highlighter<'doc> {
                         let dst = ((op >> 4) & 0xf) as usize;
                         let src = ((op >> 8) & 0xf) as usize;
                         let imm = op >> 12;
-                        let src = *self.registers.get_unchecked(src);
-                        let dst = self.registers.get_unchecked_mut(dst);
-                        *dst = src + imm;
+                        self.set_reg(dst, self.get_reg(src) + imm);
                     }
                     1 => {
                         // Call
                         let dst = op >> 12;
                         self.call_stack.push(self.registers);
-                        self.set_reg(Register::ProgramCounter, dst);
-                        self.set_reg(Register::ProcedureStart, dst);
+                        self.registers.pc = dst;
+                        self.registers.ps = dst;
                     }
                     2 => {
                         // Return
@@ -206,6 +205,8 @@ impl<'doc> Highlighter<'doc> {
                             self.registers = *last;
                             self.call_stack.pop();
                         } else {
+                            self.registers = mem::zeroed();
+                            self.registers.hk = HighlightKind::Other.as_usize() as u32;
                             break;
                         }
                     }
@@ -213,50 +214,45 @@ impl<'doc> Highlighter<'doc> {
                         // JumpIfNotMatchCharset
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
-                        let mut off = self.get_reg(Register::InputOffset) as usize;
+                        let off = self.registers.off as usize;
                         let cs = self.language.charsets.get_unchecked(idx);
 
-                        // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
-                        if off >= line.len() || !Self::in_set(cs, line[off]) {
-                            self.set_reg(Register::ProgramCounter, dst);
+                        if let Some(off) = Self::charset_gobble(line, off, cs) {
+                            self.registers.off = off as u32;
                         } else {
-                            while {
-                                off += 1;
-                                off < line.len() && Self::in_set(cs, line[off])
-                            } {}
-                            self.set_reg(Register::InputOffset, off as u32);
+                            self.registers.pc = dst;
                         }
                     }
                     4 => {
                         // JumpIfNotMatchPrefix
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
-                        let off = self.get_reg(Register::InputOffset) as usize;
+                        let off = self.registers.off as usize;
                         let str = self.language.strings.get_unchecked(idx).as_bytes();
 
-                        if !Self::inlined_memcmp(line, off, str) {
-                            self.set_reg(Register::ProgramCounter, dst);
+                        if Self::inlined_memcmp(line, off, str) {
+                            self.registers.off = (off + str.len()) as u32;
                         } else {
-                            self.set_reg(Register::InputOffset, (off + str.len()) as u32);
+                            self.registers.pc = dst;
                         }
                     }
                     5 => {
                         // JumpIfNotMatchPrefixInsensitive
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
-                        let off = self.get_reg(Register::InputOffset) as usize;
+                        let off = self.registers.off as usize;
                         let str = self.language.strings.get_unchecked(idx).as_bytes();
 
-                        if !Self::inlined_memicmp(line, off, str) {
-                            self.set_reg(Register::ProgramCounter, dst);
+                        if Self::inlined_memicmp(line, off, str) {
+                            self.registers.off = (off + str.len()) as u32;
                         } else {
-                            self.set_reg(Register::InputOffset, (off + str.len()) as u32);
+                            self.registers.pc = dst;
                         }
                     }
                     6 => {
                         // FlushHighlight
-                        let start = self.get_reg(Register::HighlightStart) as usize;
-                        let kind = self.get_reg(Register::HighlightKind) as usize;
+                        let start = self.registers.hs as usize;
+                        let kind = self.registers.hk as usize;
                         let kind = HighlightKind::from_usize(kind);
 
                         if let Some(last) = res.last_mut()
@@ -267,11 +263,11 @@ impl<'doc> Highlighter<'doc> {
                             res.push(Higlight { start, kind });
                         }
 
-                        self.set_reg(Register::HighlightStart, self.get_reg(Register::InputOffset));
+                        self.registers.hs = self.registers.off;
                     }
                     7 => {
                         // SuspendOpportunity
-                        let off = self.get_reg(Register::InputOffset) as usize;
+                        let off = self.registers.off as usize;
                         if off >= line.len() {
                             break;
                         }
@@ -291,12 +287,27 @@ impl<'doc> Highlighter<'doc> {
         res
     }
 
+    // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
+    #[inline]
+    fn charset_gobble(haystack: &[u8], mut off: usize, cs: &[u16; 16]) -> Option<usize> {
+        if off >= haystack.len() || !Self::in_set(cs, haystack[off]) {
+            return None;
+        }
+
+        while {
+            off += 1;
+            off < haystack.len() && Self::in_set(cs, haystack[off])
+        } {}
+
+        Some(off)
+    }
+
     /// A mini-memcmp implementation for short needles.
     /// Compares the `haystack` at `off` with the `needle`.
     #[inline]
     fn inlined_memcmp(haystack: &[u8], off: usize, needle: &[u8]) -> bool {
         unsafe {
-            if haystack.len() - off < needle.len() {
+            if off >= haystack.len() || haystack.len() - off < needle.len() {
                 return false;
             }
 
@@ -321,7 +332,7 @@ impl<'doc> Highlighter<'doc> {
     #[inline]
     fn inlined_memicmp(haystack: &[u8], off: usize, needle: &[u8]) -> bool {
         unsafe {
-            if haystack.len() - off < needle.len() {
+            if off >= haystack.len() || haystack.len() - off < needle.len() {
                 return false;
             }
 
@@ -355,13 +366,13 @@ impl<'doc> Highlighter<'doc> {
     }
 
     #[inline(always)]
-    fn get_reg(&self, reg: Register) -> u32 {
-        self.registers[reg as usize]
+    fn get_reg(&self, reg: usize) -> u32 {
+        unsafe { (&self.registers as *const _ as *const u32).add(reg).read() }
     }
 
     #[inline(always)]
-    fn set_reg(&mut self, reg: Register, val: u32) {
-        self.registers[reg as usize] = val;
+    fn set_reg(&mut self, reg: usize, val: u32) {
+        unsafe { (&mut self.registers as *mut _ as *mut u32).add(reg).write(val) }
     }
 }
 

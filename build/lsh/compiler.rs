@@ -12,6 +12,7 @@ declare_handle!(pub StateHandle(usize));
 declare_handle!(pub StringHandle(usize));
 declare_handle!(pub TransitionHandle(usize));
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub enum Register {
     Zero,
@@ -20,9 +21,6 @@ pub enum Register {
     InputOffset,
     HighlightStart,
     HighlightKind,
-
-    #[allow(clippy::upper_case_acronyms)]
-    COUNT,
 }
 
 impl Register {
@@ -34,14 +32,20 @@ impl Register {
             Register::InputOffset => "off",
             Register::HighlightStart => "hs",
             Register::HighlightKind => "hk",
-
-            Register::COUNT => unreachable!(),
         }
     }
 }
 
 #[allow(dead_code)]
-pub type Registers = [u32; Register::COUNT as usize];
+#[repr(C)]
+pub struct Registers {
+    pub zero: u32, // Zero
+    pub pc: u32,   // ProgramCounter
+    pub ps: u32,   // ProcedureStart
+    pub off: u32,  // InputOffset
+    pub hs: u32,   // HighlightStart
+    pub hk: u32,   // HighlightKind
+}
 
 #[derive(Debug, Clone, Copy)]
 enum RelocationTarget {
@@ -498,11 +502,7 @@ impl Compiler {
     }
 
     fn add_state(&mut self) -> StateHandle {
-        self.states.push(GraphState {
-            name: None,
-            coverage: Charset::default(),
-            instruction_offset: usize::MAX,
-        })
+        self.states.push(GraphState { instruction_offset: usize::MAX, ..Default::default() })
     }
 
     fn add_transition(
@@ -554,8 +554,8 @@ impl Compiler {
         }
 
         self.transitions.push(GraphTransition {
-            origin: self.origin,
             instruction_offset: usize::MAX,
+            origin: self.origin,
             src,
             test,
             kind,
@@ -648,8 +648,7 @@ impl Compiler {
                         }
                         GraphAction::Push(dst) => {
                             self.flush_highlight();
-                            self.copy(Register::HighlightStart, Register::InputOffset);
-                            self.jump(State(dst));
+                            self.call(State(dst));
                         }
                         GraphAction::Pop(0) => {
                             self.flush_highlight();
@@ -660,9 +659,9 @@ impl Compiler {
                             self.flush_highlight();
                             self.ret();
                         }
-                        GraphAction::Loop(dst) => {
+                        GraphAction::Loop => {
                             self.suspend_opportunity();
-                            self.jump(State(dst));
+                            self.jump(State(t.src));
                         }
                         _ => unreachable!(),
                     }
@@ -681,7 +680,8 @@ impl Compiler {
                         } => {
                             *imm = instruction_offset;
                         }
-                        Instruction::JumpIfNotMatchCharset { dst, .. }
+                        Instruction::Call { dst }
+                        | Instruction::JumpIfNotMatchCharset { dst, .. }
                         | Instruction::JumpIfNotMatchPrefix { dst, .. }
                         | Instruction::JumpIfNotMatchPrefixInsensitive { dst, .. } => {
                             *dst = instruction_offset;
@@ -729,6 +729,11 @@ impl Compiler {
                 self.instructions.push(Instruction::JumpIfNotMatchPrefixInsensitive { idx, dst });
             }
 
+            fn call(&mut self, dst: RelocationTarget) {
+                let dst = self.resolve_relocation(dst);
+                self.instructions.push(Instruction::Call { dst });
+            }
+
             fn ret(&mut self) {
                 self.instructions.push(Instruction::Return);
             }
@@ -770,12 +775,12 @@ impl Compiler {
     fn finalize_resolve_root_aliases(&mut self) {
         for t in &mut self.transitions {
             match &mut t.dst {
-                GraphAction::Jump(dst) | GraphAction::Push(dst) | GraphAction::Loop(dst) => {
+                GraphAction::Jump(dst) | GraphAction::Push(dst) => {
                     if let Some(actual) = self.roots.try_find_actual_by_alias(*dst) {
                         *dst = actual;
                     }
                 }
-                GraphAction::Pop(_) | GraphAction::Fallback => {}
+                _ => {}
             }
         }
     }
@@ -834,21 +839,22 @@ impl Compiler {
                 cs.invert();
 
                 let cs = self.intern_charset(&cs);
+                self.states[src].has_root_loop = true;
                 self.transitions.push(GraphTransition {
-                    origin: -1,
                     instruction_offset: usize::MAX,
+                    origin: -1,
                     src,
                     test: GraphTest::Charset(cs),
                     kind: HighlightKindOp::None,
-                    dst: GraphAction::Loop(src),
+                    dst: GraphAction::Loop,
                 });
                 self.transitions.push(GraphTransition {
-                    origin: -1,
                     instruction_offset: usize::MAX,
+                    origin: -1,
                     src,
                     test: GraphTest::Chars(1),
                     kind: HighlightKindOp::None,
-                    dst: GraphAction::Loop(src),
+                    dst: GraphAction::Loop,
                 });
             }
         }
@@ -945,20 +951,21 @@ impl Compiler {
     fn finalize_add_rescue_fallbacks(&mut self) {
         for (src, s) in self.states.enumerate() {
             if !s.coverage.covers_all() {
+                debug_assert!(false, "Why is this not Pop(0)?");
                 self.transitions.push(GraphTransition {
-                    origin: -1,
                     instruction_offset: usize::MAX,
+                    origin: -1,
                     src,
                     test: GraphTest::Chars(0),
                     kind: HighlightKindOp::None,
-                    dst: GraphAction::Loop(src),
+                    dst: GraphAction::Pop(0),
                 });
             }
         }
 
         for t in &mut self.transitions {
             if t.dst == GraphAction::Fallback {
-                t.dst = GraphAction::Loop(t.src);
+                t.dst = GraphAction::Pop(0);
                 t.kind = HighlightKindOp::None;
             }
         }
@@ -1024,8 +1031,8 @@ impl Compiler {
         while let Some(src) = stack.pop() {
             for t in self.transitions_from_state(src) {
                 let dst = match t.dst {
-                    GraphAction::Jump(d) | GraphAction::Push(d) | GraphAction::Loop(d) => d,
-                    GraphAction::Pop(_) | GraphAction::Fallback => continue,
+                    GraphAction::Jump(d) | GraphAction::Push(d) => d,
+                    _ => continue,
                 };
                 if !visited[dst.0] {
                     visited[dst.0] = true;
@@ -1059,13 +1066,13 @@ impl Compiler {
             };
 
             match &mut t.dst {
-                GraphAction::Jump(dst) | GraphAction::Push(dst) | GraphAction::Loop(dst) => {
+                GraphAction::Jump(dst) | GraphAction::Push(dst) => {
                     *dst = match new_indices[dst.0] {
                         StateHandle::MAX => return false,
                         new => new,
                     };
                 }
-                GraphAction::Pop(_) | GraphAction::Fallback => {}
+                _ => {}
             }
 
             true
@@ -1148,9 +1155,8 @@ impl Compiler {
         while let Some(t) = iter.next() {
             let src_offset = self.states[t.src].instruction_offset;
             let dst_offset = self.states[match &t.dst {
-                GraphAction::Jump(dst) | GraphAction::Push(dst) | GraphAction::Loop(dst) => *dst,
-                GraphAction::Pop(_) => StateHandle(0),
-                GraphAction::Fallback => unreachable!(),
+                GraphAction::Jump(dst) | GraphAction::Push(dst) => *dst,
+                _ => StateHandle(0),
             }]
             .instruction_offset;
 
@@ -1213,8 +1219,8 @@ impl Compiler {
                 GraphAction::Pop(_) => {
                     format!("pop{}@{{ shape: stop }}", src_offset << 16)
                 }
-                GraphAction::Loop(_) => {
-                    format!("{dst_offset}")
+                GraphAction::Loop => {
+                    format!("{src_offset}")
                 }
                 GraphAction::Fallback => unreachable!(),
             };
@@ -1303,12 +1309,13 @@ impl RootList {
 
 #[derive(Debug, Default, Clone)]
 pub struct GraphState {
+    /// Offset in the flattened transition list.
+    instruction_offset: usize,
     /// Root states will have a name from the definitions file.
     name: Option<&'static str>,
     /// The sum of chars that transition going out of this state cover.
     coverage: Charset,
-    /// Offset in the flattened transition list.
-    instruction_offset: usize,
+    has_root_loop: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1316,7 +1323,7 @@ pub enum GraphAction {
     Jump(StateHandle), // change to
     Push(StateHandle), // push to
     Pop(usize),        // pop this many
-    Loop(StateHandle), // loop to the start of the state & do an exit check
+    Loop,              // loop to the start of the state & do an exit check
     Fallback,          // replace with a fallback transition (for look-aheads like \b)
 }
 
@@ -1330,8 +1337,8 @@ pub enum GraphTest {
 
 #[derive(Debug, Clone)]
 pub struct GraphTransition {
-    origin: i32,
     instruction_offset: usize,
+    origin: i32,
     pub src: StateHandle,
     pub test: GraphTest,
     pub kind: HighlightKindOp,

@@ -76,6 +76,8 @@ impl HighlightKind {
         unsafe { std::mem::transmute::<HighlightKind, u8>(self) as usize }
     }
 
+    /// # Safety
+    /// Don't pass the wrong thing you dummy.
     #[inline]
     pub const unsafe fn from_usize(value: usize) -> Self {
         debug_assert!(value <= Self::Method.as_usize());
@@ -83,21 +85,16 @@ impl HighlightKind {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Register {
-    Zero,
-    ProgramCounter,
-    ProcedureStart,
-    InputOffset,
-    HighlightStart,
-    HighlightKind,
-
-    #[allow(clippy::upper_case_acronyms)]
-    COUNT,
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct Registers {
+    pub zero: u32, // Zero
+    pub pc: u32,   // ProgramCounter
+    pub ps: u32,   // ProcedureStart
+    pub off: u32,  // InputOffset
+    pub hs: u32,   // HighlightStart
+    pub hk: u32,   // HighlightKind
 }
-
-#[allow(dead_code)]
-pub type Registers = [u32; Register::COUNT as usize];
 
 ",
     );
