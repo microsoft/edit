@@ -285,7 +285,7 @@ unsafe fn lines_fwd_lsx(
             }
         }
 
-        let lf = lsx_vrepli_b(b'\n' as i32);
+        const LF: i32 = b'\n' as i32;
         let off = beg.align_offset(16);
         if off != 0 && off < end.offset_from_unsigned(beg) {
             (beg, line) = lines_fwd_fallback(beg, beg.add(off), line, line_stop);
@@ -298,11 +298,11 @@ unsafe fn lines_fwd_lsx(
                 let v3 = lsx_vld::<32>(beg as *const _);
                 let v4 = lsx_vld::<48>(beg as *const _);
 
-                let mut sum = lsx_vrepli_b(0);
-                sum = lsx_vsub_b(sum, lsx_vseq_b(v1, lf));
-                sum = lsx_vsub_b(sum, lsx_vseq_b(v2, lf));
-                sum = lsx_vsub_b(sum, lsx_vseq_b(v3, lf));
-                sum = lsx_vsub_b(sum, lsx_vseq_b(v4, lf));
+                let mut sum = lsx_vldi(0);
+                sum = lsx_vsub_b(sum, lsx_vseqi_b::<LF>(v1));
+                sum = lsx_vsub_b(sum, lsx_vseqi_b::<LF>(v2));
+                sum = lsx_vsub_b(sum, lsx_vseqi_b::<LF>(v3));
+                sum = lsx_vsub_b(sum, lsx_vseqi_b::<LF>(v4));
                 let sum = horizontal_sum(sum);
 
                 let line_next = line + sum as CoordType;
@@ -316,9 +316,9 @@ unsafe fn lines_fwd_lsx(
 
             while end.offset_from_unsigned(beg) >= 16 {
                 let v = lsx_vld::<0>(beg as *const _);
-                let c = lsx_vseq_b(v, lf);
+                let c = lsx_vseqi_b::<LF>(v);
 
-                let ones = lsx_vand_v(c, lsx_vrepli_b(1));
+                let ones = lsx_vandi_b::<1>(c);
                 let sum = horizontal_sum(ones);
 
                 let line_next = line + sum as CoordType;
