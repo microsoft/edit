@@ -234,8 +234,14 @@ build_and_install() {
   : "${EDIT_FORCE_WRAPPER:=0}"          # 1 = force user wrapper even with sudo
   : "${EDIT_SOURCE_URL:=https://github.com/microsoft/edit.git}"  # allow testing forks
 
-  local SRC_DIR CLEANUP=0
-  _cleanup() { [ "$CLEANUP" -eq 1 ] && rm -rf "$SRC_DIR"; }
+  local SRC_DIR
+  local CLEANUP=0
+  _cleanup() {
+    # safe under `set -u`
+    if [ "${CLEANUP:-0}" -eq 1 ] && [ -n "${SRC_DIR:-}" ]; then
+      rm -rf "$SRC_DIR"
+    fi
+  }
   trap _cleanup EXIT
 
   if [ -d .git ] && [ -f Cargo.toml ]; then
@@ -266,7 +272,7 @@ build_and_install() {
   [ -x "$CARGO_BIN" ] || CARGO_BIN="$(command -v cargo || true)"
   [ -x "$CARGO_BIN" ] || die "cargo not found"
   (cd "$SRC_DIR" && RUSTC_BOOTSTRAP=1 "$CARGO_BIN" +nightly \
-    build --locked --config .cargo/release.toml --release ${EDIT_CARGO_ARGS:-})
+    build --config .cargo/release.toml --release ${EDIT_CARGO_ARGS:-})
 
   local BIN="$SRC_DIR/target/release/edit"
   [ -x "$BIN" ] || die "Build failed: $BIN not found"
@@ -275,14 +281,24 @@ build_and_install() {
   local DEST_USER="${EDIT_USER_PREFIX:-$HOME/.local}/bin"
   local OUT_BIN="" WRAPPER_NEEDED=0 ICU_DIR="" ICU_DIR_FIRST=""
 
-  ICU_DIR="$(build_icu_ldpath || true)"
+  # Prefer build.rs artifact if present, else fall back to shell discovery
+  local LDPATH_FILE=""
+  LDPATH_FILE="$(find "$SRC_DIR/target" -type f -name '.edit.ldpath' | head -n1 || true)"
+  if [ -n "$LDPATH_FILE" ] && [ -s "$LDPATH_FILE" ]; then
+    ICU_DIR="$(tr -d '\n' < "$LDPATH_FILE" || true)"
+    log "ICU (from build.rs): ${ICU_DIR:-<empty>}"
+  else
+    ICU_DIR="$(build_icu_ldpath || true)"
+    [ -n "$ICU_DIR" ] && log "ICU (shell fallback): $ICU_DIR"
+  fi
+
   if [ -z "$ICU_DIR" ]; then
     warn "ICU libraries not found; install ICU dev/runtime packages. Proceeding; wrapper will not help."
   else
-    log "Detected ICU library dirs: $ICU_DIR"
-    # First directory (for creating system shims); keep full ICU_DIR for wrappers
+    # First dir for symlink shim; keep full list for LD_LIBRARY_PATH wrappers
     ICU_DIR_FIRST="${ICU_DIR%%:*}"
   fi
+
 
   # Try to make system-wide ICU symlinks if we can
   if [ "$HAVE_ROOT" -eq 1 ] && [ -n "$ICU_DIR_FIRST" ]; then
