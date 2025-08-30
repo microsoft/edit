@@ -43,6 +43,7 @@ libc = "0.2"
 # The default toml crate bundles its dependencies with bad compile times. Thanks.
 # Thankfully toml-span exists. FWIW the alternative is yaml-rust (without the 2 suffix).
 toml-span = { version = "0.5", default-features = false }
+pkg-config = "0.3"
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = { version = "0.1.22", default-features = false }
