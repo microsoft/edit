@@ -225,7 +225,8 @@ fn run() -> apperr::Result<()> {
 fn handle_args(state: &mut State) -> apperr::Result<bool> {
     let scratch = scratch_arena(None);
     let mut paths: Vec<PathBuf, &Arena> = Vec::new_in(&*scratch);
-    let mut cwd = env::current_dir()?;
+    let cwd = env::current_dir()?;
+    let mut dir = None;
     let mut parse_args = true;
 
     // The best CLI argument parser in the world.
@@ -251,16 +252,16 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
 
         let p = cwd.join(Path::new(&arg));
         let p = path::normalize(&p);
-        if !p.is_dir() {
+        if p.is_dir() {
+            state.wants_file_picker = StateFilePicker::Open;
+            dir = Some(p);
+        } else {
             paths.push(p);
         }
     }
 
     for p in &paths {
         state.documents.add_file_path(p)?;
-    }
-    if let Some(parent) = paths.first().and_then(|p| p.parent()) {
-        cwd = parent.to_path_buf();
     }
 
     if let Some(mut file) = sys::open_stdin_if_redirected() {
@@ -273,7 +274,13 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         state.documents.add_untitled()?;
     }
 
-    state.file_picker_pending_dir = DisplayablePathBuf::from_path(cwd);
+    if dir.is_none()
+        && let Some(parent) = paths.last().and_then(|p| p.parent())
+    {
+        dir = Some(parent.to_path_buf());
+    }
+
+    state.file_picker_pending_dir = DisplayablePathBuf::from_path(dir.unwrap_or(cwd));
     Ok(false)
 }
 
