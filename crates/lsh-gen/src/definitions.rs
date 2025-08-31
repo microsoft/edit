@@ -72,20 +72,16 @@ const LANG_GIT_REBASE: Language = Language {
         State {
             name: "ground",
             rules: &[
-                re(r#"#.*"#).is(Comment),
-                re(r#"(?:break|exec|b|x)\w+.*"#),
-                re(r#"(?:break|exec|b|x)"#).is(Keyword).then_call("comment"),
-                re(r#"(?:drop|edit|fixup|pick|reword|squash|d|e|f|p|r|s)\w+.*"#),
-                re(r#"(?:drop|edit|fixup|pick|reword|squash|d|e|f|p|r|s)"#)
+                re(r#"(?:break|exec|b|x)\b{end-half}"#).is(Keyword).then_call("comment"),
+                re(r#"(?:drop|edit|fixup|pick|reword|squash|d|e|f|p|r|s)\b{end-half}"#)
                     .is(Keyword)
                     .then_call("hash"),
-                re(r#".*"#),
+                re(r#"#.*"#).is(Comment),
             ],
         },
         State {
             name: "hash",
             rules: &[
-                re(r#"-\S+"#).is(Keyword).then_call("hash"),
                 re(r#"\S+"#).is(Variable).then_call("comment"),
                 re(r#"\s+"#),
                 re(r#".*"#).then_return(),
@@ -364,10 +360,12 @@ pub enum HighlightKind {
 }
 
 impl HighlightKind {
+    #[inline]
     pub const fn as_usize(self) -> usize {
         unsafe { std::mem::transmute::<HighlightKind, u8>(self) as usize }
     }
 
+    #[inline]
     pub const unsafe fn from_usize(value: usize) -> Self {
         debug_assert!(value <= Method.as_usize());
         unsafe { std::mem::transmute::<u8, HighlightKind>(value as u8) }
@@ -391,7 +389,7 @@ pub struct State {
     pub rules: &'static [Rule],
 }
 
-pub enum Instruction {
+pub enum Action {
     Continue,
     Jump(&'static str),
     Push(&'static str),
