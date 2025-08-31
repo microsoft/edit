@@ -2,8 +2,8 @@
 // Licensed under the MIT License.
 
 use std::fmt::Debug;
+use std::mem;
 use std::path::Path;
-use std::slice;
 
 use stdext::arena::{Arena, scratch_arena};
 
@@ -52,19 +52,31 @@ pub struct Highlighter<'a> {
     language: &'static Language,
     offset: usize,
     logical_pos_y: CoordType,
-    state_stack: Vec<(u8, HighlightKind)>,
+    stack: Vec<Registers>,
+    registers: Registers,
 }
 
 #[derive(Clone)]
 pub struct HighlighterState {
-    pub offset: usize,
-    pub logical_pos_y: CoordType,
-    pub state_stack: Vec<(u8, HighlightKind)>,
+    offset: usize,
+    logical_pos_y: CoordType,
+    stack: Vec<Registers>,
+    registers: Registers,
 }
 
 impl<'doc> Highlighter<'doc> {
     pub fn new(doc: &'doc dyn ReadableDocument, language: &'static Language) -> Self {
-        Self { doc, language, offset: 0, logical_pos_y: 0, state_stack: Vec::new() }
+        Self {
+            doc,
+            language,
+            offset: 0,
+            logical_pos_y: 0,
+            stack: Default::default(),
+            registers: Registers {
+                hk: HighlightKind::Other.as_usize() as u32,
+                ..Default::default()
+            },
+        }
     }
 
     pub fn logical_pos_y(&self) -> CoordType {
@@ -77,7 +89,8 @@ impl<'doc> Highlighter<'doc> {
         HighlighterState {
             offset: self.offset,
             logical_pos_y: self.logical_pos_y,
-            state_stack: self.state_stack.clone(),
+            stack: self.stack.clone(),
+            registers: self.registers,
         }
     }
 
@@ -85,7 +98,8 @@ impl<'doc> Highlighter<'doc> {
     pub fn restore(&mut self, snapshot: &HighlighterState) {
         self.offset = snapshot.offset;
         self.logical_pos_y = snapshot.logical_pos_y;
-        self.state_stack = snapshot.state_stack.clone();
+        self.stack = snapshot.stack.clone();
+        self.registers = snapshot.registers;
     }
 
     pub fn parse_next_line<'a>(&mut self, arena: &'a Arena) -> Vec<Higlight, &'a Arena> {
@@ -93,7 +107,6 @@ impl<'doc> Highlighter<'doc> {
 
         let scratch = scratch_arena(Some(arena));
         let line_beg = self.offset;
-        let mut res = Vec::new_in(arena);
 
         self.logical_pos_y += 1;
 
@@ -156,7 +169,9 @@ impl<'doc> Highlighter<'doc> {
             line_buf.leak()
         };
 
-        // If the line is empty, we reached the end of the document.
+        let mut res = Vec::new_in(arena);
+
+        // Empty lines can be somewhat common.
         //
         // If the line is too long, we don't highlight it.
         // This is to prevent performance issues with very long lines.
@@ -164,112 +179,111 @@ impl<'doc> Highlighter<'doc> {
             return res;
         }
 
+        self.registers.off = 0;
+        self.registers.hs = 0;
+
         let line = unicode::strip_newline(line);
-        let mut off = 0usize;
-        let mut start = 0usize;
-
-        let (state, mut kind) =
-            self.state_stack.last().cloned().unwrap_or((0, HighlightKind::Other));
-        let mut state = state as usize;
-
-        let mut push = |start: usize, kind: HighlightKind| {
-            if let Some(last) = res.last_mut() {
-                if last.start == start {
-                    last.kind = kind;
-                }
-                if last.kind == kind {
-                    return;
-                }
-            }
-            res.push(Higlight { start, kind });
-        };
-
-        state = state.wrapping_sub(1);
 
         loop {
-            state = state.wrapping_add(1);
-            let t = unsafe { self.language.transitions.get_unchecked(state) };
+            unsafe {
+                let pc = self.registers.pc;
+                let op = *self.language.instructions.get_unchecked(pc as usize);
 
-            match t.test {
-                Test::Chars(n) => {
-                    off = off + n.min(line.len() - off);
-                }
-                Test::Prefix(str) => {
-                    let str = unsafe { slice::from_raw_parts(str.add(1), str.read() as usize) };
-                    if !Self::inlined_memcmp(line, off, str) {
-                        continue;
+                self.registers.pc += 1;
+
+                match op & 0xf {
+                    0 => {
+                        // Add
+                        let dst = ((op >> 4) & 0xf) as usize;
+                        let src = ((op >> 8) & 0xf) as usize;
+                        let imm = op >> 12;
+                        self.set_reg(dst, self.get_reg(src) + imm);
                     }
-                    off += str.len();
-                }
-                Test::PrefixInsensitive(str) => {
-                    let str = unsafe { slice::from_raw_parts(str.add(1), str.read() as usize) };
-                    if !Self::inlined_memicmp(line, off, str) {
-                        continue;
+                    1 => {
+                        // Call
+                        let dst = op >> 12;
+                        self.stack.push(self.registers);
+                        self.registers.pc = dst;
+                        self.registers.ps = dst;
                     }
-                    off += str.len();
-                }
-                Test::Charset(cs) => {
-                    // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
-                    if off >= line.len() || !Self::in_set(cs, line[off]) {
-                        continue;
+                    2 => {
+                        // Return
+                        if let Some(last) = self.stack.last() {
+                            self.registers = *last;
+                            self.stack.pop();
+                        } else {
+                            self.registers = mem::zeroed();
+                            self.registers.hk = HighlightKind::Other.as_usize() as u32;
+                            break;
+                        }
                     }
-                    while {
-                        off += 1;
-                        off < line.len() && Self::in_set(cs, line[off])
-                    } {}
+                    3 => {
+                        // JumpIfNotMatchCharset
+                        let idx = ((op >> 4) & 0xff) as usize;
+                        let dst = op >> 12;
+                        let off = self.registers.off as usize;
+                        let cs = self.language.charsets.get_unchecked(idx);
+
+                        if let Some(off) = Self::charset_gobble(line, off, cs) {
+                            self.registers.off = off as u32;
+                        } else {
+                            self.registers.pc = dst;
+                        }
+                    }
+                    4 => {
+                        // JumpIfNotMatchPrefix
+                        let idx = ((op >> 4) & 0xff) as usize;
+                        let dst = op >> 12;
+                        let off = self.registers.off as usize;
+                        let str = self.language.strings.get_unchecked(idx).as_bytes();
+
+                        if Self::inlined_memcmp(line, off, str) {
+                            self.registers.off = (off + str.len()) as u32;
+                        } else {
+                            self.registers.pc = dst;
+                        }
+                    }
+                    5 => {
+                        // JumpIfNotMatchPrefixInsensitive
+                        let idx = ((op >> 4) & 0xff) as usize;
+                        let dst = op >> 12;
+                        let off = self.registers.off as usize;
+                        let str = self.language.strings.get_unchecked(idx).as_bytes();
+
+                        if Self::inlined_memicmp(line, off, str) {
+                            self.registers.off = (off + str.len()) as u32;
+                        } else {
+                            self.registers.pc = dst;
+                        }
+                    }
+                    6 => {
+                        // FlushHighlight
+                        let start = self.registers.hs as usize;
+                        let kind = self.registers.hk as usize;
+                        let kind = HighlightKind::from_usize(kind);
+
+                        if let Some(last) = res.last_mut()
+                            && (last.start == start || last.kind == kind)
+                        {
+                            last.kind = kind;
+                        } else {
+                            res.push(Higlight { start, kind });
+                        }
+
+                        self.registers.hs = self.registers.off;
+                    }
+                    7 => {
+                        // SuspendOpportunity
+                        let off = self.registers.off as usize;
+                        if off >= line.len() {
+                            break;
+                        }
+                    }
+                    _ => std::hint::unreachable_unchecked(),
                 }
             }
-
-            if let Some(k) = t.kind {
-                kind = k;
-            }
-
-            match t.action {
-                Action::Jump(dst) => {
-                    state = dst as usize;
-                }
-                Action::Push(dst) => {
-                    state = dst as usize;
-                    push(start, kind);
-
-                    self.state_stack.push((dst, kind));
-
-                    start = off;
-                }
-                Action::Pop(count) => {
-                    push(start, kind);
-
-                    if count != 0 {
-                        self.state_stack
-                            .truncate(self.state_stack.len().saturating_sub(count as usize));
-                    }
-
-                    let v = self.state_stack.last().cloned().unwrap_or((0, HighlightKind::Other));
-                    state = v.0 as usize;
-                    kind = v.1;
-
-                    start = off;
-
-                    if count == 0 && off >= line.len() {
-                        break;
-                    }
-                }
-                Action::Loop(dst) => {
-                    push(start, kind);
-
-                    state = dst as usize;
-                    start = off;
-
-                    if off >= line.len() {
-                        break;
-                    }
-                }
-            }
-
-            state = state.wrapping_sub(1);
         }
 
-        push(start, kind);
         res.push(Higlight { start: line.len(), kind: HighlightKind::Other });
 
         // Adjust the range to account for the line offset.
@@ -280,13 +294,27 @@ impl<'doc> Highlighter<'doc> {
         res
     }
 
+    // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
+    #[inline]
+    fn charset_gobble(haystack: &[u8], mut off: usize, cs: &[u16; 16]) -> Option<usize> {
+        if off >= haystack.len() || !Self::in_set(cs, haystack[off]) {
+            return None;
+        }
+
+        while {
+            off += 1;
+            off < haystack.len() && Self::in_set(cs, haystack[off])
+        } {}
+
+        Some(off)
+    }
+
     /// A mini-memcmp implementation for short needles.
     /// Compares the `haystack` at `off` with the `needle`.
     #[inline]
     fn inlined_memcmp(haystack: &[u8], off: usize, needle: &[u8]) -> bool {
         unsafe {
-            let needle_len = needle.len();
-            if haystack.len() - off < needle_len {
+            if off >= haystack.len() || haystack.len() - off < needle.len() {
                 return false;
             }
 
@@ -294,7 +322,7 @@ impl<'doc> Highlighter<'doc> {
             let b = needle.as_ptr();
             let mut i = 0;
 
-            while i < needle_len {
+            while i < needle.len() {
                 let a = *a.add(i);
                 let b = *b.add(i);
                 i += 1;
@@ -311,8 +339,7 @@ impl<'doc> Highlighter<'doc> {
     #[inline]
     fn inlined_memicmp(haystack: &[u8], off: usize, needle: &[u8]) -> bool {
         unsafe {
-            let needle_len = needle.len();
-            if haystack.len() - off < needle_len {
+            if off >= haystack.len() || haystack.len() - off < needle.len() {
                 return false;
             }
 
@@ -320,7 +347,7 @@ impl<'doc> Highlighter<'doc> {
             let b = needle.as_ptr();
             let mut i = 0;
 
-            while i < needle_len {
+            while i < needle.len() {
                 // str in PrefixInsensitive(str) is expected to be lowercase, printable ASCII.
                 let a = a.add(i).read().to_ascii_lowercase();
                 let b = b.add(i).read();
@@ -344,4 +371,80 @@ impl<'doc> Highlighter<'doc> {
 
         (bitset & bitmask) != 0
     }
+
+    #[inline(always)]
+    fn get_reg(&self, reg: usize) -> u32 {
+        unsafe { (&self.registers as *const _ as *const u32).add(reg).read() }
+    }
+
+    #[inline(always)]
+    fn set_reg(&mut self, reg: usize, val: u32) {
+        unsafe { (&mut self.registers as *mut _ as *mut u32).add(reg).write(val) }
+    }
 }
+
+/*#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_powershell() {
+        let doc = r#"$response = Read-Host "Delete branch '$branch'? [y/N]""#;
+        let bytes = doc.as_bytes();
+        let scratch = scratch_arena(None);
+        let mut parser = Highlighter::new(&bytes, &lang_powershell::LANG);
+
+        let tokens = parser.parse_next_line(&scratch);
+        assert_eq!(
+            tokens,
+            &[
+                Higlight { start: 0, kind: HighlightKind::Variable },
+                Higlight { start: 9, kind: HighlightKind::Other },
+                Higlight { start: 10, kind: HighlightKind::Operator },
+                Higlight { start: 11, kind: HighlightKind::Other },
+                Higlight { start: 12, kind: HighlightKind::Method },
+                Higlight { start: 21, kind: HighlightKind::Other },
+                Higlight { start: 22, kind: HighlightKind::String },
+                Higlight { start: 38, kind: HighlightKind::Variable },
+                Higlight { start: 45, kind: HighlightKind::String },
+                Higlight { start: 54, kind: HighlightKind::Other },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_string() {
+        let doc = r#""$x";"#;
+        let bytes = doc.as_bytes();
+        let scratch = scratch_arena(None);
+        let mut parser = Highlighter::new(&bytes, &lang_powershell::LANG);
+
+        let tokens = parser.parse_next_line(&scratch);
+        assert_eq!(
+            tokens,
+            &[
+                Higlight { start: 0, kind: HighlightKind::String },
+                Higlight { start: 1, kind: HighlightKind::Variable },
+                Higlight { start: 3, kind: HighlightKind::String },
+                Higlight { start: 4, kind: HighlightKind::Other },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_comment() {
+        let doc = r#"<#x#>"#;
+        let bytes = doc.as_bytes();
+        let scratch = scratch_arena(None);
+        let mut parser = Highlighter::new(&bytes, &lang_powershell::LANG);
+
+        let tokens = parser.parse_next_line(&scratch);
+        assert_eq!(
+            tokens,
+            &[
+                Higlight { start: 0, kind: HighlightKind::Comment },
+                Higlight { start: 5, kind: HighlightKind::Other },
+            ]
+        );
+    }
+}*/
