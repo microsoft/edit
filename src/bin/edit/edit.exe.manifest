@@ -2,7 +2,6 @@
 <assembly
     xmlns="urn:schemas-microsoft-com:asm.v1"
     xmlns:asmv3="urn:schemas-microsoft-com:asm.v3"
-    xmlns:cv1="urn:schemas-microsoft-com:compatibility.v1"
     xmlns:ws2="http://schemas.microsoft.com/SMI/2016/WindowsSettings"
     xmlns:ws3="http://schemas.microsoft.com/SMI/2019/WindowsSettings"
     xmlns:ws4="http://schemas.microsoft.com/SMI/2020/WindowsSettings"
@@ -14,9 +13,9 @@
             <ws4:heapType>SegmentHeap</ws4:heapType>
         </windowsSettings>
     </asmv3:application>
-    <cv1:compatibility>
+    <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
         <application>
             <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
         </application>
-    </cv1:compatibility>
+    </compatibility>
 </assembly>
