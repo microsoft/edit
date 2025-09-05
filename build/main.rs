@@ -4,6 +4,9 @@
 #![allow(irrefutable_let_patterns)]
 
 use crate::helpers::env_opt;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 mod helpers;
 mod i18n;
@@ -15,6 +18,94 @@ enum TargetOs {
     Unix,
 }
 
+// ---- ICU discovery for installer & source builds ---------------------------
+fn dedup_join(mut v: Vec<PathBuf>) -> String {
+    v.sort();
+    v.dedup();
+    let parts: Vec<String> = v.into_iter().map(|p| p.display().to_string()).collect();
+    parts.join(":")
+}
+
+fn try_pkg_config() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for name in ["icu-uc", "icu-i18n", "icu-data"] {
+        match pkg_config::Config::new().print_system_libs(false).probe(name) {
+            Ok(lib) => dirs.extend(lib.link_paths.clone()),
+            Err(_) => {}
+        }
+    }
+    dirs
+}
+
+fn try_fs_latest_for(stem: &str, roots: &[&str]) -> Option<PathBuf> {
+    // Find lib<stem>.so.* and return its parent dir
+    for d in roots {
+        let dir = Path::new(d);
+        if !dir.is_dir() { continue; }
+        // A simple lexicographic sort is good enough for .so.N versions
+        let mut candidates: Vec<PathBuf> = match fs::read_dir(dir) {
+            Ok(it) => it.filter_map(|e| e.ok().map(|e| e.path()))
+                        .filter(|p| p.file_name()
+                                     .and_then(|s| s.to_str())
+                                     .map(|n| n.starts_with(&format!("lib{stem}.so.")))
+                                     .unwrap_or(false))
+                        .collect(),
+            Err(_) => continue,
+        };
+        candidates.sort();
+        if let Some(path) = candidates.last() {
+            return path.parent().map(|p| p.to_path_buf());
+        }
+    }
+    None
+}
+
+fn try_fs_scan() -> Vec<PathBuf> {
+    let roots = [
+        "/usr/local/lib", "/usr/local/lib64",
+        "/usr/lib", "/usr/lib64", "/lib", "/lib64",
+        "/usr/lib32",
+        "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu", "/lib/aarch64-linux-gnu",
+        "/usr/lib/arm-linux-gnueabihf", "/lib/arm-linux-gnueabihf",
+    ];
+    let mut dirs = Vec::new();
+    for stem in ["icuuc", "icui18n", "icudata"] {
+        if let Some(d) = try_fs_latest_for(stem, &roots) {
+            dirs.push(d);
+        }
+    }
+    dirs
+}
+
+fn write_icu_ldpath_artifact() {
+    // 1) gather ICU dirs (prefer pkg-config)
+    let mut dirs = try_pkg_config();
+    if dirs.is_empty() {
+        dirs = try_fs_scan();
+    }
+
+    // 2) write ${OUT_DIR}/.edit.ldpath (empty file if not found)
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
+    let ldfile = Path::new(&out_dir).join(".edit.ldpath");
+    let joined = dedup_join(dirs);
+    // Create the file regardless (lets the installer detect the “not found” case)
+    let mut f = fs::File::create(&ldfile).expect("create .edit.ldpath");
+    if !joined.is_empty() {
+        let _ = writeln!(f, "{}", joined);
+        // Also export for optional runtime hints
+        println!("cargo:rustc-env=EDIT_BUILD_ICU_LDPATH={}", joined);
+        println!("cargo:warning=edit: using ICU from {}", joined);
+    } else {
+        // Leave it empty; installer will fall back to its own detection
+        println!("cargo:warning=edit: ICU not found by build script");
+    }
+    // Re-run if we change this file
+    println!("cargo:rerun-if-changed=build/main.rs");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+}
+
+
 fn main() {
     let target_os = match env_opt("CARGO_CFG_TARGET_OS").as_str() {
         "windows" => TargetOs::Windows,
@@ -22,6 +113,8 @@ fn main() {
         _ => TargetOs::Unix,
     };
 
+    // Always produce ICU ldpath artifact for installer & source builds
+    write_icu_ldpath_artifact();
     compile_i18n();
     configure_icu(target_os);
     #[cfg(windows)]
