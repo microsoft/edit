@@ -11,6 +11,7 @@ use std::ptr::{self, NonNull};
 use std::{mem, slice};
 
 use crate::helpers::*;
+use crate::sys::Syscall;
 use crate::{apperr, sys};
 
 const ALLOC_CHUNK_SIZE: usize = 64 * KIBI;
@@ -66,7 +67,7 @@ impl Arena {
 
     pub fn new(capacity: usize) -> apperr::Result<Self> {
         let capacity = (capacity.max(1) + ALLOC_CHUNK_SIZE - 1) & !(ALLOC_CHUNK_SIZE - 1);
-        let base = unsafe { sys::virtual_reserve(capacity)? };
+        let base = unsafe { sys::syscall::virtual_reserve(capacity)? };
 
         Ok(Self {
             base,
@@ -139,7 +140,8 @@ impl Arena {
 
         if commit_new > self.capacity
             || unsafe {
-                sys::virtual_commit(self.base.add(commit_old), commit_new - commit_old).is_err()
+                sys::syscall::virtual_commit(self.base.add(commit_old), commit_new - commit_old)
+                    .is_err()
             }
         {
             return Err(AllocError);
@@ -176,7 +178,7 @@ impl Arena {
 impl Drop for Arena {
     fn drop(&mut self) {
         if !self.is_empty() {
-            unsafe { sys::virtual_release(self.base, self.capacity) };
+            unsafe { sys::syscall::virtual_release(self.base, self.capacity) };
         }
     }
 }

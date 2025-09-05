@@ -7,6 +7,7 @@ use std::slice;
 
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::helpers::*;
+use crate::sys::Syscall;
 use crate::{apperr, sys};
 
 #[cfg(target_pointer_width = "32")]
@@ -31,7 +32,7 @@ impl Drop for BackingBuffer {
     fn drop(&mut self) {
         unsafe {
             if let Self::VirtualMemory(ptr, reserve) = *self {
-                sys::virtual_release(ptr, reserve);
+                sys::syscall::virtual_release(ptr, reserve);
             }
         }
     }
@@ -73,7 +74,7 @@ impl GapBuffer {
             buffer = BackingBuffer::Vec(Vec::new());
         } else {
             reserve = LARGE_CAPACITY;
-            text = unsafe { sys::virtual_reserve(reserve)? };
+            text = unsafe { sys::syscall::virtual_reserve(reserve)? };
             buffer = BackingBuffer::VirtualMemory(text, reserve);
         }
 
@@ -195,7 +196,9 @@ impl GapBuffer {
 
             match &mut self.buffer {
                 BackingBuffer::VirtualMemory(ptr, _) => unsafe {
-                    if sys::virtual_commit(ptr.add(bytes_old), bytes_new - bytes_old).is_err() {
+                    if sys::syscall::virtual_commit(ptr.add(bytes_old), bytes_new - bytes_old)
+                        .is_err()
+                    {
                         return;
                     }
                 },
