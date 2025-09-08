@@ -177,7 +177,6 @@ pub fn switch_modes() -> apperr::Result<()> {
                 | Console::ENABLE_EXTENDED_FLAGS
                 | Console::ENABLE_VIRTUAL_TERMINAL_INPUT,
         )) {
-            Ok(()) => Ok(()),
             Err(apperr::Error::Sys(e)) if e == 0x80070000 | ERROR_INVALID_PARAMETER => {
                 let mut osv = OSVERSIONINFOEXW {
                     dwOSVersionInfoSize: mem::size_of::<OSVERSIONINFOEXW>() as u32,
@@ -196,7 +195,7 @@ pub fn switch_modes() -> apperr::Result<()> {
                     },
                 ))
             }
-            Err(e) => Err(e),
+            other => other,
         }?;
         check_bool_return(Console::SetConsoleMode(
             STATE.stdout,
