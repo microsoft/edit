@@ -59,6 +59,7 @@ features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Threading",
+    "Win32_System_SystemInformation",
 ]
 
 [dev-dependencies]

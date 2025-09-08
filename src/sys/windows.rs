@@ -10,8 +10,12 @@ use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull, null, null_mut};
 use std::{mem, time};
 
+use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
 use windows_sys::Win32::Storage::FileSystem;
 use windows_sys::Win32::System::Diagnostics::Debug;
+use windows_sys::Win32::System::SystemInformation::{
+    OSVERSIONINFOEXW, VER_BUILDNUMBER, VerSetConditionMask, VerifyVersionInfoW,
+};
 use windows_sys::Win32::System::{Console, IO, LibraryLoader, Memory, Threading};
 use windows_sys::Win32::{Foundation, Globalization};
 use windows_sys::w;
@@ -70,6 +74,10 @@ unsafe extern "system" fn read_console_input_ex_placeholder(
 const CONSOLE_READ_NOWAIT: u16 = 0x0002;
 
 const INVALID_CONSOLE_MODE: u32 = u32::MAX;
+
+// Locally-defined error codes follow the HRESULT format, but they have bit 29 set to indicate that they are Customer error codes.
+const ERROR_UNSUPPORTED_LEGACY_CONSOLE: u32 = 0xE0010001;
+const ERROR_UNSUPPORTED_WINDOWS_VERSION: u32 = 0xE0010002;
 
 struct State {
     read_console_input_ex: ReadConsoleInputExW,
@@ -160,21 +168,36 @@ pub fn switch_modes() -> apperr::Result<()> {
             return Err(get_last_error());
         }
 
-        check_bool_return(Console::SetConsoleCtrlHandler(Some(console_ctrl_handler), 1))?;
-
-        STATE.stdin_cp_old = Console::GetConsoleCP();
-        STATE.stdout_cp_old = Console::GetConsoleOutputCP();
         check_bool_return(Console::GetConsoleMode(STATE.stdin, &raw mut STATE.stdin_mode_old))?;
         check_bool_return(Console::GetConsoleMode(STATE.stdout, &raw mut STATE.stdout_mode_old))?;
 
-        check_bool_return(Console::SetConsoleCP(Globalization::CP_UTF8))?;
-        check_bool_return(Console::SetConsoleOutputCP(Globalization::CP_UTF8))?;
-        check_bool_return(Console::SetConsoleMode(
+        match check_bool_return(Console::SetConsoleMode(
             STATE.stdin,
             Console::ENABLE_WINDOW_INPUT
                 | Console::ENABLE_EXTENDED_FLAGS
                 | Console::ENABLE_VIRTUAL_TERMINAL_INPUT,
-        ))?;
+        )) {
+            Ok(()) => Ok(()),
+            Err(apperr::Error::Sys(e)) if e == 0x80070000 | ERROR_INVALID_PARAMETER => {
+                let mut osv = OSVERSIONINFOEXW {
+                    dwOSVersionInfoSize: mem::size_of::<OSVERSIONINFOEXW>() as u32,
+                    dwBuildNumber: 10586,
+                    ..mem::zeroed()
+                };
+                let condition =
+                    VerSetConditionMask(0, VER_BUILDNUMBER, 3 /* VER_GREATER_EQUAL */);
+
+                // Transform ERROR_INVALID_PARAMETER into a a more meaningful error.
+                Err(apperr::Error::Sys(
+                    match VerifyVersionInfoW(&mut osv, VER_BUILDNUMBER, condition) {
+                        Foundation::TRUE => ERROR_UNSUPPORTED_LEGACY_CONSOLE,
+                        Foundation::FALSE => ERROR_UNSUPPORTED_WINDOWS_VERSION,
+                        _ => unreachable!(), // Win32 APIs do not return other values here.
+                    },
+                ))
+            }
+            Err(e) => Err(e),
+        }?;
         check_bool_return(Console::SetConsoleMode(
             STATE.stdout,
             Console::ENABLE_PROCESSED_OUTPUT
@@ -182,6 +205,14 @@ pub fn switch_modes() -> apperr::Result<()> {
                 | Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING
                 | Console::DISABLE_NEWLINE_AUTO_RETURN,
         ))?;
+
+        check_bool_return(Console::SetConsoleCtrlHandler(Some(console_ctrl_handler), 1))?;
+
+        STATE.stdin_cp_old = Console::GetConsoleCP();
+        STATE.stdout_cp_old = Console::GetConsoleOutputCP();
+
+        check_bool_return(Console::SetConsoleCP(Globalization::CP_UTF8))?;
+        check_bool_return(Console::SetConsoleOutputCP(Globalization::CP_UTF8))?;
 
         Ok(())
     }
@@ -724,31 +755,39 @@ pub(crate) fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
 
 /// Formats a platform error code into a human-readable string.
 pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
-    unsafe {
-        let mut ptr: *mut u8 = null_mut();
-        let len = Debug::FormatMessageA(
-            Debug::FORMAT_MESSAGE_ALLOCATE_BUFFER
-                | Debug::FORMAT_MESSAGE_FROM_SYSTEM
-                | Debug::FORMAT_MESSAGE_IGNORE_INSERTS,
-            null(),
-            code,
-            0,
-            &mut ptr as *mut *mut _ as *mut _,
-            0,
-            null_mut(),
-        );
-
-        write!(f, "Error {code:#08x}")?;
-
-        if len > 0 {
-            let msg = str_from_raw_parts(ptr, len as usize);
-            let msg = msg.trim_ascii();
-            let msg = msg.replace(['\r', '\n'], " ");
-            write!(f, ": {msg}")?;
-            Foundation::LocalFree(ptr as *mut _);
+    match code {
+        ERROR_UNSUPPORTED_LEGACY_CONSOLE => {
+            write!(f, "This application does not support the legacy console.")
         }
+        ERROR_UNSUPPORTED_WINDOWS_VERSION => {
+            write!(f, "This application requires Windows 10 build 10586 or greater.")
+        }
+        _ => unsafe {
+            let mut ptr: *mut u8 = null_mut();
+            let len = Debug::FormatMessageA(
+                Debug::FORMAT_MESSAGE_ALLOCATE_BUFFER
+                    | Debug::FORMAT_MESSAGE_FROM_SYSTEM
+                    | Debug::FORMAT_MESSAGE_IGNORE_INSERTS,
+                null(),
+                code,
+                0,
+                &mut ptr as *mut *mut _ as *mut _,
+                0,
+                null_mut(),
+            );
 
-        Ok(())
+            write!(f, "Error {code:#08x}")?;
+
+            if len > 0 {
+                let msg = str_from_raw_parts(ptr, len as usize);
+                let msg = msg.trim_ascii();
+                let msg = msg.replace(['\r', '\n'], " ");
+                write!(f, ": {msg}")?;
+                Foundation::LocalFree(ptr as *mut _);
+            }
+
+            Ok(())
+        },
     }
 }
 
