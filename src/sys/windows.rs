@@ -13,9 +13,6 @@ use std::{mem, time};
 use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
 use windows_sys::Win32::Storage::FileSystem;
 use windows_sys::Win32::System::Diagnostics::Debug;
-use windows_sys::Win32::System::SystemInformation::{
-    OSVERSIONINFOEXW, VER_BUILDNUMBER, VerSetConditionMask, VerifyVersionInfoW,
-};
 use windows_sys::Win32::System::{Console, IO, LibraryLoader, Memory, Threading};
 use windows_sys::Win32::{Foundation, Globalization};
 use windows_sys::w;
@@ -77,7 +74,6 @@ const INVALID_CONSOLE_MODE: u32 = u32::MAX;
 
 // Locally-defined error codes follow the HRESULT format, but they have bit 29 set to indicate that they are Customer error codes.
 const ERROR_UNSUPPORTED_LEGACY_CONSOLE: u32 = 0xE0010001;
-const ERROR_UNSUPPORTED_WINDOWS_VERSION: u32 = 0xE0010002;
 
 struct State {
     read_console_input_ex: ReadConsoleInputExW,
@@ -177,23 +173,8 @@ pub fn switch_modes() -> apperr::Result<()> {
                 | Console::ENABLE_EXTENDED_FLAGS
                 | Console::ENABLE_VIRTUAL_TERMINAL_INPUT,
         )) {
-            Err(apperr::Error::Sys(e)) if e == 0x80070000 | ERROR_INVALID_PARAMETER => {
-                let mut osv = OSVERSIONINFOEXW {
-                    dwOSVersionInfoSize: mem::size_of::<OSVERSIONINFOEXW>() as u32,
-                    dwBuildNumber: 10586,
-                    ..mem::zeroed()
-                };
-                let condition =
-                    VerSetConditionMask(0, VER_BUILDNUMBER, 3 /* VER_GREATER_EQUAL */);
-
-                // Transform ERROR_INVALID_PARAMETER into a a more meaningful error.
-                Err(apperr::Error::Sys(
-                    match VerifyVersionInfoW(&mut osv, VER_BUILDNUMBER, condition) {
-                        Foundation::TRUE => ERROR_UNSUPPORTED_LEGACY_CONSOLE,
-                        Foundation::FALSE => ERROR_UNSUPPORTED_WINDOWS_VERSION,
-                        _ => unreachable!(), // Win32 APIs do not return other values here.
-                    },
-                ))
+            Err(e) if e == gle_to_apperr(ERROR_INVALID_PARAMETER) => {
+                Err(gle_to_apperr(ERROR_UNSUPPORTED_LEGACY_CONSOLE))
             }
             other => other,
         }?;
@@ -757,9 +738,6 @@ pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Re
     match code {
         ERROR_UNSUPPORTED_LEGACY_CONSOLE => {
             write!(f, "This application does not support the legacy console.")
-        }
-        ERROR_UNSUPPORTED_WINDOWS_VERSION => {
-            write!(f, "This application requires Windows 10 build 10586 or greater.")
         }
         _ => unsafe {
             let mut ptr: *mut u8 = null_mut();
