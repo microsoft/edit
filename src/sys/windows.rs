@@ -174,7 +174,7 @@ pub fn switch_modes() -> apperr::Result<()> {
                 | Console::ENABLE_VIRTUAL_TERMINAL_INPUT,
         )) {
             Err(e) if e == gle_to_apperr(ERROR_INVALID_PARAMETER) => {
-                Err(gle_to_apperr(ERROR_UNSUPPORTED_LEGACY_CONSOLE))
+                Err(apperr::Error::Sys(ERROR_UNSUPPORTED_LEGACY_CONSOLE))
             }
             other => other,
         }?;
