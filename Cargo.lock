@@ -186,6 +186,7 @@ version = "1.2.1"
 dependencies = [
  "criterion",
  "libc",
+ "pkg-config",
  "serde",
  "serde_json",
  "toml-span",
