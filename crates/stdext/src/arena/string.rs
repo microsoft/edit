@@ -3,6 +3,7 @@
 
 use std::fmt;
 use std::ops::{Bound, Deref, DerefMut, RangeBounds};
+use std::str::Utf8Error;
 
 use super::Arena;
 use crate::helpers::*;
@@ -33,6 +34,10 @@ impl<'a> ArenaString<'a> {
         let mut res = Self::new_in(arena);
         res.push_str(s);
         res
+    }
+
+    pub fn from_utf8(arena: &'a Arena, vec: &[u8]) -> Result<Self, Utf8Error> {
+        Ok(Self::from_str(arena, str::from_utf8(vec)?))
     }
 
     /// It says right here that you checked if `bytes` is valid UTF-8
@@ -118,6 +123,10 @@ impl<'a> ArenaString<'a> {
     /// Now it's bytes!
     pub fn as_bytes(&self) -> &[u8] {
         self.vec.as_slice()
+    }
+
+    pub fn leak(self) -> &'a str {
+        unsafe { str::from_utf8_unchecked(self.vec.leak()) }
     }
 
     /// Returns a mutable reference to the contents of this `String`.

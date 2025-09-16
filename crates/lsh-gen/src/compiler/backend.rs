@@ -1,12 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use crate::compiler::*;
 use crate::definitions::*;
-use crate::graph::{EdgeId, NodeId};
-use crate::handles::HandleVec;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -44,9 +43,9 @@ pub struct Registers {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum RelocationTarget {
-    State(NodeId),
-    Transition(EdgeId),
+enum RelocationTarget<'a> {
+    Node(*const NodeCell<'a>),
+    Edge(*const Edge<'a>),
 }
 
 // General encoding:
@@ -77,15 +76,15 @@ pub enum Instruction {
     //   dst[31:12] |      idx[11:4]       | 0011
     //
     // Jumps to `dst` if the test fails.
-    JumpIfNotMatchCharset { idx: CharsetHandle, dst: usize },
+    JumpIfNotMatchCharset { idx: usize, dst: usize },
 
     // Encoding:
     //   dst[31:12] |      idx[11:4]       | 0100
-    JumpIfNotMatchPrefix { idx: StringHandle, dst: usize },
+    JumpIfNotMatchPrefix { idx: usize, dst: usize },
 
     // Encoding:
     //   dst[31:12] |      idx[11:4]       | 0101
-    JumpIfNotMatchPrefixInsensitive { idx: StringHandle, dst: usize },
+    JumpIfNotMatchPrefixInsensitive { idx: usize, dst: usize },
 
     // Encoding:
     //                                       0110
@@ -112,13 +111,13 @@ impl Instruction {
             Instruction::Call { dst } => Self::cast_imm(dst) | 0b0001,
             Instruction::Return => 0b0010,
             Instruction::JumpIfNotMatchCharset { idx, dst } => {
-                Self::cast_imm(dst) | (idx.0 as u32) << 4 | 0b0011
+                Self::cast_imm(dst) | (idx as u32) << 4 | 0b0011
             }
             Instruction::JumpIfNotMatchPrefix { idx, dst } => {
-                Self::cast_imm(dst) | (idx.0 as u32) << 4 | 0b0100
+                Self::cast_imm(dst) | (idx as u32) << 4 | 0b0100
             }
             Instruction::JumpIfNotMatchPrefixInsensitive { idx, dst } => {
-                Self::cast_imm(dst) | (idx.0 as u32) << 4 | 0b0101
+                Self::cast_imm(dst) | (idx as u32) << 4 | 0b0101
             }
             Instruction::FlushHighlight => 0b0110,
             Instruction::SuspendOpportunity => 0b0111,
@@ -140,13 +139,13 @@ impl Instruction {
             Instruction::Call { dst } => format!("call  {dst}"),
             Instruction::Return => "ret".to_string(),
             Instruction::JumpIfNotMatchCharset { idx, dst } => {
-                format!("jnc   {:?}, {dst}", idx.0)
+                format!("jnc   {idx:?}, {dst}")
             }
             Instruction::JumpIfNotMatchPrefix { idx, dst } => {
-                format!("jnp   {:?}, {dst}", idx.0)
+                format!("jnp   {idx:?}, {dst}")
             }
             Instruction::JumpIfNotMatchPrefixInsensitive { idx, dst } => {
-                format!("jnpi  {:?}, {dst}", idx.0)
+                format!("jnpi  {idx:?}, {dst}")
             }
             Instruction::FlushHighlight => "flush".to_string(),
             Instruction::SuspendOpportunity => "susp".to_string(),
@@ -163,84 +162,138 @@ impl Instruction {
     }
 }
 
-struct Backend<'a> {
-    states: &'a mut HandleVec<NodeId, GraphState>,
-    transitions: &'a mut HandleVec<EdgeId, GraphTransition>,
+pub struct Backend<'a> {
     instructions: Vec<Instruction>,
-    relocations: Vec<(usize, RelocationTarget)>,
+    charsets: Vec<&'a Charset>,
+    strings: Vec<&'a str>,
+    relocations: Vec<(usize, RelocationTarget<'a>)>,
 }
 
-impl Backend<'_> {
-    fn compile(mut self) -> Vec<Instruction> {
-        for th in self.transitions.indices() {
-            let th_next = EdgeId(th.0 + 1);
-            let t = self.transitions[th].clone();
-
-            self.transitions[th].instruction_offset = self.instructions.len();
-            if self.states[t.src].instruction_offset == usize::MAX {
-                self.states[t.src].instruction_offset = self.instructions.len();
-            }
-
-            match t.test {
-                GraphTest::Chars(0) => {}
-                GraphTest::Chars(usize::MAX) => {
-                    self.assign(Register::InputOffset, usize::MAX);
-                }
-                GraphTest::Chars(n) => {
-                    self.add_assign(Register::InputOffset, n);
-                }
-                GraphTest::Charset(h) => {
-                    self.jump_if_not_match_charset(h, RelocationTarget::Transition(th_next));
-                }
-                GraphTest::Prefix(h) => {
-                    self.jump_if_not_match_prefix(h, RelocationTarget::Transition(th_next));
-                }
-                GraphTest::PrefixInsensitive(h) => {
-                    self.jump_if_not_match_prefix_insensitive(
-                        h,
-                        RelocationTarget::Transition(th_next),
-                    );
-                }
-            }
-
-            match t.kind {
-                HighlightKindOp::None => {}
-                HighlightKindOp::Some(kind) => {
-                    self.assign(Register::HighlightKind, kind.as_usize());
-                }
-            }
-
-            match t.dst {
-                GraphAction::Jump(dst) => {
-                    self.jump(RelocationTarget::State(dst));
-                }
-                GraphAction::Push(dst) => {
-                    self.flush_highlight();
-                    self.call(RelocationTarget::State(dst));
-                }
-                GraphAction::Pop(0) => {
-                    self.flush_highlight();
-                    self.suspend_opportunity();
-                    self.assign(Register::HighlightKind, HighlightKind::Other.as_usize());
-                    self.copy(Register::ProgramCounter, Register::ProcedureStart);
-                }
-                GraphAction::Pop(1) => {
-                    self.flush_highlight();
-                    self.ret();
-                }
-                GraphAction::Loop => {
-                    self.suspend_opportunity();
-                    self.jump(RelocationTarget::State(t.src));
-                }
-                _ => unreachable!(),
-            }
+impl<'a> Backend<'a> {
+    pub fn new() -> Self {
+        Self {
+            instructions: Vec::new(),
+            charsets: Vec::new(),
+            strings: Vec::new(),
+            relocations: Vec::new(),
         }
+    }
+
+    pub fn instructions(&self) -> &[Instruction] {
+        &self.instructions
+    }
+
+    pub fn charsets(&self) -> &[&'a Charset] {
+        &self.charsets
+    }
+
+    pub fn strings(&self) -> &[&'a str] {
+        &self.strings
+    }
+
+    pub fn compile(&mut self, frontend: &Frontend<'a>) {
+        let mut offsets = HashMap::new();
+        let mut charsets_seen = HashMap::new();
+        let mut strings_seen = HashMap::new();
+
+        frontend.visit_graph(|src| {
+            let Node::Intra(n) = &*src.borrow() else {
+                return;
+            };
+
+            offsets.insert(src as *const _ as *const (), self.instructions.len());
+
+            let mut iter = n.edges.iter().peekable();
+            while let Some(t) = iter.next() {
+                offsets.insert(t as *const _ as *const (), self.instructions.len());
+
+                match t.test {
+                    GraphTest::Chars(0) => {}
+                    GraphTest::Chars(usize::MAX) => {
+                        self.assign(Register::InputOffset, usize::MAX);
+                    }
+                    GraphTest::Chars(n) => {
+                        self.add_assign(Register::InputOffset, n);
+                    }
+                    GraphTest::Charset(h) => {
+                        let h = *charsets_seen.entry(h as *const _).or_insert_with(|| {
+                            let idx = self.charsets.len();
+                            self.charsets.push(h);
+                            idx
+                        });
+                        self.jump_if_not_match_charset(
+                            h,
+                            RelocationTarget::Edge(*iter.peek().unwrap() as *const _),
+                        );
+                    }
+                    GraphTest::Prefix(h) => {
+                        let h = *strings_seen.entry(h as *const _).or_insert_with(|| {
+                            let idx = self.strings.len();
+                            self.strings.push(h);
+                            idx
+                        });
+                        self.jump_if_not_match_prefix(
+                            h,
+                            RelocationTarget::Edge(*iter.peek().unwrap() as *const _),
+                        );
+                    }
+                    GraphTest::PrefixInsensitive(h) => {
+                        let h = *strings_seen.entry(h as *const _).or_insert_with(|| {
+                            let idx = self.strings.len();
+                            self.strings.push(h);
+                            idx
+                        });
+                        self.jump_if_not_match_prefix_insensitive(
+                            h,
+                            RelocationTarget::Edge(*iter.peek().unwrap() as *const _),
+                        );
+                    }
+                }
+
+                match t.kind {
+                    HighlightKindOp::None => {}
+                    HighlightKindOp::Some(kind) => {
+                        self.assign(Register::HighlightKind, kind.as_usize());
+                    }
+                }
+
+                match &*t.dst.borrow() {
+                    Node::Intra(..) => {
+                        self.jump(RelocationTarget::Node(t.dst as *const _));
+                    }
+                    Node::Leaf(LeafNode::Jump(dst)) => {
+                        self.jump(RelocationTarget::Node(*dst as *const _));
+                    }
+                    Node::Leaf(LeafNode::Push(dst)) => {
+                        self.flush_highlight();
+                        self.call(RelocationTarget::Node(*dst as *const _));
+                    }
+                    Node::Leaf(LeafNode::Pop(0)) => {
+                        self.flush_highlight();
+                        self.suspend_opportunity();
+                        self.assign(Register::HighlightKind, HighlightKind::Other.as_usize());
+                        self.copy(Register::ProgramCounter, Register::ProcedureStart);
+                    }
+                    Node::Leaf(LeafNode::Pop(1)) => {
+                        self.flush_highlight();
+                        self.ret();
+                    }
+                    Node::Leaf(LeafNode::Loop) => {
+                        self.suspend_opportunity();
+                        self.jump(RelocationTarget::Node(src));
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        });
 
         for &(off, dst) in &self.relocations {
-            let instruction_offset = match dst {
-                RelocationTarget::State(h) => self.states[h].instruction_offset,
-                RelocationTarget::Transition(h) => self.transitions[h].instruction_offset,
-            };
+            let instruction_offset = *offsets
+                .get(&match dst {
+                    RelocationTarget::Node(h) => h as *const _ as *const (),
+                    RelocationTarget::Edge(h) => h as *const _ as *const (),
+                })
+                .unwrap();
             match &mut self.instructions[off] {
                 Instruction::Add { dst: Register::ProgramCounter, src: Register::Zero, imm } => {
                     *imm = instruction_offset;
@@ -254,8 +307,6 @@ impl Backend<'_> {
                 i => panic!("Unexpected relocation target: {i:?}"),
             }
         }
-
-        self.instructions
     }
 
     fn add_assign(&mut self, dst: Register, imm: usize) {
@@ -270,27 +321,27 @@ impl Backend<'_> {
         self.instructions.push(Instruction::Add { dst, src, imm: 0 });
     }
 
-    fn jump(&mut self, dst: RelocationTarget) {
+    fn jump(&mut self, dst: RelocationTarget<'a>) {
         let dst = self.resolve_relocation(dst);
         self.assign(Register::ProgramCounter, dst);
     }
 
-    fn jump_if_not_match_charset(&mut self, idx: CharsetHandle, dst: RelocationTarget) {
+    fn jump_if_not_match_charset(&mut self, idx: usize, dst: RelocationTarget<'a>) {
         let dst = self.resolve_relocation(dst);
         self.instructions.push(Instruction::JumpIfNotMatchCharset { idx, dst });
     }
 
-    fn jump_if_not_match_prefix(&mut self, idx: StringHandle, dst: RelocationTarget) {
+    fn jump_if_not_match_prefix(&mut self, idx: usize, dst: RelocationTarget<'a>) {
         let dst = self.resolve_relocation(dst);
         self.instructions.push(Instruction::JumpIfNotMatchPrefix { idx, dst });
     }
 
-    fn jump_if_not_match_prefix_insensitive(&mut self, idx: StringHandle, dst: RelocationTarget) {
+    fn jump_if_not_match_prefix_insensitive(&mut self, idx: usize, dst: RelocationTarget<'a>) {
         let dst = self.resolve_relocation(dst);
         self.instructions.push(Instruction::JumpIfNotMatchPrefixInsensitive { idx, dst });
     }
 
-    fn call(&mut self, dst: RelocationTarget) {
+    fn call(&mut self, dst: RelocationTarget<'a>) {
         let dst = self.resolve_relocation(dst);
         self.instructions.push(Instruction::Call { dst });
     }
@@ -307,17 +358,8 @@ impl Backend<'_> {
         self.instructions.push(Instruction::SuspendOpportunity);
     }
 
-    fn resolve_relocation(&mut self, dst: RelocationTarget) -> usize {
-        let instruction_offset = match dst {
-            RelocationTarget::State(h) => self.states[h].instruction_offset,
-            RelocationTarget::Transition(h) => self.transitions[h].instruction_offset,
-        };
-
-        if instruction_offset != usize::MAX {
-            instruction_offset
-        } else {
-            self.relocations.push((self.instructions.len(), dst));
-            0
-        }
+    fn resolve_relocation(&mut self, dst: RelocationTarget<'a>) -> usize {
+        self.relocations.push((self.instructions.len(), dst));
+        0
     }
 }

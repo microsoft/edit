@@ -16,6 +16,8 @@ enum TargetOs {
 }
 
 fn main() {
+    stdext::arena::init(128 * 1024 * 1024).unwrap();
+
     let target_os = match env_opt("CARGO_CFG_TARGET_OS").as_str() {
         "windows" => TargetOs::Windows,
         "macos" | "ios" => TargetOs::MacOS,

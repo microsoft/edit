@@ -14,15 +14,16 @@
 //! whereas the additional states will try to match the next character without seeking.
 //! If it doesn't match, it will fall back to the next possible defined regular expression.
 
+#![feature(allocator_api)]
+
 mod compiler;
 mod definitions;
-mod graph;
-mod handles;
 
 use std::fmt::Write as _;
 
 use compiler::*;
 use definitions::*;
+use stdext::arena::scratch_arena;
 
 pub fn generate() -> String {
     let mut output = String::new();
@@ -104,6 +105,7 @@ pub struct Registers {
     );
 
     for lang in LANGUAGES {
+        let scratch = scratch_arena(None);
         let name_uppercase = lang.name.bytes().fold(String::new(), |mut acc, ch| {
             if ch.is_ascii_alphanumeric() {
                 acc.push(ch.to_ascii_uppercase() as char);
@@ -113,16 +115,19 @@ pub struct Registers {
             acc
         });
 
-        let mut builder = Frontend::new();
+        let mut frontend = Frontend::new(&scratch);
         for s in lang.states {
-            builder.declare_root(s.name);
+            frontend.declare_root(s.name);
         }
         for state in lang.states {
             for rule in state.rules {
-                builder.parse(state.name, rule);
+                frontend.parse(state.name, rule);
             }
         }
-        let assembly = builder.compile();
+        frontend.finalize();
+
+        let mut backend = Backend::new();
+        backend.compile(&frontend);
 
         _ = write!(
             output,
@@ -135,27 +140,132 @@ config:
   elk:
     considerModelOrder: NONE
 ---
-{}
+",
+            lang.name,
+        );
+
+        {
+            _ = writeln!(&mut output, "flowchart TD");
+
+            frontend.visit_graph(|n| {});
+
+            /*let mut iter = self.transitions.iter().peekable();
+            while let Some(t) = iter.next() {
+                let src_offset = self.states[t.src].offset;
+                let dst_offset = self.states[match &t.dst {
+                    GraphAction::Jump(dst) | GraphAction::Push(dst) | GraphAction::Loop(dst) => {
+                        *dst
+                    }
+                    GraphAction::Pop(_) => StateHandle(0),
+                    GraphAction::Fallback => unreachable!(),
+                }]
+                .offset;
+
+                if !visited[t.src.0] {
+                    visited[t.src.0] = true;
+
+                    let s = &self.states[t.src];
+                    if let Some(name) = s.name {
+                        _ = writeln!(&mut output, "    {src_offset}[\"{src_offset} ({name})\"]");
+                    }
+                }
+
+                let label = match t.test {
+                    GraphTest::Chars(usize::MAX) => "Chars(Line)".to_string(),
+                    GraphTest::Chars(n) => format!("Chars({n})"),
+                    GraphTest::Charset(c) => format!("Charset({:?})", &self.charsets[c]),
+                    GraphTest::Prefix(s) => {
+                        let mut label = String::new();
+                        _ = write!(label, "Prefix({}", &self.strings[s]);
+
+                        while let Some(next) = iter.peek()
+                            && let GraphTest::Prefix(next_s) = next.test
+                            && next.dst == t.dst
+                        {
+                            _ = write!(label, ", {}", &self.strings[next_s]);
+                            iter.next();
+                        }
+
+                        label.push(')');
+                        label
+                    }
+                    GraphTest::PrefixInsensitive(s) => {
+                        let mut label = String::new();
+                        _ = write!(label, "PrefixInsensitive({}", &self.strings[s]);
+
+                        while let Some(next) = iter.peek()
+                            && let GraphTest::PrefixInsensitive(next_s) = next.test
+                            && next.dst == t.dst
+                        {
+                            _ = write!(label, ", {}", &self.strings[next_s]);
+                            iter.next();
+                        }
+
+                        label.push(')');
+                        label
+                    }
+                };
+
+                let dst_str = match &t.dst {
+                    GraphAction::Jump(_) => {
+                        format!("{dst_offset}")
+                    }
+                    GraphAction::Push(dst) => {
+                        format!(
+                            "push{}[/\"{}\"/]",
+                            src_offset << 16 | dst_offset,
+                            self.states[*dst].name.unwrap()
+                        )
+                    }
+                    GraphAction::Pop(_) => {
+                        format!("pop{}@{{ shape: stop }}", src_offset << 16)
+                    }
+                    GraphAction::Loop(_) => {
+                        format!("{dst_offset}")
+                    }
+                    GraphAction::Fallback => unreachable!(),
+                };
+
+                let label = {
+                    let mut res = String::with_capacity(label.len());
+                    for c in label.chars() {
+                        match c {
+                            '\t' => res.push_str(r#"\\t"#),
+                            '"' => res.push_str("&quot;"),
+                            '\\' => res.push_str(r#"\\"#),
+                            _ => res.push(c),
+                        }
+                    }
+                    res
+                };
+                _ = writeln!(
+                    &mut output,
+                    "    {src_offset} -->|\"{label}<br/>{kind:?}\"| {dst_str}",
+                    kind = t.kind,
+                );
+            }*/
+        }
+
+        _ = write!(
+            output,
+            "\
 **/
 #[rustfmt::skip] pub const LANG_{name_uppercase}: &Language = &Language {{
     name: {name:?},
     filenames: &{filenames:?},
     strings: &[
 ",
-            lang.name,
-            builder.format_as_mermaid(),
             name = lang.name,
             name_uppercase = name_uppercase,
             filenames = lang.filenames,
         );
-
-        for s in builder.strings() {
+        for s in backend.strings() {
             _ = writeln!(output, "        {s:?},");
         }
 
         output.push_str("    ],\n    charsets: &[\n");
 
-        for cs in builder.charsets() {
+        for cs in backend.charsets() {
             output.push_str("        [");
             for lo in 0..16 {
                 if lo > 0 {
@@ -172,8 +282,9 @@ config:
 
         output.push_str("    ],\n    instructions: &[\n");
 
+        let assembly = backend.instructions();
         let line_num_width = assembly.len().ilog10() as usize + 1;
-        for (i, op) in assembly.into_iter().enumerate() {
+        for (i, op) in assembly.iter().enumerate() {
             _ = writeln!(
                 output,
                 "        {op:#010x}, // {i:>line_num_width$}:  {mnemonic}",

@@ -1,47 +1,96 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::fmt::{self};
 use std::ops::{Index, IndexMut};
+use std::ptr;
 
 use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind, Look};
+use stdext::arena::{Arena, ArenaString};
 
 use crate::definitions::*;
-use crate::graph::{DiGraph, EdgeId, NodeId};
-use crate::handles::{HandleVec, declare_handle};
 
-declare_handle!(pub CharsetHandle(usize));
-declare_handle!(pub StringHandle(usize));
-pub struct Frontend {
-    graph: DiGraph<GraphState, GraphTransition>,
-    root_count: usize,
-    charsets: HandleVec<CharsetHandle, Charset>,
-    strings: HandleVec<StringHandle, String>,
+trait Intern<'a, T: ?Sized> {
+    fn intern(&mut self, arena: &'a Arena, item: &T) -> &'a T;
+}
+
+impl<'a> Intern<'a, Charset> for Vec<&'a Charset> {
+    fn intern(&mut self, arena: &'a Arena, value: &Charset) -> &'a Charset {
+        if let Some(&s) = self.iter().find(|&&v| v == value) {
+            s
+        } else {
+            let s = arena.alloc_uninit().write(value.clone());
+            self.push(s);
+            s
+        }
+    }
+}
+
+impl<'a> Intern<'a, str> for Vec<&'a str> {
+    fn intern(&mut self, arena: &'a Arena, value: &str) -> &'a str {
+        if let Some(&s) = self.iter().find(|&&v| v == value) {
+            s
+        } else {
+            let s = ArenaString::from_str(arena, value).leak();
+            self.push(s);
+            s
+        }
+    }
+}
+
+pub struct Frontend<'a> {
+    arena: &'a Arena,
+    root: Option<&'a NodeCell<'a>>,
+    functions: Vec<(&'a str, &'a NodeCell<'a>)>,
+    charsets: Vec<&'a Charset>,
+    strings: Vec<&'a str>,
     origin: i32,
 }
 
-impl Frontend {
-    pub fn new() -> Self {
+impl<'a> Frontend<'a> {
+    pub fn new(arena: &'a Arena) -> Self {
         Frontend {
-            graph: Default::default(),
-            root_count: 0,
+            arena,
+            root: None,
+            functions: Default::default(),
             charsets: Default::default(),
             strings: Default::default(),
             origin: -1,
         }
     }
 
-    pub fn declare_root(&mut self, name: &'static str) {
-        self.graph.add_node(GraphState { name: Some(name), ..Default::default() });
-        self.root_count += 1;
+    fn alloc_node(&self, node: Node<'a>) -> &'a NodeCell<'a> {
+        self.arena.alloc_uninit().write(NodeCell::new(node))
     }
 
-    fn find_root_by_name(&self, name: &str) -> NodeId {
-        self.graph
-            .iter_nodes()
-            .take(self.root_count)
-            .find(|n| n.value.name == Some(name))
-            .map(|n| n.id)
+    fn alloc_intra_node(&self) -> &'a NodeCell<'a> {
+        self.alloc_node(Node::Intra(IntraNode {
+            edges: Vec::new_in(self.arena),
+            coverage: Charset::default(),
+            has_root_loop: false,
+        }))
+    }
+
+    fn alloc_leaf_node(&self, leaf: LeafNode<'a>) -> &'a NodeCell<'a> {
+        self.alloc_node(Node::Leaf(leaf))
+    }
+
+    pub fn declare_root(&mut self, name: &'static str) {
+        let name = ArenaString::from_str(self.arena, name).leak();
+        let node = self.alloc_intra_node();
+        self.functions.push((name, node));
+        if self.root.is_none() {
+            self.root = Some(node);
+        }
+    }
+
+    fn find_root_by_name(&self, name: &str) -> &'a NodeCell<'a> {
+        self.functions
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, n)| *n)
             .unwrap_or_else(|| panic!("No such root state: {name}"))
     }
 
@@ -57,12 +106,12 @@ impl Frontend {
             .unwrap();
 
         let src = self.find_root_by_name(root);
-        let action = match rule.action {
-            ActionDefinition::Continue => GraphAction::Pop(0),
-            ActionDefinition::Jump(name) => GraphAction::Jump(self.find_root_by_name(name)),
-            ActionDefinition::Push(name) => GraphAction::Push(self.find_root_by_name(name)),
-            ActionDefinition::Pop => GraphAction::Pop(1),
-        };
+        let dst = self.alloc_leaf_node(match rule.action {
+            ActionDefinition::Continue => LeafNode::Pop(0),
+            ActionDefinition::Jump(name) => LeafNode::Jump(self.find_root_by_name(name)),
+            ActionDefinition::Push(name) => LeafNode::Push(self.find_root_by_name(name)),
+            ActionDefinition::Pop => LeafNode::Pop(1),
+        });
 
         // By creating a deferred target node like this:
         //   [node] --- Chars(0) --> Pop
@@ -70,17 +119,22 @@ impl Frontend {
         //
         // During `simplify_indirections()` we'll then clean those up again, by connection
         // nodes together directly if they're joined by just a `Chars(0)` transition.
-        let deferred_dst = self.graph.add_node(GraphState::default());
+        let deferred_dst = self.alloc_intra_node();
 
         // Here's where the magic happens.
         let deferred_dst = self.transform(HighlightKindOp::None, src, deferred_dst, &hir);
 
         // Now we connect the [node] --- Chars(0) --> Pop
-        let dst = self.graph.add_node(GraphState { action: Some(action), ..Default::default() });
         self.add_transition(rule.kind, deferred_dst, dst, GraphTest::Chars(0));
     }
 
-    fn transform(&mut self, kind: HighlightKindOp, src: NodeId, dst: NodeId, hir: &Hir) -> NodeId {
+    fn transform(
+        &mut self,
+        kind: HighlightKindOp,
+        src: &'a NodeCell<'a>,
+        dst: &'a NodeCell<'a>,
+        hir: &Hir,
+    ) -> &'a NodeCell<'a> {
         fn is_any_class(class: &ClassBytes) -> bool {
             class.ranges() == [ClassBytesRange::new(0, 255)]
         }
@@ -96,14 +150,10 @@ impl Frontend {
                 self.transform_class(kind, src, dst, &class.to_byte_class().unwrap())
             }
             HirKind::Look(Look::WordEndHalfAscii) => {
-                let fallback = self.graph.add_node(GraphState {
-                    action: Some(GraphAction::Fallback),
-                    ..Default::default()
-                });
                 self.transform_class_plus(
                     kind,
                     src,
-                    fallback,
+                    self.alloc_leaf_node(LeafNode::Fallback),
                     &ClassBytes::new(vec![
                         ClassBytesRange::new(b'0', b'9'),
                         ClassBytesRange::new(b'A', b'Z'),
@@ -144,12 +194,12 @@ impl Frontend {
     fn transform_literal(
         &mut self,
         kind: HighlightKindOp,
-        src: NodeId,
-        dst: NodeId,
+        src: &'a NodeCell<'a>,
+        dst: &'a NodeCell<'a>,
         lit: &[u8],
-    ) -> NodeId {
-        let prefix = String::from_utf8(lit.to_vec()).unwrap();
-        let prefix = self.intern_string(prefix);
+    ) -> &'a NodeCell<'a> {
+        let prefix = ArenaString::from_utf8(self.arena, lit).unwrap();
+        let prefix = self.strings.intern(self.arena, &prefix);
         self.add_transition(kind, src, dst, GraphTest::Prefix(prefix))
     }
 
@@ -157,12 +207,12 @@ impl Frontend {
     fn transform_class_plus(
         &mut self,
         kind: HighlightKindOp,
-        src: NodeId,
-        dst: NodeId,
+        src: &'a NodeCell<'a>,
+        dst: &'a NodeCell<'a>,
         class: &ClassBytes,
-    ) -> NodeId {
+    ) -> &'a NodeCell<'a> {
         let c = self.class_to_charset(class);
-        let c = self.intern_charset(&c);
+        let c = self.charsets.intern(self.arena, &c);
         self.add_transition(kind, src, dst, GraphTest::Charset(c))
     }
 
@@ -170,10 +220,10 @@ impl Frontend {
     fn transform_class(
         &mut self,
         kind: HighlightKindOp,
-        src: NodeId,
-        dst: NodeId,
+        src: &'a NodeCell<'a>,
+        dst: &'a NodeCell<'a>,
         class: &ClassBytes,
-    ) -> NodeId {
+    ) -> &'a NodeCell<'a> {
         let mut charset = self.class_to_charset(class);
         let mut actual_dst = None;
 
@@ -187,7 +237,7 @@ impl Frontend {
             }
 
             let ch = i as u8;
-            let mut str = String::new();
+            let mut str = ArenaString::new_in(self.arena);
             str.push(ch as char);
 
             // NOTE: Uppercase chars have a lower numeric value than lowercase chars.
@@ -198,13 +248,13 @@ impl Frontend {
             {
                 charset[upper] = false;
                 str.make_ascii_lowercase();
-                GraphTest::PrefixInsensitive(self.intern_string(str))
+                GraphTest::PrefixInsensitive(self.strings.intern(self.arena, &str))
             } else {
-                GraphTest::Prefix(self.intern_string(str))
+                GraphTest::Prefix(self.strings.intern(self.arena, &str))
             };
 
             let d = self.add_transition(kind, src, dst, test);
-            if d != *actual_dst.get_or_insert(d) {
+            if !ptr::eq(d, *actual_dst.get_or_insert(d)) {
                 panic!("Diverging destinations for class transformer: {class:?}");
             }
         }
@@ -213,17 +263,32 @@ impl Frontend {
     }
 
     // .?
-    fn transform_option(&mut self, kind: HighlightKindOp, src: NodeId, dst: NodeId) -> NodeId {
+    fn transform_option(
+        &mut self,
+        kind: HighlightKindOp,
+        src: &'a NodeCell<'a>,
+        dst: &'a NodeCell<'a>,
+    ) -> &'a NodeCell<'a> {
         self.add_transition(kind, src, dst, GraphTest::Chars(0))
     }
 
     // .*
-    fn transform_any_star(&mut self, kind: HighlightKindOp, src: NodeId, dst: NodeId) -> NodeId {
+    fn transform_any_star(
+        &mut self,
+        kind: HighlightKindOp,
+        src: &'a NodeCell<'a>,
+        dst: &'a NodeCell<'a>,
+    ) -> &'a NodeCell<'a> {
         self.add_transition(kind, src, dst, GraphTest::Chars(usize::MAX))
     }
 
     // .
-    fn transform_any(&mut self, kind: HighlightKindOp, src: NodeId, dst: NodeId) -> NodeId {
+    fn transform_any(
+        &mut self,
+        kind: HighlightKindOp,
+        src: &'a NodeCell<'a>,
+        dst: &'a NodeCell<'a>,
+    ) -> &'a NodeCell<'a> {
         self.add_transition(kind, src, dst, GraphTest::Chars(1))
     }
 
@@ -231,10 +296,10 @@ impl Frontend {
     fn transform_concat(
         &mut self,
         kind: HighlightKindOp,
-        src: NodeId,
-        dst: NodeId,
+        src: &'a NodeCell<'a>,
+        dst: &'a NodeCell<'a>,
         hirs: &[Hir],
-    ) -> NodeId {
+    ) -> &'a NodeCell<'a> {
         fn check_lowercase_literal(hir: &Hir) -> Option<u8> {
             if let HirKind::Class(Class::Bytes(class)) = hir.kind()
                 && let ranges = class.ranges()
@@ -257,7 +322,7 @@ impl Frontend {
         while let Some(hir) = it.next() {
             // Transform [aA][bB][cC] into PrefixInsensitive("abc").
             let prefix_insensitive = check_lowercase_literal(hir).map(|ch| {
-                let mut str = String::new();
+                let mut str = ArenaString::new_in(self.arena);
                 str.push(ch as char);
 
                 while let Some(next_hir) = it.peek() {
@@ -275,10 +340,10 @@ impl Frontend {
 
             let more = it.peek().is_some();
             let kind = if more { HighlightKindOp::None } else { kind };
-            let dst = if more { self.graph.add_node(GraphState::default()) } else { dst };
+            let dst = if more { self.alloc_intra_node() } else { dst };
 
             if let Some(str) = prefix_insensitive {
-                let str = self.intern_string(str);
+                let str = self.strings.intern(self.arena, &str);
                 src = self.add_transition(kind, src, dst, GraphTest::PrefixInsensitive(str));
             } else {
                 src = self.transform(kind, src, dst, hir);
@@ -292,15 +357,15 @@ impl Frontend {
     fn transform_alt(
         &mut self,
         kind: HighlightKindOp,
-        src: NodeId,
-        dst: NodeId,
+        src: &'a NodeCell<'a>,
+        dst: &'a NodeCell<'a>,
         hirs: &[Hir],
-    ) -> NodeId {
+    ) -> &'a NodeCell<'a> {
         let mut actual_dst = None;
 
         for hir in hirs {
             let d = self.transform(kind, src, dst, hir);
-            if d != *actual_dst.get_or_insert(d) {
+            if !ptr::eq(d, *actual_dst.get_or_insert(d)) {
                 panic!("Diverging destinations for alternation transformer: {hirs:?}");
             }
         }
@@ -331,17 +396,23 @@ impl Frontend {
     fn add_transition(
         &mut self,
         kind: HighlightKindOp,
-        src: NodeId,
-        dst: NodeId,
-        test: GraphTest,
-    ) -> NodeId {
+        src: &'a NodeCell<'a>,
+        dst: &'a NodeCell<'a>,
+        test: GraphTest<'a>,
+    ) -> &'a NodeCell<'a> {
+        let mut src = src.borrow_mut();
+        let src = match &mut *src {
+            Node::Intra(n) => n,
+            Node::Leaf(_) => panic!("Cannot add transition from leaf node"),
+        };
+
         // Check if the edge already exists.
-        for t in self.graph.get_edges_from(src) {
+        for t in &src.edges {
             if t.test != test {
                 continue;
             }
 
-            if t.dst == dst {
+            if ptr::eq(t.dst, dst) {
                 return t.dst;
             }
 
@@ -349,22 +420,18 @@ impl Frontend {
         }
 
         // Check for plausibility: if any prior test encompasses the new test, panic.
-        for t in self.graph.get_edges_from(src) {
+        for t in &src.edges {
             use GraphTest::*;
 
             if match (t.test, test) {
                 (Chars(_), _) => true,
-                (Charset(p), Charset(n)) => self.charsets[n].is_superset(&self.charsets[p]),
-                (Charset(p), Prefix(n)) => {
-                    self.charsets[p].covers_char(self.strings[n].as_bytes()[0])
-                }
-                (Charset(p), PrefixInsensitive(n)) => {
-                    self.charsets[p].covers_char_insensitive(self.strings[n].as_bytes()[0])
-                }
-                (Prefix(p), Prefix(s)) => self.strings[s].starts_with(self.strings[p].as_str()),
+                (Charset(p), Charset(n)) => n.is_superset(p),
+                (Charset(p), Prefix(n)) => p.covers_char(n.as_bytes()[0]),
+                (Charset(p), PrefixInsensitive(n)) => p.covers_char_insensitive(n.as_bytes()[0]),
+                (Prefix(p), Prefix(s)) => s.starts_with(p),
                 (PrefixInsensitive(p), Prefix(s) | PrefixInsensitive(s)) => {
-                    let s = self.strings[s].as_bytes();
-                    let p = self.strings[p].as_bytes();
+                    let s = s.as_bytes();
+                    let p = p.as_bytes();
                     p.len() <= s.len() && s[..p.len()].eq_ignore_ascii_case(p)
                 }
                 _ => false,
@@ -376,29 +443,8 @@ impl Frontend {
             }
         }
 
-        self.graph.add_edge(
-            src,
-            dst,
-            GraphTransition { origin: self.origin, test, kind, ..Default::default() },
-        );
-
+        src.edges.push(Edge { origin: self.origin, test, kind, dst });
         dst
-    }
-
-    fn intern_charset(&mut self, cs: &Charset) -> CharsetHandle {
-        if let Some((idx, _)) = self.charsets.enumerate().find(|&(_, v)| v == cs) {
-            idx
-        } else {
-            self.charsets.push(cs.clone())
-        }
-    }
-
-    fn intern_string(&mut self, string: String) -> StringHandle {
-        if let Some((idx, _)) = self.strings.enumerate().find(|&(_, v)| *v == string) {
-            idx
-        } else {
-            self.strings.push(string)
-        }
     }
 
     pub fn finalize(&mut self) {
@@ -407,90 +453,162 @@ impl Frontend {
         self.finalize_add_fallbacks();
         self.finalize_add_rescue_fallbacks();
         self.finalize_simplify_indirections();
-        self.finalize_strings();
-        self.finalize_charsets();
+    }
+
+    pub fn visit_graph<F: FnMut(&'a NodeCell<'a>)>(&self, mut callback: F) {
+        for &(_, root) in &self.functions {
+            let mut stack = Vec::new();
+            let mut visited = HashSet::new();
+
+            stack.push(root);
+
+            while let Some(node) = stack.pop() {
+                if !visited.insert(node as *const _) {
+                    continue;
+                }
+
+                callback(node);
+
+                if let Node::Intra(n) = &*node.borrow() {
+                    stack.extend(n.edges.iter().rev().map(|e| e.dst));
+                }
+            }
+        }
     }
 
     /// Compute existing charset coverage.
     /// Technically we don't need to do that for the root states.
     fn finalize_compute_charset_coverage(&mut self) {
-        for (t, src) in self.graph.iter_edges_with_src_mut() {
-            match t.test {
-                GraphTest::Chars(_) => src.coverage.fill(true),
-                GraphTest::Charset(c) => src.coverage.merge(&self.charsets[c]),
-                _ => {}
+        self.visit_graph(|n| {
+            if let Node::Intra(n) = &mut *n.borrow_mut() {
+                for t in &n.edges {
+                    match t.test {
+                        GraphTest::Chars(_) => n.coverage.fill(true),
+                        GraphTest::Charset(c) => n.coverage.merge(c),
+                        _ => {}
+                    }
+                }
             }
-        }
+        });
     }
 
     // Compute fast skips for root states & fallback to 1 byte skip.
     // This is different from coverage computation above, because here
     // we want to "skip" any character that can never be matched.
     fn finalize_add_root_loops(&mut self) {
-        let mut coverages = vec![Charset::no(); self.root_count];
-
-        for t in self.graph.iter_edges() {
-            let Some(cs) = coverages.get_mut(t.src.0) else {
-                continue;
+        for &(_, src) in &self.functions {
+            let mut src = src.borrow_mut();
+            let Node::Intra(src) = &mut *src else {
+                unreachable!();
             };
 
-            match t.test {
-                GraphTest::Chars(_) => {
-                    cs.fill(true);
-                    break;
-                }
-                GraphTest::Charset(c) => {
-                    cs.merge(&self.charsets[c]);
-                }
-                GraphTest::Prefix(s) => {
-                    let ch = self.strings[s].as_bytes()[0];
-                    cs.set(ch, true);
-                }
-                GraphTest::PrefixInsensitive(s) => {
-                    let ch = self.strings[s].as_bytes()[0];
-                    cs.set(ch.to_ascii_uppercase(), true);
-                    cs.set(ch.to_ascii_lowercase(), true);
+            let mut cs = Charset::no();
+            for t in &src.edges {
+                match t.test {
+                    GraphTest::Chars(_) => {
+                        cs.fill(true);
+                        break;
+                    }
+                    GraphTest::Charset(c) => {
+                        cs.merge(c);
+                    }
+                    GraphTest::Prefix(s) => {
+                        let ch = s.as_bytes()[0];
+                        cs.set(ch, true);
+                    }
+                    GraphTest::PrefixInsensitive(s) => {
+                        let ch = s.as_bytes()[0];
+                        cs.set(ch.to_ascii_uppercase(), true);
+                        cs.set(ch.to_ascii_lowercase(), true);
+                    }
                 }
             }
-        }
 
-        for (i, mut cs) in coverages.into_iter().enumerate() {
             if !cs.covers_all() {
                 cs.invert();
 
-                let cs = self.intern_charset(&cs);
-                let src = NodeId(i);
-                let dst = self
-                    .graph
-                    .add_node(GraphState { action: Some(GraphAction::Loop), ..Default::default() });
-                self.graph.add_edge(
-                    src,
+                let cs = self.charsets.intern(self.arena, &cs);
+                let dst = self.alloc_leaf_node(LeafNode::Loop);
+                src.edges.push(Edge {
+                    origin: -1,
+                    test: GraphTest::Charset(cs),
+                    kind: HighlightKindOp::None,
                     dst,
-                    GraphTransition {
-                        origin: -1,
-                        test: GraphTest::Charset(cs),
-                        kind: HighlightKindOp::None,
-                    },
-                );
-                self.graph.add_edge(
-                    src,
+                });
+                src.edges.push(Edge {
+                    origin: -1,
+                    test: GraphTest::Chars(1),
+                    kind: HighlightKindOp::None,
                     dst,
-                    GraphTransition {
-                        origin: -1,
-                        test: GraphTest::Chars(1),
-                        kind: HighlightKindOp::None,
-                    },
-                );
+                });
             }
         }
     }
 
     /// Add fallbacks from earlier regexes to later regexes that they cover.
     fn finalize_add_fallbacks(&mut self) {
-        const CS_YES: Charset = Charset::yes();
-        let mut stack = Vec::new();
-        let mut visited = vec![false; self.states.len()];
-        let mut new_transitions = Vec::new();
+        /*const CS_YES: Charset = Charset::yes();
+
+        for &(_, root) in &self.functions {
+            Self::visit_graph(root, |n| {
+                let Node::Intra(n) = n else {
+                    return;
+                };
+
+                for t in &n.edges {
+                    if t.origin >= 0
+                        && matches!(t.test, GraphTest::Chars(_) | GraphTest::Charset(_))
+                    {
+                        let fallback_cs = match t.test {
+                            GraphTest::Chars(_) => &CS_YES,
+                            GraphTest::Charset(c) => c,
+                            _ => unreachable!(),
+                        };
+
+                        Self::visit_graph(t.dst, |n| {})
+                    }
+                }
+            });
+
+            let mut visit;
+            visit = |node: &NodeCell<'a>| {
+                let mut node = node.borrow_mut();
+                let Node::Intra(node) = &mut *node else {
+                    return;
+                };
+
+                for t in &node.edges {
+                    if t.origin >= fallback.origin {
+                        continue;
+                    }
+
+                    let dst = match &*t.dst.borrow() {
+                        Node::Leaf(LeafNode::Fallback) => {
+                            t.test = fallback.test;
+                            t.dst = fallback.dst;
+                             continue;
+                        }
+                        Node::Intra(dst)
+                            // Check if the fallback is a superset of this transition.
+                            // This applies recursively, which means we assert that the fallback covers
+                            // the entire "path" from the original `fallback.src` down to this state.
+                            if match t.test {
+                                GraphTest::Chars(0) => true,
+                                GraphTest::Chars(_) => fallback_cs.covers_all(),
+                                GraphTest::Charset(c) => fallback_cs.is_superset(c),
+                                GraphTest::Prefix(s) => fallback_cs.covers_str(&s),
+                                GraphTest::PrefixInsensitive(s) => {
+                                    fallback_cs.covers_str_insensitive(&s)
+                                }
+                            } => t.dst,
+                        _ => continue,
+                    };
+
+                    visit(dst);
+                }
+            };
+            visit(root);
+        }
 
         // We iterate in reverse order, so that "deeper" transitions are processed first.
         for t in self.transitions.indices().rev() {
@@ -506,7 +624,7 @@ impl Frontend {
 
             let fallback_cs = match fallback.test {
                 GraphTest::Chars(_) => &CS_YES,
-                GraphTest::Charset(c) => &self.charsets[c],
+                GraphTest::Charset(c) => c,
                 _ => unreachable!(),
             };
 
@@ -544,8 +662,8 @@ impl Frontend {
                             t.test = fallback.test;
                             t.dst = fallback.dst;
                         }
-                        GraphAction::Jump(dst) if !visited[dst.0] => {
-                            visited[dst.0] = true;
+                        GraphAction::Jump(dst) if !visited[dst] => {
+                            visited[dst] = true;
 
                             // Check if the fallback is a superset of this transition.
                             // This applies recursively, which means we assert that the fallback covers
@@ -553,10 +671,10 @@ impl Frontend {
                             if match t.test {
                                 GraphTest::Chars(0) => true,
                                 GraphTest::Chars(_) => fallback_cs.covers_all(),
-                                GraphTest::Charset(c) => fallback_cs.is_superset(&self.charsets[c]),
-                                GraphTest::Prefix(s) => fallback_cs.covers_str(&self.strings[s]),
+                                GraphTest::Charset(c) => fallback_cs.is_superset(c),
+                                GraphTest::Prefix(s) => fallback_cs.covers_str(&s),
                                 GraphTest::PrefixInsensitive(s) => {
-                                    fallback_cs.covers_str_insensitive(&self.strings[s])
+                                    fallback_cs.covers_str_insensitive(&s)
                                 }
                             } {
                                 stack.push(dst);
@@ -566,198 +684,119 @@ impl Frontend {
                     }
                 }
             }
-        }
-
-        self.transitions.extend(new_transitions);
+        }*/
     }
 
     /// Add always-matching fallbacks to all remaining ones,
     /// that drop down to a None highlight kind.
     fn finalize_add_rescue_fallbacks(&mut self) {
-        for (src, s) in self.states.enumerate() {
-            if !s.coverage.covers_all() {
-                self.graph.add_edge(GraphTransition {
+        self.visit_graph(|n| {
+            let Node::Intra(n) = &mut *n.borrow_mut() else {
+                return;
+            };
+
+            if !n.coverage.covers_all() {
+                n.edges.push(Edge {
                     origin: -1,
-                    src,
                     test: GraphTest::Chars(0),
                     kind: HighlightKindOp::None,
-                    dst: NodeId::Pop(0),
+                    dst: self.alloc_leaf_node(LeafNode::Pop(0)),
                 });
             }
-        }
 
-        for t in &mut self.transitions {
-            if t.dst == GraphAction::Fallback {
-                t.dst = GraphAction::Pop(0);
-                t.kind = HighlightKindOp::None;
+            for t in &mut n.edges {
+                let mut dst = t.dst.borrow_mut();
+                if matches!(&*dst, Node::Leaf(LeafNode::Fallback)) {
+                    *dst = Node::Leaf(LeafNode::Pop(0));
+                    t.kind = HighlightKindOp::None;
+                }
             }
-        }
+        });
     }
 
     // Remove pointless indirections from `add_indirect_target()` like this:
     //   [node] --- Chars(0) --> Pop
     fn finalize_simplify_indirections(&mut self) {
-        let mut src_seen = vec![false; self.states.len()];
+        self.visit_graph(|n| {
+            let Node::Intra(n) = &mut *n.borrow_mut() else {
+                return;
+            };
 
-        loop {
-            let mut any_fixed = false;
-
-            src_seen.fill(false);
-
-            for i in 0..self.transitions.len() {
-                let (src, dst, kind) = {
-                    let t = &self.transitions[EdgeId(i)];
-                    if src_seen[t.src.0] {
-                        continue;
-                    }
-
-                    src_seen[t.src.0] = true;
-
-                    if t.test != GraphTest::Chars(0) {
-                        continue;
-                    }
-
-                    (t.src, t.dst, t.kind)
-                };
-
-                for t in &mut self.transitions {
-                    if t.dst == GraphAction::Jump(src) {
-                        if kind != HighlightKindOp::None {
-                            if t.kind != HighlightKindOp::None && t.kind != kind {
-                                panic!(
-                                    "Inconsistent highlight kinds for indirection: {:?} vs {:?}",
-                                    t.kind, kind
-                                );
-                            }
-                            t.kind = kind;
+            for t in &mut n.edges {
+                while let Node::Intra(dst) = &*t.dst.borrow()
+                    && dst.edges.len() == 1
+                    && let dst_t = &dst.edges[0]
+                    && matches!(dst_t.test, GraphTest::Chars(0))
+                {
+                    if dst_t.kind != HighlightKindOp::None {
+                        if t.kind != HighlightKindOp::None && t.kind != dst_t.kind {
+                            panic!(
+                                "Inconsistent highlight kinds for indirection: {:?} vs {:?}",
+                                t.kind, dst_t.kind
+                            );
                         }
-
-                        t.dst = dst;
-                        any_fixed = true;
+                        t.kind = dst_t.kind;
                     }
+
+                    t.dst = dst_t.dst;
                 }
             }
-
-            if !any_fixed {
-                break;
-            }
-        }
-    }
-
-    fn finalize_strings(&mut self) {
-        let mut used = vec![false; self.strings.len()];
-        let mut new_indices = vec![StringHandle::MAX; self.strings.len()];
-
-        for t in &self.transitions {
-            if let GraphTest::Prefix(s) | GraphTest::PrefixInsensitive(s) = t.test {
-                used[s.0] = true;
-            }
-        }
-
-        let mut old_idx = 0;
-        let mut new_idx = 0;
-        self.strings.retain(|_| {
-            let v = used[old_idx];
-
-            if v {
-                new_indices[old_idx] = StringHandle(new_idx);
-                new_idx += 1;
-            }
-
-            old_idx += 1;
-            v
         });
-
-        for t in &mut self.transitions {
-            if let GraphTest::Prefix(h) | GraphTest::PrefixInsensitive(h) = &mut t.test {
-                *h = new_indices[h.0];
-            }
-        }
-    }
-
-    fn finalize_charsets(&mut self) {
-        let mut used = vec![false; self.charsets.len()];
-        let mut new_indices = vec![CharsetHandle::MAX; self.charsets.len()];
-
-        for t in &self.transitions {
-            if let GraphTest::Charset(c) = t.test {
-                used[c.0] = true;
-            }
-        }
-
-        let mut old_idx = 0;
-        let mut new_idx = 0;
-        self.charsets.retain(|_| {
-            let v = used[old_idx];
-
-            if v {
-                new_indices[old_idx] = CharsetHandle(new_idx);
-                new_idx += 1;
-            }
-
-            old_idx += 1;
-            v
-        });
-
-        for t in &mut self.transitions {
-            if let GraphTest::Charset(h) = &mut t.test {
-                *h = new_indices[h.0];
-            }
-        }
-    }
-
-    pub fn charsets(&self) -> &HandleVec<CharsetHandle, Charset> {
-        &self.charsets
-    }
-
-    pub fn strings(&self) -> &HandleVec<StringHandle, String> {
-        &self.strings
     }
 }
 
+pub type NodeCell<'a> = RefCell<Node<'a>>;
+
 #[derive(Debug, Clone)]
-pub struct GraphState {
-    /// Root states will have a name from the definitions file.
-    name: Option<&'static str>,
-    action: Option<GraphAction>,
+pub enum Node<'a> {
+    Intra(IntraNode<'a>),
+    Leaf(LeafNode<'a>),
+}
+
+#[derive(Debug, Clone)]
+pub struct IntraNode<'a> {
+    pub edges: Vec<Edge<'a>, &'a Arena>,
     /// The sum of chars that transition going out of this state cover.
     coverage: Charset,
     has_root_loop: bool,
 }
 
-impl Default for GraphState {
-    fn default() -> Self {
-        Self { name: None, action: None, coverage: Charset::default(), has_root_loop: false }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum GraphAction {
-    Jump(NodeId), // change to
-    Push(NodeId), // push to
-    Pop(usize),   // pop this many
-    Loop,         // loop to the start of the state & do an exit check
-    Fallback,     // replace with a fallback transition (for look-aheads like \b)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GraphTest {
-    Chars(usize),
-    Charset(CharsetHandle),
-    Prefix(StringHandle),
-    PrefixInsensitive(StringHandle),
+#[derive(Debug, Clone)]
+pub enum LeafNode<'a> {
+    Jump(&'a NodeCell<'a>), // change to
+    Push(&'a NodeCell<'a>), // push to
+    Pop(usize),             // pop this many
+    Loop,                   // loop to the start of the state & do an exit check
+    Fallback,               // replace with a fallback transition (for look-aheads like \b)
 }
 
 #[derive(Debug, Clone)]
-pub struct GraphTransition {
-    origin: i32,
-    pub test: GraphTest,
+pub struct Edge<'a> {
+    pub origin: i32,
+    pub test: GraphTest<'a>,
     pub kind: HighlightKindOp,
+    pub dst: &'a NodeCell<'a>,
 }
 
-impl Default for GraphTransition {
-    fn default() -> Self {
-        Self { origin: -1, test: GraphTest::Chars(0), kind: HighlightKindOp::None }
+#[derive(Debug, Clone, Copy)]
+pub enum GraphTest<'a> {
+    Chars(usize),
+    Charset(&'a Charset),
+    Prefix(&'a str),
+    PrefixInsensitive(&'a str),
+}
+
+impl PartialEq for GraphTest<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        use GraphTest::*;
+
+        match (*self, *other) {
+            (Chars(a), Chars(b)) => a == b,
+            (Charset(a), Charset(b)) => ptr::eq(a, b),
+            (Prefix(a), Prefix(b)) => ptr::eq(a, b),
+            (PrefixInsensitive(a), PrefixInsensitive(b)) => ptr::eq(a, b),
+            _ => false,
+        }
     }
 }
 
