@@ -104,34 +104,35 @@ pub struct Registers {
 ",
     );
 
-    for lang in LANGUAGES {
-        let scratch = scratch_arena(None);
-        let name_uppercase = lang.name.bytes().fold(String::new(), |mut acc, ch| {
-            if ch.is_ascii_alphanumeric() {
-                acc.push(ch.to_ascii_uppercase() as char);
-            } else if !acc.ends_with('_') {
-                acc.push('_');
+    /**
+        for lang in LANGUAGES {
+            let scratch = scratch_arena(None);
+            let name_uppercase = lang.name.bytes().fold(String::new(), |mut acc, ch| {
+                if ch.is_ascii_alphanumeric() {
+                    acc.push(ch.to_ascii_uppercase() as char);
+                } else if !acc.ends_with('_') {
+                    acc.push('_');
+                }
+                acc
+            });
+
+            let mut frontend = Frontend::new(&scratch);
+            for s in lang.states {
+                frontend.declare_root(s.name);
             }
-            acc
-        });
-
-        let mut frontend = Frontend::new(&scratch);
-        for s in lang.states {
-            frontend.declare_root(s.name);
-        }
-        for state in lang.states {
-            for rule in state.rules {
-                frontend.parse(state.name, rule);
+            for state in lang.states {
+                for rule in state.rules {
+                    frontend.parse(state.name, rule);
+                }
             }
-        }
-        frontend.finalize();
+            frontend.finalize();
 
-        let mut backend = Backend::new();
-        backend.compile(&frontend);
+            let mut backend = Backend::new();
+            backend.compile(&frontend);
 
-        _ = write!(
-            output,
-            "\
+            _ = write!(
+                output,
+                "\
 /**
 ---
 title: {}
@@ -141,97 +142,97 @@ config:
     considerModelOrder: NONE
 ---
 ",
-            lang.name,
-        );
+                lang.name,
+            );
 
-        {
-            _ = writeln!(&mut output, "flowchart TD");
+            {
+                _ = writeln!(&mut output, "flowchart TD");
 
-            frontend.visit_graph(|n| {});
+                frontend.visit_graph(|n| {});
 
-            /*let mut iter = self.transitions.iter().peekable();
-            while let Some(t) = iter.next() {
-                let src_offset = self.states[t.src].offset;
-                let dst_offset = self.states[match &t.dst {
-                    GraphAction::Jump(dst) | GraphAction::Push(dst) | GraphAction::Loop(dst) => {
-                        *dst
-                    }
-                    GraphAction::Pop(_) => StateHandle(0),
-                    GraphAction::Fallback => unreachable!(),
-                }]
-                .offset;
-
-                if !visited[t.src.0] {
-                    visited[t.src.0] = true;
-
-                    let s = &self.states[t.src];
-                    if let Some(name) = s.name {
-                        _ = writeln!(&mut output, "    {src_offset}[\"{src_offset} ({name})\"]");
-                    }
-                }
-
-                let label = match t.test {
-                    GraphTest::Chars(usize::MAX) => "Chars(Line)".to_string(),
-                    GraphTest::Chars(n) => format!("Chars({n})"),
-                    GraphTest::Charset(c) => format!("Charset({:?})", &self.charsets[c]),
-                    GraphTest::Prefix(s) => {
-                        let mut label = String::new();
-                        _ = write!(label, "Prefix({}", &self.strings[s]);
-
-                        while let Some(next) = iter.peek()
-                            && let GraphTest::Prefix(next_s) = next.test
-                            && next.dst == t.dst
-                        {
-                            _ = write!(label, ", {}", &self.strings[next_s]);
-                            iter.next();
+                /*let mut iter = self.transitions.iter().peekable();
+                while let Some(t) = iter.next() {
+                    let src_offset = self.states[t.src].offset;
+                    let dst_offset = self.states[match &t.dst {
+                        GraphAction::Jump(dst) | GraphAction::Push(dst) | GraphAction::Loop(dst) => {
+                            *dst
                         }
+                        GraphAction::Pop(_) => StateHandle(0),
+                        GraphAction::Fallback => unreachable!(),
+                    }]
+                    .offset;
 
-                        label.push(')');
-                        label
-                    }
-                    GraphTest::PrefixInsensitive(s) => {
-                        let mut label = String::new();
-                        _ = write!(label, "PrefixInsensitive({}", &self.strings[s]);
+                    if !visited[t.src.0] {
+                        visited[t.src.0] = true;
 
-                        while let Some(next) = iter.peek()
-                            && let GraphTest::PrefixInsensitive(next_s) = next.test
-                            && next.dst == t.dst
-                        {
-                            _ = write!(label, ", {}", &self.strings[next_s]);
-                            iter.next();
+                        let s = &self.states[t.src];
+                        if let Some(name) = s.name {
+                            _ = writeln!(&mut output, "    {src_offset}[\"{src_offset} ({name})\"]");
                         }
+                    }
 
-                        label.push(')');
-                        label
-                    }
-                };
+                    let label = match t.test {
+                        GraphTest::Chars(usize::MAX) => "Chars(Line)".to_string(),
+                        GraphTest::Chars(n) => format!("Chars({n})"),
+                        GraphTest::Charset(c) => format!("Charset({:?})", &self.charsets[c]),
+                        GraphTest::Prefix(s) => {
+                            let mut label = String::new();
+                            _ = write!(label, "Prefix({}", &self.strings[s]);
 
-                let dst_str = match &t.dst {
-                    GraphAction::Jump(_) => {
-                        format!("{dst_offset}")
-                    }
-                    GraphAction::Push(dst) => {
-                        format!(
-                            "push{}[/\"{}\"/]",
-                            src_offset << 16 | dst_offset,
-                            self.states[*dst].name.unwrap()
-                        )
-                    }
-                    GraphAction::Pop(_) => {
-                        format!("pop{}@{{ shape: stop }}", src_offset << 16)
-                    }
-                    GraphAction::Loop(_) => {
-                        format!("{dst_offset}")
-                    }
-                    GraphAction::Fallback => unreachable!(),
-                };
+                            while let Some(next) = iter.peek()
+                                && let GraphTest::Prefix(next_s) = next.test
+                                && next.dst == t.dst
+                            {
+                                _ = write!(label, ", {}", &self.strings[next_s]);
+                                iter.next();
+                            }
 
-                let label = {
-                    let mut res = String::with_capacity(label.len());
-                    for c in label.chars() {
-                        match c {
-                            '\t' => res.push_str(r#"\\t"#),
-                            '"' => res.push_str("&quot;"),
+                            label.push(')');
+                            label
+                        }
+                        GraphTest::PrefixInsensitive(s) => {
+                            let mut label = String::new();
+                            _ = write!(label, "PrefixInsensitive({}", &self.strings[s]);
+
+                            while let Some(next) = iter.peek()
+                                && let GraphTest::PrefixInsensitive(next_s) = next.test
+                                && next.dst == t.dst
+                            {
+                                _ = write!(label, ", {}", &self.strings[next_s]);
+                                iter.next();
+                            }
+
+                            label.push(')');
+                            label
+                        }
+                    };
+
+                    let dst_str = match &t.dst {
+                        GraphAction::Jump(_) => {
+                            format!("{dst_offset}")
+                        }
+                        GraphAction::Push(dst) => {
+                            format!(
+                                "push{}[/\"{}\"/]",
+                                src_offset << 16 | dst_offset,
+                                self.states[*dst].name.unwrap()
+                            )
+                        }
+                        GraphAction::Pop(_) => {
+                            format!("pop{}@{{ shape: stop }}", src_offset << 16)
+                        }
+                        GraphAction::Loop(_) => {
+                            format!("{dst_offset}")
+                        }
+                        GraphAction::Fallback => unreachable!(),
+                    };
+
+                    let label = {
+                        let mut res = String::with_capacity(label.len());
+                        for c in label.chars() {
+                            match c {
+                                '\t' => res.push_str(r#"\\t"#),
+                                '"' => res.push_str("&quot;"),
                             '\\' => res.push_str(r#"\\"#),
                             _ => res.push(c),
                         }
@@ -244,16 +245,16 @@ config:
                     kind = t.kind,
                 );
             }*/
-        }
+            }
 
-        _ = write!(
-            output,
-            "\
-**/
-#[rustfmt::skip] pub const LANG_{name_uppercase}: &Language = &Language {{
-    name: {name:?},
-    filenames: &{filenames:?},
-    strings: &[
+            _ = write!(
+                output,
+                "\
+    **/
+    #[rustfmt::skip] pub const LANG_{name_uppercase}: &Language = &Language {{
+        name: {name:?},
+        filenames: &{filenames:?},
+        strings: &[
 ",
             name = lang.name,
             name_uppercase = name_uppercase,
@@ -288,31 +289,31 @@ config:
             _ = writeln!(
                 output,
                 "        {op:#010x}, // {i:>line_num_width$}:  {mnemonic}",
-                op = op.encode(),
-                mnemonic = op.mnemonic()
-            );
+                    op = op.encode(),
+                    mnemonic = op.mnemonic()
+                );
+            }
+
+            output.push_str("    ],\n};\n\n");
         }
 
-        output.push_str("    ],\n};\n\n");
-    }
-
-    output.push_str("#[rustfmt::skip] pub const LANGUAGES: &[&Language] = &[");
-    for lang in LANGUAGES {
-        let name_uppercase: String = lang.name.chars().fold(String::new(), |mut acc, ch| {
-            if ch.is_whitespace() || ch.is_control() {
-                if !acc.ends_with('_') {
-                    acc.push('_');
+        output.push_str("#[rustfmt::skip] pub const LANGUAGES: &[&Language] = &[");
+        for lang in LANGUAGES {
+            let name_uppercase: String = lang.name.chars().fold(String::new(), |mut acc, ch| {
+                if ch.is_whitespace() || ch.is_control() {
+                    if !acc.ends_with('_') {
+                        acc.push('_');
+                    }
+                } else {
+                    for up in ch.to_uppercase() {
+                        acc.push(up);
+                    }
                 }
-            } else {
-                for up in ch.to_uppercase() {
-                    acc.push(up);
-                }
-            }
-            acc
-        });
-        _ = writeln!(output, "    LANG_{name_uppercase},");
-    }
-    output.push_str("];");
-
+                acc
+            });
+            _ = writeln!(output, "    LANG_{name_uppercase},");
+        }
+        output.push_str("];");
+        **/
     output
 }
