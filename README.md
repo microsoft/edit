@@ -25,7 +25,9 @@ winget install Microsoft.Edit
 * Install the nightly toolchain: `rustup install nightly`
   * Alternatively, set the environment variable `RUSTC_BOOTSTRAP=1`
 * Clone the repository
-* For a release build, run: `cargo build --config .cargo/release.toml --release`
+* For a release build, run:
+  * Rust 1.90 or earlier: `cargo build --config .cargo/release.toml --release`
+  * otherwise: `cargo build --config .cargo/release-nightly.toml --release`
 
 ### Build Configuration
 

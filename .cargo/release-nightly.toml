@@ -1,0 +1,16 @@
+[profile.release]
+panic = "immediate-abort"
+
+[target.'cfg(all(target_os = "windows", target_env = "msvc"))']
+rustflags = [
+    "-Ctarget-feature=+crt-static",
+    "-Clink-args=/DEFAULTLIB:ucrt.lib",
+    "-Clink-args=/NODEFAULTLIB:vcruntime.lib",
+    "-Clink-args=/NODEFAULTLIB:msvcrt.lib",
+    "-Clink-args=/NODEFAULTLIB:libucrt.lib",
+]
+
+[unstable]
+panic-immediate-abort = true
+build-std = ["std", "panic_abort"]
+build-std-features = ["default", "optimize_for_size"]
