@@ -1,7 +1,6 @@
 __default__ = [
     "en",
     # --------
-    "ar",
     "de",
     "es",
     "fr",
@@ -20,18 +19,15 @@ zh = "zh_hans"
 # The keyboard key
 [Ctrl]
 en = "Ctrl"
-ar = "Ctrl"
 de = "Strg"
 
 # The keyboard key
 [Alt]
 en = "Alt"
-ar = "Alt"
 
 # The keyboard key
 [Shift]
 en = "Shift"
-ar = "Shift"
 da = "Skift"
 de = "Umschalt"
 es = "Mayús"
