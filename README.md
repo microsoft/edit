@@ -19,6 +19,41 @@ You can install the latest version with WinGet:
 winget install Microsoft.Edit
 ```
 
+### Linux
+
+You can install the latest version by pasting this into the linux terminal:
+```sh
+curl -fsSL https://raw.githubusercontent.com/microsoft/edit/main/tools/install.sh | bash
+```
+You can uninstall via:
+```sh
+curl -fsSL https://raw.githubusercontent.com/microsoft/edit/main/tools/uninstall.sh | bash
+```
+<!-- 
+
+Before this becomes live, these can be used instead.
+
+
+To to this directory:
+```sh
+git clone git@github.com:microsoft/edit.git
+cd edit
+```
+
+Then from there:
+
+To install:
+```sh
+curl -fsSL file://"$PWD/tools/install.sh" | bash
+``` 
+
+To uninstall:
+```sh
+sudo ./tools/uninstall.sh
+```
+
+-->
+
 ## Build Instructions
 
 * [Install Rust](https://www.rust-lang.org/tools/install)
