@@ -2322,9 +2322,27 @@ impl<'a> Context<'a, '_> {
         }
 
         let mut write: &[u8] = &[];
-
+        
         if let Some(input) = &self.input_text {
-            write = input.as_bytes();
+            // Handle auto-closing brackets
+            match *input {
+                "{" => {
+                    self.handle_auto_closing_brackets(tb, "{", "}");
+                    tc.preferred_column = tb.cursor_visual_pos().x;
+                }
+                "[" => {
+                    self.handle_auto_closing_brackets(tb, "[", "]");
+                    tc.preferred_column = tb.cursor_visual_pos().x;
+                }
+                "(" => {
+                    self.handle_auto_closing_brackets(tb, "(", ")");
+                    tc.preferred_column = tb.cursor_visual_pos().x;
+                }
+                _ => {
+                    write = input.as_bytes();
+                    tc.preferred_column = tb.cursor_visual_pos().x;
+                }
+            }
         } else if let Some(input) = &self.input_keyboard {
             let key = input.key();
             let modifiers = input.modifiers();
@@ -2338,7 +2356,13 @@ impl<'a> Context<'a, '_> {
                     } else {
                         CursorMovement::Grapheme
                     };
-                    tb.delete(granularity, -1);
+                    
+                    // Check if we should delete both brackets when cursor is between them
+                    if matches!(granularity, CursorMovement::Grapheme) && self.should_delete_both_brackets(tb) {
+                        self.delete_both_brackets(tb);
+                    } else {
+                        tb.delete(granularity, -1);
+                    }
                 }
                 vk::TAB => {
                     if single_line {
@@ -3333,8 +3357,58 @@ impl<'a> Context<'a, '_> {
             self.block_begin("shortcut");
             self.block_end();
         }
+        
         self.attr_padding(Rect { left: 2, top: 0, right: 2, bottom: 0 });
     }
+
+    /// Handles auto-closing brackets by inserting both opening and closing brackets
+    /// and positioning the cursor between them.
+    fn handle_auto_closing_brackets(&mut self, tb: &mut TextBuffer, opening: &str, closing: &str) {        
+        // Insert the opening bracket
+        tb.write_raw(opening.as_bytes());
+        
+        // Insert the closing bracket
+        tb.write_raw(closing.as_bytes());
+        
+        // Move cursor back to be between the brackets
+        // We need to move back by the length of the closing bracket
+        let new_offset = tb.cursor_logical_pos();
+        tb.cursor_move_to_logical(Point { x: new_offset.x - closing.len() as CoordType, y: new_offset.y });
+    }
+
+    /// Checks if we should delete both opening and closing brackets
+    /// 
+    /// Returns true if we should delete both brackets, false for normal deletion
+    fn should_delete_both_brackets(&mut self, tb: &mut TextBuffer) -> bool {
+        // Get the current cursor offset
+        let cursor_pos = tb.cursor_logical_pos();
+        
+        // Read text before cursor (try to get at least 1 character)
+        let text_before = tb.read_backward(cursor_pos.x as usize);
+        let text_after = tb.read_forward(cursor_pos.x as usize);
+        
+        // Check for common bracket pairs
+        if text_before.ends_with(b"(") && text_after.starts_with(b")") {
+            return true;
+        }
+        if text_before.ends_with(b"[") && text_after.starts_with(b"]") {
+            return true;
+        }
+        if text_before.ends_with(b"{") && text_after.starts_with(b"}") {
+            return true;
+        }
+        
+        false
+    }
+
+    /// Deletes both opening and closing brackets when cursor is between them
+    fn delete_both_brackets(&mut self, tb: &mut TextBuffer) {
+        // Delete the closing bracket first (forward)
+        tb.delete(CursorMovement::Grapheme, 1);
+        // Then delete the opening bracket (backward)
+        tb.delete(CursorMovement::Grapheme, -1);
+    }
+
 }
 
 /// See [`Tree::visit_all`].
