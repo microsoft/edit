@@ -1,23 +1,27 @@
 fn main() {
-    /#/ {
-        yield Comment;
+    loop {
+        /#/ {
+            yield Comment;
 
-        /\tdeleted:.*/ { yield BrightRed; }
-        /\tmodified:.*/ { yield BrightBlue; }
-        /\tnew file:.*/ { yield BrightGreen; }
-        /\trenamed:.*/ { yield BrightBlue; }
-    }
+                 if /\tdeleted:.*/  { yield BrightRed;   }
+            else if /\tmodified:.*/ { yield BrightBlue;  }
+            else if /\tnew file:.*/ { yield BrightGreen; }
+            else if /\trenamed:.*/  { yield BrightBlue;  }
+        }
 
-    /diff --git.*/ {
-        yield BrightBlue;
-        diff();
+        /diff --git.*/ {
+            yield BrightBlue;
+            diff();
+        }
     }
 }
 
 fn diff() {
-    /diff.*/ { yield BrightBlue; }
-    /---.*/ { yield BrightBlue; }
-    /\+\+\+.*/ { yield BrightBlue; }
-    /-.*/ { yield BrightRed; }
-    /\+.*/ { yield BrightGreen; }
+    loop {
+             if /diff.*/   { yield BrightBlue;  }
+        else if /---.*/    { yield BrightBlue;  }
+        else if /\+\+\+.*/ { yield BrightBlue;  }
+        else if /-.*/      { yield BrightRed;   }
+        else if /\+.*/     { yield BrightGreen; }
+    }
 }

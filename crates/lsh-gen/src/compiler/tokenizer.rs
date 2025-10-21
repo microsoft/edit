@@ -34,8 +34,11 @@ pub enum Token {
     Regex(String),
 
     // Keywords
+    Return,
     Fn,
     Yield,
+    If,
+    Else,
 
     // Punctuation
     LeftBrace,
@@ -105,18 +108,17 @@ impl<'a> Tokenizer<'a> {
     fn read_regex(&mut self) -> Token {
         let mut regex = String::new();
 
-        while let Some(&ch) = self.peek() {
+        while let Some(ch) = self.advance() {
             if ch == '/' {
-                self.advance(); // consume closing '/'
                 break;
-            } else if ch == '\\' {
-                self.advance(); // consume backslash
-                regex.push(ch);
-                if let Some(escaped) = self.advance() {
-                    regex.push(escaped);
-                }
+            }
+
+            // Unescape \/ -> /
+            if ch == '\\' && self.peek() == Some(&'/') {
+                self.advance();
+                regex.push('/');
             } else {
-                regex.push(self.advance().unwrap());
+                regex.push(ch);
             }
         }
 
@@ -136,8 +138,11 @@ impl<'a> Tokenizer<'a> {
         }
 
         match value.as_str() {
+            "return" => Token::Return,
             "fn" => Token::Fn,
             "yield" => Token::Yield,
+            "if" => Token::If,
+            "else" => Token::Else,
             _ => Token::Identifier(value),
         }
     }
