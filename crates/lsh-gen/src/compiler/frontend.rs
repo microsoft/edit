@@ -32,9 +32,9 @@ pub enum Condition<'a> {
 pub enum Node<'a> {
     Return,
     Jump { destination: NodeCell<'a> },
-    If { condition: Condition<'a>, then_branch: NodeCell<'a>, else_branch: NodeCell<'a> },
-    Yield { color: &'a str, next: NodeCell<'a> },
-    Call { name: &'a str, next: NodeCell<'a> },
+    If { condition: Condition<'a>, then: NodeCell<'a>, next: Option<NodeCell<'a>> },
+    Yield { color: &'a str, next: Option<NodeCell<'a>> },
+    Call { name: &'a str, next: Option<NodeCell<'a>> },
 }
 
 impl<'a> Node<'a> {
@@ -72,19 +72,24 @@ impl<'a> Frontend<'a> {
     }
 }
 
-type ParseResult<T> = Result<T, ParseError>;
+pub type ParseResult<T> = Result<T, ParseError>;
 
-struct ParseError {
+#[derive(Debug)]
+pub struct ParseError {
+    line: usize,
+    column: usize,
     message: String,
 }
 
 macro_rules! raise {
-    ($msg:literal) => {
-        return Err(ParseError { message: $msg.to_string() })
-    };
-    ($($arg:tt)*) => {
-        return Err(ParseError { message: format!($($arg)*) })
-    };
+    ($self:ident, $msg:literal) => {{
+        let (line, column) = $self.tokenizer.position();
+        return Err(ParseError { line, column, message: $msg.to_string() })
+    }};
+    ($self:ident, $($arg:tt)*) => {{
+        let (line, column) = $self.tokenizer.position();
+        return Err(ParseError { line, column, message: format!($($arg)*) })
+    }};
 }
 
 struct Parser<'a, 'src> {
@@ -108,7 +113,7 @@ impl<'a, 'src> Parser<'a, 'src> {
 
         let name = match &self.current_token {
             Token::Identifier(n) => arena_clone_str(self.frontend.arena, n),
-            _ => raise!("Expected function name"),
+            _ => raise!(self, "Expected function name"),
         };
         self.advance();
 
@@ -116,52 +121,44 @@ impl<'a, 'src> Parser<'a, 'src> {
         self.expect_token(Token::RightParen)?;
 
         let ret = self.alloc_node(Node::Return);
-        let block = self.parse_block(ret)?;
-        Ok(Function { name, body: block.map_or(ret, |(first, _)| first) })
+        let first = self.alloc_node(Node::Jump { destination: ret });
+        let last = self.parse_block(first)?;
+        last.borrow_mut().set_next(ret);
+        Ok(Function { name, body: first })
     }
 
-    fn parse_block(
-        &mut self,
-        next: NodeCell<'a>,
-    ) -> ParseResult<Option<(NodeCell<'a>, NodeCell<'a>)>> {
+    fn parse_block(&mut self, mut last: NodeCell<'a>) -> ParseResult<NodeCell<'a>> {
         self.expect_token(Token::LeftBrace)?;
 
-        let mut statements: Option<(&RefCell<Node<'a>>, &RefCell<Node<'a>>)> = None;
-
         while !matches!(self.current_token, Token::RightBrace | Token::Eof) {
-            let statement = self.parse_statement(next)?;
-            if let Some((_, last)) = &mut statements {
-                last.borrow_mut().set_next(statement);
-                *last = statement;
-            } else {
-                statements = Some((statement, statement));
-            }
+            let next = self.parse_statement(last)?;
+            last.borrow_mut().set_next(next);
+            last = next;
         }
 
         self.expect_token(Token::RightBrace)?;
-
-        Ok(statements)
+        Ok(last)
     }
 
-    fn parse_statement(&mut self, next: NodeCell<'a>) -> ParseResult<NodeCell<'a>> {
+    fn parse_statement(&mut self, last: NodeCell<'a>) -> ParseResult<NodeCell<'a>> {
         match &self.current_token {
             Token::Return => {
                 self.advance();
                 self.expect_token(Token::Semicolon)?;
                 Ok(self.alloc_node(Node::Return))
             }
-            Token::If => self.parse_if_statement(next),
-            Token::Yield => self.parse_yield(next),
-            Token::Identifier(_) => self.parse_call(next),
-            _ => raise!("Unexpected token: {:?}", self.current_token),
+            Token::If => self.parse_if_statement(last),
+            Token::Yield => self.parse_yield(last),
+            Token::Identifier(_) => self.parse_call(last),
+            _ => raise!(self, "Unexpected token: {:?}", self.current_token),
         }
     }
 
-    fn parse_if_statement(&mut self, next: NodeCell<'a>) -> ParseResult<NodeCell<'a>> {
+    fn parse_if_statement(&mut self, mut last: NodeCell<'a>) -> ParseResult<NodeCell<'a>> {
         loop {
             self.expect_token(Token::If)?;
             self.parse_regex()?;
-            self.parse_block(next)?;
+            last = self.parse_block(last)?;
 
             if !matches!(self.current_token, Token::Else) {
                 break;
@@ -170,34 +167,36 @@ impl<'a, 'src> Parser<'a, 'src> {
             self.advance();
 
             if !matches!(self.current_token, Token::If) {
-                self.parse_block(next)?;
+                last = self.parse_block(last)?;
                 break;
             }
         }
+
+        Ok(last)
     }
 
     fn parse_regex(&mut self) -> ParseResult<NodeCell<'a>> {
         todo!()
     }
 
-    fn parse_yield(&mut self, next: NodeCell<'a>) -> ParseResult<NodeCell<'a>> {
+    fn parse_yield(&mut self, last: NodeCell<'a>) -> ParseResult<NodeCell<'a>> {
         self.expect_token(Token::Yield)?;
 
         let color = match &self.current_token {
             Token::Identifier(c) => self.frontend.strings.intern(self.frontend.arena, c),
-            _ => raise!("Expected color name after yield"),
+            _ => raise!(self, "Expected color name after yield"),
         };
         self.advance();
 
         self.expect_token(Token::Semicolon)?;
 
-        Ok(self.alloc_node(Node::Yield { color, next }))
+        Ok(self.alloc_node(Node::Yield { color, next: None }))
     }
 
-    fn parse_call(&mut self, next: NodeCell<'a>) -> ParseResult<NodeCell<'a>> {
+    fn parse_call(&mut self, last: NodeCell<'a>) -> ParseResult<NodeCell<'a>> {
         let name = match &self.current_token {
             Token::Identifier(n) => self.frontend.strings.intern(self.frontend.arena, n),
-            _ => raise!("Expected function name"),
+            _ => raise!(self, "Expected function name"),
         };
         self.advance();
 
@@ -205,7 +204,7 @@ impl<'a, 'src> Parser<'a, 'src> {
         self.expect_token(Token::RightParen)?;
         self.expect_token(Token::Semicolon)?;
 
-        Ok(self.alloc_node(Node::Call { name, next }))
+        Ok(self.alloc_node(Node::Call { name, next: None }))
     }
 
     fn expect_token(&mut self, expected: Token) -> ParseResult<()> {
@@ -213,7 +212,7 @@ impl<'a, 'src> Parser<'a, 'src> {
             self.advance();
             Ok(())
         } else {
-            raise!("Expected {:?}, found {:?}", expected, self.current_token)
+            raise!(self, "Expected {:?}, found {:?}", expected, self.current_token)
         }
     }
 

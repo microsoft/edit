@@ -19,13 +19,20 @@
 mod compiler;
 mod definitions;
 
-use std::fmt::Write as _;
-
 use compiler::*;
 use definitions::*;
 use stdext::arena::scratch_arena;
 
+const SRC: &str = include_str!("../../../lsh/COMMIT_EDITMSG.lsh");
+
 pub fn generate() -> String {
+    let arena = scratch_arena(None);
+    let mut frontend = Frontend::new(&arena);
+    frontend.parse(SRC).unwrap();
+
+    String::new()
+
+    /*
     let mut output = String::new();
 
     output.push_str(
@@ -104,7 +111,6 @@ pub struct Registers {
 ",
     );
 
-    /**
         for lang in LANGUAGES {
             let scratch = scratch_arena(None);
             let name_uppercase = lang.name.bytes().fold(String::new(), |mut acc, ch| {
@@ -289,7 +295,7 @@ config:
             _ = writeln!(
                 output,
                 "        {op:#010x}, // {i:>line_num_width$}:  {mnemonic}",
-                    op = op.encode(),
+    op = op.encode(),
                     mnemonic = op.mnemonic()
                 );
             }
@@ -314,6 +320,7 @@ config:
             _ = writeln!(output, "    LANG_{name_uppercase},");
         }
         output.push_str("];");
-        **/
-    output
+
+        output
+    */
 }

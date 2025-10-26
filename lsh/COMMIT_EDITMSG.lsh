@@ -1,4 +1,4 @@
-fn main() {
+afn main() {
     loop {
         /#/ {
             yield Comment;

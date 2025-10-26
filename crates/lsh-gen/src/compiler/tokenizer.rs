@@ -55,16 +55,27 @@ pub enum Token {
 }
 
 pub struct Tokenizer<'a> {
+    input: &'a str,
     chars: Peekable<Chars<'a>>,
     current_pos: usize,
+    last_pos: usize,
 }
 
 impl<'a> Tokenizer<'a> {
     pub fn new(input: &'a str) -> Self {
-        Self { chars: input.chars().peekable(), current_pos: 0 }
+        Self { input, chars: input.chars().peekable(), current_pos: 0, last_pos: 0 }
+    }
+
+    pub fn position(&self) -> (usize, usize) {
+        let line = self.input[..self.last_pos].lines().count();
+        let column =
+            self.input[..self.last_pos].lines().last().map_or(0, |line| line.chars().count());
+        (line + 1, column + 1)
     }
 
     pub fn next_token(&mut self) -> Token {
+        self.last_pos = self.current_pos;
+
         self.skip_whitespace();
 
         match self.advance() {
@@ -96,33 +107,22 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn skip_whitespace(&mut self) {
-        while let Some(&ch) = self.peek() {
-            if ch.is_whitespace() {
-                self.advance();
-            } else {
-                break;
-            }
+        while let Some(&ch) = self.peek()
+            && ch.is_whitespace()
+        {
+            self.advance();
         }
     }
 
     fn read_regex(&mut self) -> Token {
-        let mut regex = String::new();
+        let beg = self.current_pos;
 
-        while let Some(ch) = self.advance() {
-            if ch == '/' {
-                break;
-            }
+        while let Some(ch) = self.advance()
+            && ch != '/'
+        {}
 
-            // Unescape \/ -> /
-            if ch == '\\' && self.peek() == Some(&'/') {
-                self.advance();
-                regex.push('/');
-            } else {
-                regex.push(ch);
-            }
-        }
-
-        Token::Regex(regex)
+        let end = self.current_pos - 1;
+        Token::Regex(String::from(&self.input[beg..end]))
     }
 
     fn read_identifier_or_keyword(&mut self, first_char: char) -> Token {
