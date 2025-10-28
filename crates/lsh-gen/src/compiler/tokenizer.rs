@@ -34,6 +34,7 @@ pub enum Token {
     Regex(String),
 
     // Keywords
+    Loop,
     Return,
     Fn,
     Yield,
@@ -58,25 +59,33 @@ pub struct Tokenizer<'a> {
     input: &'a str,
     chars: Peekable<Chars<'a>>,
     current_pos: usize,
-    last_pos: usize,
+    start_pos: usize,
 }
 
 impl<'a> Tokenizer<'a> {
     pub fn new(input: &'a str) -> Self {
-        Self { input, chars: input.chars().peekable(), current_pos: 0, last_pos: 0 }
+        Self { input, chars: input.chars().peekable(), current_pos: 0, start_pos: 0 }
     }
 
     pub fn position(&self) -> (usize, usize) {
-        let line = self.input[..self.last_pos].lines().count();
-        let column =
-            self.input[..self.last_pos].lines().last().map_or(0, |line| line.chars().count());
-        (line + 1, column + 1)
+        let mut line = 1;
+        let mut column = 1;
+
+        for ch in self.input[..self.start_pos].chars() {
+            column += 1;
+            if ch == '\n' {
+                line += 1;
+                column = 1;
+            }
+        }
+
+        (line, column)
     }
 
     pub fn next_token(&mut self) -> Token {
-        self.last_pos = self.current_pos;
-
         self.skip_whitespace();
+
+        self.start_pos = self.current_pos;
 
         match self.advance() {
             Some(ch) => match ch {
@@ -116,10 +125,13 @@ impl<'a> Tokenizer<'a> {
 
     fn read_regex(&mut self) -> Token {
         let beg = self.current_pos;
+        let mut last_char = '\0';
 
         while let Some(ch) = self.advance()
-            && ch != '/'
-        {}
+            && (ch != '/' || last_char == '\\')
+        {
+            last_char = ch;
+        }
 
         let end = self.current_pos - 1;
         Token::Regex(String::from(&self.input[beg..end]))
@@ -138,6 +150,7 @@ impl<'a> Tokenizer<'a> {
         }
 
         match value.as_str() {
+            "loop" => Token::Loop,
             "return" => Token::Return,
             "fn" => Token::Fn,
             "yield" => Token::Yield,

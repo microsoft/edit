@@ -7,41 +7,6 @@ use std::fmt::Write as _;
 use crate::compiler::*;
 use crate::definitions::*;
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
-pub enum Register {
-    Zero,
-    ProgramCounter,
-    ProcedureStart,
-    InputOffset,
-    HighlightStart,
-    HighlightKind,
-}
-
-impl Register {
-    pub fn mnemonic(&self) -> &'static str {
-        match self {
-            Register::Zero => "zero",
-            Register::ProgramCounter => "pc",
-            Register::ProcedureStart => "ps",
-            Register::InputOffset => "off",
-            Register::HighlightStart => "hs",
-            Register::HighlightKind => "hk",
-        }
-    }
-}
-
-#[allow(dead_code)]
-#[repr(C)]
-pub struct Registers {
-    pub zero: u32, // Zero
-    pub pc: u32,   // ProgramCounter
-    pub ps: u32,   // ProcedureStart
-    pub off: u32,  // InputOffset
-    pub hs: u32,   // HighlightStart
-    pub hk: u32,   // HighlightKind
-}
-
 #[derive(Debug, Clone, Copy)]
 enum RelocationTarget<'a> {
     Node(*const NodeCell<'a>),

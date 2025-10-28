@@ -1,6 +1,6 @@
-afn main() {
+fn main() {
     loop {
-        /#/ {
+        if /#/ {
             yield Comment;
 
                  if /\tdeleted:.*/  { yield BrightRed;   }
@@ -8,8 +8,7 @@ afn main() {
             else if /\tnew file:.*/ { yield BrightGreen; }
             else if /\trenamed:.*/  { yield BrightBlue;  }
         }
-
-        /diff --git.*/ {
+        else if /diff --git.*/ {
             yield BrightBlue;
             diff();
         }

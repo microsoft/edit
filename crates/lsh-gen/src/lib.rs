@@ -25,12 +25,11 @@ use stdext::arena::scratch_arena;
 
 const SRC: &str = include_str!("../../../lsh/COMMIT_EDITMSG.lsh");
 
-pub fn generate() -> String {
+pub fn generate() -> CompileResult<String> {
     let arena = scratch_arena(None);
-    let mut frontend = Frontend::new(&arena);
-    frontend.parse(SRC).unwrap();
-
-    String::new()
+    let mut compiler = Compiler::new(&arena);
+    compiler.parse(SRC)?;
+    Ok(compiler.as_mermaid())
 
     /*
     let mut output = String::new();
