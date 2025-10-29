@@ -4,6 +4,7 @@
 use std::ptr;
 
 use crate::compiler::*;
+use crate::definitions::HighlightKind;
 
 macro_rules! raise {
     ($self:ident, $msg:literal) => {{
@@ -66,8 +67,11 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.expect_token(Token::RightParen)?;
 
         let span = self.parse_block()?;
-        let ret = self.compiler.alloc_node(Node::Return);
-        span.last.borrow_mut().set_next(ret);
+        if let mut last = span.last.borrow_mut()
+            && last.next().is_none()
+        {
+            last.set_next(self.compiler.alloc_node(Node::Return));
+        }
         Ok(Function { name, body: span.first })
     }
 
@@ -99,8 +103,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             Token::Loop => {
                 self.advance();
                 let span = self.parse_block()?;
-                let jump = self.compiler.alloc_node(Node::Jump { destination: span.first });
-                span.last.borrow_mut().set_next(jump);
+                span.last.borrow_mut().set_next(span.first);
                 Ok(span)
             }
             Token::Return => {
@@ -184,14 +187,23 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.expect_token(Token::Yield)?;
 
         let color = match &self.current_token {
-            Token::Identifier(c) => self.compiler.strings.intern(self.compiler.arena, c),
+            Token::Identifier(c) => c,
             _ => raise!(self, "Expected color name after yield"),
         };
-        self.advance();
+        let color = match HighlightKind::from_str(color) {
+            Some(c) => c.as_usize(),
+            None => raise!(self, "Unknown highlight color: {}", color),
+        };
 
+        self.advance();
         self.expect_token(Token::Semicolon)?;
 
-        Ok(NodeSpan::single(self.compiler.alloc_node(Node::Yield { color, next: None })))
+        Ok(NodeSpan::single(self.compiler.alloc_node(Node::Add {
+            dst: Register::HighlightKind,
+            src: Register::Zero,
+            imm: color,
+            next: None,
+        })))
     }
 
     fn parse_call(&mut self) -> CompileResult<NodeSpan<'a>> {

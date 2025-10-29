@@ -15,6 +15,7 @@
 //! If it doesn't match, it will fall back to the next possible defined regular expression.
 
 #![feature(allocator_api)]
+#![allow(irrefutable_let_patterns)]
 
 mod compiler;
 mod definitions;

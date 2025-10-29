@@ -3,10 +3,10 @@ fn main() {
         if /#/ {
             yield Comment;
 
-                 if /\tdeleted:.*/  { yield BrightRed;   }
-            else if /\tmodified:.*/ { yield BrightBlue;  }
-            else if /\tnew file:.*/ { yield BrightGreen; }
-            else if /\trenamed:.*/  { yield BrightBlue;  }
+            //     if /\tdeleted:.*/  { yield BrightRed;   }
+            //else if /\tmodified:.*/ { yield BrightBlue;  }
+            //else if /\tnew file:.*/ { yield BrightGreen; }
+            //else if /\trenamed:.*/  { yield BrightBlue;  }
         }
         else if /diff --git.*/ {
             yield BrightBlue;

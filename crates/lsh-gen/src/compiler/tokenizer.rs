@@ -116,10 +116,25 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn skip_whitespace(&mut self) {
-        while let Some(&ch) = self.peek()
-            && ch.is_whitespace()
-        {
-            self.advance();
+        loop {
+            // Skip whitespace. advance() has been inlined with ASCII assumptions.
+            while let Some(&ch) = self.peek()
+                && ch.is_ascii_whitespace()
+            {
+                self.chars.next();
+                self.current_pos += 1;
+            }
+
+            // Check for "//" comments. Skip the line if found.
+            if !self.input.get(self.current_pos..).is_some_and(|s| s.starts_with("//")) {
+                break;
+            }
+            for ch in &mut self.chars {
+                self.current_pos += 1;
+                if ch == '\n' {
+                    break;
+                }
+            }
         }
     }
 

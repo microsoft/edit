@@ -360,6 +360,38 @@ pub enum HighlightKind {
 }
 
 impl HighlightKind {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "Black" => Some(Black),
+            "Red" => Some(Red),
+            "Green" => Some(Green),
+            "Yellow" => Some(Yellow),
+            "Blue" => Some(Blue),
+            "Magenta" => Some(Magenta),
+            "Cyan" => Some(Cyan),
+            "White" => Some(White),
+            "BrightBlack" => Some(BrightBlack),
+            "BrightRed" => Some(BrightRed),
+            "BrightGreen" => Some(BrightGreen),
+            "BrightYellow" => Some(BrightYellow),
+            "BrightBlue" => Some(BrightBlue),
+            "BrightMagenta" => Some(BrightMagenta),
+            "BrightCyan" => Some(BrightCyan),
+            "BrightWhite" => Some(BrightWhite),
+
+            "Other" => Some(Other),
+            "Comment" => Some(Comment),
+            "Number" => Some(Number),
+            "String" => Some(String),
+            "Variable" => Some(Variable),
+            "Operator" => Some(Operator),
+            "Keyword" => Some(Keyword),
+            "Method" => Some(Method),
+
+            _ => None,
+        }
+    }
+
     #[inline]
     pub const fn as_usize(self) -> usize {
         unsafe { std::mem::transmute::<HighlightKind, u8>(self) as usize }

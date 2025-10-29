@@ -8,7 +8,7 @@ pub fn parse<'a>(
     compiler: &mut Compiler<'a>,
     pattern: &str,
     dst_good: NodeCell<'a>,
-    _dst_bad: NodeCell<'a>,
+    dst_bad: NodeCell<'a>,
 ) -> Result<NodeCell<'a>, String> {
     let hir = match regex_syntax::ParserBuilder::new()
         .utf8(false)
@@ -23,6 +23,12 @@ pub fn parse<'a>(
 
     let src = compiler.alloc_noop();
     transform(compiler, src, dst_good, &hir);
+
+    // Connect all unset .next pointers to dst_bad.
+    for node in compiler.visit_nodes_from(src) {
+        node.borrow_mut().set_next(dst_bad);
+    }
+
     Ok(src)
 }
 
@@ -83,7 +89,7 @@ fn transform_literal<'a>(
     add_transition(
         compiler,
         src,
-        Node::If { condition: Condition::MatchPrefix(s), then: dst, next: None },
+        Node::If { condition: Condition::Prefix(s), then: dst, next: None },
     )
 }
 
@@ -99,7 +105,7 @@ fn transform_class_plus<'a>(
     add_transition(
         compiler,
         src,
-        Node::If { condition: Condition::MatchCharset(c), then: dst, next: None },
+        Node::If { condition: Condition::Charset(c), then: dst, next: None },
     )
 }
 
@@ -137,11 +143,8 @@ fn transform_class<'a>(
         }
 
         let str = compiler.intern_string(&str);
-        let test = if insensitive {
-            Condition::MatchPrefixInsensitive(str)
-        } else {
-            Condition::MatchPrefix(str)
-        };
+        let test =
+            if insensitive { Condition::PrefixInsensitive(str) } else { Condition::Prefix(str) };
 
         let d = add_transition(compiler, src, Node::If { condition: test, then: dst, next: None });
         if !ptr::eq(d, *actual_dst.get_or_insert(d)) {
@@ -159,7 +162,14 @@ fn transform_option<'a>(
     src: NodeCell<'a>,
     dst: NodeCell<'a>,
 ) -> NodeCell<'a> {
-    add_transition(compiler, src, Node::Jump { destination: dst })
+    match &mut *src.borrow_mut() {
+        Node::If { next, .. } => {
+            assert!(next.is_none());
+            *next = Some(dst);
+            dst
+        }
+        _ => unreachable!(),
+    }
 }
 
 // .*
@@ -250,11 +260,7 @@ fn transform_concat<'a>(
             src = add_transition(
                 compiler,
                 src,
-                Node::If {
-                    condition: Condition::MatchPrefixInsensitive(str),
-                    then: dst,
-                    next: None,
-                },
+                Node::If { condition: Condition::PrefixInsensitive(str), then: dst, next: None },
             );
         } else {
             src = transform(compiler, src, dst, hir);

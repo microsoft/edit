@@ -7,6 +7,7 @@ mod regex;
 mod tokenizer;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Write as _;
 use std::ops::{Index, IndexMut};
@@ -73,12 +74,13 @@ impl<'a> Compiler<'a> {
 
     pub fn as_mermaid(&self) -> String {
         let mut output = String::new();
-        output.push_str("graph TD\n");
+        _ = writeln!(output, "flowchart TB");
 
         for func in &self.functions {
-            _ = writeln!(output, "  subgraph Function: {}", func.name);
+            _ = writeln!(output, "  subgraph {}", func.name);
+            _ = writeln!(output, "    direction TB");
 
-            let mut visited = std::collections::HashSet::new();
+            let mut visited = HashSet::new();
             let mut to_visit = vec![func.body];
 
             while let Some(node_cell) = to_visit.pop() {
@@ -87,48 +89,117 @@ impl<'a> Compiler<'a> {
                 }
 
                 let node = node_cell.borrow();
-
-                let node_id = format!("N{:p}", node_cell.as_ptr());
-                let label = match &*node {
+                match *node {
                     Node::Add { dst, src, imm, .. } => {
-                        format!("Add {} = {} + {}", dst.mnemonic(), src.mnemonic(), imm)
-                    }
-                    Node::Return => "Return".to_string(),
-                    Node::Jump { destination } => {
-                        to_visit.push(*destination);
-                        format!("Jump to N{:p}", destination.as_ptr())
-                    }
-                    Node::If { condition, then, .. } => {
-                        to_visit.push(*then);
-                        match condition {
-                            Condition::MatchCharset(cs) => {
-                                format!("If matches {:?}", cs)
-                            }
-                            Condition::MatchPrefix(s) => {
-                                format!("If prefix == {:?}", s)
-                            }
-                            Condition::MatchPrefixInsensitive(s) => {
-                                format!("If prefix (insensitive) == {:?}", s)
-                            }
+                        if dst == Register::Zero && src == Register::Zero && imm == 0 {
+                            _ = writeln!(output, "    N{node_cell:p}[noop]");
+                        } else {
+                            _ = writeln!(
+                                output,
+                                "    N{node_cell:p}[{} = {} + {}]",
+                                dst.mnemonic(),
+                                src.mnemonic(),
+                                imm
+                            )
                         }
                     }
-                    Node::Yield { color, .. } => format!("Yield color {}", color),
-                    Node::Call { name, .. } => format!("Call {}", name),
+                    Node::Return => {
+                        _ = writeln!(output, "    N{node_cell:p}[return]");
+                    }
+                    Node::If { condition, then, .. } => {
+                        match condition {
+                            Condition::Charset(cs) => {
+                                _ = writeln!(output, "    N{node_cell:p}{{charset: {cs:?}}}");
+                            }
+                            Condition::Prefix(s) => {
+                                _ = writeln!(output, "    N{node_cell:p}{{match: {s}}}");
+                            }
+                            Condition::PrefixInsensitive(s) => {
+                                _ = writeln!(output, "    N{node_cell:p}{{imatch: {s}}}");
+                            }
+                        }
+                        _ = writeln!(output, "    N{node_cell:p} -->|Yes| N{then:p}");
+                        to_visit.push(then);
+                    }
+                    Node::Call { name, .. } => {
+                        _ = writeln!(output, "    N{node_cell:p}[Call {}]", name);
+                    }
                 };
 
-                _ = writeln!(output, "    {}[\"{}\"]", node_id, label);
-
                 if let Some(next) = node.next() {
-                    let next_id = format!("N{:p}", next.as_ptr());
-                    _ = writeln!(output, "    {} --> {}", node_id, next_id);
+                    _ = writeln!(output, "    N{node_cell:p} --> N{next:p}");
                     to_visit.push(next);
                 }
             }
 
-            output.push_str("  end\n");
+            _ = writeln!(output, "  end");
         }
 
         output
+    }
+
+    fn visit_nodes_from<'a>(&self, src: NodeCell<'a>) -> _ {
+        struct NodeIter<'a> {
+            stack: Vec<NodeCell<'a>>,
+            visited: HashSet<*const NodeCell<'a>>,
+        }
+
+        impl<'a> Iterator for NodeIter<'a> {
+            type Item = NodeCell<'a>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                while let Some(node_cell) = to_visit.pop() {
+                    if !visited.insert(node_cell.as_ptr()) {
+                        continue;
+                    }
+
+                    let node = node_cell.borrow();
+                    match *node {
+                        Node::Add { dst, src, imm, .. } => {
+                            if dst == Register::Zero && src == Register::Zero && imm == 0 {
+                                _ = writeln!(output, "    N{node_cell:p}[noop]");
+                            } else {
+                                _ = writeln!(
+                                    output,
+                                    "    N{node_cell:p}[{} = {} + {}]",
+                                    dst.mnemonic(),
+                                    src.mnemonic(),
+                                    imm
+                                )
+                            }
+                        }
+                        Node::Return => {
+                            _ = writeln!(output, "    N{node_cell:p}[return]");
+                        }
+                        Node::If { condition, then, .. } => {
+                            match condition {
+                                Condition::Charset(cs) => {
+                                    _ = writeln!(output, "    N{node_cell:p}{{charset: {cs:?}}}");
+                                }
+                                Condition::Prefix(s) => {
+                                    _ = writeln!(output, "    N{node_cell:p}{{match: {s}}}");
+                                }
+                                Condition::PrefixInsensitive(s) => {
+                                    _ = writeln!(output, "    N{node_cell:p}{{imatch: {s}}}");
+                                }
+                            }
+                            _ = writeln!(output, "    N{node_cell:p} -->|Yes| N{then:p}");
+                            to_visit.push(then);
+                        }
+                        Node::Call { name, .. } => {
+                            _ = writeln!(output, "    N{node_cell:p}[Call {}]", name);
+                        }
+                    };
+
+                    if let Some(next) = node.next() {
+                        _ = writeln!(output, "    N{node_cell:p} --> N{next:p}");
+                        to_visit.push(next);
+                    }
+                }
+            }
+        }
+
+        NodeIter { stack: vec![src], visited: HashSet::new() }
     }
 }
 
@@ -137,7 +208,7 @@ pub enum IR<'a> {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Register {
     Zero,
     ProgramCounter,
@@ -179,20 +250,18 @@ pub struct Function<'a> {
     pub body: NodeCell<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Condition<'a> {
-    MatchCharset(&'a Charset),
-    MatchPrefix(&'a str),
-    MatchPrefixInsensitive(&'a str),
+    Charset(&'a Charset),
+    Prefix(&'a str),
+    PrefixInsensitive(&'a str),
 }
 
 #[derive(Debug)]
 pub enum Node<'a> {
     Add { dst: Register, src: Register, imm: usize, next: Option<NodeCell<'a>> },
     Return,
-    Jump { destination: NodeCell<'a> },
     If { condition: Condition<'a>, then: NodeCell<'a>, next: Option<NodeCell<'a>> },
-    Yield { color: &'a str, next: Option<NodeCell<'a>> },
     Call { name: &'a str, next: Option<NodeCell<'a>> },
 }
 
@@ -201,7 +270,6 @@ impl<'a> Node<'a> {
         match self {
             Node::Add { next, .. } => *next,
             Node::If { next, .. } => *next,
-            Node::Yield { next, .. } => *next,
             Node::Call { next, .. } => *next,
             _ => None,
         }
@@ -211,7 +279,6 @@ impl<'a> Node<'a> {
         match self {
             Node::Add { next, .. } => *next = Some(_next),
             Node::If { next, .. } => *next = Some(_next),
-            Node::Yield { next, .. } => *next = Some(_next),
             Node::Call { next, .. } => *next = Some(_next),
             _ => panic!("Cannot set next on this node type"),
         }
