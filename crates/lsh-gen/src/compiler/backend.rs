@@ -103,13 +103,13 @@ impl Instruction {
             Instruction::Call { dst } => format!("call  {dst}"),
             Instruction::Return => "ret".to_string(),
             Instruction::JumpIfMatchCharset { idx, dst } => {
-                format!("jnc   {idx:?}, {dst}")
+                format!("jc    {idx:?}, {dst}")
             }
             Instruction::JumpIfMatchPrefix { idx, dst } => {
-                format!("jnp   {idx:?}, {dst}")
+                format!("jp    {idx:?}, {dst}")
             }
             Instruction::JumpIfMatchPrefixInsensitive { idx, dst } => {
-                format!("jnpi  {idx:?}, {dst}")
+                format!("jpi   {idx:?}, {dst}")
             }
             Instruction::FlushHighlight => "flush".to_string(),
             Instruction::SuspendOpportunity => "susp".to_string(),
@@ -127,14 +127,28 @@ impl Instruction {
 }
 
 pub struct Backend<'a> {
+    stack: Vec<IRCell<'a>>,
     instructions: Vec<Instruction>,
+    relocations: Vec<Relocation<'a>>,
+    functions_seen: HashMap<&'a str, usize>,
     charsets: Vec<&'a Charset>,
+    charsets_seen: HashMap<*const Charset, usize>,
     strings: Vec<&'a str>,
+    strings_seen: HashMap<*const str, usize>,
 }
 
 impl<'a> Backend<'a> {
     pub fn new() -> Self {
-        Self { instructions: Vec::new(), charsets: Vec::new(), strings: Vec::new() }
+        Self {
+            stack: Vec::new(),
+            instructions: Vec::new(),
+            relocations: Vec::new(),
+            functions_seen: HashMap::new(),
+            charsets: Vec::new(),
+            charsets_seen: HashMap::new(),
+            strings: Vec::new(),
+            strings_seen: HashMap::new(),
+        }
     }
 
     pub fn instructions(&self) -> &[Instruction] {
@@ -150,93 +164,88 @@ impl<'a> Backend<'a> {
     }
 
     pub fn compile(&mut self, compiler: &Compiler<'a>) {
-        let mut relocations = Vec::new();
-
-        let mut charsets_seen = HashMap::new();
-        let mut visit_charset = |h: &'a Charset| {
-            *charsets_seen.entry(h as *const _).or_insert_with(|| {
-                let idx = self.charsets.len();
-                self.charsets.push(h);
-                idx
-            })
-        };
-        let mut strings_seen = HashMap::new();
-        let mut visit_string = |s: &'a str| {
-            *strings_seen.entry(s as *const _).or_insert_with(|| {
-                let idx = self.strings.len();
-                self.strings.push(s);
-                idx
-            })
-        };
-
         for function in &compiler.functions {
-            let mut stack = vec![function.body];
+            self.functions_seen.insert(function.name, self.instructions.len());
+            self.stack.push(function.body);
 
-            while let mut cell = stack.pop()
+            while let mut cell = self.stack.pop()
                 && cell.is_some()
             {
                 while let Some(ir) = cell {
                     let mut ir = ir.borrow_mut();
-                    ir.offset = self.instructions.len();
-
-                    match ir.instr {
-                        IRI::Add { dst, src, imm } => {
-                            self.instructions.push(Instruction::Add { dst, src, imm });
-                        }
-                        IRI::If { condition, then } => {
-                            stack.push(then);
-                            relocations.push(Relocation::ByNode(self.instructions.len(), then));
-                            match condition {
-                                Condition::Charset(h) => {
-                                    let idx = visit_charset(h);
-                                    self.instructions
-                                        .push(Instruction::JumpIfMatchCharset { idx, dst: 0 });
-                                }
-                                Condition::Prefix(s) => {
-                                    let idx = visit_string(s);
-                                    self.instructions
-                                        .push(Instruction::JumpIfMatchPrefix { idx, dst: 0 });
-                                }
-                                Condition::PrefixInsensitive(s) => {
-                                    let idx = visit_string(s);
-                                    self.instructions.push(
-                                        Instruction::JumpIfMatchPrefixInsensitive { idx, dst: 0 },
-                                    );
-                                }
-                            }
-                        }
-                        IRI::Call { name } => {
-                            relocations.push(Relocation::ByName(self.instructions.len(), name));
-                            self.instructions.push(Instruction::Call { dst: 0 });
-                        }
-                        IRI::Return => {
-                            self.instructions.push(Instruction::Return);
-                        }
-                        IRI::Flush => {
-                            self.instructions.push(Instruction::FlushHighlight);
-                        }
-                    }
-
+                    self.visit_ir(&mut ir);
                     cell = ir.next;
                 }
             }
         }
+    }
 
-        for reloc in relocations {
-            let (off, resolved) = match reloc {
-                Relocation::ByName(off, name) => {
-                    let resolved = compiler
-                        .functions
-                        .iter()
-                        .find(|f| f.name == name)
-                        .map(|f| f.body.borrow().offset)
-                        .expect("Undefined function in relocation");
-                    (off, resolved)
-                }
-                Relocation::ByNode(off, node) => {
-                    let resolved = node.borrow().offset;
-                    (off, resolved)
-                }
+    fn visit_ir(&mut self, ir: &mut IR<'a>) {
+        ir.offset = self.instructions.len();
+
+        match ir.instr {
+            IRI::Add { dst, src, imm } => {
+                self.instructions.push(Instruction::Add { dst, src, imm });
+            }
+            IRI::If { condition, then } => {
+                self.stack.push(then);
+                let dst = self.dst_by_node(then);
+                let instr = match condition {
+                    Condition::Charset(h) => {
+                        let idx = self.visit_charset(h);
+                        Instruction::JumpIfMatchCharset { idx, dst }
+                    }
+                    Condition::Prefix(s) => {
+                        let idx = self.visit_string(s);
+                        Instruction::JumpIfMatchPrefix { idx, dst }
+                    }
+                    Condition::PrefixInsensitive(s) => {
+                        let idx = self.visit_string(s);
+                        Instruction::JumpIfMatchPrefixInsensitive { idx, dst }
+                    }
+                };
+                self.instructions.push(instr);
+            }
+            IRI::Call { name } => {
+                self.relocations.push(Relocation::ByName(self.instructions.len(), name));
+                self.instructions.push(Instruction::Call { dst: 0 });
+            }
+            IRI::Return => {
+                self.instructions.push(Instruction::Return);
+            }
+            IRI::Flush => {
+                self.instructions.push(Instruction::FlushHighlight);
+            }
+        }
+    }
+
+    fn visit_charset(&mut self, h: &'a Charset) -> usize {
+        *self.charsets_seen.entry(h as *const _).or_insert_with(|| {
+            let idx = self.charsets.len();
+            self.charsets.push(h);
+            idx
+        })
+    }
+
+    fn visit_string(&mut self, s: &'a str) -> usize {
+        *self.strings_seen.entry(s as *const _).or_insert_with(|| {
+            let idx = self.strings.len();
+            self.strings.push(s);
+            idx
+        })
+    }
+
+    fn process_relocations(&mut self) {
+        self.relocations.retain_mut(|reloc| {
+            let (off, resolved) = match *reloc {
+                Relocation::ByName(off, name) => match self.functions_seen.get(name) {
+                    None => return false,
+                    Some(&resolved) => (off, resolved),
+                },
+                Relocation::ByNode(off, node) => match node.borrow().offset {
+                    usize::MAX => return false,
+                    resolved => (off, resolved),
+                },
             };
 
             match &mut self.instructions[off] {
@@ -251,6 +260,18 @@ impl<'a> Backend<'a> {
                 }
                 i => panic!("Unexpected relocation target: {i:?}"),
             }
+
+            false
+        });
+    }
+
+    fn dst_by_node(&mut self, ir: IRCell<'a>) -> usize {
+        let off = ir.borrow().offset;
+        if off != usize::MAX {
+            off
+        } else {
+            self.relocations.push(Relocation::ByNode(self.instructions.len(), ir));
+            0
         }
     }
 }

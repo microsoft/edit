@@ -150,7 +150,7 @@ fn transform_any_star<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>) -> IRCel
     compiler.alloc_ir(IR {
         next: Some(dst),
         instr: IRI::Add { dst: Register::InputOffset, src: Register::Zero, imm: usize::MAX },
-        offset: 0,
+        offset: usize::MAX,
     })
 }
 
@@ -159,7 +159,7 @@ fn transform_any<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>) -> IRCell<'a>
     compiler.alloc_ir(IR {
         next: Some(dst),
         instr: IRI::Add { dst: Register::InputOffset, src: Register::InputOffset, imm: 1 },
-        offset: 0,
+        offset: usize::MAX,
     })
 }
 

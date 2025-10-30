@@ -71,7 +71,7 @@ impl<'a> Compiler<'a> {
     }
 
     fn alloc_iri(&self, instr: IRI<'a>) -> IRCell<'a> {
-        self.arena.alloc_uninit().write(RefCell::new(IR { next: None, instr, offset: 0 }))
+        self.arena.alloc_uninit().write(RefCell::new(IR { next: None, instr, offset: usize::MAX }))
     }
 
     fn alloc_noop(&self) -> IRCell<'a> {
@@ -79,7 +79,11 @@ impl<'a> Compiler<'a> {
     }
 
     fn chain_iri(&self, prev: IRCell<'a>, instr: IRI<'a>) -> IRCell<'a> {
-        let ir = self.arena.alloc_uninit().write(RefCell::new(IR { next: None, instr, offset: 0 }));
+        let ir = self.arena.alloc_uninit().write(RefCell::new(IR {
+            next: None,
+            instr,
+            offset: usize::MAX,
+        }));
         prev.borrow_mut().set_next(ir);
         ir
     }
