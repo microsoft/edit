@@ -2,7 +2,8 @@
 // Licensed under the MIT License.
 
 //mod backend;
-mod parser;
+mod frontend;
+mod optimizer;
 mod regex;
 mod tokenizer;
 
@@ -14,8 +15,9 @@ use std::ops::{Index, IndexMut};
 
 use stdext::arena::{Arena, ArenaString};
 
-use self::parser::*;
+use self::frontend::*;
 use self::tokenizer::*;
+use crate::definitions::HighlightKind;
 
 pub type CompileResult<T> = Result<T, CompileError>;
 
@@ -49,15 +51,18 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// Parses the given source code into a graph-based IR.
     pub fn parse(&mut self, src: &str) -> CompileResult<()> {
         let mut parser = Parser::new(self, src);
         parser.run()?;
         Ok(())
     }
 
+    pub fn optimize(&mut self) {
+        optimizer::optimize(self);
+    }
+
     fn alloc_noop(&self) -> NodeCell<'a> {
-        self.alloc_node(Node::Add { dst: Register::Zero, src: Register::Zero, imm: 0, next: None })
+        self.alloc_node(Node::Add { next: None, dst: Register::Zero, src: Register::Zero, imm: 0 })
     }
 
     fn alloc_node(&self, node: Node<'a>) -> NodeCell<'a> {
@@ -72,13 +77,25 @@ impl<'a> Compiler<'a> {
         self.strings.intern(self.arena, s)
     }
 
+    fn visit_nodes_from(&self, root: NodeCell<'a>) -> NodeIter<'a> {
+        NodeIter { stack: vec![root], visited: HashSet::new() }
+    }
+
     pub fn as_mermaid(&self) -> String {
         let mut output = String::new();
-        _ = writeln!(output, "flowchart TB");
+
+        // ---
+        // config:
+        // layout: elk
+        // elk:
+        //   considerModelOrder: NONE
+        // ---
+        output.push_str("flowchart TB\n");
 
         for func in &self.functions {
             _ = writeln!(output, "  subgraph {}", func.name);
             _ = writeln!(output, "    direction TB");
+            _ = writeln!(output, "    {}_start@{{shape: start}} --> N{:p}", func.name, func.body);
 
             let mut visited = HashSet::new();
             let mut to_visit = vec![func.body];
@@ -90,23 +107,33 @@ impl<'a> Compiler<'a> {
 
                 let node = node_cell.borrow();
                 match *node {
-                    Node::Add { dst, src, imm, .. } => {
+                    Node::Add { next, dst, src, imm } => {
+                        _ = write!(output, "    N{node_cell:p}");
                         if dst == Register::Zero && src == Register::Zero && imm == 0 {
-                            _ = writeln!(output, "    N{node_cell:p}[noop]");
+                            _ = write!(output, "[noop]");
+                        } else if dst == Register::HighlightKind && src == Register::Zero {
+                            _ = write!(output, "[hk = {:?}]", unsafe {
+                                HighlightKind::from_usize(imm)
+                            });
                         } else {
-                            _ = writeln!(
-                                output,
-                                "    N{node_cell:p}[{} = {} + {}]",
-                                dst.mnemonic(),
-                                src.mnemonic(),
-                                imm
-                            )
+                            _ = write!(output, "[{} = ", dst.mnemonic());
+                            if src != Register::Zero {
+                                _ = write!(output, "{} + ", src.mnemonic());
+                            }
+                            if imm == usize::MAX {
+                                _ = write!(output, "max]");
+                            } else {
+                                _ = write!(output, "{imm}]");
+                            }
+                        }
+                        if let Some(next) = next {
+                            _ = writeln!(output, " --> N{next:p}");
+                            to_visit.push(next);
+                        } else {
+                            _ = writeln!(output);
                         }
                     }
-                    Node::Return => {
-                        _ = writeln!(output, "    N{node_cell:p}[return]");
-                    }
-                    Node::If { condition, then, .. } => {
+                    Node::If { next, condition, then } => {
                         match condition {
                             Condition::Charset(cs) => {
                                 _ = writeln!(output, "    N{node_cell:p}{{charset: {cs:?}}}");
@@ -118,18 +145,37 @@ impl<'a> Compiler<'a> {
                                 _ = writeln!(output, "    N{node_cell:p}{{imatch: {s}}}");
                             }
                         }
-                        _ = writeln!(output, "    N{node_cell:p} -->|Yes| N{then:p}");
+                        _ = writeln!(output, "    N{node_cell:p} -->|yes| N{then:p}");
                         to_visit.push(then);
+                        if let Some(next) = next {
+                            to_visit.push(next);
+                            _ = writeln!(output, "    N{node_cell:p} -->|no| N{next:p}");
+                        } else {
+                            _ = writeln!(output);
+                        }
                     }
-                    Node::Call { name, .. } => {
-                        _ = writeln!(output, "    N{node_cell:p}[Call {}]", name);
+                    Node::Call { next, name } => {
+                        _ = write!(output, "    N{node_cell:p}[Call {name}]");
+                        if let Some(next) = next {
+                            to_visit.push(next);
+                            _ = writeln!(output, " --> N{next:p}");
+                        } else {
+                            _ = writeln!(output);
+                        }
+                    }
+                    Node::Return => {
+                        _ = writeln!(output, "    N{node_cell:p}[return]");
+                    }
+                    Node::Flush { next } => {
+                        _ = write!(output, "    N{node_cell:p}[flush]");
+                        if let Some(next) = next {
+                            to_visit.push(next);
+                            _ = writeln!(output, " --> N{next:p}");
+                        } else {
+                            _ = writeln!(output);
+                        }
                     }
                 };
-
-                if let Some(next) = node.next() {
-                    _ = writeln!(output, "    N{node_cell:p} --> N{next:p}");
-                    to_visit.push(next);
-                }
             }
 
             _ = writeln!(output, "  end");
@@ -137,69 +183,31 @@ impl<'a> Compiler<'a> {
 
         output
     }
+}
 
-    fn visit_nodes_from<'a>(&self, src: NodeCell<'a>) -> _ {
-        struct NodeIter<'a> {
-            stack: Vec<NodeCell<'a>>,
-            visited: HashSet<*const NodeCell<'a>>,
-        }
+struct NodeIter<'a> {
+    stack: Vec<NodeCell<'a>>,
+    visited: HashSet<*const RefCell<Node<'a>>>,
+}
 
-        impl<'a> Iterator for NodeIter<'a> {
-            type Item = NodeCell<'a>;
+impl<'a> Iterator for NodeIter<'a> {
+    type Item = NodeCell<'a>;
 
-            fn next(&mut self) -> Option<Self::Item> {
-                while let Some(node_cell) = to_visit.pop() {
-                    if !visited.insert(node_cell.as_ptr()) {
-                        continue;
-                    }
-
-                    let node = node_cell.borrow();
-                    match *node {
-                        Node::Add { dst, src, imm, .. } => {
-                            if dst == Register::Zero && src == Register::Zero && imm == 0 {
-                                _ = writeln!(output, "    N{node_cell:p}[noop]");
-                            } else {
-                                _ = writeln!(
-                                    output,
-                                    "    N{node_cell:p}[{} = {} + {}]",
-                                    dst.mnemonic(),
-                                    src.mnemonic(),
-                                    imm
-                                )
-                            }
-                        }
-                        Node::Return => {
-                            _ = writeln!(output, "    N{node_cell:p}[return]");
-                        }
-                        Node::If { condition, then, .. } => {
-                            match condition {
-                                Condition::Charset(cs) => {
-                                    _ = writeln!(output, "    N{node_cell:p}{{charset: {cs:?}}}");
-                                }
-                                Condition::Prefix(s) => {
-                                    _ = writeln!(output, "    N{node_cell:p}{{match: {s}}}");
-                                }
-                                Condition::PrefixInsensitive(s) => {
-                                    _ = writeln!(output, "    N{node_cell:p}{{imatch: {s}}}");
-                                }
-                            }
-                            _ = writeln!(output, "    N{node_cell:p} -->|Yes| N{then:p}");
-                            to_visit.push(then);
-                        }
-                        Node::Call { name, .. } => {
-                            _ = writeln!(output, "    N{node_cell:p}[Call {}]", name);
-                        }
-                    };
-
-                    if let Some(next) = node.next() {
-                        _ = writeln!(output, "    N{node_cell:p} --> N{next:p}");
-                        to_visit.push(next);
-                    }
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(cell) = self.stack.pop() {
+            if self.visited.insert(cell) {
+                let node = cell.borrow_mut();
+                if let Node::If { then, .. } = *node {
+                    self.stack.push(then);
                 }
+                if let Some(next) = node.next() {
+                    self.stack.push(next);
+                }
+                return Some(cell);
             }
         }
 
-        NodeIter { stack: vec![src], visited: HashSet::new() }
+        None
     }
 }
 
@@ -244,7 +252,7 @@ pub struct Registers {
 
 type NodeCell<'a> = &'a RefCell<Node<'a>>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Function<'a> {
     pub name: &'a str,
     pub body: NodeCell<'a>,
@@ -259,10 +267,11 @@ pub enum Condition<'a> {
 
 #[derive(Debug)]
 pub enum Node<'a> {
-    Add { dst: Register, src: Register, imm: usize, next: Option<NodeCell<'a>> },
+    Add { next: Option<NodeCell<'a>>, dst: Register, src: Register, imm: usize },
+    If { next: Option<NodeCell<'a>>, condition: Condition<'a>, then: NodeCell<'a> },
+    Call { next: Option<NodeCell<'a>>, name: &'a str },
     Return,
-    If { condition: Condition<'a>, then: NodeCell<'a>, next: Option<NodeCell<'a>> },
-    Call { name: &'a str, next: Option<NodeCell<'a>> },
+    Flush { next: Option<NodeCell<'a>> },
 }
 
 impl<'a> Node<'a> {
@@ -271,16 +280,33 @@ impl<'a> Node<'a> {
             Node::Add { next, .. } => *next,
             Node::If { next, .. } => *next,
             Node::Call { next, .. } => *next,
+            Node::Flush { next, .. } => *next,
             _ => None,
         }
     }
 
-    fn set_next(&mut self, _next: NodeCell<'a>) {
-        match self {
-            Node::Add { next, .. } => *next = Some(_next),
-            Node::If { next, .. } => *next = Some(_next),
-            Node::Call { next, .. } => *next = Some(_next),
+    fn set_next(&mut self, n: NodeCell<'a>) {
+        let next = match self {
+            Node::Add { next, .. } => next,
+            Node::If { next, .. } => next,
+            Node::Call { next, .. } => next,
+            Node::Flush { next, .. } => next,
             _ => panic!("Cannot set next on this node type"),
+        };
+        debug_assert!(next.is_none());
+        *next = Some(n);
+    }
+
+    fn set_next_if_none(&mut self, n: NodeCell<'a>) {
+        let next = match self {
+            Node::Add { next, .. } => next,
+            Node::If { next, .. } => next,
+            Node::Call { next, .. } => next,
+            Node::Flush { next, .. } => next,
+            _ => panic!("Cannot set next on this node type"),
+        };
+        if next.is_none() {
+            *next = Some(n);
         }
     }
 }

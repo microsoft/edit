@@ -1,9 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::ptr;
-
-use crate::compiler::*;
+use super::*;
 use crate::definitions::HighlightKind;
 
 macro_rules! raise {
@@ -198,12 +196,14 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.advance();
         self.expect_token(Token::Semicolon)?;
 
-        Ok(NodeSpan::single(self.compiler.alloc_node(Node::Add {
+        let flush = self.compiler.alloc_node(Node::Flush { next: None });
+        let set = self.compiler.alloc_node(Node::Add {
+            next: Some(flush),
             dst: Register::HighlightKind,
             src: Register::Zero,
             imm: color,
-            next: None,
-        })))
+        });
+        Ok(NodeSpan { first: set, last: flush })
     }
 
     fn parse_call(&mut self) -> CompileResult<NodeSpan<'a>> {
@@ -217,7 +217,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.expect_token(Token::RightParen)?;
         self.expect_token(Token::Semicolon)?;
 
-        Ok(NodeSpan::single(self.compiler.alloc_node(Node::Call { name, next: None })))
+        Ok(NodeSpan::single(self.compiler.alloc_node(Node::Call { next: None, name })))
     }
 
     fn expect_token(&mut self, expected: Token) -> CompileResult<()> {

@@ -2,7 +2,7 @@ use std::ptr;
 
 use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind};
 
-use crate::compiler::*;
+use super::*;
 
 pub fn parse<'a>(
     compiler: &mut Compiler<'a>,
@@ -26,7 +26,9 @@ pub fn parse<'a>(
 
     // Connect all unset .next pointers to dst_bad.
     for node in compiler.visit_nodes_from(src) {
-        node.borrow_mut().set_next(dst_bad);
+        if !ptr::eq(node, dst_good) && !ptr::eq(node, dst_bad) {
+            node.borrow_mut().set_next_if_none(dst_bad);
+        }
     }
 
     Ok(src)
@@ -89,7 +91,7 @@ fn transform_literal<'a>(
     add_transition(
         compiler,
         src,
-        Node::If { condition: Condition::Prefix(s), then: dst, next: None },
+        Node::If { next: None, condition: Condition::Prefix(s), then: dst },
     )
 }
 
@@ -105,7 +107,7 @@ fn transform_class_plus<'a>(
     add_transition(
         compiler,
         src,
-        Node::If { condition: Condition::Charset(c), then: dst, next: None },
+        Node::If { next: None, condition: Condition::Charset(c), then: dst },
     )
 }
 
@@ -143,10 +145,10 @@ fn transform_class<'a>(
         }
 
         let str = compiler.intern_string(&str);
-        let test =
+        let condition =
             if insensitive { Condition::PrefixInsensitive(str) } else { Condition::Prefix(str) };
 
-        let d = add_transition(compiler, src, Node::If { condition: test, then: dst, next: None });
+        let d = add_transition(compiler, src, Node::If { next: None, condition, then: dst });
         if !ptr::eq(d, *actual_dst.get_or_insert(d)) {
             // TODO: broken
             panic!("Diverging destinations for class transformer: {class:?}");
@@ -260,7 +262,7 @@ fn transform_concat<'a>(
             src = add_transition(
                 compiler,
                 src,
-                Node::If { condition: Condition::PrefixInsensitive(str), then: dst, next: None },
+                Node::If { next: None, condition: Condition::PrefixInsensitive(str), then: dst },
             );
         } else {
             src = transform(compiler, src, dst, hir);
