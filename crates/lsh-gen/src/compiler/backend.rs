@@ -7,9 +7,9 @@ use std::fmt::Write as _;
 use super::*;
 
 #[derive(Debug, Clone, Copy)]
-enum RelocationTarget<'a> {
-    Node(*const IRCell<'a>),
-    Edge(*const Edge<'a>),
+enum Relocation<'a> {
+    ByName(usize, &'a str),
+    ByNode(usize, IRCell<'a>),
 }
 
 // General encoding:
@@ -130,17 +130,11 @@ pub struct Backend<'a> {
     instructions: Vec<Instruction>,
     charsets: Vec<&'a Charset>,
     strings: Vec<&'a str>,
-    relocations: Vec<(usize, RelocationTarget<'a>)>,
 }
 
 impl<'a> Backend<'a> {
     pub fn new() -> Self {
-        Self {
-            instructions: Vec::new(),
-            charsets: Vec::new(),
-            strings: Vec::new(),
-            relocations: Vec::new(),
-        }
+        Self { instructions: Vec::new(), charsets: Vec::new(), strings: Vec::new() }
     }
 
     pub fn instructions(&self) -> &[Instruction] {
@@ -156,176 +150,107 @@ impl<'a> Backend<'a> {
     }
 
     pub fn compile(&mut self, compiler: &Compiler<'a>) {
-        let mut offsets = HashMap::new();
+        let mut relocations = Vec::new();
+
         let mut charsets_seen = HashMap::new();
+        let mut visit_charset = |h: &'a Charset| {
+            *charsets_seen.entry(h as *const _).or_insert_with(|| {
+                let idx = self.charsets.len();
+                self.charsets.push(h);
+                idx
+            })
+        };
         let mut strings_seen = HashMap::new();
+        let mut visit_string = |s: &'a str| {
+            *strings_seen.entry(s as *const _).or_insert_with(|| {
+                let idx = self.strings.len();
+                self.strings.push(s);
+                idx
+            })
+        };
 
         for function in &compiler.functions {
-            for src in compiler.visit_nodes_from(function.body) {
-                let IR::Intra(n) = &*src.borrow() else {
-                    return;
-                };
+            let mut stack = vec![function.body];
 
-                offsets.insert(src as *const _ as *const (), self.instructions.len());
+            while let mut cell = stack.pop()
+                && cell.is_some()
+            {
+                while let Some(ir) = cell {
+                    let mut ir = ir.borrow_mut();
+                    ir.offset = self.instructions.len();
 
-                let mut iter = n.edges.iter().peekable();
-                while let Some(t) = iter.next() {
-                    offsets.insert(t as *const _ as *const (), self.instructions.len());
-
-                    match t.test {
-                        GraphTest::Chars(0) => {}
-                        GraphTest::Chars(usize::MAX) => {
-                            self.assign(Register::InputOffset, usize::MAX);
+                    match ir.instr {
+                        IRI::Add { dst, src, imm } => {
+                            self.instructions.push(Instruction::Add { dst, src, imm });
                         }
-                        GraphTest::Chars(n) => {
-                            self.add_assign(Register::InputOffset, n);
+                        IRI::If { condition, then } => {
+                            stack.push(then);
+                            relocations.push(Relocation::ByNode(self.instructions.len(), then));
+                            match condition {
+                                Condition::Charset(h) => {
+                                    let idx = visit_charset(h);
+                                    self.instructions
+                                        .push(Instruction::JumpIfMatchCharset { idx, dst: 0 });
+                                }
+                                Condition::Prefix(s) => {
+                                    let idx = visit_string(s);
+                                    self.instructions
+                                        .push(Instruction::JumpIfMatchPrefix { idx, dst: 0 });
+                                }
+                                Condition::PrefixInsensitive(s) => {
+                                    let idx = visit_string(s);
+                                    self.instructions.push(
+                                        Instruction::JumpIfMatchPrefixInsensitive { idx, dst: 0 },
+                                    );
+                                }
+                            }
                         }
-                        GraphTest::Charset(h) => {
-                            let h = *charsets_seen.entry(h as *const _).or_insert_with(|| {
-                                let idx = self.charsets.len();
-                                self.charsets.push(h);
-                                idx
-                            });
-                            self.jump_if_not_match_charset(
-                                h,
-                                RelocationTarget::Edge(*iter.peek().unwrap() as *const _),
-                            );
+                        IRI::Call { name } => {
+                            relocations.push(Relocation::ByName(self.instructions.len(), name));
+                            self.instructions.push(Instruction::Call { dst: 0 });
                         }
-                        GraphTest::Prefix(h) => {
-                            let h = *strings_seen.entry(h as *const _).or_insert_with(|| {
-                                let idx = self.strings.len();
-                                self.strings.push(h);
-                                idx
-                            });
-                            self.jump_if_not_match_prefix(
-                                h,
-                                RelocationTarget::Edge(*iter.peek().unwrap() as *const _),
-                            );
+                        IRI::Return => {
+                            self.instructions.push(Instruction::Return);
                         }
-                        GraphTest::PrefixInsensitive(h) => {
-                            let h = *strings_seen.entry(h as *const _).or_insert_with(|| {
-                                let idx = self.strings.len();
-                                self.strings.push(h);
-                                idx
-                            });
-                            self.jump_if_not_match_prefix_insensitive(
-                                h,
-                                RelocationTarget::Edge(*iter.peek().unwrap() as *const _),
-                            );
+                        IRI::Flush => {
+                            self.instructions.push(Instruction::FlushHighlight);
                         }
                     }
 
-                    match t.kind {
-                        HighlightKindOp::None => {}
-                        HighlightKindOp::Some(kind) => {
-                            self.assign(Register::HighlightKind, kind.as_usize());
-                        }
-                    }
-
-                    match &*t.dst.borrow() {
-                        IR::Intra(..) => {
-                            self.jump(RelocationTarget::Node(t.dst as *const _));
-                        }
-                        IR::Leaf(LeafNode::Jump(dst)) => {
-                            self.jump(RelocationTarget::Node(*dst as *const _));
-                        }
-                        IR::Leaf(LeafNode::Push(dst)) => {
-                            self.flush_highlight();
-                            self.call(RelocationTarget::Node(*dst as *const _));
-                        }
-                        IR::Leaf(LeafNode::Pop(0)) => {
-                            self.flush_highlight();
-                            self.suspend_opportunity();
-                            self.assign(Register::HighlightKind, HighlightKind::Other.as_usize());
-                            self.copy(Register::ProgramCounter, Register::ProcedureStart);
-                        }
-                        IR::Leaf(LeafNode::Pop(1)) => {
-                            self.flush_highlight();
-                            self.ret();
-                        }
-                        IR::Leaf(LeafNode::Loop) => {
-                            self.suspend_opportunity();
-                            self.jump(RelocationTarget::Node(src));
-                        }
-                        _ => unreachable!(),
-                    }
+                    cell = ir.next;
                 }
             }
         }
 
-        for &(off, dst) in &self.relocations {
-            let instruction_offset = *offsets
-                .get(&match dst {
-                    RelocationTarget::Node(h) => h as *const _ as *const (),
-                    RelocationTarget::Edge(h) => h as *const _ as *const (),
-                })
-                .unwrap();
+        for reloc in relocations {
+            let (off, resolved) = match reloc {
+                Relocation::ByName(off, name) => {
+                    let resolved = compiler
+                        .functions
+                        .iter()
+                        .find(|f| f.name == name)
+                        .map(|f| f.body.borrow().offset)
+                        .expect("Undefined function in relocation");
+                    (off, resolved)
+                }
+                Relocation::ByNode(off, node) => {
+                    let resolved = node.borrow().offset;
+                    (off, resolved)
+                }
+            };
+
             match &mut self.instructions[off] {
                 Instruction::Add { dst: Register::ProgramCounter, src: Register::Zero, imm } => {
-                    *imm = instruction_offset;
+                    *imm = resolved;
                 }
                 Instruction::Call { dst }
                 | Instruction::JumpIfMatchCharset { dst, .. }
                 | Instruction::JumpIfMatchPrefix { dst, .. }
                 | Instruction::JumpIfMatchPrefixInsensitive { dst, .. } => {
-                    *dst = instruction_offset;
+                    *dst = resolved;
                 }
                 i => panic!("Unexpected relocation target: {i:?}"),
             }
         }
-    }
-
-    fn add_assign(&mut self, dst: Register, imm: usize) {
-        self.instructions.push(Instruction::Add { dst, src: dst, imm });
-    }
-
-    fn assign(&mut self, dst: Register, imm: usize) {
-        self.instructions.push(Instruction::Add { dst, src: Register::Zero, imm });
-    }
-
-    fn copy(&mut self, dst: Register, src: Register) {
-        self.instructions.push(Instruction::Add { dst, src, imm: 0 });
-    }
-
-    fn jump(&mut self, dst: RelocationTarget<'a>) {
-        let dst = self.resolve_relocation(dst);
-        self.assign(Register::ProgramCounter, dst);
-    }
-
-    fn jump_if_not_match_charset(&mut self, idx: usize, dst: RelocationTarget<'a>) {
-        let dst = self.resolve_relocation(dst);
-        self.instructions.push(Instruction::JumpIfMatchCharset { idx, dst });
-    }
-
-    fn jump_if_not_match_prefix(&mut self, idx: usize, dst: RelocationTarget<'a>) {
-        let dst = self.resolve_relocation(dst);
-        self.instructions.push(Instruction::JumpIfMatchPrefix { idx, dst });
-    }
-
-    fn jump_if_not_match_prefix_insensitive(&mut self, idx: usize, dst: RelocationTarget<'a>) {
-        let dst = self.resolve_relocation(dst);
-        self.instructions.push(Instruction::JumpIfMatchPrefixInsensitive { idx, dst });
-    }
-
-    fn call(&mut self, dst: RelocationTarget<'a>) {
-        let dst = self.resolve_relocation(dst);
-        self.instructions.push(Instruction::Call { dst });
-    }
-
-    fn ret(&mut self) {
-        self.instructions.push(Instruction::Return);
-    }
-
-    fn flush_highlight(&mut self) {
-        self.instructions.push(Instruction::FlushHighlight);
-    }
-
-    fn suspend_opportunity(&mut self) {
-        self.instructions.push(Instruction::SuspendOpportunity);
-    }
-
-    fn resolve_relocation(&mut self, dst: RelocationTarget<'a>) -> usize {
-        self.relocations.push((self.instructions.len(), dst));
-        0
     }
 }

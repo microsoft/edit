@@ -66,9 +66,9 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         let span = self.parse_block()?;
         if let mut last = span.last.borrow_mut()
-            && last.next().is_none()
+            && last.next.is_none()
         {
-            last.set_next(self.compiler.alloc_node(IR::Return));
+            last.set_next(self.compiler.alloc_iri(IRI::Return));
         }
         Ok(Function { name, body: span.first })
     }
@@ -107,7 +107,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             Token::Return => {
                 self.advance();
                 self.expect_token(Token::Semicolon)?;
-                Ok(NodeSpan::single(self.compiler.alloc_node(IR::Return)))
+                Ok(NodeSpan::single(self.compiler.alloc_iri(IRI::Return)))
             }
             Token::If => self.parse_if_statement(),
             Token::Yield => self.parse_yield(),
@@ -196,13 +196,12 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.advance();
         self.expect_token(Token::Semicolon)?;
 
-        let flush = self.compiler.alloc_node(IR::Flush { next: None });
-        let set = self.compiler.alloc_node(IR::Add {
-            next: Some(flush),
+        let set = self.compiler.alloc_iri(IRI::Add {
             dst: Register::HighlightKind,
             src: Register::Zero,
             imm: color,
         });
+        let flush = self.compiler.chain_iri(set, IRI::Flush);
         Ok(NodeSpan { first: set, last: flush })
     }
 
@@ -217,7 +216,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.expect_token(Token::RightParen)?;
         self.expect_token(Token::Semicolon)?;
 
-        Ok(NodeSpan::single(self.compiler.alloc_node(IR::Call { next: None, name })))
+        Ok(NodeSpan::single(self.compiler.alloc_iri(IRI::Call { name })))
     }
 
     fn expect_token(&mut self, expected: Token) -> CompileResult<()> {

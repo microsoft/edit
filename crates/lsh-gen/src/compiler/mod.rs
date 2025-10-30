@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//mod backend;
+mod backend;
 mod frontend;
 mod optimizer;
 mod regex;
@@ -61,12 +61,27 @@ impl<'a> Compiler<'a> {
         optimizer::optimize(self);
     }
 
-    fn alloc_noop(&self) -> IRCell<'a> {
-        self.alloc_node(IR::Add { next: None, dst: Register::Zero, src: Register::Zero, imm: 0 })
+    pub fn assemble(&mut self) {
+        let mut backend = backend::Backend::new();
+        backend.compile(self)
     }
 
-    fn alloc_node(&self, node: IR<'a>) -> IRCell<'a> {
-        self.arena.alloc_uninit().write(RefCell::new(node))
+    fn alloc_ir(&self, ir: IR<'a>) -> IRCell<'a> {
+        self.arena.alloc_uninit().write(RefCell::new(ir))
+    }
+
+    fn alloc_iri(&self, instr: IRI<'a>) -> IRCell<'a> {
+        self.arena.alloc_uninit().write(RefCell::new(IR { next: None, instr, offset: 0 }))
+    }
+
+    fn alloc_noop(&self) -> IRCell<'a> {
+        self.alloc_iri(IRI::Add { dst: Register::Zero, src: Register::Zero, imm: 0 })
+    }
+
+    fn chain_iri(&self, prev: IRCell<'a>, instr: IRI<'a>) -> IRCell<'a> {
+        let ir = self.arena.alloc_uninit().write(RefCell::new(IR { next: None, instr, offset: 0 }));
+        prev.borrow_mut().set_next(ir);
+        ir
     }
 
     fn intern_charset(&mut self, charset: &Charset) -> &'a Charset {
@@ -106,9 +121,10 @@ impl<'a> Compiler<'a> {
                 }
 
                 let node = node_cell.borrow();
-                match *node {
-                    IR::Add { next, dst, src, imm } => {
-                        _ = write!(output, "    N{node_cell:p}");
+                _ = write!(output, "    N{node_cell:p}");
+
+                match node.instr {
+                    IRI::Add { dst, src, imm } => {
                         if dst == Register::Zero && src == Register::Zero && imm == 0 {
                             _ = write!(output, "[noop]");
                         } else if dst == Register::HighlightKind && src == Register::Zero {
@@ -126,56 +142,51 @@ impl<'a> Compiler<'a> {
                                 _ = write!(output, "{imm}]");
                             }
                         }
-                        if let Some(next) = next {
-                            _ = writeln!(output, " --> N{next:p}");
-                            to_visit.push(next);
-                        } else {
-                            _ = writeln!(output);
-                        }
                     }
-                    IR::If { next, condition, then } => {
+                    IRI::If { condition, then } => {
                         match condition {
                             Condition::Charset(cs) => {
-                                _ = writeln!(output, "    N{node_cell:p}{{charset: {cs:?}}}");
+                                _ = writeln!(output, "{{charset: {cs:?}}}");
                             }
                             Condition::Prefix(s) => {
-                                _ = writeln!(output, "    N{node_cell:p}{{match: {s}}}");
+                                _ = writeln!(output, "{{match: {s}}}");
                             }
                             Condition::PrefixInsensitive(s) => {
-                                _ = writeln!(output, "    N{node_cell:p}{{imatch: {s}}}");
+                                _ = writeln!(output, "{{imatch: {s}}}");
                             }
                         }
                         _ = writeln!(output, "    N{node_cell:p} -->|yes| N{then:p}");
                         to_visit.push(then);
-                        if let Some(next) = next {
-                            to_visit.push(next);
+                    }
+                    IRI::Call { name } => {
+                        _ = write!(output, "[Call {name}]");
+                    }
+                    IRI::Return => {
+                        _ = write!(output, "[return]");
+                    }
+                    IRI::Flush => {
+                        _ = write!(output, "[flush]");
+                    }
+                }
+
+                match node.instr {
+                    IRI::If { .. } => {
+                        if let Some(next) = node.next {
                             _ = writeln!(output, "    N{node_cell:p} -->|no| N{next:p}");
-                        } else {
-                            _ = writeln!(output);
                         }
                     }
-                    IR::Call { next, name } => {
-                        _ = write!(output, "    N{node_cell:p}[Call {name}]");
-                        if let Some(next) = next {
-                            to_visit.push(next);
+                    _ => {
+                        if let Some(next) = node.next {
                             _ = writeln!(output, " --> N{next:p}");
                         } else {
                             _ = writeln!(output);
                         }
                     }
-                    IR::Return => {
-                        _ = writeln!(output, "    N{node_cell:p}[return]");
-                    }
-                    IR::Flush { next } => {
-                        _ = write!(output, "    N{node_cell:p}[flush]");
-                        if let Some(next) = next {
-                            to_visit.push(next);
-                            _ = writeln!(output, " --> N{next:p}");
-                        } else {
-                            _ = writeln!(output);
-                        }
-                    }
-                };
+                }
+
+                if let Some(next) = node.next {
+                    to_visit.push(next);
+                }
             }
 
             _ = writeln!(output, "  end");
@@ -197,10 +208,10 @@ impl<'a> Iterator for TreeVisitor<'a> {
         while let Some(cell) = self.stack.pop() {
             if self.visited.insert(cell) {
                 let node = cell.borrow_mut();
-                if let IR::If { then, .. } = *node {
+                if let IRI::If { then, .. } = node.instr {
                     self.stack.push(then);
                 }
-                if let Some(next) = node.next() {
+                if let Some(next) = node.next {
                     self.stack.push(next);
                 }
                 return Some(cell);
@@ -262,47 +273,30 @@ pub enum Condition<'a> {
 }
 
 #[derive(Debug)]
-pub enum IR<'a> {
-    Add { next: Option<IRCell<'a>>, dst: Register, src: Register, imm: usize },
-    If { next: Option<IRCell<'a>>, condition: Condition<'a>, then: IRCell<'a> },
-    Call { next: Option<IRCell<'a>>, name: &'a str },
+pub enum IRI<'a> {
+    Add { dst: Register, src: Register, imm: usize },
+    If { condition: Condition<'a>, then: IRCell<'a> },
+    Call { name: &'a str },
     Return,
-    Flush { next: Option<IRCell<'a>> },
+    Flush,
+}
+
+#[derive(Debug)]
+pub struct IR<'a> {
+    pub next: Option<IRCell<'a>>,
+    pub instr: IRI<'a>,
+    pub offset: usize,
 }
 
 impl<'a> IR<'a> {
-    fn next(&self) -> Option<IRCell<'a>> {
-        match self {
-            IR::Add { next, .. } => *next,
-            IR::If { next, .. } => *next,
-            IR::Call { next, .. } => *next,
-            IR::Flush { next, .. } => *next,
-            _ => None,
-        }
-    }
-
     fn set_next(&mut self, n: IRCell<'a>) {
-        let next = match self {
-            IR::Add { next, .. } => next,
-            IR::If { next, .. } => next,
-            IR::Call { next, .. } => next,
-            IR::Flush { next, .. } => next,
-            _ => panic!("Cannot set next on this node type"),
-        };
-        debug_assert!(next.is_none());
-        *next = Some(n);
+        debug_assert!(self.next.is_none());
+        self.next = Some(n);
     }
 
     fn set_next_if_none(&mut self, n: IRCell<'a>) {
-        let next = match self {
-            IR::Add { next, .. } => next,
-            IR::If { next, .. } => next,
-            IR::Call { next, .. } => next,
-            IR::Flush { next, .. } => next,
-            _ => panic!("Cannot set next on this node type"),
-        };
-        if next.is_none() {
-            *next = Some(n);
+        if self.next.is_none() {
+            self.next = Some(n);
         }
     }
 }

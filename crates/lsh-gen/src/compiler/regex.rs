@@ -75,7 +75,7 @@ fn transform<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hir: &Hir) -> IRC
 fn transform_literal<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, lit: &[u8]) -> IRCell<'a> {
     let s = String::from_utf8(lit.to_vec()).unwrap();
     let s = compiler.intern_string(&s);
-    compiler.alloc_node(IR::If { next: None, condition: Condition::Prefix(s), then: dst })
+    compiler.alloc_iri(IRI::If { condition: Condition::Prefix(s), then: dst })
 }
 
 // [a-z]+
@@ -86,7 +86,7 @@ fn transform_class_plus<'a>(
 ) -> IRCell<'a> {
     let c = class_to_charset(class);
     let c = compiler.intern_charset(&c);
-    compiler.alloc_node(IR::If { next: None, condition: Condition::Charset(c), then: dst })
+    compiler.alloc_iri(IRI::If { condition: Condition::Charset(c), then: dst })
 }
 
 // [eE]
@@ -126,7 +126,7 @@ fn transform_class<'a>(
         let condition =
             if insensitive { Condition::PrefixInsensitive(str) } else { Condition::Prefix(str) };
 
-        let node = compiler.alloc_node(IR::If { next: None, condition, then: dst });
+        let node = compiler.alloc_iri(IRI::If { condition, then: dst });
         if first.is_none() {
             first = Some(node);
         }
@@ -141,33 +141,25 @@ fn transform_class<'a>(
 
 // .?
 fn transform_option<'a>(src: IRCell<'a>, dst: IRCell<'a>) -> IRCell<'a> {
-    match &mut *src.borrow_mut() {
-        IR::If { next, .. } => {
-            debug_assert!(next.is_none());
-            *next = Some(dst);
-            dst
-        }
-        _ => unreachable!(),
-    }
+    src.borrow_mut().set_next(dst);
+    src
 }
 
 // .*
 fn transform_any_star<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>) -> IRCell<'a> {
-    compiler.alloc_node(IR::Add {
+    compiler.alloc_ir(IR {
         next: Some(dst),
-        dst: Register::InputOffset,
-        src: Register::Zero,
-        imm: usize::MAX,
+        instr: IRI::Add { dst: Register::InputOffset, src: Register::Zero, imm: usize::MAX },
+        offset: 0,
     })
 }
 
 // .
 fn transform_any<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>) -> IRCell<'a> {
-    compiler.alloc_node(IR::Add {
+    compiler.alloc_ir(IR {
         next: Some(dst),
-        dst: Register::InputOffset,
-        src: Register::InputOffset,
-        imm: 1,
+        instr: IRI::Add { dst: Register::InputOffset, src: Register::InputOffset, imm: 1 },
+        offset: 0,
     })
 }
 
@@ -214,11 +206,7 @@ fn transform_concat<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hi
 
         let node = if let Some(str) = prefix_insensitive {
             let str = compiler.intern_string(&str);
-            compiler.alloc_node(IR::If {
-                next: None,
-                condition: Condition::PrefixInsensitive(str),
-                then: dst,
-            })
+            compiler.alloc_iri(IRI::If { condition: Condition::PrefixInsensitive(str), then: dst })
         } else {
             transform(compiler, dst, hir)
         };
@@ -226,11 +214,12 @@ fn transform_concat<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hi
             first = Some(node);
         }
         if let Some(last) = &last {
-            match &mut *last.borrow_mut() {
-                IR::Add { next, .. } => {
-                    *next = Some(node);
+            let mut last = last.borrow_mut();
+            match last.instr {
+                IRI::Add { .. } => {
+                    last.next = Some(node);
                 }
-                IR::If { then, .. } => {
+                IRI::If { ref mut then, .. } => {
                     *then = node;
                 }
                 _ => unreachable!(),

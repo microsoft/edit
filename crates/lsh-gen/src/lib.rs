@@ -30,6 +30,7 @@ pub fn generate() -> CompileResult<String> {
     let mut compiler = Compiler::new(&arena);
     compiler.parse(SRC)?;
     compiler.optimize();
+    compiler.assemble();
     Ok(compiler.as_mermaid())
 
     /*
