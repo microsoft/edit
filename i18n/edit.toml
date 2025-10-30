@@ -8,7 +8,6 @@ __default__ = [
     "ja",
     "ko",
     "pt_br",
-    "pt_pt",
     "ru",
     "zh_hans",
     "zh_hant",
@@ -16,8 +15,6 @@ __default__ = [
 
 [__alias__]
 zh = "zh_hans"
-"pt-pt" = "pt_pt"
-"pt-br" = "pt_br"
 
 # The keyboard key
 [Ctrl]
