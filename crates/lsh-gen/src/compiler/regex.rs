@@ -7,9 +7,9 @@ use super::*;
 pub fn parse<'a>(
     compiler: &mut Compiler<'a>,
     pattern: &str,
-    dst_good: NodeCell<'a>,
-    dst_bad: NodeCell<'a>,
-) -> Result<NodeCell<'a>, String> {
+    dst_good: IRCell<'a>,
+    dst_bad: IRCell<'a>,
+) -> Result<IRCell<'a>, String> {
     let hir = match regex_syntax::ParserBuilder::new()
         .utf8(false)
         .unicode(false)
@@ -21,8 +21,7 @@ pub fn parse<'a>(
         Err(e) => return Err(format!("{e}")),
     };
 
-    let src = compiler.alloc_noop();
-    transform(compiler, src, dst_good, &hir);
+    let src = transform(compiler, dst_good, &hir);
 
     // Connect all unset .next pointers to dst_bad.
     for node in compiler.visit_nodes_from(src) {
@@ -34,92 +33,71 @@ pub fn parse<'a>(
     Ok(src)
 }
 
-fn transform<'a>(
-    compiler: &mut Compiler<'a>,
-    src: NodeCell<'a>,
-    dst: NodeCell<'a>,
-    hir: &Hir,
-) -> NodeCell<'a> {
+fn transform<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hir: &Hir) -> IRCell<'a> {
     fn is_any_class(class: &ClassBytes) -> bool {
         class.ranges() == [ClassBytesRange::new(0, 255)]
     }
 
     match hir.kind() {
-        HirKind::Empty => transform_option(compiler, src, dst),
-        HirKind::Literal(lit) => transform_literal(compiler, src, dst, &lit.0),
-        HirKind::Class(Class::Bytes(class)) if is_any_class(class) => {
-            transform_any(compiler, src, dst)
-        }
-        HirKind::Class(Class::Bytes(class)) => transform_class(compiler, src, dst, class),
+        HirKind::Empty => dst,
+        HirKind::Literal(lit) => transform_literal(compiler, dst, &lit.0),
+        HirKind::Class(Class::Bytes(class)) if is_any_class(class) => transform_any(compiler, dst),
+        HirKind::Class(Class::Bytes(class)) => transform_class(compiler, dst, class),
         HirKind::Class(Class::Unicode(class)) => {
-            transform_class(compiler, src, dst, &class.to_byte_class().unwrap())
+            transform_class(compiler, dst, &class.to_byte_class().unwrap())
         }
         HirKind::Repetition(rep) => match (rep.min, rep.max, rep.sub.kind()) {
             (0, None, HirKind::Class(Class::Bytes(class))) if is_any_class(class) => {
-                transform_any_star(compiler, src, dst)
+                transform_any_star(compiler, dst)
             }
             (0, None, HirKind::Class(Class::Bytes(class))) => {
-                let dst = transform_class_plus(compiler, src, dst, class);
-                transform_option(compiler, src, dst);
-                dst
+                let src = transform_class_plus(compiler, dst, class);
+                transform_option(src, dst);
+                src
             }
             (0, Some(1), _) => {
-                let dst = transform(compiler, src, dst, &rep.sub);
-                transform_option(compiler, src, dst);
-                dst
+                let src = transform(compiler, dst, &rep.sub);
+                transform_option(src, dst);
+                src
             }
             (1, None, HirKind::Class(Class::Bytes(class))) => {
-                transform_class_plus(compiler, src, dst, class)
+                transform_class_plus(compiler, dst, class)
             }
             _ => panic!("Unsupported HIR: {hir:?}"),
         },
-        HirKind::Concat(hirs) if hirs.len() >= 2 => transform_concat(compiler, src, dst, hirs),
-        HirKind::Alternation(hirs) if hirs.len() >= 2 => transform_alt(compiler, src, dst, hirs),
+        HirKind::Concat(hirs) if hirs.len() >= 2 => transform_concat(compiler, dst, hirs),
+        HirKind::Alternation(hirs) if hirs.len() >= 2 => transform_alt(compiler, dst, hirs),
         _ => panic!("Unsupported HIR: {hir:?}"),
     }
 }
 
 // string
-fn transform_literal<'a>(
-    compiler: &mut Compiler<'a>,
-    src: NodeCell<'a>,
-    dst: NodeCell<'a>,
-    lit: &[u8],
-) -> NodeCell<'a> {
+fn transform_literal<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, lit: &[u8]) -> IRCell<'a> {
     let s = String::from_utf8(lit.to_vec()).unwrap();
     let s = compiler.intern_string(&s);
-    add_transition(
-        compiler,
-        src,
-        Node::If { next: None, condition: Condition::Prefix(s), then: dst },
-    )
+    compiler.alloc_node(IR::If { next: None, condition: Condition::Prefix(s), then: dst })
 }
 
 // [a-z]+
 fn transform_class_plus<'a>(
     compiler: &mut Compiler<'a>,
-    src: NodeCell<'a>,
-    dst: NodeCell<'a>,
+    dst: IRCell<'a>,
     class: &ClassBytes,
-) -> NodeCell<'a> {
+) -> IRCell<'a> {
     let c = class_to_charset(class);
     let c = compiler.intern_charset(&c);
-    add_transition(
-        compiler,
-        src,
-        Node::If { next: None, condition: Condition::Charset(c), then: dst },
-    )
+    compiler.alloc_node(IR::If { next: None, condition: Condition::Charset(c), then: dst })
 }
 
 // [eE]
 fn transform_class<'a>(
     compiler: &mut Compiler<'a>,
-    src: NodeCell<'a>,
-    dst: NodeCell<'a>,
+    dst: IRCell<'a>,
     class: &ClassBytes,
-) -> NodeCell<'a> {
+) -> IRCell<'a> {
     let mut charset = class_to_charset(class);
-    let mut actual_dst = None;
+    let mut first: Option<IRCell<'a>> = None;
+    let mut last: Option<IRCell<'a>> = None;
 
     for i in 0..256 {
         if !charset[i] {
@@ -148,25 +126,24 @@ fn transform_class<'a>(
         let condition =
             if insensitive { Condition::PrefixInsensitive(str) } else { Condition::Prefix(str) };
 
-        let d = add_transition(compiler, src, Node::If { next: None, condition, then: dst });
-        if !ptr::eq(d, *actual_dst.get_or_insert(d)) {
-            // TODO: broken
-            panic!("Diverging destinations for class transformer: {class:?}");
+        let node = compiler.alloc_node(IR::If { next: None, condition, then: dst });
+        if first.is_none() {
+            first = Some(node);
         }
+        if let Some(last) = &last {
+            last.borrow_mut().set_next(node);
+        }
+        last = Some(node);
     }
 
-    actual_dst.unwrap_or(dst)
+    first.unwrap()
 }
 
 // .?
-fn transform_option<'a>(
-    compiler: &mut Compiler<'a>,
-    src: NodeCell<'a>,
-    dst: NodeCell<'a>,
-) -> NodeCell<'a> {
+fn transform_option<'a>(src: IRCell<'a>, dst: IRCell<'a>) -> IRCell<'a> {
     match &mut *src.borrow_mut() {
-        Node::If { next, .. } => {
-            assert!(next.is_none());
+        IR::If { next, .. } => {
+            debug_assert!(next.is_none());
             *next = Some(dst);
             dst
         }
@@ -175,48 +152,27 @@ fn transform_option<'a>(
 }
 
 // .*
-fn transform_any_star<'a>(
-    compiler: &mut Compiler<'a>,
-    src: NodeCell<'a>,
-    dst: NodeCell<'a>,
-) -> NodeCell<'a> {
-    add_transition(
-        compiler,
-        src,
-        Node::Add {
-            dst: Register::InputOffset,
-            src: Register::Zero,
-            imm: usize::MAX,
-            next: Some(dst),
-        },
-    )
+fn transform_any_star<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>) -> IRCell<'a> {
+    compiler.alloc_node(IR::Add {
+        next: Some(dst),
+        dst: Register::InputOffset,
+        src: Register::Zero,
+        imm: usize::MAX,
+    })
 }
 
 // .
-fn transform_any<'a>(
-    compiler: &mut Compiler<'a>,
-    src: NodeCell<'a>,
-    dst: NodeCell<'a>,
-) -> NodeCell<'a> {
-    add_transition(
-        compiler,
-        src,
-        Node::Add {
-            dst: Register::InputOffset,
-            src: Register::InputOffset,
-            imm: 1,
-            next: Some(dst),
-        },
-    )
+fn transform_any<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>) -> IRCell<'a> {
+    compiler.alloc_node(IR::Add {
+        next: Some(dst),
+        dst: Register::InputOffset,
+        src: Register::InputOffset,
+        imm: 1,
+    })
 }
 
 // (a)(b)
-fn transform_concat<'a>(
-    compiler: &mut Compiler<'a>,
-    mut src: NodeCell<'a>,
-    dst: NodeCell<'a>,
-    hirs: &[Hir],
-) -> NodeCell<'a> {
+fn transform_concat<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hir]) -> IRCell<'a> {
     fn is_lowercase_literal(hir: &Hir) -> Option<u8> {
         if let HirKind::Class(Class::Bytes(class)) = hir.kind()
             && let ranges = class.ranges()
@@ -234,6 +190,8 @@ fn transform_concat<'a>(
     }
 
     let mut it = hirs.iter().peekable();
+    let mut first: Option<IRCell<'a>> = None;
+    let mut last: Option<IRCell<'a>> = None;
 
     while let Some(hir) = it.next() {
         // Transform [aA][bB][cC] into PrefixInsensitive("abc").
@@ -254,36 +212,43 @@ fn transform_concat<'a>(
             str
         });
 
-        let more = it.peek().is_some();
-        let dst = if more { compiler.alloc_noop() } else { dst };
-
-        if let Some(str) = prefix_insensitive {
+        let node = if let Some(str) = prefix_insensitive {
             let str = compiler.intern_string(&str);
-            src = add_transition(
-                compiler,
-                src,
-                Node::If { next: None, condition: Condition::PrefixInsensitive(str), then: dst },
-            );
+            compiler.alloc_node(IR::If {
+                next: None,
+                condition: Condition::PrefixInsensitive(str),
+                then: dst,
+            })
         } else {
-            src = transform(compiler, src, dst, hir);
+            transform(compiler, dst, hir)
+        };
+        if first.is_none() {
+            first = Some(node);
         }
+        if let Some(last) = &last {
+            match &mut *last.borrow_mut() {
+                IR::Add { next, .. } => {
+                    *next = Some(node);
+                }
+                IR::If { then, .. } => {
+                    *then = node;
+                }
+                _ => unreachable!(),
+            }
+        }
+        last = Some(node);
     }
 
-    src
+    first.unwrap()
 }
 
 // (a|b)
-fn transform_alt<'a>(
-    compiler: &mut Compiler<'a>,
-    src: NodeCell<'a>,
-    dst: NodeCell<'a>,
-    hirs: &[Hir],
-) -> NodeCell<'a> {
+fn transform_alt<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hir]) -> IRCell<'a> {
     let mut actual_dst = None;
 
     for hir in hirs {
         // TODO: needs to write into the else branch
-        let d = transform(compiler, src, dst, hir);
+        let d = transform(compiler, dst, hir);
         if !ptr::eq(d, *actual_dst.get_or_insert(d)) {
             // TODO: broken
             panic!("Diverging destinations for alternation transformer: {hirs:?}");
@@ -311,14 +276,4 @@ fn class_to_charset(class: &ClassBytes) -> Charset {
     }
 
     charset
-}
-
-fn add_transition<'a>(
-    compiler: &mut Compiler<'a>,
-    src: NodeCell<'a>,
-    node: Node<'a>,
-) -> NodeCell<'a> {
-    let n = compiler.alloc_node(node);
-    src.borrow_mut().set_next(n);
-    n
 }

@@ -61,11 +61,11 @@ impl<'a> Compiler<'a> {
         optimizer::optimize(self);
     }
 
-    fn alloc_noop(&self) -> NodeCell<'a> {
-        self.alloc_node(Node::Add { next: None, dst: Register::Zero, src: Register::Zero, imm: 0 })
+    fn alloc_noop(&self) -> IRCell<'a> {
+        self.alloc_node(IR::Add { next: None, dst: Register::Zero, src: Register::Zero, imm: 0 })
     }
 
-    fn alloc_node(&self, node: Node<'a>) -> NodeCell<'a> {
+    fn alloc_node(&self, node: IR<'a>) -> IRCell<'a> {
         self.arena.alloc_uninit().write(RefCell::new(node))
     }
 
@@ -77,8 +77,8 @@ impl<'a> Compiler<'a> {
         self.strings.intern(self.arena, s)
     }
 
-    fn visit_nodes_from(&self, root: NodeCell<'a>) -> NodeIter<'a> {
-        NodeIter { stack: vec![root], visited: HashSet::new() }
+    fn visit_nodes_from(&self, root: IRCell<'a>) -> TreeVisitor<'a> {
+        TreeVisitor { stack: vec![root], visited: HashSet::new() }
     }
 
     pub fn as_mermaid(&self) -> String {
@@ -107,7 +107,7 @@ impl<'a> Compiler<'a> {
 
                 let node = node_cell.borrow();
                 match *node {
-                    Node::Add { next, dst, src, imm } => {
+                    IR::Add { next, dst, src, imm } => {
                         _ = write!(output, "    N{node_cell:p}");
                         if dst == Register::Zero && src == Register::Zero && imm == 0 {
                             _ = write!(output, "[noop]");
@@ -133,7 +133,7 @@ impl<'a> Compiler<'a> {
                             _ = writeln!(output);
                         }
                     }
-                    Node::If { next, condition, then } => {
+                    IR::If { next, condition, then } => {
                         match condition {
                             Condition::Charset(cs) => {
                                 _ = writeln!(output, "    N{node_cell:p}{{charset: {cs:?}}}");
@@ -154,7 +154,7 @@ impl<'a> Compiler<'a> {
                             _ = writeln!(output);
                         }
                     }
-                    Node::Call { next, name } => {
+                    IR::Call { next, name } => {
                         _ = write!(output, "    N{node_cell:p}[Call {name}]");
                         if let Some(next) = next {
                             to_visit.push(next);
@@ -163,10 +163,10 @@ impl<'a> Compiler<'a> {
                             _ = writeln!(output);
                         }
                     }
-                    Node::Return => {
+                    IR::Return => {
                         _ = writeln!(output, "    N{node_cell:p}[return]");
                     }
-                    Node::Flush { next } => {
+                    IR::Flush { next } => {
                         _ = write!(output, "    N{node_cell:p}[flush]");
                         if let Some(next) = next {
                             to_visit.push(next);
@@ -185,19 +185,19 @@ impl<'a> Compiler<'a> {
     }
 }
 
-struct NodeIter<'a> {
-    stack: Vec<NodeCell<'a>>,
-    visited: HashSet<*const RefCell<Node<'a>>>,
+struct TreeVisitor<'a> {
+    stack: Vec<IRCell<'a>>,
+    visited: HashSet<*const RefCell<IR<'a>>>,
 }
 
-impl<'a> Iterator for NodeIter<'a> {
-    type Item = NodeCell<'a>;
+impl<'a> Iterator for TreeVisitor<'a> {
+    type Item = IRCell<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(cell) = self.stack.pop() {
             if self.visited.insert(cell) {
                 let node = cell.borrow_mut();
-                if let Node::If { then, .. } = *node {
+                if let IR::If { then, .. } = *node {
                     self.stack.push(then);
                 }
                 if let Some(next) = node.next() {
@@ -209,10 +209,6 @@ impl<'a> Iterator for NodeIter<'a> {
 
         None
     }
-}
-
-pub enum IR<'a> {
-    Program(NodeCell<'a>),
 }
 
 #[allow(dead_code)]
@@ -250,12 +246,12 @@ pub struct Registers {
     pub hk: u32,   // HighlightKind
 }
 
-type NodeCell<'a> = &'a RefCell<Node<'a>>;
+type IRCell<'a> = &'a RefCell<IR<'a>>;
 
 #[derive(Debug, Clone)]
 pub struct Function<'a> {
     pub name: &'a str,
-    pub body: NodeCell<'a>,
+    pub body: IRCell<'a>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -266,43 +262,43 @@ pub enum Condition<'a> {
 }
 
 #[derive(Debug)]
-pub enum Node<'a> {
-    Add { next: Option<NodeCell<'a>>, dst: Register, src: Register, imm: usize },
-    If { next: Option<NodeCell<'a>>, condition: Condition<'a>, then: NodeCell<'a> },
-    Call { next: Option<NodeCell<'a>>, name: &'a str },
+pub enum IR<'a> {
+    Add { next: Option<IRCell<'a>>, dst: Register, src: Register, imm: usize },
+    If { next: Option<IRCell<'a>>, condition: Condition<'a>, then: IRCell<'a> },
+    Call { next: Option<IRCell<'a>>, name: &'a str },
     Return,
-    Flush { next: Option<NodeCell<'a>> },
+    Flush { next: Option<IRCell<'a>> },
 }
 
-impl<'a> Node<'a> {
-    fn next(&self) -> Option<NodeCell<'a>> {
+impl<'a> IR<'a> {
+    fn next(&self) -> Option<IRCell<'a>> {
         match self {
-            Node::Add { next, .. } => *next,
-            Node::If { next, .. } => *next,
-            Node::Call { next, .. } => *next,
-            Node::Flush { next, .. } => *next,
+            IR::Add { next, .. } => *next,
+            IR::If { next, .. } => *next,
+            IR::Call { next, .. } => *next,
+            IR::Flush { next, .. } => *next,
             _ => None,
         }
     }
 
-    fn set_next(&mut self, n: NodeCell<'a>) {
+    fn set_next(&mut self, n: IRCell<'a>) {
         let next = match self {
-            Node::Add { next, .. } => next,
-            Node::If { next, .. } => next,
-            Node::Call { next, .. } => next,
-            Node::Flush { next, .. } => next,
+            IR::Add { next, .. } => next,
+            IR::If { next, .. } => next,
+            IR::Call { next, .. } => next,
+            IR::Flush { next, .. } => next,
             _ => panic!("Cannot set next on this node type"),
         };
         debug_assert!(next.is_none());
         *next = Some(n);
     }
 
-    fn set_next_if_none(&mut self, n: NodeCell<'a>) {
+    fn set_next_if_none(&mut self, n: IRCell<'a>) {
         let next = match self {
-            Node::Add { next, .. } => next,
-            Node::If { next, .. } => next,
-            Node::Call { next, .. } => next,
-            Node::Flush { next, .. } => next,
+            IR::Add { next, .. } => next,
+            IR::If { next, .. } => next,
+            IR::Call { next, .. } => next,
+            IR::Flush { next, .. } => next,
             _ => panic!("Cannot set next on this node type"),
         };
         if next.is_none() {

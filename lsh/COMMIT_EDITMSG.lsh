@@ -7,10 +7,13 @@ fn main() {
             else if /\tmodified:.*/ { yield BrightBlue;  }
             else if /\tnew file:.*/ { yield BrightGreen; }
             else if /\trenamed:.*/  { yield BrightBlue;  }
+            else if /.*/ {}
         }
         else if /diff --git.*/ {
             yield BrightBlue;
             diff();
+        }
+        else if /.*/ {
         }
     }
 }
@@ -22,5 +25,6 @@ fn diff() {
         else if /\+\+\+.*/ { yield BrightBlue;  }
         else if /-.*/      { yield BrightRed;   }
         else if /\+.*/     { yield BrightGreen; }
+        else if /.*/ {}
     }
 }

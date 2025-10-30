@@ -21,7 +21,6 @@ mod compiler;
 mod definitions;
 
 use compiler::*;
-use definitions::*;
 use stdext::arena::scratch_arena;
 
 const SRC: &str = include_str!("../../../lsh/COMMIT_EDITMSG.lsh");
@@ -30,7 +29,7 @@ pub fn generate() -> CompileResult<String> {
     let arena = scratch_arena(None);
     let mut compiler = Compiler::new(&arena);
     compiler.parse(SRC)?;
-    //compiler.optimize();
+    compiler.optimize();
     Ok(compiler.as_mermaid())
 
     /*

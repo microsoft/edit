@@ -16,20 +16,20 @@ macro_rules! raise {
 }
 
 struct NodeSpan<'a> {
-    pub first: NodeCell<'a>,
-    pub last: NodeCell<'a>,
+    pub first: IRCell<'a>,
+    pub last: IRCell<'a>,
 }
 
 impl<'a> NodeSpan<'a> {
-    pub fn single(node: NodeCell<'a>) -> Self {
+    pub fn single(node: IRCell<'a>) -> Self {
         Self { first: node, last: node }
     }
 }
 
 struct RegexSpan<'a> {
-    pub src: NodeCell<'a>,
-    pub dst_good: NodeCell<'a>,
-    pub dst_bad: NodeCell<'a>,
+    pub src: IRCell<'a>,
+    pub dst_good: IRCell<'a>,
+    pub dst_bad: IRCell<'a>,
 }
 
 pub struct Parser<'a, 'c, 'src> {
@@ -68,7 +68,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         if let mut last = span.last.borrow_mut()
             && last.next().is_none()
         {
-            last.set_next(self.compiler.alloc_node(Node::Return));
+            last.set_next(self.compiler.alloc_node(IR::Return));
         }
         Ok(Function { name, body: span.first })
     }
@@ -107,7 +107,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             Token::Return => {
                 self.advance();
                 self.expect_token(Token::Semicolon)?;
-                Ok(NodeSpan::single(self.compiler.alloc_node(Node::Return)))
+                Ok(NodeSpan::single(self.compiler.alloc_node(IR::Return)))
             }
             Token::If => self.parse_if_statement(),
             Token::Yield => self.parse_yield(),
@@ -117,8 +117,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_if_statement(&mut self) -> CompileResult<NodeSpan<'a>> {
-        let mut first: Option<NodeCell<'a>> = None;
-        let mut else_branch: Option<NodeCell<'a>> = None;
+        let mut first: Option<IRCell<'a>> = None;
+        let mut else_branch: Option<IRCell<'a>> = None;
         let last = self.compiler.alloc_noop();
 
         loop {
@@ -196,8 +196,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.advance();
         self.expect_token(Token::Semicolon)?;
 
-        let flush = self.compiler.alloc_node(Node::Flush { next: None });
-        let set = self.compiler.alloc_node(Node::Add {
+        let flush = self.compiler.alloc_node(IR::Flush { next: None });
+        let set = self.compiler.alloc_node(IR::Add {
             next: Some(flush),
             dst: Register::HighlightKind,
             src: Register::Zero,
@@ -217,7 +217,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.expect_token(Token::RightParen)?;
         self.expect_token(Token::Semicolon)?;
 
-        Ok(NodeSpan::single(self.compiler.alloc_node(Node::Call { next: None, name })))
+        Ok(NodeSpan::single(self.compiler.alloc_node(IR::Call { next: None, name })))
     }
 
     fn expect_token(&mut self, expected: Token) -> CompileResult<()> {
