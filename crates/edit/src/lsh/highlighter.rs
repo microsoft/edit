@@ -12,6 +12,14 @@ use crate::helpers::*;
 use crate::lsh::definitions::*;
 use crate::{simd, unicode};
 
+pub const LANGUAGES: &[&Language] = &[&Language {
+    name: "COMMIT_EDITMSG",
+    filenames: &["COMMIT_EDITMSG"],
+    strings: &STRINGS,
+    charsets: &CHARSETS,
+    instructions: &ASSEMBLY,
+}];
+
 pub fn language_from_path(path: &Path) -> Option<&'static Language> {
     let filename = path.file_name()?.as_encoded_bytes();
 
@@ -218,7 +226,7 @@ impl<'doc> Highlighter<'doc> {
                         }
                     }
                     3 => {
-                        // JumpIfNotMatchCharset
+                        // JumpIfMatchCharset
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
                         let off = self.registers.off as usize;
@@ -226,12 +234,11 @@ impl<'doc> Highlighter<'doc> {
 
                         if let Some(off) = Self::charset_gobble(line, off, cs) {
                             self.registers.off = off as u32;
-                        } else {
                             self.registers.pc = dst;
                         }
                     }
                     4 => {
-                        // JumpIfNotMatchPrefix
+                        // JumpIfMatchPrefix
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
                         let off = self.registers.off as usize;
@@ -239,12 +246,11 @@ impl<'doc> Highlighter<'doc> {
 
                         if Self::inlined_memcmp(line, off, str) {
                             self.registers.off = (off + str.len()) as u32;
-                        } else {
                             self.registers.pc = dst;
                         }
                     }
                     5 => {
-                        // JumpIfNotMatchPrefixInsensitive
+                        // JumpIfMatchPrefixInsensitive
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
                         let off = self.registers.off as usize;
@@ -252,7 +258,6 @@ impl<'doc> Highlighter<'doc> {
 
                         if Self::inlined_memicmp(line, off, str) {
                             self.registers.off = (off + str.len()) as u32;
-                        } else {
                             self.registers.pc = dst;
                         }
                     }

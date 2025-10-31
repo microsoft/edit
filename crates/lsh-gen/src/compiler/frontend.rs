@@ -100,7 +100,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         match &self.current_token {
             Token::Loop => {
                 self.advance();
-                let span = self.parse_block()?;
+                let mut span = self.parse_block()?;
+                span.last = self.compiler.chain_iri(span.last, IRI::Suspend);
                 span.last.borrow_mut().set_next(span.first);
                 Ok(span)
             }

@@ -32,7 +32,7 @@ fn main() {
 }
 
 fn compile_lsh() {
-    let contents = lsh_gen::generate();
+    let contents = lsh_gen::generate().unwrap();
     let out_dir = env_opt("OUT_DIR");
     let path = format!("{out_dir}/lsh_definitions.rs");
     std::fs::write(path, contents).unwrap();
