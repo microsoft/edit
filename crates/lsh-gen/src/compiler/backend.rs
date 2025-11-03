@@ -40,7 +40,7 @@ impl<'a> Backend<'a> {
         }
     }
 
-    pub fn compile(mut self, compiler: &Compiler<'a>) -> Assembly<'a> {
+    pub fn compile(mut self, compiler: &Compiler<'a>) -> CompileResult<Assembly<'a>> {
         for function in &compiler.functions {
             self.functions_seen.insert(function.name, self.assembly.instructions.len());
             self.stack.push(function.body);
@@ -50,10 +50,66 @@ impl<'a> Backend<'a> {
             {
                 while let Some(ir) = cell {
                     let mut ir = ir.borrow_mut();
+
                     if ir.offset != usize::MAX {
+                        // Jump to the already compiled instruction.
+                        self.assembly.instructions.push(match ir.instr {
+                            // If the target instruction is a jump (or loop) itself, we can just duplicate it.
+                            IRI::Add {
+                                dst: Register::ProgramCounter, src: Register::Zero, ..
+                            }
+                            | IRI::Loop { .. } => self.assembly.instructions[ir.offset],
+                            // Otherwise, a regular jump.
+                            _ => Instruction::Add {
+                                dst: Register::ProgramCounter,
+                                src: Register::Zero,
+                                imm: ir.offset,
+                            },
+                        });
                         break;
                     }
-                    self.visit_ir(&mut ir);
+
+                    ir.offset = self.assembly.instructions.len();
+
+                    match ir.instr {
+                        IRI::Add { dst, src, imm } => {
+                            self.assembly.instructions.push(Instruction::Add { dst, src, imm });
+                        }
+                        IRI::If { condition, then } => {
+                            self.stack.push(then);
+                            let dst = self.dst_by_node(then);
+                            let instr = match condition {
+                                Condition::Charset(h) => {
+                                    let idx = self.visit_charset(h);
+                                    Instruction::JumpIfMatchCharset { idx, dst }
+                                }
+                                Condition::Prefix(s) => {
+                                    let idx = self.visit_string(s);
+                                    Instruction::JumpIfMatchPrefix { idx, dst }
+                                }
+                                Condition::PrefixInsensitive(s) => {
+                                    let idx = self.visit_string(s);
+                                    Instruction::JumpIfMatchPrefixInsensitive { idx, dst }
+                                }
+                            };
+                            self.assembly.instructions.push(instr);
+                        }
+                        IRI::Call { name } => {
+                            let dst = self.dst_by_name(name);
+                            self.assembly.instructions.push(Instruction::Call { dst });
+                        }
+                        IRI::Return => {
+                            self.assembly.instructions.push(Instruction::Return);
+                        }
+                        IRI::Flush => {
+                            self.assembly.instructions.push(Instruction::FlushHighlight);
+                        }
+                        IRI::Loop { dst } => {
+                            let dst = self.dst_by_node(dst);
+                            self.assembly.instructions.push(Instruction::Loop { dst });
+                        }
+                    }
+
                     cell = ir.next;
                 }
             }
@@ -61,50 +117,33 @@ impl<'a> Backend<'a> {
             self.process_relocations();
         }
 
-        assert!(self.relocations.is_empty());
-        self.assembly
-    }
+        if !self.relocations.is_empty() {
+            let names: String = self
+                .relocations
+                .iter()
+                .filter_map(|reloc| match reloc {
+                    Relocation::ByName(_, name) => Some(*name),
+                    Relocation::ByNode(_, _) => None,
+                })
+                .collect::<Vec<&str>>()
+                .join(", ");
 
-    fn visit_ir(&mut self, ir: &mut IR<'a>) {
-        ir.offset = self.assembly.instructions.len();
+            if !names.is_empty() {
+                return Err(CompileError {
+                    line: 0,
+                    column: 0,
+                    message: format!("Unresolved function call names: {names}"),
+                });
+            }
 
-        match ir.instr {
-            IRI::Add { dst, src, imm } => {
-                self.assembly.instructions.push(Instruction::Add { dst, src, imm });
-            }
-            IRI::If { condition, then } => {
-                self.stack.push(then);
-                let dst = self.dst_by_node(then);
-                let instr = match condition {
-                    Condition::Charset(h) => {
-                        let idx = self.visit_charset(h);
-                        Instruction::JumpIfMatchCharset { idx, dst }
-                    }
-                    Condition::Prefix(s) => {
-                        let idx = self.visit_string(s);
-                        Instruction::JumpIfMatchPrefix { idx, dst }
-                    }
-                    Condition::PrefixInsensitive(s) => {
-                        let idx = self.visit_string(s);
-                        Instruction::JumpIfMatchPrefixInsensitive { idx, dst }
-                    }
-                };
-                self.assembly.instructions.push(instr);
-            }
-            IRI::Call { name } => {
-                self.relocations.push(Relocation::ByName(self.assembly.instructions.len(), name));
-                self.assembly.instructions.push(Instruction::Call { dst: 0 });
-            }
-            IRI::Return => {
-                self.assembly.instructions.push(Instruction::Return);
-            }
-            IRI::Flush => {
-                self.assembly.instructions.push(Instruction::FlushHighlight);
-            }
-            IRI::Suspend => {
-                self.assembly.instructions.push(Instruction::SuspendOpportunity);
-            }
+            return Err(CompileError {
+                line: 0,
+                column: 0,
+                message: "Unresolved IR nodes".to_string(),
+            });
         }
+
+        Ok(self.assembly)
     }
 
     fn visit_charset(&mut self, h: &'a Charset) -> usize {
@@ -123,15 +162,35 @@ impl<'a> Backend<'a> {
         })
     }
 
+    fn dst_by_node(&mut self, ir: IRCell<'a>) -> usize {
+        let off = ir.borrow().offset;
+        if off != usize::MAX {
+            off
+        } else {
+            self.relocations.push(Relocation::ByNode(self.assembly.instructions.len(), ir));
+            0
+        }
+    }
+
+    fn dst_by_name(&mut self, name: &'a str) -> usize {
+        match self.functions_seen.get(name) {
+            Some(&dst) => dst,
+            None => {
+                self.relocations.push(Relocation::ByName(self.assembly.instructions.len(), name));
+                0
+            }
+        }
+    }
+
     fn process_relocations(&mut self) {
         self.relocations.retain_mut(|reloc| {
             let (off, resolved) = match *reloc {
                 Relocation::ByName(off, name) => match self.functions_seen.get(name) {
-                    None => return false,
+                    None => return true,
                     Some(&resolved) => (off, resolved),
                 },
                 Relocation::ByNode(off, node) => match node.borrow().offset {
-                    usize::MAX => return false,
+                    usize::MAX => return true,
                     resolved => (off, resolved),
                 },
             };
@@ -151,15 +210,5 @@ impl<'a> Backend<'a> {
 
             false
         });
-    }
-
-    fn dst_by_node(&mut self, ir: IRCell<'a>) -> usize {
-        let off = ir.borrow().offset;
-        if off != usize::MAX {
-            off
-        } else {
-            self.relocations.push(Relocation::ByNode(self.assembly.instructions.len(), ir));
-            0
-        }
     }
 }

@@ -65,11 +65,13 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.expect_token(Token::RightParen)?;
 
         let span = self.parse_block()?;
+
         if let mut last = span.last.borrow_mut()
-            && last.next.is_none()
+            && last.wants_next()
         {
             last.set_next(self.compiler.alloc_iri(IRI::Return));
         }
+
         Ok(Function { name, body: span.first })
     }
 
@@ -101,8 +103,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             Token::Loop => {
                 self.advance();
                 let mut span = self.parse_block()?;
-                span.last = self.compiler.chain_iri(span.last, IRI::Suspend);
-                span.last.borrow_mut().set_next(span.first);
+                span.last = self.compiler.chain_iri(span.last, IRI::Loop { dst: span.first });
                 Ok(span)
             }
             Token::Return => {

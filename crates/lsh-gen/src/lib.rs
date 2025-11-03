@@ -15,7 +15,7 @@
 //! If it doesn't match, it will fall back to the next possible defined regular expression.
 
 #![feature(allocator_api)]
-#![allow(irrefutable_let_patterns)]
+#![allow(irrefutable_let_patterns, unused, clippy::upper_case_acronyms)]
 
 mod compiler;
 mod definitions;
@@ -33,7 +33,7 @@ pub fn generate() -> CompileResult<String> {
     let mut compiler = Compiler::new(&arena);
     compiler.parse(SRC)?;
     compiler.optimize();
-    let assembly = compiler.assemble();
+    let assembly = compiler.assemble()?;
     let mermaid = compiler.as_mermaid();
 
     let mut output = String::new();

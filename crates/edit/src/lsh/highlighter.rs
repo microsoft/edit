@@ -278,8 +278,13 @@ impl<'doc> Highlighter<'doc> {
                         self.registers.hs = self.registers.off;
                     }
                     7 => {
-                        // SuspendOpportunity
+                        // Loop
+                        let dst = op >> 12;
                         let off = self.registers.off as usize;
+
+                        self.registers.pc = dst;
+                        self.registers.ps = dst;
+
                         if off >= line.len() {
                             break;
                         }
@@ -387,69 +392,3 @@ impl<'doc> Highlighter<'doc> {
         unsafe { (&mut self.registers as *mut _ as *mut u32).add(reg).write(val) }
     }
 }
-
-/*#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_powershell() {
-        let doc = r#"$response = Read-Host "Delete branch '$branch'? [y/N]""#;
-        let bytes = doc.as_bytes();
-        let scratch = scratch_arena(None);
-        let mut parser = Highlighter::new(&bytes, &lang_powershell::LANG);
-
-        let tokens = parser.parse_next_line(&scratch);
-        assert_eq!(
-            tokens,
-            &[
-                Higlight { start: 0, kind: HighlightKind::Variable },
-                Higlight { start: 9, kind: HighlightKind::Other },
-                Higlight { start: 10, kind: HighlightKind::Operator },
-                Higlight { start: 11, kind: HighlightKind::Other },
-                Higlight { start: 12, kind: HighlightKind::Method },
-                Higlight { start: 21, kind: HighlightKind::Other },
-                Higlight { start: 22, kind: HighlightKind::String },
-                Higlight { start: 38, kind: HighlightKind::Variable },
-                Higlight { start: 45, kind: HighlightKind::String },
-                Higlight { start: 54, kind: HighlightKind::Other },
-            ]
-        );
-    }
-
-    #[test]
-    fn test_string() {
-        let doc = r#""$x";"#;
-        let bytes = doc.as_bytes();
-        let scratch = scratch_arena(None);
-        let mut parser = Highlighter::new(&bytes, &lang_powershell::LANG);
-
-        let tokens = parser.parse_next_line(&scratch);
-        assert_eq!(
-            tokens,
-            &[
-                Higlight { start: 0, kind: HighlightKind::String },
-                Higlight { start: 1, kind: HighlightKind::Variable },
-                Higlight { start: 3, kind: HighlightKind::String },
-                Higlight { start: 4, kind: HighlightKind::Other },
-            ]
-        );
-    }
-
-    #[test]
-    fn test_comment() {
-        let doc = r#"<#x#>"#;
-        let bytes = doc.as_bytes();
-        let scratch = scratch_arena(None);
-        let mut parser = Highlighter::new(&bytes, &lang_powershell::LANG);
-
-        let tokens = parser.parse_next_line(&scratch);
-        assert_eq!(
-            tokens,
-            &[
-                Higlight { start: 0, kind: HighlightKind::Comment },
-                Higlight { start: 5, kind: HighlightKind::Other },
-            ]
-        );
-    }
-}*/

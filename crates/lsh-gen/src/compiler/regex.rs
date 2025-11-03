@@ -25,8 +25,12 @@ pub fn parse<'a>(
 
     // Connect all unset .next pointers to dst_bad.
     for node in compiler.visit_nodes_from(src) {
-        if !ptr::eq(node, dst_good) && !ptr::eq(node, dst_bad) {
-            node.borrow_mut().set_next_if_none(dst_bad);
+        if !ptr::eq(node, dst_good)
+            && !ptr::eq(node, dst_bad)
+            && let mut node = node.borrow_mut()
+            && node.wants_next()
+        {
+            node.set_next(dst_bad);
         }
     }
 

@@ -45,7 +45,7 @@ pub struct Assembly<'a> {
 // * The opcode is 4 bits at opcode[3:0]
 // * Register constants are 4 bits
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Instruction {
     // Encoding:
     //   imm[31:12] | src[11:8] | dst[7:4] | 0000
@@ -85,10 +85,11 @@ pub enum Instruction {
     FlushHighlight,
 
     // Encoding:
-    //                                       0111
+    //   dst[31:12] |                      | 0111
     //
     // Checks if we're at the end and exit if so.
-    SuspendOpportunity,
+    // Otherwise, jumps to `dst`.
+    Loop { dst: usize },
 }
 
 impl Instruction {
@@ -112,7 +113,7 @@ impl Instruction {
                 Self::cast_imm(dst) | (idx as u32) << 4 | 0b0101
             }
             Instruction::FlushHighlight => 0b0110,
-            Instruction::SuspendOpportunity => 0b0111,
+            Instruction::Loop { dst } => Self::cast_imm(dst) | 0b0111,
         }
     }
 
@@ -140,7 +141,9 @@ impl Instruction {
                 format!("jpi   {idx:?}, {dst}")
             }
             Instruction::FlushHighlight => "flush".to_string(),
-            Instruction::SuspendOpportunity => "susp".to_string(),
+            Instruction::Loop { dst } => {
+                format!("loop  {dst}")
+            }
         }
     }
 
@@ -181,7 +184,7 @@ impl<'a> Compiler<'a> {
         optimizer::optimize(self);
     }
 
-    pub fn assemble(&mut self) -> Assembly<'a> {
+    pub fn assemble(&mut self) -> CompileResult<Assembly<'a>> {
         backend::Backend::new().compile(self)
     }
 
@@ -290,8 +293,8 @@ impl<'a> Compiler<'a> {
                     IRI::Flush => {
                         _ = write!(output, "[flush]");
                     }
-                    IRI::Suspend => {
-                        _ = write!(output, "[suspend]");
+                    IRI::Loop { dst } => {
+                        _ = write!(output, "[loop] --> N{dst:p}");
                     }
                 }
 
@@ -405,7 +408,7 @@ pub enum IRI<'a> {
     Call { name: &'a str },
     Return,
     Flush,
-    Suspend,
+    Loop { dst: IRCell<'a> },
 }
 
 #[derive(Debug)]
@@ -416,15 +419,13 @@ pub struct IR<'a> {
 }
 
 impl<'a> IR<'a> {
+    fn wants_next(&self) -> bool {
+        self.next.is_none() && !matches!(self.instr, IRI::Return | IRI::Loop { .. })
+    }
+
     fn set_next(&mut self, n: IRCell<'a>) {
         debug_assert!(self.next.is_none());
         self.next = Some(n);
-    }
-
-    fn set_next_if_none(&mut self, n: IRCell<'a>) {
-        if self.next.is_none() {
-            self.next = Some(n);
-        }
     }
 }
 
