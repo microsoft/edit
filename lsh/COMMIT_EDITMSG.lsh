@@ -1,4 +1,4 @@
-fn main() {
+pub fn commit_editmsg() {
     if /#/ {
         yield Comment;
 

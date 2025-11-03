@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 use super::*;
-use crate::definitions::HighlightKind;
 
 macro_rules! raise {
     ($self:ident, $msg:literal) => {{
@@ -191,8 +190,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             _ => raise!(self, "Expected color name after yield"),
         };
         let color = match HighlightKind::from_str(color) {
-            Some(c) => c.as_usize(),
-            None => raise!(self, "Unknown highlight color: {}", color),
+            Ok(c) => c.as_usize(),
+            Err(..) => raise!(self, "Unknown highlight color: {}", color),
         };
 
         self.advance();
