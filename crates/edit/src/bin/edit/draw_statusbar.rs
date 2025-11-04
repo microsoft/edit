@@ -238,7 +238,7 @@ pub fn draw_dialog_language_change(ctx: &mut Context, state: &mut State) {
                 done = true;
             }
 
-            for &lang in LANGUAGES {
+            for lang in LANGUAGES {
                 if ctx.list_item(Some(lang) == selected, lang.name) == ListSelection::Activated {
                     doc.override_language(Some(lang));
                     done = true;

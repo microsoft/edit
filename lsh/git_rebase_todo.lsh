@@ -1,0 +1,26 @@
+pub fn git_rebase_todo() {
+    loop {
+        if /(?:break|exec|b|x)\b{end-half}/ {
+            yield Keyword;
+            if /.*/ {
+                yield Comment;
+            }
+        } else if /(?:drop|edit|fixup|pick|reword|squash|d|e|f|p|r|s)\b{end-half}/ {
+            yield Keyword;
+
+            if /\s+/ {
+            }
+
+            if /\S+/ {
+                // Hash parameter
+                yield Variable;
+
+                if /.*/ {
+                    yield Comment;
+                }
+            }
+        } else if /.*/ {
+            // Gobble the rest of the line with no highlighting.
+        }
+    }
+}

@@ -1,6 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::fs::read_dir;
+use std::io;
+use std::path::PathBuf;
+
 use super::*;
 
 pub struct Generator<'a> {
@@ -12,13 +16,42 @@ impl<'a> Generator<'a> {
         Self { compiler: Compiler::new(arena) }
     }
 
-    pub fn add_file(&mut self, path: &Path) -> CompileResult<()> {
+    pub fn read_file(&mut self, path: &Path) -> CompileResult<()> {
         let src = std::fs::read_to_string(path).map_err(|e| CompileError {
             line: 0,
             column: 0,
             message: format!("Failed to read {}: {}", path.display(), e),
         })?;
         self.compiler.parse(&src)
+    }
+
+    pub fn read_directory(&mut self, path: &Path) -> CompileResult<()> {
+        let files = Self::read_dir_to_vec(path).map_err(|e| CompileError {
+            line: 0,
+            column: 0,
+            message: format!("Failed to read directory {}: {}", path.display(), e),
+        })?;
+
+        for path in files {
+            self.read_file(&path)?;
+        }
+        Ok(())
+    }
+
+    fn read_dir_to_vec(path: &Path) -> io::Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+
+        for entry in read_dir(path)? {
+            let entry = entry?;
+            if entry.metadata().is_ok_and(|f| f.is_file())
+                && entry.file_name().as_encoded_bytes().ends_with(b".lsh")
+            {
+                paths.push(entry.path());
+            }
+        }
+
+        paths.sort_unstable();
+        Ok(paths)
     }
 
     pub fn generate_rust(mut self) -> CompileResult<String> {
@@ -86,41 +119,66 @@ pub struct Registers {
     pub hk: u32,   // HighlightKind
 }
 
-/**
+impl Registers {
+    #[inline(always)]
+    pub fn get(&self, reg: usize) -> u32 {
+        debug_assert!(reg < 5);
+        unsafe { (self as *const _ as *const u32).add(reg).read() }
+    }
+
+    #[inline(always)]
+    pub fn set(&mut self, reg: usize, val: u32) {
+        debug_assert!(reg < 5);
+        unsafe { (self as *mut _ as *mut u32).add(reg).write(val) }
+    }
+}
+
 ",
         );
 
+        output.push_str("/**\n");
         output.push_str(&mermaid);
+        output.push_str("**/\n");
 
-        _ = write!(
-            output,
-            "\
-**/
-#[rustfmt::skip] pub const ASSEMBLY: [u32; {len}] = [
-",
-            len = assembly.instructions.len(),
-        );
-
-        let line_num_width = assembly.instructions.len().ilog10() as usize + 1;
-        for (i, op) in assembly.instructions.iter().enumerate() {
+        for func in &self.compiler.functions {
+            if !func.public {
+                continue;
+            }
             _ = writeln!(
                 output,
-                "        {op:#010x}, // {i:>line_num_width$}:  {mnemonic}",
-                op = op.encode(),
-                mnemonic = op.mnemonic()
+                "pub const ENTRYPOINT_{}: u32 = {};",
+                func.name.to_ascii_uppercase(),
+                func.body.borrow().offset
             );
         }
 
-        _ = write!(
+        _ = writeln!(
             output,
-            "\
-];
+            "\n#[rustfmt::skip] pub const ASSEMBLY: [u32; {len}] = [",
+            len = assembly.instructions.len(),
+        );
+        let line_num_width = assembly.instructions.len().ilog10() as usize + 1;
+        for (i, ai) in assembly.instructions.iter().enumerate() {
+            if !ai.label.is_empty() {
+                if i != 0 {
+                    output.push('\n');
+                }
+                _ = writeln!(output, "        // {}:", ai.label);
+            }
+            _ = writeln!(
+                output,
+                "        {instr:#010x}, // {i:>line_num_width$}:  {mnemonic}",
+                instr = ai.instr.encode(),
+                mnemonic = ai.instr.mnemonic()
+            );
+        }
+        output.push_str("];\n");
 
-#[rustfmt::skip] pub const CHARSETS: [[u16; 16]; {len}] = [
-",
+        _ = writeln!(
+            output,
+            "\n#[rustfmt::skip] pub const CHARSETS: [[u16; 16]; {len}] = [",
             len = assembly.charsets.len(),
         );
-
         for cs in assembly.charsets {
             output.push_str("    [");
             for lo in 0..16 {
@@ -135,21 +193,16 @@ pub struct Registers {
             }
             output.push_str("],\n");
         }
+        output.push_str("];\n");
 
-        _ = write!(
+        _ = writeln!(
             output,
-            "\
-];
-
-#[rustfmt::skip] pub const STRINGS: [&str; {len}] = [
-",
+            "\n#[rustfmt::skip] pub const STRINGS: [&str; {len}] = [",
             len = assembly.strings.len(),
         );
-
         for s in assembly.strings {
             _ = writeln!(output, "    {s:?},");
         }
-
         output.push_str("];\n");
 
         Ok(output)

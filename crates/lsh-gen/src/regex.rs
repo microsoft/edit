@@ -1,6 +1,7 @@
+use std::ops::RangeInclusive;
 use std::ptr;
 
-use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind};
+use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind, Look};
 
 use super::*;
 
@@ -50,6 +51,18 @@ fn transform<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hir: &Hir) -> IRC
         HirKind::Class(Class::Unicode(class)) => {
             transform_class(compiler, dst, &class.to_byte_class().unwrap())
         }
+        HirKind::Look(Look::WordEndHalfAscii) => {
+            // If the test hits, then we failed the word boundary, so go to dst_bad.
+            // We don't have dst_bad here, so allocate a noop node, which later gets
+            // picked up with its unset .next pointer, and set to dst_bad automatically.
+            let bad = compiler.alloc_noop();
+            let c = compiler.intern_charset(&ASCII_WORD_CHARSET);
+            compiler.alloc_ir(IR {
+                next: Some(dst),
+                instr: IRI::If { condition: Condition::Charset(c), then: bad },
+                offset: usize::MAX,
+            })
+        }
         HirKind::Repetition(rep) => match (rep.min, rep.max, rep.sub.kind()) {
             (0, None, HirKind::Class(Class::Bytes(class))) if is_any_class(class) => {
                 transform_any_star(compiler, dst)
@@ -64,6 +77,7 @@ fn transform<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hir: &Hir) -> IRC
                 transform_option(src, dst);
                 src
             }
+            (1, None, HirKind::Literal(lit)) => transform_literal_plus(compiler, dst, lit),
             (1, None, HirKind::Class(Class::Bytes(class))) => {
                 transform_class_plus(compiler, dst, class)
             }
@@ -80,6 +94,19 @@ fn transform_literal<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, lit: &[u8
     let s = String::from_utf8(lit.to_vec()).unwrap();
     let s = compiler.intern_string(&s);
     compiler.alloc_iri(IRI::If { condition: Condition::Prefix(s), then: dst })
+}
+
+// a+
+fn transform_literal_plus<'a>(
+    compiler: &mut Compiler<'a>,
+    dst: IRCell<'a>,
+    lit: &regex_syntax::hir::Literal,
+) -> IRCell<'a> {
+    assert!(lit.0.len() == 1);
+    let mut c = Charset::default();
+    c[lit.0[0] as usize] = true;
+    let c = compiler.intern_charset(&c);
+    compiler.alloc_iri(IRI::If { condition: Condition::Charset(c), then: dst })
 }
 
 // [a-z]+
@@ -237,18 +264,22 @@ fn transform_concat<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hi
 
 // (a|b)
 fn transform_alt<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hir]) -> IRCell<'a> {
-    let mut actual_dst = None;
+    let mut first: Option<IRCell<'a>> = None;
+    let mut last: Option<IRCell<'a>> = None;
 
     for hir in hirs {
         // TODO: needs to write into the else branch
-        let d = transform(compiler, dst, hir);
-        if !ptr::eq(d, *actual_dst.get_or_insert(d)) {
-            // TODO: broken
-            panic!("Diverging destinations for alternation transformer: {hirs:?}");
+        let node = transform(compiler, dst, hir);
+        if first.is_none() {
+            first = Some(node);
         }
+        if let Some(last) = &last {
+            last.borrow_mut().set_next(node);
+        }
+        last = Some(node);
     }
 
-    actual_dst.unwrap_or(dst)
+    first.unwrap()
 }
 
 // [a-z] -> 256-ary LUT
@@ -270,3 +301,23 @@ fn class_to_charset(class: &ClassBytes) -> Charset {
 
     charset
 }
+
+const ASCII_WORD_CHARSET: Charset = {
+    const fn fill(bits: &mut [bool; 256], range: RangeInclusive<u8>) {
+        let beg = *range.start() as usize;
+        let end = *range.end() as usize;
+        let mut i = beg;
+        while i <= end {
+            bits[i] = true;
+            i += 1;
+        }
+    }
+
+    let mut charset = Charset::no();
+    fill(&mut charset.bits, b'0'..=b'9');
+    fill(&mut charset.bits, b'A'..=b'Z');
+    fill(&mut charset.bits, b'_'..=b'_');
+    fill(&mut charset.bits, b'a'..=b'z');
+    fill(&mut charset.bits, 0xC2..=0xF4);
+    charset
+};

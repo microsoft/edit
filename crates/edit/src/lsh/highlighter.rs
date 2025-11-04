@@ -12,18 +12,36 @@ use crate::helpers::*;
 use crate::lsh::definitions::*;
 use crate::{simd, unicode};
 
-pub const LANGUAGES: &[&Language] = &[&Language {
-    name: "COMMIT_EDITMSG",
-    filenames: &["COMMIT_EDITMSG"],
-    strings: &STRINGS,
-    charsets: &CHARSETS,
-    instructions: &ASSEMBLY,
-}];
+pub struct Language {
+    pub name: &'static str,
+    pub filenames: &'static [&'static str],
+    entrypoint: u32,
+}
+
+impl PartialEq for &Language {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(*self, *other)
+    }
+}
+
+pub const LANGUAGES: &[Language] = &[
+    Language { name: "Diff", filenames: &["*.diff", "*.patch"], entrypoint: ENTRYPOINT_DIFF },
+    Language {
+        name: "Git Commit Message",
+        filenames: &["COMMIT_EDITMSG", "MERGE_MSG"],
+        entrypoint: ENTRYPOINT_GIT_COMMIT_MESSAGE,
+    },
+    Language {
+        name: "Git Rebase Message",
+        filenames: &["git-rebase-todo"], // TODO: https://github.com/microsoft/vscode/issues/156954
+        entrypoint: ENTRYPOINT_GIT_REBASE_TODO,
+    },
+];
 
 pub fn language_from_path(path: &Path) -> Option<&'static Language> {
     let filename = path.file_name()?.as_encoded_bytes();
 
-    for &l in LANGUAGES {
+    for l in LANGUAGES {
         for f in l.filenames {
             let f = f.as_bytes();
             if let Some(suffix) = f.strip_prefix(b"*") {
@@ -57,7 +75,6 @@ pub struct State {}
 #[derive(Clone)]
 pub struct Highlighter<'a> {
     doc: &'a dyn ReadableDocument,
-    language: &'static Language,
     offset: usize,
     logical_pos_y: CoordType,
     stack: Vec<Registers>,
@@ -76,11 +93,11 @@ impl<'doc> Highlighter<'doc> {
     pub fn new(doc: &'doc dyn ReadableDocument, language: &'static Language) -> Self {
         Self {
             doc,
-            language,
             offset: 0,
             logical_pos_y: 0,
             stack: Default::default(),
             registers: Registers {
+                pc: language.entrypoint,
                 hk: HighlightKind::Other.as_usize() as u32,
                 ..Default::default()
             },
@@ -195,7 +212,7 @@ impl<'doc> Highlighter<'doc> {
         loop {
             unsafe {
                 let pc = self.registers.pc;
-                let op = *self.language.instructions.get_unchecked(pc as usize);
+                let op = *ASSEMBLY.get_unchecked(pc as usize);
 
                 self.registers.pc += 1;
 
@@ -205,14 +222,13 @@ impl<'doc> Highlighter<'doc> {
                         let dst = ((op >> 4) & 0xf) as usize;
                         let src = ((op >> 8) & 0xf) as usize;
                         let imm = op >> 12;
-                        self.set_reg(dst, self.get_reg(src) + imm);
+                        self.registers.set(dst, self.registers.get(src) + imm);
                     }
                     1 => {
                         // Call
                         let dst = op >> 12;
                         self.stack.push(self.registers);
                         self.registers.pc = dst;
-                        self.registers.ps = dst;
                     }
                     2 => {
                         // Return
@@ -230,7 +246,7 @@ impl<'doc> Highlighter<'doc> {
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
                         let off = self.registers.off as usize;
-                        let cs = self.language.charsets.get_unchecked(idx);
+                        let cs = CHARSETS.get_unchecked(idx);
 
                         if let Some(off) = Self::charset_gobble(line, off, cs) {
                             self.registers.off = off as u32;
@@ -242,7 +258,7 @@ impl<'doc> Highlighter<'doc> {
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
                         let off = self.registers.off as usize;
-                        let str = self.language.strings.get_unchecked(idx).as_bytes();
+                        let str = STRINGS.get_unchecked(idx).as_bytes();
 
                         if Self::inlined_memcmp(line, off, str) {
                             self.registers.off = (off + str.len()) as u32;
@@ -254,7 +270,7 @@ impl<'doc> Highlighter<'doc> {
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
                         let off = self.registers.off as usize;
-                        let str = self.language.strings.get_unchecked(idx).as_bytes();
+                        let str = STRINGS.get_unchecked(idx).as_bytes();
 
                         if Self::inlined_memicmp(line, off, str) {
                             self.registers.off = (off + str.len()) as u32;
@@ -283,7 +299,6 @@ impl<'doc> Highlighter<'doc> {
                         let off = self.registers.off as usize;
 
                         self.registers.pc = dst;
-                        self.registers.ps = dst;
 
                         if off >= line.len() {
                             break;
@@ -380,15 +395,5 @@ impl<'doc> Highlighter<'doc> {
         let bitmask = 1u16 << hi_nibble;
 
         (bitset & bitmask) != 0
-    }
-
-    #[inline(always)]
-    fn get_reg(&self, reg: usize) -> u32 {
-        unsafe { (&self.registers as *const _ as *const u32).add(reg).read() }
-    }
-
-    #[inline(always)]
-    fn set_reg(&mut self, reg: usize, val: u32) {
-        unsafe { (&mut self.registers as *mut _ as *mut u32).add(reg).write(val) }
     }
 }

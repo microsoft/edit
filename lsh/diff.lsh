@@ -1,0 +1,17 @@
+pub fn diff() {
+    loop {
+        if /diff.*/ {
+            yield BrightBlue;
+        } else if /---.*/ {
+            yield BrightBlue;
+        } else if /\+\+\+.*/ {
+            yield BrightBlue;
+        } else if /-.*/ {
+            yield BrightRed;
+        } else if /\+.*/ {
+            yield BrightGreen;
+        } else if /.*/ {
+            // Gobble the rest of the line with no highlighting.
+        }
+    }
+}

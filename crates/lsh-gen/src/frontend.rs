@@ -14,12 +14,12 @@ macro_rules! raise {
     }};
 }
 
-struct NodeSpan<'a> {
+struct IRSpan<'a> {
     pub first: IRCell<'a>,
     pub last: IRCell<'a>,
 }
 
-impl<'a> NodeSpan<'a> {
+impl<'a> IRSpan<'a> {
     pub fn single(node: IRCell<'a>) -> Self {
         Self { first: node, last: node }
     }
@@ -52,6 +52,13 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_function(&mut self) -> CompileResult<Function<'a>> {
+        let public = if matches!(self.current_token, Token::Pub) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         self.expect_token(Token::Fn)?;
 
         let name = match &self.current_token {
@@ -71,14 +78,14 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             last.set_next(self.compiler.alloc_iri(IRI::Return));
         }
 
-        Ok(Function { name, body: span.first })
+        Ok(Function { name, body: span.first, public })
     }
 
-    fn parse_block(&mut self) -> CompileResult<NodeSpan<'a>> {
+    fn parse_block(&mut self) -> CompileResult<IRSpan<'a>> {
         self.expect_token(Token::LeftBrace)?;
 
         // TODO: a bit inoptimal to always allocate a noop node
-        let mut result: Option<NodeSpan> = None;
+        let mut result: Option<IRSpan> = None;
 
         while !matches!(self.current_token, Token::RightBrace | Token::Eof) {
             let s = self.parse_statement()?;
@@ -93,11 +100,11 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.expect_token(Token::RightBrace)?;
         Ok(match result {
             Some(span) => span,
-            None => NodeSpan::single(self.compiler.alloc_noop()),
+            None => IRSpan::single(self.compiler.alloc_noop()),
         })
     }
 
-    fn parse_statement(&mut self) -> CompileResult<NodeSpan<'a>> {
+    fn parse_statement(&mut self) -> CompileResult<IRSpan<'a>> {
         match &self.current_token {
             Token::Loop => {
                 self.advance();
@@ -108,7 +115,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             Token::Return => {
                 self.advance();
                 self.expect_token(Token::Semicolon)?;
-                Ok(NodeSpan::single(self.compiler.alloc_iri(IRI::Return)))
+                Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Return)))
             }
             Token::If => self.parse_if_statement(),
             Token::Yield => self.parse_yield(),
@@ -117,7 +124,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         }
     }
 
-    fn parse_if_statement(&mut self) -> CompileResult<NodeSpan<'a>> {
+    fn parse_if_statement(&mut self) -> CompileResult<IRSpan<'a>> {
         let mut first: Option<IRCell<'a>> = None;
         let mut else_branch: Option<IRCell<'a>> = None;
         let last = self.compiler.alloc_noop();
@@ -162,7 +169,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             else_branch = Some(re.dst_bad);
         }
 
-        Ok(NodeSpan { first: first.unwrap(), last })
+        Ok(IRSpan { first: first.unwrap(), last })
     }
 
     fn parse_if_regex(&mut self) -> CompileResult<RegexSpan<'a>> {
@@ -182,7 +189,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         Ok(RegexSpan { src, dst_good, dst_bad })
     }
 
-    fn parse_yield(&mut self) -> CompileResult<NodeSpan<'a>> {
+    fn parse_yield(&mut self) -> CompileResult<IRSpan<'a>> {
         self.expect_token(Token::Yield)?;
 
         let color = match &self.current_token {
@@ -203,10 +210,10 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             imm: color,
         });
         let flush = self.compiler.chain_iri(set, IRI::Flush);
-        Ok(NodeSpan { first: set, last: flush })
+        Ok(IRSpan { first: set, last: flush })
     }
 
-    fn parse_call(&mut self) -> CompileResult<NodeSpan<'a>> {
+    fn parse_call(&mut self) -> CompileResult<IRSpan<'a>> {
         let name = match &self.current_token {
             Token::Identifier(n) => self.compiler.strings.intern(self.compiler.arena, n),
             _ => raise!(self, "Expected function name"),
@@ -217,7 +224,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.expect_token(Token::RightParen)?;
         self.expect_token(Token::Semicolon)?;
 
-        Ok(NodeSpan::single(self.compiler.alloc_iri(IRI::Call { name })))
+        Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Call { name })))
     }
 
     fn expect_token(&mut self, expected: Token) -> CompileResult<()> {

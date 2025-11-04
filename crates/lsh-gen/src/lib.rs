@@ -20,14 +20,30 @@ use std::ops::{Index, IndexMut};
 use std::path::Path;
 use std::str::FromStr;
 
-use stdext::arena::{Arena, ArenaString, scratch_arena};
+use stdext::arena::*;
 
 use self::compiler::*;
 use self::frontend::*;
+pub use self::generator::Generator;
 use self::tokenizer::*;
 
+pub type CompileResult<T> = Result<T, CompileError>;
+
+#[derive(Debug)]
+pub struct CompileError {
+    pub line: usize,
+    pub column: usize,
+    pub message: String,
+}
+
+impl fmt::Display for CompileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "error at {}:{}: {}", self.line, self.column, self.message)
+    }
+}
+
 pub struct Assembly<'a> {
-    pub instructions: Vec<Instruction>,
+    pub instructions: Vec<AnnotatedInstruction<'a>>,
     pub charsets: Vec<&'a Charset>,
     pub strings: Vec<&'a str>,
 }
@@ -117,7 +133,6 @@ impl FromStr for HighlightKind {
 pub enum Register {
     Zero,
     ProgramCounter,
-    ProcedureStart,
     InputOffset,
     HighlightStart,
     HighlightKind,
@@ -128,7 +143,6 @@ impl Register {
         match self {
             Register::Zero => "zero",
             Register::ProgramCounter => "pc",
-            Register::ProcedureStart => "ps",
             Register::InputOffset => "off",
             Register::HighlightStart => "hs",
             Register::HighlightKind => "hk",
@@ -141,10 +155,28 @@ impl Register {
 pub struct Registers {
     pub zero: u32, // Zero
     pub pc: u32,   // ProgramCounter
-    pub ps: u32,   // ProcedureStart
     pub off: u32,  // InputOffset
     pub hs: u32,   // HighlightStart
     pub hk: u32,   // HighlightKind
+}
+
+impl Registers {
+    #[inline(always)]
+    pub fn get(&self, reg: usize) -> u32 {
+        debug_assert!(reg < 5);
+        unsafe { (self as *const _ as *const u32).add(reg).read() }
+    }
+
+    #[inline(always)]
+    pub fn set(&mut self, reg: usize, val: u32) {
+        debug_assert!(reg < 5);
+        unsafe { (self as *mut _ as *mut u32).add(reg).write(val) }
+    }
+}
+
+pub struct AnnotatedInstruction<'a> {
+    pub instr: Instruction,
+    pub label: &'a str,
 }
 
 #[allow(dead_code)]

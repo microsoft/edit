@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use super::*;
 
@@ -14,8 +14,9 @@ enum Relocation<'a> {
 pub struct Backend<'a> {
     assembly: Assembly<'a>,
 
-    stack: Vec<IRCell<'a>>,
+    stack: VecDeque<IRCell<'a>>,
     relocations: Vec<Relocation<'a>>,
+    next_instruction_label: &'a str,
 
     functions_seen: HashMap<&'a str, usize>,
     charsets_seen: HashMap<*const Charset, usize>,
@@ -31,8 +32,9 @@ impl<'a> Backend<'a> {
                 strings: Vec::new(),
             },
 
-            stack: Vec::new(),
+            stack: VecDeque::new(),
             relocations: Vec::new(),
+            next_instruction_label: "",
 
             functions_seen: HashMap::new(),
             charsets_seen: HashMap::new(),
@@ -42,41 +44,27 @@ impl<'a> Backend<'a> {
 
     pub fn compile(mut self, compiler: &Compiler<'a>) -> CompileResult<Assembly<'a>> {
         for function in &compiler.functions {
+            self.next_instruction_label = function.name;
             self.functions_seen.insert(function.name, self.assembly.instructions.len());
-            self.stack.push(function.body);
+            self.stack.push_back(function.body);
 
-            while let mut cell = self.stack.pop()
-                && cell.is_some()
-            {
-                while let Some(ir) = cell {
-                    let mut ir = ir.borrow_mut();
+            while let Some(mut ir) = self.stack.pop_front() {
+                let mut ir = ir.borrow_mut();
 
-                    if ir.offset != usize::MAX {
-                        // Jump to the already compiled instruction.
-                        self.assembly.instructions.push(match ir.instr {
-                            // If the target instruction is a jump (or loop) itself, we can just duplicate it.
-                            IRI::Add {
-                                dst: Register::ProgramCounter, src: Register::Zero, ..
-                            }
-                            | IRI::Loop { .. } => self.assembly.instructions[ir.offset],
-                            // Otherwise, a regular jump.
-                            _ => Instruction::Add {
-                                dst: Register::ProgramCounter,
-                                src: Register::Zero,
-                                imm: ir.offset,
-                            },
-                        });
-                        break;
-                    }
+                if ir.offset != usize::MAX {
+                    // Already serialized: self.dst_by_node() and the relocation code will insert jumps as needed.
+                    continue;
+                }
 
+                loop {
                     ir.offset = self.assembly.instructions.len();
 
                     match ir.instr {
                         IRI::Add { dst, src, imm } => {
-                            self.assembly.instructions.push(Instruction::Add { dst, src, imm });
+                            self.push_instruction(Instruction::Add { dst, src, imm });
                         }
                         IRI::If { condition, then } => {
-                            self.stack.push(then);
+                            self.stack.push_back(then);
                             let dst = self.dst_by_node(then);
                             let instr = match condition {
                                 Condition::Charset(h) => {
@@ -92,25 +80,46 @@ impl<'a> Backend<'a> {
                                     Instruction::JumpIfMatchPrefixInsensitive { idx, dst }
                                 }
                             };
-                            self.assembly.instructions.push(instr);
+                            self.push_instruction(instr);
                         }
                         IRI::Call { name } => {
                             let dst = self.dst_by_name(name);
-                            self.assembly.instructions.push(Instruction::Call { dst });
+                            self.push_instruction(Instruction::Call { dst });
                         }
                         IRI::Return => {
-                            self.assembly.instructions.push(Instruction::Return);
+                            self.push_instruction(Instruction::Return);
                         }
                         IRI::Flush => {
-                            self.assembly.instructions.push(Instruction::FlushHighlight);
+                            self.push_instruction(Instruction::FlushHighlight);
                         }
                         IRI::Loop { dst } => {
                             let dst = self.dst_by_node(dst);
-                            self.assembly.instructions.push(Instruction::Loop { dst });
+                            self.push_instruction(Instruction::Loop { dst });
                         }
                     }
 
-                    cell = ir.next;
+                    ir = match ir.next {
+                        Some(next) => next.borrow_mut(),
+                        None => break,
+                    };
+
+                    // If the tail end of this IR chain is already compiled, we jump there.
+                    if ir.offset != usize::MAX {
+                        self.push_instruction(match ir.instr {
+                            // If the target instruction is a jump (or loop) itself, we can just duplicate it.
+                            IRI::Add {
+                                dst: Register::ProgramCounter, src: Register::Zero, ..
+                            }
+                            | IRI::Loop { .. } => self.assembly.instructions[ir.offset].instr,
+                            // Otherwise, a regular jump.
+                            _ => Instruction::Add {
+                                dst: Register::ProgramCounter,
+                                src: Register::Zero,
+                                imm: ir.offset,
+                            },
+                        });
+                        break;
+                    }
                 }
             }
 
@@ -195,7 +204,7 @@ impl<'a> Backend<'a> {
                 },
             };
 
-            match &mut self.assembly.instructions[off] {
+            match &mut self.assembly.instructions[off].instr {
                 Instruction::Add { dst: Register::ProgramCounter, src: Register::Zero, imm } => {
                     *imm = resolved;
                 }
@@ -210,5 +219,12 @@ impl<'a> Backend<'a> {
 
             false
         });
+    }
+
+    fn push_instruction(&mut self, instr: Instruction) {
+        self.assembly
+            .instructions
+            .push(AnnotatedInstruction { instr, label: self.next_instruction_label });
+        self.next_instruction_label = "";
     }
 }

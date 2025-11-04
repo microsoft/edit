@@ -34,12 +34,13 @@ pub enum Token {
     Regex(String),
 
     // Keywords
-    Loop,
-    Return,
+    Pub,
     Fn,
-    Yield,
     If,
     Else,
+    Loop,
+    Return,
+    Yield,
 
     // Punctuation
     LeftBrace,
@@ -165,12 +166,13 @@ impl<'a> Tokenizer<'a> {
         }
 
         match value.as_str() {
-            "loop" => Token::Loop,
-            "return" => Token::Return,
+            "pub" => Token::Pub,
             "fn" => Token::Fn,
-            "yield" => Token::Yield,
             "if" => Token::If,
             "else" => Token::Else,
+            "loop" => Token::Loop,
+            "return" => Token::Return,
+            "yield" => Token::Yield,
             _ => Token::Identifier(value),
         }
     }
