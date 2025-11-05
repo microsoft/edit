@@ -42,7 +42,7 @@ fn compile_lsh() {
     let out_dir = env_opt("OUT_DIR");
     let out_path = format!("{out_dir}/lsh_definitions.rs");
 
-    let mut generator = lsh_gen::Generator::new(&scratch);
+    let mut generator = lsh::Generator::new(&scratch);
     generator.read_directory(Path::new(lsh_path)).unwrap();
     let contents = generator.generate_rust().unwrap();
     std::fs::write(out_path, contents).unwrap();

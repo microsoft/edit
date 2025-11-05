@@ -1,6 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Welcome to Leonard's Syntax Highlighter,
+//! otherwise known as Leonard's Shitty Highlighter.
+//!
+//! This module provides the compiler that produces the bytecode for edit.
+
 #![feature(allocator_api)]
 #![allow(irrefutable_let_patterns, unused, clippy::upper_case_acronyms)]
 

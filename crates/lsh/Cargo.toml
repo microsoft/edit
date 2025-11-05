@@ -1,5 +1,5 @@
 [package]
-name = "lsh-gen"
+name = "lsh"
 version = "0.0.0"
 
 edition.workspace = true

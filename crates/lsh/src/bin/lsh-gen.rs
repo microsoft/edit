@@ -6,7 +6,7 @@ use std::io::Write as _;
 use std::path::Path;
 use std::process::exit;
 
-use lsh_gen::CompileResult;
+use lsh::CompileResult;
 use stdext::arena::scratch_arena;
 
 pub fn main() {
@@ -20,7 +20,7 @@ fn run() -> CompileResult<()> {
     stdext::arena::init(128 * 1024 * 1024).unwrap();
 
     let scratch = scratch_arena(None);
-    let mut generator = lsh_gen::Generator::new(&scratch);
+    let mut generator = lsh::Generator::new(&scratch);
     let mut has_path = false;
 
     for arg in args_os().skip(1) {
