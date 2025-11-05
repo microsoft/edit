@@ -10,6 +10,10 @@ rust-version.workspace = true
 build = "build/main.rs"
 categories = ["text-editors"]
 
+[[bench]]
+name = "lib"
+harness = false
+
 [features]
 debug-latency = []
 
