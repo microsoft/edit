@@ -1,11 +1,11 @@
 pub fn diff() {
     loop {
         if /(?:diff|---|\+\+\+).*/ {
-            yield BrightBlue;
+            yield meta.diff.header;
         } else if /-.*/ {
-            yield BrightRed;
+            yield markup.deleted;
         } else if /\+.*/ {
-            yield BrightGreen;
+            yield markup.inserted;
         } else if /.*/ {
             // Gobble the rest of the line with no highlighting.
         }

@@ -1,20 +1,18 @@
 pub fn git_commit_message() {
     loop {
         if /#/ {
-            yield Comment;
-            if /\tdeleted:.*/ {
-                yield BrightRed;
-            } else if /\tmodified:.*/ {
-                yield BrightBlue;
+            yield comment;
+            if /(?:\tmodified:|\trenamed:).*/ {
+                yield markup.changed;
+            } else if /\tdeleted:.*/ {
+                yield markup.deleted;
             } else if /\tnew file:.*/ {
-                yield BrightGreen;
-            } else if /\trenamed:.*/ {
-                yield BrightBlue;
+                yield markup.inserted;
             } else if /.*/ {
                 // Gobble the rest of the line with no highlighting.
             }
         } else if /diff --git.*/ {
-            yield BrightBlue;
+            yield meta.diff.header;
             diff();
         } else if /.*/ {
             // Gobble the rest of the line with no highlighting.

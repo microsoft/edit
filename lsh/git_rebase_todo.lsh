@@ -1,22 +1,24 @@
 pub fn git_rebase_todo() {
     loop {
-        if /(?:break|exec|b|x)\b{end-half}/ {
-            yield Keyword;
+        if /#.*/ {
+            yield comment;
+        } else if /(?:break|exec|b|x)\b{end-half}/ {
+            yield keyword;
             if /.*/ {
-                yield Comment;
+                yield comment;
             }
         } else if /(?:drop|edit|fixup|pick|reword|squash|d|e|f|p|r|s)\b{end-half}/ {
-            yield Keyword;
+            yield keyword;
 
             if /\s+/ {
             }
 
             if /\S+/ {
                 // Hash parameter
-                yield Variable;
+                yield number;
 
                 if /.*/ {
-                    yield Comment;
+                    yield comment;
                 }
             }
         } else if /.*/ {

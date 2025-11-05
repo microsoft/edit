@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use std::env::args_os;
 use std::io::Write as _;
 use std::path::Path;

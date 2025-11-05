@@ -1998,15 +1998,14 @@ impl TextBuffer {
                             let end = highlight_beg.visual_pos;
 
                             let color = match kind {
-                                _ if (kind as u8) < 16 => IndexedColor::from(kind as u8),
                                 HighlightKind::Comment => IndexedColor::Green,
-                                HighlightKind::Number => IndexedColor::BrightGreen,
-                                HighlightKind::String => IndexedColor::BrightRed,
-                                HighlightKind::Variable => IndexedColor::BrightBlue,
-                                HighlightKind::Operator => IndexedColor::White,
                                 HighlightKind::Keyword => IndexedColor::BrightMagenta,
-                                HighlightKind::Method => IndexedColor::BrightYellow,
-                                _ => continue,
+                                HighlightKind::Number => IndexedColor::BrightBlue,
+                                HighlightKind::Other => continue,
+                                HighlightKind::MarkupChanged => IndexedColor::BrightBlue,
+                                HighlightKind::MarkupDeleted => IndexedColor::BrightRed,
+                                HighlightKind::MarkupInserted => IndexedColor::BrightGreen,
+                                HighlightKind::MetaDiffHeader => IndexedColor::BrightBlue,
                             };
 
                             fb.blend_fg(

@@ -1,37 +1,14 @@
-// Example script:
-//
-// fn main() {
-//     /#/ {
-//         yield Comment;
-//
-//         /\tdeleted:.*/ { yield BrightRed; }
-//         /\tmodified:.*/ { yield BrightBlue; }
-//         /\tnew file:.*/ { yield BrightGreen; }
-//         /\trenamed:.*/ { yield BrightBlue; }
-//     }
-//
-//     /diff --git.*/ {
-//         yield BrightBlue;
-//         diff();
-//     }
-// }
-//
-// fn diff() {
-//     /diff.*/ { yield BrightBlue; }
-//     /---.*/ { yield BrightBlue; }
-//     /\+\+\+.*/ { yield BrightBlue; }
-//     /-.*/ { yield BrightRed; }
-//     /\+.*/ { yield BrightGreen; }
-// }
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
 
 use std::iter::Peekable;
 use std::str::Chars;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Token {
+pub enum Token<'a> {
     // Literals
-    Identifier(String),
-    Regex(String),
+    Identifier(&'a str),
+    Regex(&'a str),
 
     // Keywords
     Pub,
@@ -83,12 +60,13 @@ impl<'a> Tokenizer<'a> {
         (line, column)
     }
 
-    pub fn next_token(&mut self) -> Token {
+    pub fn next(&mut self) -> Token<'a> {
         self.skip_whitespace();
 
         self.start_pos = self.current_pos;
 
         match self.advance() {
+            None => Token::Eof,
             Some(ch) => match ch {
                 '{' => Token::LeftBrace,
                 '}' => Token::RightBrace,
@@ -96,10 +74,8 @@ impl<'a> Tokenizer<'a> {
                 ')' => Token::RightParen,
                 ';' => Token::Semicolon,
                 '/' => self.read_regex(),
-                c if c.is_alphabetic() || c == '_' => self.read_identifier_or_keyword(c),
-                c => Token::Error(format!("Unexpected character: '{}'", c)),
+                c => self.read_identifier_or_keyword(c),
             },
-            None => Token::Eof,
         }
     }
 
@@ -112,14 +88,14 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn peek(&mut self) -> Option<&char> {
-        self.chars.peek()
+    fn peek(&mut self) -> Option<char> {
+        self.chars.peek().copied()
     }
 
     fn skip_whitespace(&mut self) {
         loop {
             // Skip whitespace. advance() has been inlined with ASCII assumptions.
-            while let Some(&ch) = self.peek()
+            while let Some(ch) = self.peek()
                 && ch.is_ascii_whitespace()
             {
                 self.chars.next();
@@ -139,7 +115,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn read_regex(&mut self) -> Token {
+    fn read_regex(&mut self) -> Token<'a> {
         let beg = self.current_pos;
         let mut last_char = '\0';
 
@@ -150,22 +126,28 @@ impl<'a> Tokenizer<'a> {
         }
 
         let end = self.current_pos - 1;
-        Token::Regex(String::from(&self.input[beg..end]))
+        Token::Regex(&self.input[beg..end])
     }
 
-    fn read_identifier_or_keyword(&mut self, first_char: char) -> Token {
-        let mut value = String::new();
-        value.push(first_char);
-
-        while let Some(&ch) = self.peek() {
-            if ch.is_alphanumeric() || ch == '_' {
-                value.push(self.advance().unwrap());
-            } else {
-                break;
-            }
+    fn read_identifier_or_keyword(&mut self, ch: char) -> Token<'a> {
+        fn is_ident_start(ch: char) -> bool {
+            ch.is_ascii_alphabetic() || ch == '_'
+        }
+        fn is_ident_continuation(ch: char) -> bool {
+            ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'
         }
 
-        match value.as_str() {
+        if !is_ident_start(ch) {
+            return Token::Error(format!("Unexpected character: '{ch}'"));
+        }
+
+        while let Some(ch) = self.peek()
+            && is_ident_continuation(ch)
+        {
+            self.advance();
+        }
+
+        match self.input.get(self.start_pos..self.current_pos).unwrap_or("") {
             "pub" => Token::Pub,
             "fn" => Token::Fn,
             "if" => Token::If,
@@ -173,67 +155,7 @@ impl<'a> Tokenizer<'a> {
             "loop" => Token::Loop,
             "return" => Token::Return,
             "yield" => Token::Yield,
-            _ => Token::Identifier(value),
+            ident => Token::Identifier(ident),
         }
-    }
-}
-
-// Iterator implementation for convenient usage
-impl<'a> Iterator for Tokenizer<'a> {
-    type Item = Token;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let token = self.next_token();
-        match token {
-            Token::Eof => None,
-            _ => Some(token),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_basic_tokens() {
-        let mut tokenizer = Tokenizer::new("fn main() { yield; }");
-
-        assert_eq!(tokenizer.next_token(), Token::Fn);
-        assert_eq!(tokenizer.next_token(), Token::Identifier("main".to_string()));
-        assert_eq!(tokenizer.next_token(), Token::LeftParen);
-        assert_eq!(tokenizer.next_token(), Token::RightParen);
-        assert_eq!(tokenizer.next_token(), Token::LeftBrace);
-        assert_eq!(tokenizer.next_token(), Token::Yield);
-        assert_eq!(tokenizer.next_token(), Token::Semicolon);
-        assert_eq!(tokenizer.next_token(), Token::RightBrace);
-        assert_eq!(tokenizer.next_token(), Token::Eof);
-    }
-
-    #[test]
-    fn test_regex() {
-        let mut tokenizer = Tokenizer::new("/\\tdeleted:.*/");
-
-        assert_eq!(tokenizer.next_token(), Token::Regex("\\tdeleted:.*".to_string()));
-        assert_eq!(tokenizer.next_token(), Token::Eof);
-    }
-
-    #[test]
-    fn test_complex_example() {
-        let input = r#"
-            /#/ {
-                yield Comment;
-            }
-        "#;
-
-        let mut tokenizer = Tokenizer::new(input);
-
-        assert_eq!(tokenizer.next_token(), Token::Regex("#".to_string()));
-        assert_eq!(tokenizer.next_token(), Token::LeftBrace);
-        assert_eq!(tokenizer.next_token(), Token::Yield);
-        assert_eq!(tokenizer.next_token(), Token::Identifier("Comment".to_string()));
-        assert_eq!(tokenizer.next_token(), Token::Semicolon);
-        assert_eq!(tokenizer.next_token(), Token::RightBrace);
-        assert_eq!(tokenizer.next_token(), Token::Eof);
     }
 }

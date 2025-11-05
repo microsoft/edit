@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::collections::VecDeque;
+
 use super::*;
 
 pub struct Compiler<'a> {
@@ -8,15 +10,17 @@ pub struct Compiler<'a> {
     pub functions: Vec<Function<'a>>,
     pub charsets: Vec<&'a Charset>,
     pub strings: Vec<&'a str>,
+    pub highlight_kinds: Vec<HighlightKind<'a>>,
 }
 
 impl<'a> Compiler<'a> {
     pub fn new(arena: &'a Arena) -> Self {
         Self {
             arena,
-            functions: Vec::new(),
+            functions: Default::default(),
             charsets: Default::default(),
             strings: Default::default(),
+            highlight_kinds: vec![HighlightKind { identifier: "other", value: 0 }],
         }
     }
 
@@ -64,8 +68,23 @@ impl<'a> Compiler<'a> {
         self.strings.intern(self.arena, s)
     }
 
+    pub fn intern_highlight_kind(&mut self, identifier: &str) -> &HighlightKind<'a> {
+        let idx = match self.highlight_kinds.binary_search_by(|hk| hk.identifier.cmp(identifier)) {
+            Ok(idx) => idx,
+            Err(idx) => {
+                let identifier = arena_clone_str(self.arena, identifier);
+                let value = self.highlight_kinds.len();
+                self.highlight_kinds.insert(idx, HighlightKind { identifier, value });
+                idx
+            }
+        };
+        &self.highlight_kinds[idx]
+    }
+
     pub fn visit_nodes_from(&self, root: IRCell<'a>) -> TreeVisitor<'a> {
-        TreeVisitor { stack: vec![root], visited: HashSet::new() }
+        let mut stack = VecDeque::new();
+        stack.push_back(root);
+        TreeVisitor { current: None, stack, visited: Default::default() }
     }
 
     pub fn as_mermaid(&self) -> String {
@@ -100,9 +119,11 @@ impl<'a> Compiler<'a> {
                         output.push_str("[noop]");
                     }
                     IRI::Add { dst: Register::HighlightKind, src: Register::Zero, imm } => {
-                        _ = write!(output, "[\"hk = {:?}\"]", unsafe {
-                            HighlightKind::from_usize(imm)
-                        });
+                        if let Some(hk) = self.highlight_kinds.iter().find(|hk| hk.value == imm) {
+                            _ = write!(output, "[\"hk = {} ({})\"]", hk.value, hk.identifier);
+                        } else {
+                            _ = write!(output, "[\"hk = {imm}\"]");
+                        }
                     }
                     IRI::Add { dst, src, imm } => {
                         _ = write!(output, "[\"{} = ", dst.mnemonic());
@@ -182,7 +203,8 @@ impl<'a> Compiler<'a> {
 }
 
 pub struct TreeVisitor<'a> {
-    stack: Vec<IRCell<'a>>,
+    current: Option<IRCell<'a>>,
+    stack: VecDeque<IRCell<'a>>,
     visited: HashSet<*const RefCell<IR<'a>>>,
 }
 
@@ -190,20 +212,58 @@ impl<'a> Iterator for TreeVisitor<'a> {
     type Item = IRCell<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(cell) = self.stack.pop() {
+        if let Some(cell) = self.current.take() {
+            {
+                let ir = cell.borrow();
+                if let IRI::If { then, .. } = ir.instr {
+                    self.stack.push_back(then);
+                }
+                if let Some(next) = ir.next {
+                    self.stack.push_back(next);
+                }
+            }
+        }
+
+        while let Some(cell) = self.stack.pop_front() {
             if self.visited.insert(cell) {
-                let node = cell.borrow_mut();
-                if let IRI::If { then, .. } = node.instr {
-                    self.stack.push(then);
-                }
-                if let Some(next) = node.next {
-                    self.stack.push(next);
-                }
-                return Some(cell);
+                self.current = Some(cell);
+                return self.current;
             }
         }
 
         None
+    }
+}
+
+pub struct HighlightKind<'a> {
+    pub identifier: &'a str,
+    pub value: usize,
+}
+
+impl<'a> HighlightKind<'a> {
+    pub fn fmt_camelcase(&self) -> HighlightKindCamelcaseFormatter<'a> {
+        HighlightKindCamelcaseFormatter { identifier: self.identifier }
+    }
+}
+
+pub struct HighlightKindCamelcaseFormatter<'a> {
+    identifier: &'a str,
+}
+
+impl<'a> fmt::Display for HighlightKindCamelcaseFormatter<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut capitalize_next = true;
+        for c in self.identifier.chars() {
+            if c == '.' {
+                capitalize_next = true;
+            } else if capitalize_next {
+                capitalize_next = false;
+                f.write_char(c.to_ascii_uppercase())?;
+            } else {
+                f.write_char(c)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -215,8 +275,7 @@ pub struct Function<'a> {
 }
 
 // To be honest, I don't think this qualifies as an "intermediate representation",
-// if we compare this to popular compilers. It's still in a tree representation after all.
-// But whatever. It's still intermediate to us.
+// if we compare this to popular compilers. But whatever. It's still intermediate to us.
 #[derive(Debug)]
 pub struct IR<'a> {
     pub next: Option<IRCell<'a>>,

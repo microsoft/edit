@@ -34,7 +34,7 @@ struct RegexSpan<'a> {
 pub struct Parser<'a, 'c, 'src> {
     compiler: &'c mut Compiler<'a>,
     tokenizer: Tokenizer<'src>,
-    current_token: Token,
+    current_token: Token<'src>,
 }
 
 impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
@@ -61,7 +61,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         self.expect_token(Token::Fn)?;
 
-        let name = match &self.current_token {
+        let name = match self.current_token {
             Token::Identifier(n) => arena_clone_str(self.compiler.arena, n),
             _ => raise!(self, "Expected function name"),
         };
@@ -105,7 +105,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_statement(&mut self) -> CompileResult<IRSpan<'a>> {
-        match &self.current_token {
+        match self.current_token {
             Token::Loop => {
                 self.advance();
                 let mut span = self.parse_block()?;
@@ -175,8 +175,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_if_regex(&mut self) -> CompileResult<RegexSpan<'a>> {
-        let pattern = match &self.current_token {
-            Token::Regex(s) => s.as_str(),
+        let pattern = match self.current_token {
+            Token::Regex(s) => s,
             _ => raise!(self, "Expected regex after if"),
         };
         let dst_good = self.compiler.alloc_noop();
@@ -194,14 +194,11 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     fn parse_yield(&mut self) -> CompileResult<IRSpan<'a>> {
         self.expect_token(Token::Yield)?;
 
-        let color = match &self.current_token {
+        let color = match self.current_token {
             Token::Identifier(c) => c,
             _ => raise!(self, "Expected color name after yield"),
         };
-        let color = match HighlightKind::from_str(color) {
-            Ok(c) => c.as_usize(),
-            Err(..) => raise!(self, "Unknown highlight color: {}", color),
-        };
+        let imm = self.compiler.intern_highlight_kind(color).value;
 
         self.advance();
         self.expect_token(Token::Semicolon)?;
@@ -209,14 +206,14 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         let set = self.compiler.alloc_iri(IRI::Add {
             dst: Register::HighlightKind,
             src: Register::Zero,
-            imm: color,
+            imm,
         });
         let flush = self.compiler.chain_iri(set, IRI::Flush);
         Ok(IRSpan { first: set, last: flush })
     }
 
     fn parse_call(&mut self) -> CompileResult<IRSpan<'a>> {
-        let name = match &self.current_token {
+        let name = match self.current_token {
             Token::Identifier(n) => self.compiler.strings.intern(self.compiler.arena, n),
             _ => raise!(self, "Expected function name"),
         };
@@ -239,6 +236,6 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn advance(&mut self) {
-        self.current_token = self.tokenizer.next_token();
+        self.current_token = self.tokenizer.next();
     }
 }
