@@ -155,6 +155,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 break;
             }
 
+            // Gobble the "else" token.
             self.advance();
 
             // The else branch has a block? Connect it with the if.
@@ -166,6 +167,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 break;
             }
 
+            // Otherwise, we expect an "if" in the next iteration to form an "else if".
             else_branch = Some(re.dst_bad);
         }
 

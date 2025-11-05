@@ -235,28 +235,24 @@ fn transform_concat<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hi
             str
         });
 
-        let node = if let Some(str) = prefix_insensitive {
+        let dst = compiler.alloc_noop();
+        let src = if let Some(str) = prefix_insensitive {
             let str = compiler.intern_string(&str);
             compiler.alloc_iri(IRI::If { condition: Condition::PrefixInsensitive(str), then: dst })
         } else {
             transform(compiler, dst, hir)
         };
         if first.is_none() {
-            first = Some(node);
+            first = Some(src);
         }
         if let Some(last) = &last {
-            let mut last = last.borrow_mut();
-            match last.instr {
-                IRI::Add { .. } => {
-                    last.next = Some(node);
-                }
-                IRI::If { ref mut then, .. } => {
-                    *then = node;
-                }
-                _ => unreachable!(),
-            }
+            last.borrow_mut().set_next(src);
         }
-        last = Some(node);
+        last = Some(dst);
+    }
+
+    if let Some(last) = &last {
+        last.borrow_mut().set_next(dst);
     }
 
     first.unwrap()
@@ -268,7 +264,6 @@ fn transform_alt<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hir])
     let mut last: Option<IRCell<'a>> = None;
 
     for hir in hirs {
-        // TODO: needs to write into the else branch
         let node = transform(compiler, dst, hir);
         if first.is_none() {
             first = Some(node);

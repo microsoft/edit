@@ -234,18 +234,21 @@ impl Instruction {
     pub fn encode(&self) -> u32 {
         match *self {
             Instruction::Add { dst, src, imm } => {
-                Self::cast_imm(imm) | (src as u32) << 8 | (dst as u32) << 4 | 0b0000
+                Self::cast_imm(imm)
+                    | Self::cast_bits(src as usize, 4, 8)
+                    | Self::cast_bits(dst as usize, 4, 4)
+                    | 0b0000
             }
             Instruction::Call { dst } => Self::cast_imm(dst) | 0b0001,
             Instruction::Return => 0b0010,
             Instruction::JumpIfMatchCharset { idx, dst } => {
-                Self::cast_imm(dst) | (idx as u32) << 4 | 0b0011
+                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0011
             }
             Instruction::JumpIfMatchPrefix { idx, dst } => {
-                Self::cast_imm(dst) | (idx as u32) << 4 | 0b0100
+                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0100
             }
             Instruction::JumpIfMatchPrefixInsensitive { idx, dst } => {
-                Self::cast_imm(dst) | (idx as u32) << 4 | 0b0101
+                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0101
             }
             Instruction::FlushHighlight => 0b0110,
             Instruction::Loop { dst } => Self::cast_imm(dst) | 0b0111,
@@ -289,6 +292,11 @@ impl Instruction {
             assert!(imm <= Self::IMM_MAX);
             (imm << 12) as u32
         }
+    }
+
+    fn cast_bits(val: usize, bits: usize, shift: usize) -> u32 {
+        assert!(val < (1 << bits));
+        (val as u32) << shift
     }
 }
 

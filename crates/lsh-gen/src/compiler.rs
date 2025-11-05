@@ -96,24 +96,34 @@ impl<'a> Compiler<'a> {
                 _ = write!(output, "    N{node_cell:p}");
 
                 match node.instr {
+                    IRI::Add { dst: Register::Zero, src: Register::Zero, imm: 0 } => {
+                        output.push_str("[noop]");
+                    }
+                    IRI::Add { dst: Register::HighlightKind, src: Register::Zero, imm } => {
+                        _ = write!(output, "[\"hk = {:?}\"]", unsafe {
+                            HighlightKind::from_usize(imm)
+                        });
+                    }
                     IRI::Add { dst, src, imm } => {
-                        if dst == Register::Zero && src == Register::Zero && imm == 0 {
-                            _ = write!(output, "[noop]");
-                        } else if dst == Register::HighlightKind && src == Register::Zero {
-                            _ = write!(output, "[\"hk = {:?}\"]", unsafe {
-                                HighlightKind::from_usize(imm)
-                            });
-                        } else {
-                            _ = write!(output, "[\"{} = ", dst.mnemonic());
-                            if src != Register::Zero {
-                                _ = write!(output, "{} + ", src.mnemonic());
+                        _ = write!(output, "[\"{} = ", dst.mnemonic());
+                        match (src, imm) {
+                            (Register::Zero, 0) => {
+                                _ = write!(output, "0");
                             }
-                            if imm == usize::MAX {
-                                _ = write!(output, "max\"]");
-                            } else {
-                                _ = write!(output, "{imm}\"]");
+                            (Register::Zero, usize::MAX) => {
+                                _ = write!(output, "max");
+                            }
+                            (Register::Zero, _) => {
+                                _ = write!(output, "{imm}");
+                            }
+                            (_, 0) => {
+                                _ = write!(output, "{}", src.mnemonic());
+                            }
+                            _ => {
+                                _ = write!(output, "{} + {}", src.mnemonic(), imm);
                             }
                         }
+                        output.push_str("\"]");
                     }
                     IRI::If { condition, then } => {
                         match condition {
@@ -134,10 +144,10 @@ impl<'a> Compiler<'a> {
                         _ = write!(output, "[\"Call {name}\"]");
                     }
                     IRI::Return => {
-                        _ = write!(output, "[return]");
+                        output.push_str("[return]");
                     }
                     IRI::Flush => {
-                        _ = write!(output, "[flush]");
+                        output.push_str("[flush]");
                     }
                     IRI::Loop { dst } => {
                         _ = write!(output, "[loop] --> N{dst:p}");
@@ -216,6 +226,7 @@ pub struct IR<'a> {
 
 pub type IRCell<'a> = &'a RefCell<IR<'a>>;
 
+// IRI = Immediate Representation Instruction
 #[derive(Debug)]
 pub enum IRI<'a> {
     Add { dst: Register, src: Register, imm: usize },

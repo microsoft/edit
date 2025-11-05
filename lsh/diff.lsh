@@ -1,10 +1,6 @@
 pub fn diff() {
     loop {
-        if /diff.*/ {
-            yield BrightBlue;
-        } else if /---.*/ {
-            yield BrightBlue;
-        } else if /\+\+\+.*/ {
+        if /(?:diff|---|\+\+\+).*/ {
             yield BrightBlue;
         } else if /-.*/ {
             yield BrightRed;

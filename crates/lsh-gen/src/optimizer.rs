@@ -8,6 +8,7 @@ pub fn optimize<'a>(compiler: &mut Compiler<'a>) {
     optimize_noop(compiler);
 }
 
+// Removes no-op instructions from the IR.
 fn optimize_noop<'a>(compiler: &mut Compiler<'a>) {
     let scratch = scratch_arena(None);
     let mut candidates = Vec::new_in(&*scratch);
