@@ -20,6 +20,7 @@ zh = "zh_hans"
 [Ctrl]
 en = "Ctrl"
 de = "Strg"
+eu = "Ktrl"
 
 # The keyboard key
 [Alt]
@@ -34,6 +35,7 @@ es = "Mayús"
 fi = "Vaihto"
 fr = "Maj"
 it = "Maiusc"
+eu = "Maius"
 
 # Used as a common dialog button
 [Ok]
@@ -64,6 +66,7 @@ tr = "Tamam"
 vi = "OK"
 zh_hans = "确定"
 zh_hant = "確定"
+eu = "Ados"
 
 # Used as a common dialog button
 [Yes]
@@ -96,6 +99,7 @@ uk = "Так"
 vi = "Có"
 zh_hans = "是"
 zh_hant = "是"
+eu = "Bai"
 
 # Used as a common dialog button
 [No]
@@ -128,6 +132,7 @@ uk = "Ні"
 vi = "Không"
 zh_hans = "否"
 zh_hant = "否"
+eu = "Ez"
 
 # Used as a common dialog button
 [Cancel]
@@ -160,11 +165,12 @@ uk = "Скасувати"
 vi = "Hủy"
 zh_hans = "取消"
 zh_hant = "取消"
+eu = "Utzi"
 
 # Used as a common dialog button
 [Always]
 en = "Always"
-bn = "সবসময়"
+bn = "সবসময়"
 cs = "Vždy"
 da = "Altid"
 de = "Immer"
@@ -191,6 +197,7 @@ uk = "Завжди"
 vi = "Luôn"
 zh_hans = "总是"
 zh_hant = "總是"
+eu = "Beti"
 
 # A menu bar item
 [File]
@@ -223,6 +230,7 @@ uk = "Файл"
 vi = "Tệp"
 zh_hans = "文件"
 zh_hant = "檔案"
+eu = "Fitxategia"
 
 [FileNew]
 en = "New File"
@@ -254,6 +262,7 @@ uk = "Новий файл"
 vi = "Tệp mới"
 zh_hans = "新建文件"
 zh_hant = "新增檔案"
+eu = "Fitxategi berria"
 
 [FileOpen]
 en = "Open File…"
@@ -285,6 +294,7 @@ uk = "Відкрити файл…"
 vi = "Mở tệp…"
 zh_hans = "打开文件…"
 zh_hant = "開啟檔案…"
+eu = "Ireki fitxategia…"
 
 [FileSave]
 en = "Save"
@@ -316,6 +326,7 @@ uk = "Зберегти"
 vi = "Lưu"
 zh_hans = "保存"
 zh_hant = "儲存"
+eu = "Gorde"
 
 [FileSaveAs]
 en = "Save As…"
@@ -347,6 +358,7 @@ uk = "Зберегти як…"
 vi = "Lưu thành…"
 zh_hans = "另存为…"
 zh_hant = "另存新檔…"
+eu = "Gorde honela…"
 
 [FileClose]
 en = "Close File"
@@ -378,6 +390,7 @@ uk = "Закрити файл"
 vi = "Đóng tệp"
 zh_hans = "关闭文件"
 zh_hant = "關閉檔案"
+eu = "Itxi fitxategia"
 
 [FileExit]
 en = "Exit"
@@ -409,6 +422,7 @@ uk = "Вихід"
 vi = "Thoát"
 zh_hans = "退出"
 zh_hant = "退出"
+eu = "Irten"
 
 [FileGoto]
 en = "Go to Line:Column…"
@@ -435,6 +449,7 @@ uk = "Перейти на рядок:стовпчик…"
 vi = "Đi tới dòng:cột…"
 zh_hans = "转到行:列…"
 zh_hant = "跳至行:列…"
+eu = "Joan lerrora:zutabea…"
 
 # A menu bar item
 [Edit]
@@ -467,6 +482,7 @@ uk = "Редагувати"
 vi = "Chỉnh sửa"
 zh_hans = "编辑"
 zh_hant = "編輯"
+eu = "Editatu"
 
 [EditUndo]
 en = "Undo"
@@ -498,6 +514,7 @@ uk = "Скасувати"
 vi = "Hoàn tác"
 zh_hans = "撤销"
 zh_hant = "復原"
+eu = "Desegin"
 
 [EditRedo]
 en = "Redo"
@@ -529,6 +546,7 @@ uk = "Повторити"
 vi = "Làm lại"
 zh_hans = "重做"
 zh_hant = "重做"
+eu = "Berregin"
 
 [EditCut]
 en = "Cut"
@@ -560,6 +578,7 @@ uk = "Вирізати"
 vi = "Cắt"
 zh_hans = "剪切"
 zh_hant = "剪下"
+eu = "Ebaki"
 
 [EditCopy]
 en = "Copy"
@@ -591,6 +610,7 @@ uk = "Копіювати"
 vi = "Sao chép"
 zh_hans = "复制"
 zh_hant = "複製"
+eu = "Kopiatu"
 
 [EditPaste]
 en = "Paste"
@@ -622,6 +642,7 @@ uk = "Вставити"
 vi = "Dán"
 zh_hans = "粘贴"
 zh_hant = "貼上"
+eu = "Itsatsi"
 
 [EditFind]
 en = "Find"
@@ -653,6 +674,7 @@ uk = "Знайти"
 vi = "Tìm kiếm"
 zh_hans = "查找"
 zh_hant = "尋找"
+eu = "Bilatu"
 
 [EditReplace]
 en = "Replace"
@@ -684,6 +706,7 @@ uk = "Замінити"
 vi = "Thay thế"
 zh_hans = "替换"
 zh_hant = "取代"
+eu = "Ordeztu"
 
 [EditSelectAll]
 en = "Select All"
@@ -709,6 +732,7 @@ uk = "Вибрати все"
 vi = "Chọn tất cả"
 zh_hans = "全选"
 zh_hant = "全選"
+eu = "Hautatu dena"
 
 # A menu bar item
 [View]
@@ -741,6 +765,7 @@ uk = "Вигляд"
 vi = "Xem"
 zh_hans = "视图"
 zh_hant = "檢視"
+eu = "Ikusi"
 
 [ViewFocusStatusbar]
 en = "Focus Statusbar"
@@ -752,7 +777,7 @@ el = "Εστίαση στη γραμμή κατάστασης"
 es = "Enfocar barra de estado"
 fa = "کانون به نوار وضعیت"
 fi = "Fokusoi tilapalkki"
-fr = "Activer la barre d’état"
+fr = "Activer la barre d'état"
 hu = "Fókusz a státuszsorra"
 is = "Fókus á stöðuslá"
 it = "Attiva barra di stato"
@@ -772,6 +797,7 @@ uk = "Фокус на рядок стану"
 vi = "Đặt tiêu điểm vào thanh trạng thái"
 zh_hans = "聚焦状态栏"
 zh_hant = "聚焦狀態列"
+eu = "Egoera-barrara fokua"
 
 [ViewWordWrap]
 en = "Word Wrap"
@@ -803,6 +829,7 @@ uk = "Переніс слів"
 vi = "Ngắt dòng tự động"
 zh_hans = "自动换行"
 zh_hant = "自動換行"
+eu = "Lerro-jauzia"
 
 [ViewGoToFile]
 en = "Go to File…"
@@ -826,6 +853,7 @@ uk = "Перейти до файлу…"
 vi = "Đi tới tệp…"
 zh_hans = "转到文件…"
 zh_hant = "跳至檔案…"
+eu = "Joan fitxategira…"
 
 # A menu bar item
 [Help]
@@ -858,6 +886,7 @@ uk = "Допомога"
 vi = "Trợ giúp"
 zh_hans = "帮助"
 zh_hant = "幫助"
+eu = "Laguntza"
 
 [HelpAbout]
 en = "About"
@@ -889,6 +918,7 @@ uk = "Про програму"
 vi = "Giới thiệu"
 zh_hans = "关于"
 zh_hant = "關於"
+eu = "Honi buruz"
 
 [UnsavedChangesDialogTitle]
 en = "Unsaved Changes"
@@ -920,6 +950,7 @@ uk = "Незбережені зміни"
 vi = "Các thay đổi chưa được lưu"
 zh_hans = "未保存的更改"
 zh_hant = "未儲存的變更"
+eu = "Gorde gabeko aldaketak"
 
 [UnsavedChangesDialogDescription]
 en = "Do you want to save the changes you made?"
@@ -931,7 +962,7 @@ el = "Θέλετε να αποθηκεύσετε τις αλλαγές που κ
 es = "¿Desea guardar los cambios realizados?"
 fa = "مایلید تغییرات ذخیره شود؟"
 fi = "Haluatko tallentaa tekemäsi muutokset?"
-fr = "Voulez-vous enregistrer les modifications apportées ?"
+fr = "Voulez-vous enregistrer les modifications apportées ?"
 hu = "Szeretnéd menteni a módosításokat?"
 is = "Viltu vista breytingarnar sem þú gerðir?"
 it = "Vuoi salvare le modifiche apportate?"
@@ -951,6 +982,7 @@ uk = "Зберегти внесені зміни?"
 vi = "Bạn có muốn lưu các thay đổi bạn đã thực hiện không?"
 zh_hans = "您要保存所做的更改吗？"
 zh_hant = "您要保存所做的變更嗎？"
+eu = "Egindako aldaketak gorde nahi dituzu?"
 
 [UnsavedChangesDialogYes]
 en = "Save"
@@ -982,6 +1014,7 @@ uk = "Зберегти"
 vi = "Lưu"
 zh_hans = "保存"
 zh_hant = "儲存"
+eu = "Gorde"
 
 [UnsavedChangesDialogNo]
 en = "Don't Save"
@@ -1012,6 +1045,7 @@ uk = "Не зберігати"
 vi = "Không lưu"
 zh_hans = "不保存"
 zh_hant = "不儲存"
+eu = "Ez gorde"
 
 [AboutDialogTitle]
 en = "About"
@@ -1043,6 +1077,7 @@ uk = "Про програму"
 vi = "Giới thiệu"
 zh_hans = "关于"
 zh_hant = "關於"
+eu = "Honi buruz"
 
 [AboutDialogVersion]
 en = "Version: "
@@ -1054,7 +1089,7 @@ el = "Έκδοση: "
 es = "Versión: "
 fa = "نسخه: "
 fi = "Versio: "
-fr = "Version : "
+fr = "Version : "
 hu = "Verzió: "
 is = "Útgáfa: "
 it = "Versione: "
@@ -1074,11 +1109,12 @@ uk = "Версія: "
 vi = "Phiên bản: "
 zh_hans = "版本: "
 zh_hant = "版本: "
+eu = "Bertsioa: "
 
 # Shown when the clipboard size exceeds the limit for OSC 52
 [LargeClipboardWarningLine1]
 en = "Text you copy is shared with the terminal clipboard."
-bn = "আপনার কপি করা টেক্সট টার্মিনাল ক্লিপবোর্ডের সাথে শেয়ার করা হয়।"
+bn = "আপনার কপি করা টেক্সট টার্মিনাল ক্লিপবোর্ডের সাথে শেয়ার করা হয়।"
 cs = "Text, který zkopírujete, je sdílen s terminálovou schránkou."
 da = "Tekst, du kopierer, deles med terminalens udklipsholder."
 de = "Der kopierte Text wird mit der Terminal-Zwischenablage geteilt."
@@ -1106,11 +1142,12 @@ uk = "Скопійований текст доступний в буфері о�
 vi = "Văn bản bạn sao chép sẽ được chia sẻ với bảng tạm của terminal."
 zh_hans = "你复制的文本将共享到终端剪贴板。"
 zh_hant = "您複製的文字將會與終端機剪貼簿分享。"
+eu = "Kopiatutako testua terminalaren arbelarekin partekatzen da."
 
 # Shown when the clipboard size exceeds the limit for OSC 52
 [LargeClipboardWarningLine2]
 en = "You copied {size} which may take a long time to share."
-bn = "আপনি {size} কপি করেছেন যা শেয়ার করতে দীর্ঘ সময় লাগতে পারে।"
+bn = "আপনি {size} কপি করেছেন যা শেয়ার করতে দীর্ঘ সময় লাগতে পারে।"
 cs = "Zkopírovali jste {size}, což může trvat dlouho."
 da = "Du har kopieret {size}, som muligvis tager lang tid at dele."
 de = "Sie haben {size} kopiert. Das Weitergeben könnte länger dauern."
@@ -1138,6 +1175,7 @@ uk = "Скопійовано {size}, передача може зайняти д
 vi = "Bạn đã sao chép {size}, việc chia sẻ có thể mất nhiều thời gian."
 zh_hans = "你复制了 {size}，共享可能需要较长时间。"
 zh_hant = "您已複製 {size}，共享可能需要較長時間。"
+eu = "{size} kopiatu duzu, eta partekatzeak denbora asko har dezake."
 
 # Shown when the clipboard size exceeds the limit for OSC 52
 [LargeClipboardWarningLine3]
@@ -1150,7 +1188,7 @@ el = "Θέλετε να το στείλετε ούτως ή άλλως;"
 es = "¿Desea enviarlo de todas formas?"
 fa = "مایلید آن را به هر روی ارسال کنید؟"
 fi = "Haluatko lähettää sen silti?"
-fr = "Voulez-vous quand même l’envoyer ?"
+fr = "Voulez-vous quand même l'envoyer ?"
 hu = "El szeretnéd küldeni ennek ellenére?"
 is = "Viltu samt senda það?"
 it = "Vuoi inviarlo comunque?"
@@ -1170,11 +1208,12 @@ uk = "Все одно надіслати?"
 vi = "Bạn vẫn muốn gửi chứ?"
 zh_hans = "仍要发送吗？"
 zh_hant = "仍要傳送嗎？"
+eu = "Hala ere bidali nahi duzu?"
 
 # As an alternative to LargeClipboardWarningLine2 and 3
 [SuperLargeClipboardWarning]
 en = "The text you copied is too large to be shared."
-bn = "আপনার কপি করা টেক্সট শেয়ার করার জন্য খুব বড়।"
+bn = "আপনার কপি করা টেক্সট শেয়ার করার জন্য খুব বড়।"
 cs = "Text, který jste zkopírovali, je příliš velký na to, aby mohl být sdílen."
 da = "Den kopierede tekst er for stor til at blive delt."
 de = "Der kopierte Text ist zu groß, um geteilt zu werden."
@@ -1202,6 +1241,7 @@ uk = "Скопійований текст завеликий для переда
 vi = "Văn bản bạn sao chép quá lớn, không thể chia sẻ."
 zh_hans = "你复制的文本过大，无法共享。"
 zh_hant = "您複製的文字過大，無法分享。"
+eu = "Kopiatutako testua handiegia da partekatzeko."
 
 [WarningDialogTitle]
 en = "Warning"
@@ -1233,6 +1273,7 @@ uk = "Попередження"
 vi = "Cảnh báo"
 zh_hans = "警告"
 zh_hant = "警告"
+eu = "Abisua"
 
 [ErrorDialogTitle]
 en = "Error"
@@ -1264,6 +1305,7 @@ uk = "Помилка"
 vi = "Lỗi"
 zh_hans = "错误"
 zh_hant = "錯誤"
+eu = "Errorea"
 
 [ErrorIcuMissing]
 en = "This operation requires the ICU library"
@@ -1295,6 +1337,7 @@ uk = "Ця операція потребує наявності бібліоте
 vi = "Thao tác này cần thư viện ICU"
 zh_hans = "此操作需要 ICU 库"
 zh_hant = "此操作需要 ICU 庫"
+eu = "Eragiketa honek ICU liburutegia behar du"
 
 # For input field
 [SearchNeedleLabel]
@@ -1307,7 +1350,7 @@ el = "Εύρεση:"
 es = "Buscar:"
 fa = "جستجو:"
 fi = "Etsi:"
-fr = "Rechercher :"
+fr = "Rechercher :"
 hu = "Keresés:"
 is = "Finna:"
 it = "Trova:"
@@ -1327,6 +1370,7 @@ uk = "Знайти:"
 vi = "Tìm:"
 zh_hans = "查找:"
 zh_hant = "尋找:"
+eu = "Bilatu:"
 
 # For input field
 [SearchReplacementLabel]
@@ -1339,7 +1383,7 @@ el = "Αντικατάσταση:"
 es = "Reemplazar:"
 fa = "جایگزین:"
 fi = "Korvaa:"
-fr = "Remplacer :"
+fr = "Remplacer :"
 hu = "Csere:"
 is = "Skipta út með:"
 it = "Sostituire:"
@@ -1359,6 +1403,7 @@ uk = "Заміна:"
 vi = "Thay thế:"
 zh_hans = "替换:"
 zh_hant = "替換:"
+eu = "Ordeztu:"
 
 # Toggle
 [SearchMatchCase]
@@ -1391,6 +1436,7 @@ uk = "Регістр"
 vi = "Phân biệt chữ hoa/thường"
 zh_hans = "区分大小写"
 zh_hant = "區分大小寫"
+eu = "Bereizi maiuskulak"
 
 # Toggle
 [SearchWholeWord]
@@ -1409,6 +1455,7 @@ is = "Heil orð"
 it = "Parola"
 ja = "単語全体"
 ko = "전체 단어"
+"
 nl = "Volledig Woord"
 pl = "Całe słowa"
 pt_br = "Palavra"
@@ -1423,6 +1470,7 @@ uk = "Ціле слово"
 vi = "Khớp toàn bộ từ"
 zh_hans = "全字匹配"
 zh_hant = "全字匹配"
+eu = "Hitz osoa"
 
 # Toggle
 [SearchUseRegex]
@@ -1455,6 +1503,7 @@ uk = "RegEx"
 vi = "Sử dụng biểu thức chính quy"
 zh_hans = "正则"
 zh_hant = "正則"
+eu = "Erabili Regex"
 
 # Button
 [SearchReplaceAll]
@@ -1487,6 +1536,7 @@ uk = "Замінити все"
 vi = "Thay thế tất cả"
 zh_hans = "全部替换"
 zh_hant = "全部取代"
+eu = "Ordeztu dena"
 
 # Button
 [SearchClose]
@@ -1519,6 +1569,7 @@ uk = "Закрити"
 vi = "Đóng"
 zh_hans = "关闭"
 zh_hant = "關閉"
+eu = "Itxi"
 
 [EncodingReopen]
 en = "Reopen with encoding…"
@@ -1550,6 +1601,7 @@ uk = "Відкрити наново з кодуванням…"
 vi = "Mở lại với mã hóa…"
 zh_hans = "使用编码重新打开…"
 zh_hant = "使用編碼重新打開…"
+eu = "Berrireki kodetzarekin…"
 
 [EncodingConvert]
 en = "Convert to encoding…"
@@ -1561,7 +1613,7 @@ el = "Μετατροπή σε κωδικοποίηση…"
 es = "Convertir a otra codificación…"
 fa = "تبدیل به کدبندی"
 fi = "Muunna koodaukselle…"
-fr = "Convertir vers l’encodage…"
+fr = "Convertir vers l'encodage…"
 hu = "Átkonvertálás más karakterkódolásra…"
 is = "Umbreyta í stafakóðun"
 it = "Converti in codifica…"
@@ -1581,6 +1633,7 @@ uk = "Перетворити в кодування…"
 vi = "Chuyển đổi sang mã hóa…"
 zh_hans = "转换为编码…"
 zh_hant = "轉換為編碼…"
+eu = "Bihurtu kodetzera…"
 
 [IndentationTabs]
 en = "Tabs"
@@ -1612,6 +1665,7 @@ uk = "Табуляція"
 vi = "Tab"
 zh_hans = "制表符"
 zh_hant = "製表符"
+eu = "Tabuladoreak"
 
 [IndentationSpaces]
 en = "Spaces"
@@ -1643,6 +1697,7 @@ uk = "Пробіли"
 vi = "Dấu cách"
 zh_hans = "空格"
 zh_hant = "空格"
+eu = "Zuriuneak"
 
 [SaveAsDialogPathLabel]
 en = "Folder:"
@@ -1654,7 +1709,7 @@ el = "Φάκελος:"
 es = "Carpeta:"
 fa = "پوشه:"
 fi = "Kansio:"
-fr = "Dossier :"
+fr = "Dossier :"
 hu = "Mappa:"
 is = "Mappa:"
 it = "Cartella:"
@@ -1674,6 +1729,7 @@ uk = "Папка:"
 vi = "Thư mục:"
 zh_hans = "文件夹:"
 zh_hant = "資料夾:"
+eu = "Karpeta:"
 
 [SaveAsDialogNameLabel]
 en = "File name:"
@@ -1685,7 +1741,7 @@ el = "Όνομα αρχείου:"
 es = "Nombre de archivo:"
 fa = "نام پرونده:"
 fi = "Tiedostonimi:"
-fr = "Nom du fichier :"
+fr = "Nom du fichier :"
 hu = "Fájlnév:"
 is = "Skráarnafn:"
 it = "Nome del file:"
@@ -1705,6 +1761,7 @@ uk = "Ім'я файлу:"
 vi = "Tên tệp:"
 zh_hans = "文件名:"
 zh_hant = "檔案名稱:"
+eu = "Fitxategi-izena:"
 
 [FileOverwriteWarning]
 en = "Confirm Save As"
@@ -1736,6 +1793,7 @@ uk = "Підтвердьте «Зберегти як…»"
 vi = "Xác nhận Lưu thành"
 zh_hans = "确认另存为"
 zh_hant = "確認另存新檔"
+eu = "Berretsi Gorde honela"
 
 [FileOverwriteWarningDescription]
 en = "File already exists. Do you want to overwrite it?"
@@ -1747,7 +1805,7 @@ el = "Το αρχείο υπάρχει ήδη. Θέλετε να το αντικ
 es = "El archivo ya existe. ¿Desea sobrescribirlo?"
 fa = "پرونده در حال حاضر وجود دارد. مایلید آن را جایگزین کنید؟"
 fi = "Tiedosto on jo olemassa. Haluatko ylikirjoittaa sen?"
-fr = "Le fichier existe déjà. Voulez-vous l’écraser ?"
+fr = "Le fichier existe déjà. Voulez-vous l'écraser ?"
 hu = "A fájl már létezik. Felül szeretnéd írni?"
 is = "Skráin er þegar til. Viltu yfirskrifa hana?"
 it = "Il file esiste già. Vuoi sovrascriverlo?"
@@ -1767,3 +1825,4 @@ uk = "Файл вже існує. Перезаписати?"
 vi = "Tệp đã tồn tại. Bạn có muốn ghi đè không?"
 zh_hans = "文件已存在。要覆盖它吗？"
 zh_hant = "檔案已存在。要覆蓋它嗎？"
+eu = "Fitxategia badago lehendik ere. Gainidatzi nahi duzu?"
