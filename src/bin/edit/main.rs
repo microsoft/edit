@@ -360,6 +360,7 @@ fn draw(ctx: &mut Context, state: &mut State) {
             state.wants_command_palette = true;
             state.command_palette_filter.clear();
             state.command_palette_selection = 0;
+            state.command_palette_reset_selection = true;
             ctx.needs_rerender();
             return;
         } else if key == kbmod::CTRL | vk::N {
