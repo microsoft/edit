@@ -208,6 +208,10 @@ pub fn draw_command_palette(ctx: &mut Context, state: &mut State) {
     if ctx.editline("command-filter", &mut state.command_palette_filter) {
         state.command_palette_selection = 0;
     }
+    if state.command_palette_focus_filter {
+        state.command_palette_focus_filter = false;
+        ctx.steal_focus();
+    }
     ctx.block_end();
 
     let entries = build_command_entries(state);

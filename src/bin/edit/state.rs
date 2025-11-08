@@ -186,6 +186,7 @@ pub struct State {
     pub command_palette_filter: String,
     pub command_palette_selection: usize,
     pub command_palette_reset_selection: bool,
+    pub command_palette_focus_filter: bool,
     system_palette: [StraightRgba; INDEXED_COLORS_COUNT],
 }
 
@@ -245,6 +246,7 @@ impl State {
             command_palette_filter: String::new(),
             command_palette_selection: 0,
             command_palette_reset_selection: false,
+            command_palette_focus_filter: false,
             system_palette: framebuffer::DEFAULT_THEME,
         })
     }
