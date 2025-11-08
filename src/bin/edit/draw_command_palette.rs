@@ -264,7 +264,6 @@ pub fn draw_command_palette(ctx: &mut Context, state: &mut State) {
                 entry.label
             };
 
-            ctx.inherit_focus();
             if idx == selection {
                 ctx.steal_focus();
             }
