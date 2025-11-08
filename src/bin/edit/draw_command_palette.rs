@@ -233,9 +233,6 @@ pub fn draw_command_palette(ctx: &mut Context, state: &mut State) {
         }
     }
 
-    let activate_via_keyboard = visible_len != 0
-        && (ctx.consume_shortcut(vk::RETURN) || ctx.consume_shortcut(kbmod::CTRL | vk::RETURN));
-
     ctx.block_begin("results");
     ctx.attr_padding(Rect::three(0, 0, 1));
 
@@ -267,6 +264,11 @@ pub fn draw_command_palette(ctx: &mut Context, state: &mut State) {
                 entry.label
             };
 
+            ctx.inherit_focus();
+            if idx == selection {
+                ctx.steal_focus();
+            }
+
             if ctx.button("command-entry", label_text, ButtonStyle::default()) && entry.enabled {
                 selection = idx;
                 activate = Some(entry.action);
@@ -274,14 +276,6 @@ pub fn draw_command_palette(ctx: &mut Context, state: &mut State) {
         }
     }
     ctx.block_end();
-
-    if activate_via_keyboard {
-        if let Some(entry) = filtered.get(selection) {
-            if entry.enabled {
-                activate = Some(entry.action);
-            }
-        }
-    }
 
     drop(filtered);
     state.command_palette_selection = selection;
