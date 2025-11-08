@@ -238,7 +238,7 @@ pub fn draw_command_palette(ctx: &mut Context, state: &mut State) {
     } else {
         for (idx, entry) in filtered.iter().take(visible_len).enumerate() {
             ctx.next_block_id_mixin(idx as u64);
-            if idx == state.command_palette_selection {
+            if idx == selection {
                 ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Blue, 3, 4));
                 ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
             } else {
