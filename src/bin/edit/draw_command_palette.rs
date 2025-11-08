@@ -259,6 +259,11 @@ pub fn draw_command_palette(ctx: &mut Context, state: &mut State) {
                 entry.label
             };
 
+            ctx.inherit_focus();
+            if idx == selection {
+                ctx.steal_focus();
+            }
+
             if ctx.button("command-entry", label_text, ButtonStyle::default()) && entry.enabled {
                 selection = idx;
                 activate = Some(entry.action);
