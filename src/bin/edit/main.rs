@@ -344,6 +344,7 @@ fn draw(ctx: &mut Context, state: &mut State) {
     }
     if state.wants_command_palette {
         draw_command_palette(ctx, state);
+        return;
     }
     if ctx.clipboard_ref().wants_host_sync() {
         draw_handle_clipboard_change(ctx, state);
@@ -352,17 +353,15 @@ fn draw(ctx: &mut Context, state: &mut State) {
         draw_error_log(ctx, state);
     }
 
-    if state.wants_command_palette {
-        return;
-    }
-
     if let Some(key) = ctx.keyboard_input() {
         // Shortcuts that are not handled as part of the textarea, etc.
 
-        if key == kbmod::CTRL_SHIFT | vk::P {
+        if key == vk::F1 {
             state.wants_command_palette = true;
             state.command_palette_filter.clear();
             state.command_palette_selection = 0;
+            ctx.needs_rerender();
+            return;
         } else if key == kbmod::CTRL | vk::N {
             draw_add_untitled_document(ctx, state);
         } else if key == kbmod::CTRL | vk::O {

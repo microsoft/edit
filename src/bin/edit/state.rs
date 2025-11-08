@@ -565,8 +565,7 @@ impl State {
                 prefs.apply_to_document(doc);
                 {
                     let mut tb = doc.buffer.borrow_mut();
-                    let target =
-                        Point { x: clamp_coord(entry.column), y: clamp_coord(entry.line) };
+                    let target = Point { x: clamp_coord(entry.column), y: clamp_coord(entry.line) };
                     tb.cursor_move_to_logical(target);
                 }
             }
