@@ -14,6 +14,7 @@ use edit::{apperr, path, sys};
 use crate::state::DisplayablePathBuf;
 
 pub struct Document {
+    pub id: u64,
     pub buffer: RcTextBuffer,
     pub path: Option<PathBuf>,
     pub dir: Option<DisplayablePathBuf>,
@@ -79,6 +80,7 @@ impl Document {
 #[derive(Default)]
 pub struct DocumentManager {
     list: LinkedList<Document>,
+    next_id: u64,
 }
 
 impl DocumentManager {
@@ -115,6 +117,20 @@ impl DocumentManager {
         self.list.pop_front();
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &Document> {
+        self.list.iter()
+    }
+
+    pub fn activate(&mut self, id: u64) -> bool {
+        self.update_active(|doc| doc.id == id)
+    }
+
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        id
+    }
+
     pub fn iter_mut(&mut self) -> std::collections::linked_list::IterMut<'_, Document> {
         self.list.iter_mut()
     }
@@ -122,6 +138,7 @@ impl DocumentManager {
     pub fn add_untitled(&mut self) -> apperr::Result<&mut Document> {
         let buffer = Self::create_buffer()?;
         let mut doc = Document {
+            id: self.next_id(),
             buffer,
             path: None,
             dir: Default::default(),
@@ -187,6 +204,7 @@ impl DocumentManager {
         }
 
         let mut doc = Document {
+            id: self.next_id(),
             buffer,
             path: None,
             dir: None,

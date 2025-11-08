@@ -295,6 +295,7 @@ fn print_version() {
 
 fn draw(ctx: &mut Context, state: &mut State) {
     draw_menubar(ctx, state);
+    draw_tabstrip(ctx, state);
     draw_editor(ctx, state);
     draw_statusbar(ctx, state);
 

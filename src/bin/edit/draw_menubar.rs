@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use edit::arena_format;
+use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::input::{kbmod, vk};
 use edit::tui::*;
@@ -35,6 +36,52 @@ pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
         }
     }
     ctx.menubar_end();
+}
+
+pub fn draw_tabstrip(ctx: &mut Context, state: &mut State) {
+    if state.documents.len() <= 1 {
+        return;
+    }
+
+    let mut tabs = Vec::new();
+    for doc in state.documents.iter() {
+        let dirty = doc.buffer.borrow().is_dirty();
+        tabs.push((doc.id, doc.filename.clone(), dirty));
+    }
+
+    let active_id = state.documents.active().map(|doc| doc.id);
+
+    ctx.block_begin("tabstrip");
+    ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Background, 5, 6));
+    ctx.attr_padding(Rect::three(0, 1, 0));
+    let columns = vec![0; tabs.len().max(1)];
+    ctx.table_begin("tabstrip-row");
+    ctx.table_set_columns(&columns);
+    ctx.table_next_row();
+    ctx.table_set_cell_gap(Size { width: 1, height: 0 });
+    for (id, title, dirty) in tabs {
+        ctx.next_block_id_mixin(id);
+        if Some(id) == active_id {
+            ctx.attr_background_rgba(state.menubar_color_bg);
+            ctx.attr_foreground_rgba(state.menubar_color_fg);
+        } else {
+            ctx.attr_background_rgba(ctx.indexed(IndexedColor::Background));
+            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Foreground));
+        }
+
+        let mut label = title.clone();
+        if dirty {
+            label.push('*');
+        }
+
+        if ctx.button("tab", &label, ButtonStyle::default()) {
+            if state.documents.activate(id) {
+                ctx.needs_rerender();
+            }
+        }
+    }
+    ctx.table_end();
+    ctx.block_end();
 }
 
 fn draw_menu_file(ctx: &mut Context, state: &mut State) {

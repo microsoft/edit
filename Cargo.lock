@@ -186,7 +186,6 @@ version = "1.2.1"
 dependencies = [
  "criterion",
  "libc",
- "serde",
  "serde_json",
  "toml-span",
  "windows-sys",

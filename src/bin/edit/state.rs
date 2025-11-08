@@ -3,8 +3,8 @@
 
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
-use std::mem;
 use std::path::{Path, PathBuf};
+use std::{env, fs, mem};
 
 use edit::framebuffer::{self, INDEXED_COLORS_COUNT, IndexedColor};
 use edit::helpers::*;
@@ -180,6 +180,7 @@ pub struct State {
 
 impl State {
     pub fn new() -> apperr::Result<Self> {
+        let preferences = Preferences::load_from_disk();
         Ok(Self {
             menubar_color_bg: StraightRgba::zero(),
             menubar_color_fg: StraightRgba::zero(),
@@ -225,7 +226,7 @@ impl State {
             osc_clipboard_sync: false,
             osc_clipboard_always_send: false,
             exit: false,
-            preferences: Preferences::default(),
+            preferences,
             system_palette: framebuffer::DEFAULT_THEME,
         })
     }
@@ -301,6 +302,7 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
             &mut state.preferences.auto_close_pairs,
         ) {
             state.apply_preferences_to_documents();
+            state.save_preferences();
             ctx.needs_rerender();
         }
 
@@ -310,6 +312,7 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
             &mut state.preferences.line_highlight,
         ) {
             state.apply_preferences_to_documents();
+            state.save_preferences();
             ctx.needs_rerender();
         }
 
@@ -329,6 +332,7 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
             {
                 state.preferences.colorscheme = scheme;
                 state.apply_colorscheme_to_context(ctx);
+                state.save_preferences();
                 ctx.needs_rerender();
             }
         }
@@ -351,6 +355,10 @@ impl State {
         for doc in self.documents.iter_mut() {
             prefs.apply_to_document(doc);
         }
+    }
+
+    pub fn save_preferences(&self) {
+        self.preferences.save_to_disk();
     }
 
     pub fn set_system_palette(&mut self, palette: [StraightRgba; INDEXED_COLORS_COUNT]) {
@@ -461,6 +469,27 @@ impl ColorScheme {
             ColorScheme::HighContrast => "scheme-high-contrast",
         }
     }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            ColorScheme::System => "system",
+            ColorScheme::Midnight => "midnight",
+            ColorScheme::Daylight => "daylight",
+            ColorScheme::Nord => "nord",
+            ColorScheme::HighContrast => "high_contrast",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "system" => Some(ColorScheme::System),
+            "midnight" => Some(ColorScheme::Midnight),
+            "daylight" => Some(ColorScheme::Daylight),
+            "nord" => Some(ColorScheme::Nord),
+            "high_contrast" | "high-contrast" => Some(ColorScheme::HighContrast),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -485,6 +514,64 @@ impl Preferences {
     pub fn apply_to_document(&self, doc: &mut Document) {
         let mut tb = doc.buffer.borrow_mut();
         self.apply_to_text_buffer(&mut tb);
+    }
+
+    fn load_from_disk() -> Self {
+        let Some(path) = preferences_file_path() else {
+            return Self::default();
+        };
+        let Ok(text) = fs::read_to_string(path) else {
+            return Self::default();
+        };
+        let mut prefs = Preferences::default();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let key = key.trim();
+            let value = value.trim();
+            match key {
+                "auto_close_pairs" => {
+                    if let Some(val) = parse_bool(value) {
+                        prefs.auto_close_pairs = val;
+                    }
+                }
+                "line_highlight" => {
+                    if let Some(val) = parse_bool(value) {
+                        prefs.line_highlight = val;
+                    }
+                }
+                "colorscheme" => {
+                    if let Some(val) = ColorScheme::from_str(value) {
+                        prefs.colorscheme = val;
+                    }
+                }
+                _ => {}
+            }
+        }
+        prefs
+    }
+
+    fn save_to_disk(&self) {
+        let Some(path) = preferences_file_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            if fs::create_dir_all(parent).is_err() {
+                return;
+            }
+        }
+        let contents = format!(
+            "auto_close_pairs={}\nline_highlight={}\ncolorscheme={}\n",
+            self.auto_close_pairs,
+            self.line_highlight,
+            self.colorscheme.as_str(),
+        );
+        let _ = fs::write(path, contents);
     }
 }
 
@@ -575,3 +662,28 @@ const COLOR_SCHEME_HIGH_CONTRAST: [StraightRgba; INDEXED_COLORS_COUNT] = [
     rgba(0x000000ff),
     rgba(0xffffffff),
 ];
+
+fn preferences_file_path() -> Option<PathBuf> {
+    let base = if cfg!(windows) {
+        env::var_os("APPDATA").map(PathBuf::from)
+    } else {
+        env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+    }?;
+
+    #[cfg(windows)]
+    let subdir = PathBuf::from("Microsoft").join("Edit");
+    #[cfg(not(windows))]
+    let subdir = PathBuf::from("edit");
+
+    Some(base.join(subdir).join("preferences.toml"))
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
