@@ -6,7 +6,7 @@ use edit::arena_format;
 use edit::framebuffer::IndexedColor;
 use edit::fuzzy::score_fuzzy;
 use edit::helpers::*;
-use edit::input::{kbmod, vk};
+use edit::input::vk;
 use edit::tui::*;
 
 use crate::localization::*;
@@ -221,18 +221,6 @@ pub fn draw_command_palette(ctx: &mut Context, state: &mut State) {
         selection = selection.min(visible_len.saturating_sub(1));
     }
 
-    if visible_len != 0 {
-        if ctx.consume_shortcut(vk::UP) || ctx.consume_shortcut(kbmod::CTRL | vk::P) {
-            if selection == 0 {
-                selection = visible_len - 1;
-            } else {
-                selection -= 1;
-            }
-        } else if ctx.consume_shortcut(vk::DOWN) || ctx.consume_shortcut(kbmod::CTRL | vk::N) {
-            selection = (selection + 1) % visible_len.max(1);
-        }
-    }
-
     ctx.block_begin("results");
     ctx.attr_padding(Rect::three(0, 0, 1));
 
@@ -241,38 +229,32 @@ pub fn draw_command_palette(ctx: &mut Context, state: &mut State) {
         ctx.label("no-results", loc(LocId::CommandPaletteNoResults));
         ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Foreground));
     } else {
-        for (idx, entry) in filtered.iter().take(visible_len).enumerate() {
-            ctx.next_block_id_mixin(idx as u64);
-            if idx == selection {
-                ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Blue, 3, 4));
-                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
-            } else {
-                ctx.attr_background_rgba(ctx.indexed(IndexedColor::Background));
-                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Foreground));
-            }
-            if !entry.enabled {
-                ctx.attr_foreground_rgba(ctx.indexed_alpha(IndexedColor::BrightBlack, 3, 4));
-            }
+        ctx.list_begin("command-list");
+        ctx.inherit_focus();
+        {
+            for (idx, entry) in filtered.iter().take(visible_len).enumerate() {
+                let mut label_owned = None;
+                let label_text: &str = if let Some(shortcut) = entry.shortcut {
+                    label_owned =
+                        Some(arena_format!(ctx.arena(), "{}    {}", entry.label, shortcut));
+                    label_owned.as_deref().unwrap()
+                } else {
+                    entry.label
+                };
 
-            ctx.attr_overflow(Overflow::TruncateTail);
-
-            let mut label_owned = None;
-            let label_text: &str = if let Some(shortcut) = entry.shortcut {
-                label_owned = Some(arena_format!(ctx.arena(), "{}    {}", entry.label, shortcut));
-                label_owned.as_deref().unwrap()
-            } else {
-                entry.label
-            };
-
-            if idx == selection {
-                ctx.steal_focus();
-            }
-
-            if ctx.button("command-entry", label_text, ButtonStyle::default()) && entry.enabled {
-                selection = idx;
-                activate = Some(entry.action);
+                match ctx.list_item(selection == idx, label_text) {
+                    ListSelection::Activated => {
+                        selection = idx;
+                        if entry.enabled {
+                            activate = Some(entry.action);
+                        }
+                    }
+                    ListSelection::Selected => selection = idx,
+                    ListSelection::Unchanged => {}
+                }
             }
         }
+        ctx.list_end();
     }
     ctx.block_end();
 
