@@ -35,6 +35,8 @@ codegen-units = 16          # Make compiling criterion faster (16 is the default
 lto = "thin"                # Similarly, speed up linking by a ton
 
 [dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -63,5 +65,4 @@ features = [
 
 [dev-dependencies]
 criterion = { version = "0.7", features = ["html_reports"] }
-serde_json = { version = "1.0" }
 zstd = { version = "0.13", default-features = false }

@@ -91,6 +91,11 @@ fn draw_menu_file(ctx: &mut Context, state: &mut State) {
     if ctx.menubar_menu_button(loc(LocId::FileOpen), 'O', kbmod::CTRL | vk::O) {
         state.wants_file_picker = StateFilePicker::Open;
     }
+    if !state.recent_files.is_empty()
+        && ctx.menubar_menu_button(loc(LocId::FileOpenRecent), 'R', vk::NULL)
+    {
+        state.wants_recent_files = true;
+    }
     if state.documents.active().is_some() {
         if ctx.menubar_menu_button(loc(LocId::FileSave), 'S', kbmod::CTRL | vk::S) {
             state.wants_save = true;

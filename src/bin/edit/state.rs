@@ -11,10 +11,11 @@ use edit::helpers::*;
 use edit::input::vk;
 use edit::oklab::StraightRgba;
 use edit::tui::*;
-use edit::{apperr, arena_format, buffer, icu, sys};
+use edit::{apperr, arena_format, buffer, icu, path, sys};
 
 use crate::documents::{Document, DocumentManager};
 use crate::localization::*;
+use crate::session;
 
 #[repr(transparent)]
 pub struct FormatApperr(apperr::Error);
@@ -93,6 +94,9 @@ impl<T: ?Sized + AsRef<OsStr>> From<&T> for DisplayablePathBuf {
     }
 }
 
+const RECENT_FILES_LIMIT: usize = 15;
+const SESSION_DOCUMENT_LIMIT: usize = 8;
+
 pub struct StateSearch {
     pub kind: StateSearchKind,
     pub focus: bool,
@@ -133,6 +137,7 @@ pub struct State {
     pub menubar_color_fg: StraightRgba,
 
     pub documents: DocumentManager,
+    pub recent_files: Vec<DisplayablePathBuf>,
 
     // A ring buffer of the last 10 errors.
     pub error_log: [String; 10],
@@ -164,6 +169,8 @@ pub struct State {
     pub wants_go_to_file: bool,
     pub wants_preferences: bool,
     pub wants_about: bool,
+    pub wants_recent_files: bool,
+    pub wants_command_palette: bool,
     pub wants_close: bool,
     pub wants_exit: bool,
     pub wants_goto: bool,
@@ -174,7 +181,10 @@ pub struct State {
     pub osc_clipboard_sync: bool,
     pub osc_clipboard_always_send: bool,
     pub exit: bool,
+    pub skip_session_restore: bool,
     pub preferences: Preferences,
+    pub command_palette_filter: String,
+    pub command_palette_selection: usize,
     system_palette: [StraightRgba; INDEXED_COLORS_COUNT],
 }
 
@@ -186,6 +196,7 @@ impl State {
             menubar_color_fg: StraightRgba::zero(),
 
             documents: Default::default(),
+            recent_files: Vec::new(),
 
             error_log: [const { String::new() }; 10],
             error_log_index: 0,
@@ -216,6 +227,8 @@ impl State {
             wants_go_to_file: false,
             wants_preferences: false,
             wants_about: false,
+            wants_recent_files: false,
+            wants_command_palette: false,
             wants_close: false,
             wants_exit: false,
             wants_goto: false,
@@ -226,7 +239,10 @@ impl State {
             osc_clipboard_sync: false,
             osc_clipboard_always_send: false,
             exit: false,
+            skip_session_restore: false,
             preferences,
+            command_palette_filter: String::new(),
+            command_palette_selection: 0,
             system_palette: framebuffer::DEFAULT_THEME,
         })
     }
@@ -316,6 +332,69 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
             ctx.needs_rerender();
         }
 
+        if ctx.checkbox(
+            "pref-line-numbers",
+            loc(LocId::PreferencesShowLineNumbers),
+            &mut state.preferences.show_line_numbers,
+        ) {
+            state.apply_preferences_to_documents();
+            state.save_preferences();
+            ctx.needs_rerender();
+        }
+
+        if ctx.checkbox(
+            "pref-word-wrap",
+            loc(LocId::PreferencesWordWrap),
+            &mut state.preferences.word_wrap,
+        ) {
+            state.apply_preferences_to_documents();
+            state.save_preferences();
+            ctx.needs_rerender();
+        }
+
+        if ctx.checkbox(
+            "pref-indent-tabs",
+            loc(LocId::PreferencesIndentWithTabs),
+            &mut state.preferences.indent_with_tabs,
+        ) {
+            state.apply_preferences_to_documents();
+            state.save_preferences();
+            ctx.needs_rerender();
+        }
+
+        ctx.table_begin("pref-tab-width");
+        ctx.attr_padding(Rect::three(0, 0, 1));
+        ctx.table_set_cell_gap(Size { width: 1, height: 0 });
+        ctx.table_next_row();
+        {
+            ctx.label("pref-tab-width-label", loc(LocId::PreferencesTabWidth));
+            ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
+
+            let mut changed = None;
+            if ctx.button("pref-tab-dec", "-", ButtonStyle::default()) {
+                changed = Some(state.preferences.tab_width.saturating_sub(1));
+            }
+            ctx.label(
+                "pref-tab-width-value",
+                &arena_format!(ctx.arena(), "{}", state.preferences.tab_width),
+            );
+            ctx.attr_position(Position::Center);
+            if ctx.button("pref-tab-inc", "+", ButtonStyle::default()) {
+                changed = Some(state.preferences.tab_width.saturating_add(1));
+            }
+
+            if let Some(new_width) = changed {
+                let new_width = new_width.clamp(1, 8);
+                if state.preferences.tab_width != new_width {
+                    state.preferences.tab_width = new_width;
+                    state.apply_preferences_to_documents();
+                    state.save_preferences();
+                    ctx.needs_rerender();
+                }
+            }
+        }
+        ctx.table_end();
+
         ctx.label("colorscheme-label", loc(LocId::PreferencesColorscheme));
         ctx.attr_padding(Rect::three(0, 0, 1));
 
@@ -349,6 +428,62 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
     }
 }
 
+pub fn draw_recent_files_dialog(ctx: &mut Context, state: &mut State) {
+    if state.recent_files.is_empty() {
+        state.wants_recent_files = false;
+        return;
+    }
+
+    let mut close = false;
+    let mut open_path: Option<PathBuf> = None;
+
+    ctx.modal_begin("recent-files", loc(LocId::RecentFilesDialogTitle));
+    ctx.attr_focus_well();
+    ctx.attr_padding(Rect::three(1, 2, 1));
+    {
+        if ctx.contains_focus() && ctx.consume_shortcut(vk::ESCAPE) {
+            close = true;
+        }
+
+        ctx.block_begin("recent-list");
+        ctx.attr_padding(Rect::three(0, 0, 1));
+        for (idx, entry) in state.recent_files.iter().enumerate() {
+            ctx.next_block_id_mixin(idx as u64);
+            ctx.attr_overflow(Overflow::TruncateTail);
+            if ctx.button("recent-entry", entry.as_str(), ButtonStyle::default()) {
+                open_path = Some(entry.as_path().to_path_buf());
+            }
+        }
+        ctx.block_end();
+
+        ctx.attr_position(Position::Center);
+        if ctx.button("recent-close", loc(LocId::SearchClose), ButtonStyle::default()) {
+            close = true;
+        }
+    }
+    if ctx.modal_end() {
+        close = true;
+    }
+
+    if let Some(path) = open_path {
+        let prefs = state.preferences.clone();
+        match state.documents.add_file_path(&path) {
+            Ok(doc) => {
+                prefs.apply_to_document(doc);
+                state.mark_file_recent_path(&path);
+                state.wants_recent_files = false;
+                ctx.needs_rerender();
+            }
+            Err(err) => error_log_add(ctx, state, err),
+        }
+        return;
+    }
+
+    if close {
+        state.wants_recent_files = false;
+    }
+}
+
 impl State {
     pub fn apply_preferences_to_documents(&mut self) {
         let prefs = self.preferences.clone();
@@ -359,6 +494,86 @@ impl State {
 
     pub fn save_preferences(&self) {
         self.preferences.save_to_disk();
+    }
+
+    pub fn initialize_session(&mut self) {
+        if let Some(session_file) = session::load() {
+            self.set_recent_files_from_session(session_file.recent_files);
+            if !self.skip_session_restore {
+                self.restore_session_documents(&session_file.open_documents);
+            }
+        }
+    }
+
+    pub fn save_session(&self) {
+        let mut session_file = session::SessionFile {
+            version: session::SESSION_VERSION,
+            open_documents: Vec::new(),
+            recent_files: Vec::new(),
+        };
+
+        for doc in self.documents.iter().take(SESSION_DOCUMENT_LIMIT) {
+            if let Some(path) = &doc.path {
+                let cursor = doc.buffer.borrow().cursor_logical_pos();
+                session_file.open_documents.push(session::SessionDocument {
+                    path: path.to_string_lossy().into_owned(),
+                    line: cursor.y as i64,
+                    column: cursor.x as i64,
+                });
+            }
+        }
+
+        for entry in self.recent_files.iter().take(RECENT_FILES_LIMIT) {
+            session_file.recent_files.push(entry.as_str().to_string());
+        }
+
+        let _ = session::save(&session_file);
+    }
+
+    pub fn mark_file_recent_path<P: AsRef<Path>>(&mut self, path: P) {
+        let normalized = path::normalize(path.as_ref());
+        if normalized.as_os_str().is_empty() {
+            return;
+        }
+        self.recent_files.retain(|entry| entry.as_path() != normalized.as_path());
+        self.recent_files.insert(0, DisplayablePathBuf::from_path(normalized));
+        if self.recent_files.len() > RECENT_FILES_LIMIT {
+            self.recent_files.truncate(RECENT_FILES_LIMIT);
+        }
+    }
+
+    fn set_recent_files_from_session(&mut self, entries: Vec<String>) {
+        self.recent_files.clear();
+        for entry in entries.into_iter().rev() {
+            if entry.is_empty() {
+                continue;
+            }
+            self.mark_file_recent_path(PathBuf::from(entry));
+        }
+    }
+
+    fn restore_session_documents(&mut self, entries: &[session::SessionDocument]) {
+        let prefs = self.preferences.clone();
+        for entry in entries.iter().rev().take(SESSION_DOCUMENT_LIMIT) {
+            if entry.path.is_empty() {
+                continue;
+            }
+            let path = PathBuf::from(&entry.path);
+            let mut opened = false;
+            if let Ok(doc) = self.documents.add_file_path(&path) {
+                opened = true;
+                prefs.apply_to_document(doc);
+                {
+                    let mut tb = doc.buffer.borrow_mut();
+                    let target =
+                        Point { x: clamp_coord(entry.column), y: clamp_coord(entry.line) };
+                    tb.cursor_move_to_logical(target);
+                }
+            }
+            if opened {
+                self.mark_file_recent_path(&path);
+            }
+        }
     }
 
     pub fn set_system_palette(&mut self, palette: [StraightRgba; INDEXED_COLORS_COUNT]) {
@@ -497,11 +712,23 @@ pub struct Preferences {
     pub auto_close_pairs: bool,
     pub line_highlight: bool,
     pub colorscheme: ColorScheme,
+    pub show_line_numbers: bool,
+    pub word_wrap: bool,
+    pub indent_with_tabs: bool,
+    pub tab_width: u8,
 }
 
 impl Default for Preferences {
     fn default() -> Self {
-        Self { auto_close_pairs: true, line_highlight: true, colorscheme: ColorScheme::System }
+        Self {
+            auto_close_pairs: true,
+            line_highlight: true,
+            colorscheme: ColorScheme::System,
+            show_line_numbers: true,
+            word_wrap: false,
+            indent_with_tabs: false,
+            tab_width: 4,
+        }
     }
 }
 
@@ -509,6 +736,10 @@ impl Preferences {
     fn apply_to_text_buffer(&self, tb: &mut buffer::TextBuffer) {
         tb.set_auto_pair_enabled(self.auto_close_pairs);
         tb.set_line_highlight_enabled(self.line_highlight);
+        tb.set_margin_enabled(self.show_line_numbers);
+        tb.set_word_wrap(self.word_wrap);
+        tb.set_indent_with_tabs(self.indent_with_tabs);
+        tb.set_tab_size(CoordType::from(self.tab_width));
     }
 
     pub fn apply_to_document(&self, doc: &mut Document) {
@@ -550,6 +781,26 @@ impl Preferences {
                         prefs.colorscheme = val;
                     }
                 }
+                "show_line_numbers" => {
+                    if let Some(val) = parse_bool(value) {
+                        prefs.show_line_numbers = val;
+                    }
+                }
+                "word_wrap" => {
+                    if let Some(val) = parse_bool(value) {
+                        prefs.word_wrap = val;
+                    }
+                }
+                "indent_with_tabs" => {
+                    if let Some(val) = parse_bool(value) {
+                        prefs.indent_with_tabs = val;
+                    }
+                }
+                "tab_width" => {
+                    if let Some(val) = parse_u8_in_range(value, 1, 8) {
+                        prefs.tab_width = val;
+                    }
+                }
                 _ => {}
             }
         }
@@ -566,10 +817,20 @@ impl Preferences {
             }
         }
         let contents = format!(
-            "auto_close_pairs={}\nline_highlight={}\ncolorscheme={}\n",
+            "auto_close_pairs={}\n\
+             line_highlight={}\n\
+             colorscheme={}\n\
+             show_line_numbers={}\n\
+             word_wrap={}\n\
+             indent_with_tabs={}\n\
+             tab_width={}\n",
             self.auto_close_pairs,
             self.line_highlight,
             self.colorscheme.as_str(),
+            self.show_line_numbers,
+            self.word_wrap,
+            self.indent_with_tabs,
+            self.tab_width,
         );
         let _ = fs::write(path, contents);
     }
@@ -663,7 +924,7 @@ const COLOR_SCHEME_HIGH_CONTRAST: [StraightRgba; INDEXED_COLORS_COUNT] = [
     rgba(0xffffffff),
 ];
 
-fn preferences_file_path() -> Option<PathBuf> {
+pub(crate) fn config_dir() -> Option<PathBuf> {
     let base = if cfg!(windows) {
         env::var_os("APPDATA").map(PathBuf::from)
     } else {
@@ -677,7 +938,11 @@ fn preferences_file_path() -> Option<PathBuf> {
     #[cfg(not(windows))]
     let subdir = PathBuf::from("edit");
 
-    Some(base.join(subdir).join("preferences.toml"))
+    Some(base.join(subdir))
+}
+
+fn preferences_file_path() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("preferences.toml"))
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -686,4 +951,12 @@ fn parse_bool(value: &str) -> Option<bool> {
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
     }
+}
+
+fn parse_u8_in_range(value: &str, min: u8, max: u8) -> Option<u8> {
+    value.parse::<u8>().ok().map(|v| v.clamp(min, max))
+}
+
+fn clamp_coord(value: i64) -> CoordType {
+    value.clamp(0, isize::MAX as i64) as CoordType
 }

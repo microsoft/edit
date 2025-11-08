@@ -247,12 +247,13 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 prefs.apply_to_document(doc);
             })
         } else if let Some(doc) = state.documents.active_mut() {
-            doc.save(Some(path))
+            doc.save(Some(path.clone()))
         } else {
             Ok(())
         };
         match res {
             Ok(..) => {
+                state.mark_file_recent_path(&path);
                 ctx.needs_rerender();
                 done = true;
             }

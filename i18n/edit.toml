@@ -8,6 +8,7 @@ __default__ = [
     "ja",
     "ko",
     "pt_br",
+    "pl",
     "ru",
     "zh_hans",
     "zh_hant",
@@ -53,6 +54,7 @@ it = "OK"
 ja = "OK"
 ko = "확인"
 nl = "OK"
+pl = "OK"
 pt_br = "OK"
 pt_pt = "OK"
 ro = "OK"
@@ -285,6 +287,10 @@ uk = "Відкрити файл…"
 vi = "Mở tệp…"
 zh_hans = "打开文件…"
 zh_hant = "開啟檔案…"
+
+[FileOpenRecent]
+en = "Open Recent…"
+pl = "Otwórz ostatnie…"
 
 [FileSave]
 en = "Save"
@@ -1772,27 +1778,64 @@ zh_hans = "文件已存在。要覆盖它吗？"
 zh_hant = "檔案已存在。要覆蓋它嗎？"
 [PreferencesDialogTitle]
 en = "Preferences"
+pl = "Preferencje"
 
 [PreferencesAutoClose]
 en = "Auto close brackets"
+pl = "Automatycznie domykaj nawiasy"
 
 [PreferencesLineHighlight]
 en = "Highlight current line"
+pl = "Podświetlaj bieżący wiersz"
 
 [PreferencesColorscheme]
 en = "Color scheme"
+pl = "Motyw kolorów"
+
+[PreferencesShowLineNumbers]
+en = "Show line numbers"
+pl = "Pokaż numery wierszy"
+
+[PreferencesWordWrap]
+en = "Wrap long lines"
+pl = "Zawijaj długie wiersze"
+
+[PreferencesIndentWithTabs]
+en = "Use tabs for indentation"
+pl = "Używaj tabulatorów do wcięć"
+
+[PreferencesTabWidth]
+en = "Tab width"
+pl = "Szerokość tabulatora"
 
 [PreferencesSchemeSystem]
 en = "System"
+pl = "Systemowy"
 
 [PreferencesSchemeMidnight]
 en = "Midnight"
+pl = "Północ"
 
 [PreferencesSchemeDaylight]
 en = "Daylight"
+pl = "Światło dzienne"
 
 [PreferencesSchemeNord]
 en = "Nord"
+pl = "Nord"
 
 [PreferencesSchemeHighContrast]
 en = "High Contrast"
+pl = "Wysoki kontrast"
+
+[RecentFilesDialogTitle]
+en = "Recent Files"
+pl = "Ostatnie pliki"
+
+[CommandPaletteTitle]
+en = "Command Palette"
+pl = "Paleta poleceń"
+
+[CommandPaletteNoResults]
+en = "No commands found"
+pl = "Brak wyników"

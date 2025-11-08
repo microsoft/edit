@@ -4,11 +4,13 @@
 #![feature(allocator_api, linked_list_cursors, string_from_utf8_lossy_owned)]
 
 mod documents;
+mod draw_command_palette;
 mod draw_editor;
 mod draw_filepicker;
 mod draw_menubar;
 mod draw_statusbar;
 mod localization;
+mod session;
 mod state;
 
 use std::borrow::Cow;
@@ -18,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{env, process};
 
+use draw_command_palette::*;
 use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
@@ -69,6 +72,8 @@ fn run() -> apperr::Result<()> {
     if handle_args(&mut state)? {
         return Ok(());
     }
+
+    state.initialize_session();
 
     // This will reopen stdin if it's redirected (which may fail) and switch
     // the terminal to raw mode which prevents the user from pressing Ctrl+C.
@@ -205,6 +210,8 @@ fn run() -> apperr::Result<()> {
         }
     }
 
+    state.save_session();
+
     Ok(())
 }
 
@@ -251,9 +258,15 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         let prefs = state.preferences.clone();
         let doc = state.documents.add_file_path(p)?;
         prefs.apply_to_document(doc);
+        state.mark_file_recent_path(p);
+    }
+
+    if !paths.is_empty() {
+        state.skip_session_restore = true;
     }
 
     if let Some(mut file) = sys::open_stdin_if_redirected() {
+        state.skip_session_restore = true;
         let prefs = state.preferences.clone();
         let doc = state.documents.add_untitled()?;
         prefs.apply_to_document(doc);
@@ -326,6 +339,12 @@ fn draw(ctx: &mut Context, state: &mut State) {
     if state.wants_preferences {
         draw_dialog_preferences(ctx, state);
     }
+    if state.wants_recent_files {
+        draw_recent_files_dialog(ctx, state);
+    }
+    if state.wants_command_palette {
+        draw_command_palette(ctx, state);
+    }
     if ctx.clipboard_ref().wants_host_sync() {
         draw_handle_clipboard_change(ctx, state);
     }
@@ -333,10 +352,18 @@ fn draw(ctx: &mut Context, state: &mut State) {
         draw_error_log(ctx, state);
     }
 
+    if state.wants_command_palette {
+        return;
+    }
+
     if let Some(key) = ctx.keyboard_input() {
         // Shortcuts that are not handled as part of the textarea, etc.
 
-        if key == kbmod::CTRL | vk::N {
+        if key == kbmod::CTRL_SHIFT | vk::P {
+            state.wants_command_palette = true;
+            state.command_palette_filter.clear();
+            state.command_palette_selection = 0;
+        } else if key == kbmod::CTRL | vk::N {
             draw_add_untitled_document(ctx, state);
         } else if key == kbmod::CTRL | vk::O {
             state.wants_file_picker = StateFilePicker::Open;
