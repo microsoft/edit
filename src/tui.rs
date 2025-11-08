@@ -2324,6 +2324,15 @@ impl<'a> Context<'a, '_> {
         let mut write: &[u8] = &[];
 
         if let Some(input) = &self.input_text {
+            if !single_line {
+                let mut chars = input.chars();
+                if let (Some(ch), None) = (chars.next(), chars.next()) {
+                    if tb.handle_auto_pair_typed(ch) {
+                        self.set_input_consumed();
+                        return true;
+                    }
+                }
+            }
             write = input.as_bytes();
         } else if let Some(input) = &self.input_keyboard {
             let key = input.key();
