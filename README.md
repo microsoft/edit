@@ -37,6 +37,7 @@ Instead of memorizing full cargo invocations, you can run the helper scripts in 
 * `scripts/build-debug.sh` – runs `cargo build`
 * `scripts/test.sh` – runs `cargo test`
 * `scripts/check.sh` – runs `cargo check`
+* `scripts/install.sh` – runs `cargo install --path . --locked`
 
 All scripts forward additional CLI arguments to cargo (e.g., `scripts/test.sh -- --ignored`).
 

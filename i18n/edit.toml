@@ -710,6 +710,9 @@ vi = "Chọn tất cả"
 zh_hans = "全选"
 zh_hant = "全選"
 
+[EditPreferences]
+en = "Preferences"
+
 # A menu bar item
 [View]
 en = "View"
@@ -1767,3 +1770,29 @@ uk = "Файл вже існує. Перезаписати?"
 vi = "Tệp đã tồn tại. Bạn có muốn ghi đè không?"
 zh_hans = "文件已存在。要覆盖它吗？"
 zh_hant = "檔案已存在。要覆蓋它嗎？"
+[PreferencesDialogTitle]
+en = "Preferences"
+
+[PreferencesAutoClose]
+en = "Auto close brackets"
+
+[PreferencesLineHighlight]
+en = "Highlight current line"
+
+[PreferencesColorscheme]
+en = "Color scheme"
+
+[PreferencesSchemeSystem]
+en = "System"
+
+[PreferencesSchemeMidnight]
+en = "Midnight"
+
+[PreferencesSchemeDaylight]
+en = "Daylight"
+
+[PreferencesSchemeNord]
+en = "Nord"
+
+[PreferencesSchemeHighContrast]
+en = "High Contrast"

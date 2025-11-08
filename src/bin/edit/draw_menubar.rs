@@ -99,6 +99,9 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
         tb.select_all();
         ctx.needs_rerender();
     }
+    if ctx.menubar_menu_button(loc(LocId::EditPreferences), 'R', vk::NULL) {
+        state.wants_preferences = true;
+    }
     ctx.menubar_menu_end();
 }
 

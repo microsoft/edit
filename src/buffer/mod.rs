@@ -245,6 +245,7 @@ pub struct TextBuffer {
     newlines_are_crlf: bool,
     insert_final_newline: bool,
     overtype: bool,
+    auto_pair_enabled: bool,
 
     wants_cursor_visibility: bool,
     syntax: SyntaxKind,
@@ -294,6 +295,7 @@ impl TextBuffer {
             newlines_are_crlf: cfg!(windows), // Windows users want CRLF
             insert_final_newline: false,
             overtype: false,
+            auto_pair_enabled: true,
 
             wants_cursor_visibility: false,
             syntax: SyntaxKind::Plain,
@@ -588,6 +590,14 @@ impl TextBuffer {
     /// Sets whether the line the cursor is on should be highlighted.
     pub fn set_line_highlight_enabled(&mut self, enabled: bool) {
         self.line_highlight_enabled = enabled;
+    }
+
+    pub fn auto_pair_enabled(&self) -> bool {
+        self.auto_pair_enabled
+    }
+
+    pub fn set_auto_pair_enabled(&mut self, enabled: bool) {
+        self.auto_pair_enabled = enabled;
     }
 
     /// Sets a ruler column, e.g. 80.
@@ -2105,6 +2115,9 @@ impl TextBuffer {
 
     /// Handles automatic pair insertion and skipping for typed characters.
     pub fn handle_auto_pair_typed(&mut self, ch: char) -> bool {
+        if !self.auto_pair_enabled {
+            return false;
+        }
         if self.try_insert_matching_pair(ch) {
             return true;
         }

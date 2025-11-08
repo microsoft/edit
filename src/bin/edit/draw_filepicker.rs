@@ -240,8 +240,12 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     }
 
     if let Some(path) = doit {
+        let prefs = state.preferences.clone();
+
         let res = if state.wants_file_picker == StateFilePicker::Open {
-            state.documents.add_file_path(&path).map(|_| ())
+            state.documents.add_file_path(&path).map(|doc| {
+                prefs.apply_to_document(doc);
+            })
         } else if let Some(doc) = state.documents.active_mut() {
             doc.save(Some(path))
         } else {

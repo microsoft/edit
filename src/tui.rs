@@ -1390,6 +1390,27 @@ impl<'a> Context<'a, '_> {
         self.tui.framebuffer.contrasted(color)
     }
 
+    pub fn set_color_palette(&mut self, colors: [StraightRgba; INDEXED_COLORS_COUNT]) {
+        self.tui.setup_indexed_colors(colors);
+        self.tui.framebuffer.set_indexed_colors(colors);
+    }
+
+    pub fn set_floater_default_bg(&mut self, color: StraightRgba) {
+        self.tui.set_floater_default_bg(color);
+    }
+
+    pub fn set_floater_default_fg(&mut self, color: StraightRgba) {
+        self.tui.set_floater_default_fg(color);
+    }
+
+    pub fn set_modal_default_bg(&mut self, color: StraightRgba) {
+        self.tui.set_modal_default_bg(color);
+    }
+
+    pub fn set_modal_default_fg(&mut self, color: StraightRgba) {
+        self.tui.set_modal_default_fg(color);
+    }
+
     /// Returns the clipboard.
     pub fn clipboard_ref(&self) -> &Clipboard {
         &self.tui.clipboard

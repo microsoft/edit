@@ -83,25 +83,12 @@ fn run() -> apperr::Result<()> {
 
     let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
 
-    state.menubar_color_bg = tui.indexed(IndexedColor::Background).oklab_blend(tui.indexed_alpha(
-        IndexedColor::BrightBlue,
-        1,
-        2,
-    ));
-    state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
-    let floater_bg = tui
-        .indexed_alpha(IndexedColor::Background, 2, 3)
-        .oklab_blend(tui.indexed_alpha(IndexedColor::Foreground, 1, 3));
-    let floater_fg = tui.contrasted(floater_bg);
+    state.apply_colorscheme_to_tui(&mut tui);
     tui.setup_modifier_translations(ModifierTranslations {
         ctrl: loc(LocId::Ctrl),
         alt: loc(LocId::Alt),
         shift: loc(LocId::Shift),
     });
-    tui.set_floater_default_bg(floater_bg);
-    tui.set_floater_default_fg(floater_fg);
-    tui.set_modal_default_bg(floater_bg);
-    tui.set_modal_default_fg(floater_fg);
 
     sys::inject_window_size_into_stdin();
 
@@ -261,17 +248,23 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     }
 
     for p in &paths {
-        state.documents.add_file_path(p)?;
+        let prefs = state.preferences.clone();
+        let doc = state.documents.add_file_path(p)?;
+        prefs.apply_to_document(doc);
     }
 
     if let Some(mut file) = sys::open_stdin_if_redirected() {
+        let prefs = state.preferences.clone();
         let doc = state.documents.add_untitled()?;
+        prefs.apply_to_document(doc);
         let mut tb = doc.buffer.borrow_mut();
         tb.read_file(&mut file, None)?;
         tb.mark_as_dirty();
     } else if paths.is_empty() {
         // No files were passed, and stdin is not redirected.
-        state.documents.add_untitled()?;
+        let prefs = state.preferences.clone();
+        let doc = state.documents.add_untitled()?;
+        prefs.apply_to_document(doc);
     }
 
     if dir.is_none()
@@ -328,6 +321,9 @@ fn draw(ctx: &mut Context, state: &mut State) {
     }
     if state.wants_about {
         draw_dialog_about(ctx, state);
+    }
+    if state.wants_preferences {
+        draw_dialog_preferences(ctx, state);
     }
     if ctx.clipboard_ref().wants_host_sync() {
         draw_handle_clipboard_change(ctx, state);
@@ -652,8 +648,10 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
     }
 
     if color_responses == indexed_colors.len() {
-        tui.setup_indexed_colors(indexed_colors);
+        state.set_system_palette(indexed_colors);
     }
+
+    state.apply_colorscheme_to_tui(tui);
 
     RestoreModes
 }

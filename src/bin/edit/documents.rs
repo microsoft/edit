@@ -115,6 +115,10 @@ impl DocumentManager {
         self.list.pop_front();
     }
 
+    pub fn iter_mut(&mut self) -> std::collections::linked_list::IterMut<'_, Document> {
+        self.list.iter_mut()
+    }
+
     pub fn add_untitled(&mut self) -> apperr::Result<&mut Document> {
         let buffer = Self::create_buffer()?;
         let mut doc = Document {
