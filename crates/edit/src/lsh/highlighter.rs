@@ -18,24 +18,24 @@ pub struct Language {
     entrypoint: u32,
 }
 
+impl Language {
+    const fn new(name: &'static str, filenames: &'static [&'static str], entrypoint: u32) -> Self {
+        Self { name, filenames, entrypoint }
+    }
+}
+
 impl PartialEq for &Language {
     fn eq(&self, other: &Self) -> bool {
         std::ptr::eq(*self, *other)
     }
 }
 
+#[rustfmt::skip]
 pub const LANGUAGES: &[Language] = &[
-    Language { name: "Diff", filenames: &["*.diff", "*.patch"], entrypoint: ENTRYPOINT_DIFF },
-    Language {
-        name: "Git Commit Message",
-        filenames: &["COMMIT_EDITMSG", "MERGE_MSG"],
-        entrypoint: ENTRYPOINT_GIT_COMMIT_MESSAGE,
-    },
-    Language {
-        name: "Git Rebase Message",
-        filenames: &["git-rebase-todo"], // TODO: https://github.com/microsoft/vscode/issues/156954
-        entrypoint: ENTRYPOINT_GIT_REBASE_TODO,
-    },
+    Language::new("Diff", &["*.diff", "*.patch"], ENTRYPOINT_DIFF),
+    Language::new("Git Commit Message", &["COMMIT_EDITMSG", "MERGE_MSG"], ENTRYPOINT_GIT_COMMIT_MESSAGE),
+    Language::new("Git Rebase Message", &["git-rebase-todo"], ENTRYPOINT_GIT_REBASE_TODO), // TODO: https://github.com/microsoft/vscode/issues/156954
+    Language::new("Markdown", &["*.md"], ENTRYPOINT_MARKDOWN),
 ];
 
 pub fn language_from_path(path: &Path) -> Option<&'static Language> {

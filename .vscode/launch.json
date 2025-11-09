@@ -10,7 +10,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/assets/highlighting-tests/COMMIT_EDITMSG"
+                "${workspaceFolder}/assets/highlighting-tests/markdown.md"
             ],
         },
         {

@@ -24,7 +24,7 @@ __*bold italic*__
 \*not\* \_italic\_ # not a heading
 
 * Unordered item
-  * Nested item
+  - Nested item
     * Third level
 * Task list:
   * [ ] To do

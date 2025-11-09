@@ -289,12 +289,90 @@ fn transform_alt<'a>(
             first = Some(node);
         }
         if let Some(last) = &last {
-            last.borrow_mut().set_next(node);
+            // Try to merge this alternative as a fallback of previous alternatives
+            // if their charsets are compatible (superset relationship)
+            if !try_append_as_fallback(last, node) {
+                last.borrow_mut().set_next(node);
+            }
         }
         last = Some(node);
     }
 
     Ok(first.unwrap())
+}
+
+// Try to append `fallback` as a fallback to nodes in `tree` where the charset
+// of `fallback` is a superset of the charset in `tree`. This allows patterns like
+// `[a-z]+foo|\w+bar` to match `foobar` by trying the more specific pattern first,
+// and falling back to the more general pattern on failure.
+fn try_append_as_fallback<'a>(tree: &IRCell<'a>, fallback: IRCell<'a>) -> bool {
+    let fallback_charset = get_initial_charset(fallback);
+    if fallback_charset.is_none() {
+        return false;
+    }
+
+    append_fallback_recursive(tree, fallback, fallback_charset.unwrap())
+}
+
+fn append_fallback_recursive<'a>(
+    node: &IRCell<'a>,
+    fallback: IRCell<'a>,
+    fallback_charset: &Charset,
+) -> bool {
+    let mut node_ref = node.borrow_mut();
+
+    if let IRI::If { condition: Condition::Charset(charset), then } = &node_ref.instr {
+        // If the fallback charset is a superset of this node's charset,
+        // we can append the fallback to this node's failure path
+        if is_superset(fallback_charset, charset) {
+            // Recursively try to append to the success path first
+            let appended_to_then = append_fallback_recursive(then, fallback, fallback_charset);
+
+            // If not appended to success path, append to failure path (next)
+            if !appended_to_then {
+                if let Some(next) = node_ref.next {
+                    // Try to append recursively to the next node
+                    if !append_fallback_recursive(&next, fallback, fallback_charset) {
+                        // If we couldn't append recursively, this might be the right place
+                        // But we already have a next pointer, so we need to be careful
+                        // For now, don't override existing next pointers in this branch
+                    }
+                } else {
+                    // This node has no next pointer yet, so we can set it to the fallback
+                    node_ref.next = Some(fallback);
+                    return true;
+                }
+            }
+            return appended_to_then;
+        }
+    }
+
+    // Try recursively on the next node
+    if let Some(next) = node_ref.next {
+        drop(node_ref); // Release the borrow before recursing
+        return append_fallback_recursive(&next, fallback, fallback_charset);
+    }
+
+    false
+}
+
+// Get the initial charset that a regex tree matches
+fn get_initial_charset<'a>(node: IRCell<'a>) -> Option<&'a Charset> {
+    let node_ref = node.borrow();
+    match &node_ref.instr {
+        IRI::If { condition: Condition::Charset(charset), .. } => Some(*charset),
+        _ => None,
+    }
+}
+
+// Check if `superset` is a superset of `subset`
+fn is_superset(superset: &Charset, subset: &Charset) -> bool {
+    for i in 0..256 {
+        if subset[i] && !superset[i] {
+            return false;
+        }
+    }
+    true
 }
 
 // [a-z] -> 256-ary LUT

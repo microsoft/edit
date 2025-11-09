@@ -2007,7 +2007,6 @@ impl TextBuffer {
                                 HighlightKind::MarkupInserted => IndexedColor::BrightGreen,
                                 HighlightKind::MetaDiffHeader => IndexedColor::BrightBlue,
                             };
-
                             fb.blend_fg(
                                 Rect {
                                     left: destination.left + self.margin_width + beg.x - origin.x,
@@ -2017,6 +2016,18 @@ impl TextBuffer {
                                 },
                                 fb.indexed(color),
                             );
+
+                            if matches!(kind, )
+                            let color = match kind {
+                                HighlightKind::Comment => IndexedColor::Green,
+                                HighlightKind::Keyword => IndexedColor::BrightMagenta,
+                                HighlightKind::Number => IndexedColor::BrightBlue,
+                                HighlightKind::Other => continue,
+                                HighlightKind::MarkupChanged => IndexedColor::BrightBlue,
+                                HighlightKind::MarkupDeleted => IndexedColor::BrightRed,
+                                HighlightKind::MarkupInserted => IndexedColor::BrightGreen,
+                                HighlightKind::MetaDiffHeader => IndexedColor::BrightBlue,
+                            };
                         }
                     }
                 }
