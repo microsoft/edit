@@ -8,11 +8,13 @@ use std::path::{Path, PathBuf};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
+use edit::highlight::SyntaxKind;
 use edit::{apperr, path, sys};
 
 use crate::state::DisplayablePathBuf;
 
 pub struct Document {
+    pub id: u64,
     pub buffer: RcTextBuffer,
     pub path: Option<PathBuf>,
     pub dir: Option<DisplayablePathBuf>,
@@ -59,12 +61,14 @@ impl Document {
     }
 
     fn set_path(&mut self, path: PathBuf) {
+        let syntax = SyntaxKind::from_path(Some(&path));
         let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let dir = path.parent().map(ToOwned::to_owned).unwrap_or_default();
         self.filename = filename;
         self.dir = Some(DisplayablePathBuf::from_path(dir));
         self.path = Some(path);
         self.update_file_mode();
+        self.buffer.borrow_mut().set_syntax(syntax);
     }
 
     fn update_file_mode(&mut self) {
@@ -76,6 +80,7 @@ impl Document {
 #[derive(Default)]
 pub struct DocumentManager {
     list: LinkedList<Document>,
+    next_id: u64,
 }
 
 impl DocumentManager {
@@ -112,9 +117,28 @@ impl DocumentManager {
         self.list.pop_front();
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &Document> {
+        self.list.iter()
+    }
+
+    pub fn activate(&mut self, id: u64) -> bool {
+        self.update_active(|doc| doc.id == id)
+    }
+
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        id
+    }
+
+    pub fn iter_mut(&mut self) -> std::collections::linked_list::IterMut<'_, Document> {
+        self.list.iter_mut()
+    }
+
     pub fn add_untitled(&mut self) -> apperr::Result<&mut Document> {
         let buffer = Self::create_buffer()?;
         let mut doc = Document {
+            id: self.next_id(),
             buffer,
             path: None,
             dir: Default::default(),
@@ -125,6 +149,11 @@ impl DocumentManager {
         self.gen_untitled_name(&mut doc);
 
         self.list.push_front(doc);
+        let syntax = {
+            let doc_ref = self.list.front().unwrap();
+            SyntaxKind::from_path(Some(Path::new(&doc_ref.filename)))
+        };
+        self.list.front_mut().unwrap().buffer.borrow_mut().set_syntax(syntax);
         Ok(self.list.front_mut().unwrap())
     }
 
@@ -175,6 +204,7 @@ impl DocumentManager {
         }
 
         let mut doc = Document {
+            id: self.next_id(),
             buffer,
             path: None,
             dir: None,

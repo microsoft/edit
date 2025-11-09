@@ -29,6 +29,18 @@ winget install Microsoft.Edit
   * Rust 1.90 or earlier: `cargo build --config .cargo/release.toml --release`
   * otherwise: `cargo build --config .cargo/release-nightly.toml --release`
 
+### Helper Scripts
+
+Instead of memorizing full cargo invocations, you can run the helper scripts in `scripts/`:
+
+* `scripts/build-release.sh` – runs `cargo build --config .cargo/release-nightly.toml --release`
+* `scripts/build-debug.sh` – runs `cargo build`
+* `scripts/test.sh` – runs `cargo test`
+* `scripts/check.sh` – runs `cargo check`
+* `scripts/install.sh` – runs `cargo install --path . --locked`
+
+All scripts forward additional CLI arguments to cargo (e.g., `scripts/test.sh -- --ignored`).
+
 ### Build Configuration
 
 During compilation you can set various environment variables to configure the build. The following table lists the available configuration options:

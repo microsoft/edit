@@ -195,10 +195,13 @@ pub fn search_execute(ctx: &mut Context, state: &mut State, action: SearchAction
 }
 
 pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
+    let mut recent_path = None;
     if let Some(doc) = state.documents.active_mut() {
         if doc.path.is_some() {
             if let Err(err) = doc.save(None) {
                 error_log_add(ctx, state, err);
+            } else {
+                recent_path = doc.path.clone();
             }
         } else {
             // No path? Show the file picker.
@@ -206,6 +209,10 @@ pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
             state.wants_save = false;
             ctx.needs_rerender();
         }
+    }
+
+    if let Some(path) = recent_path {
+        state.mark_file_recent_path(path);
     }
 
     state.wants_save = false;

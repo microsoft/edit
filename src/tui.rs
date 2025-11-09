@@ -162,6 +162,7 @@ use crate::oklab::StraightRgba;
 use crate::{apperr, arena_format, input, simd, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
+const CLIPBOARD_REQUEST_TIMEOUT: time::Duration = time::Duration::from_millis(150);
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
 const KBMOD_FOR_WORD_NAV: InputKeyMod =
     if cfg!(target_os = "macos") { kbmod::ALT } else { kbmod::CTRL };
@@ -365,10 +366,19 @@ pub struct Tui {
 
     /// The clipboard contents.
     clipboard: Clipboard,
+    clipboard_query_pending: bool,
+    clipboard_request_started: Option<std::time::Instant>,
+    clipboard_host_supported: Option<bool>,
+    synthetic_ctrl_v_pending: bool,
 
     settling_have: i32,
     settling_want: i32,
     read_timeout: time::Duration,
+}
+
+enum CtrlVPasteDecision {
+    PasteNow,
+    Wait,
 }
 
 impl Tui {
@@ -415,6 +425,10 @@ impl Tui {
             cached_text_buffers: Vec::with_capacity(16),
 
             clipboard: Default::default(),
+            clipboard_query_pending: false,
+            clipboard_request_started: None,
+            clipboard_host_supported: None,
+            synthetic_ctrl_v_pending: false,
 
             settling_have: 0,
             settling_want: 0,
@@ -502,6 +516,53 @@ impl Tui {
         &mut self.clipboard
     }
 
+    fn ctrl_v_decision(&mut self) -> CtrlVPasteDecision {
+        if self.synthetic_ctrl_v_pending {
+            self.synthetic_ctrl_v_pending = false;
+            return CtrlVPasteDecision::PasteNow;
+        }
+
+        if self.clipboard_request_started.is_some() {
+            return CtrlVPasteDecision::Wait;
+        }
+
+        if self.clipboard_host_supported == Some(false) {
+            return CtrlVPasteDecision::PasteNow;
+        }
+
+        self.clipboard_request_started = Some(std::time::Instant::now());
+        self.clipboard_query_pending = true;
+        self.needs_more_settling();
+        CtrlVPasteDecision::Wait
+    }
+
+    fn mark_clipboard_paste_received(&mut self) {
+        if self.clipboard_request_started.is_some() {
+            self.clipboard_request_started = None;
+            self.clipboard_host_supported = Some(true);
+        }
+        self.synthetic_ctrl_v_pending = true;
+        self.needs_more_settling();
+    }
+
+    pub fn take_clipboard_request(&mut self) -> bool {
+        mem::take(&mut self.clipboard_query_pending)
+    }
+
+    fn poll_clipboard_timeout(&mut self) {
+        if let Some(started) = self.clipboard_request_started
+            && started.elapsed() > CLIPBOARD_REQUEST_TIMEOUT
+        {
+            self.clipboard_request_started = None;
+            self.clipboard_query_pending = false;
+            if self.clipboard_host_supported.is_none() {
+                self.clipboard_host_supported = Some(false);
+            }
+            self.synthetic_ctrl_v_pending = true;
+            self.needs_more_settling();
+        }
+    }
+
     /// Starts a new frame and returns a [`Context`] for it.
     pub fn create_context<'a, 'input>(
         &'a mut self,
@@ -533,11 +594,13 @@ impl Tui {
         // `self.needs_settling() == true`. However, there's a possibility for it being true from
         // a previous frame, and we do have fresh new input. In that case want `input_consumed`
         // to be false of course which is ensured by checking for `input.is_none()`.
-        let input_consumed = self.needs_settling() && input.is_none();
+        let mut input_consumed = self.needs_settling() && input.is_none();
 
         if self.scroll_to_focused() {
             self.needs_more_settling();
         }
+
+        self.poll_clipboard_timeout();
 
         match input {
             None => {}
@@ -562,6 +625,7 @@ impl Tui {
                 let clipboard = self.clipboard_mut();
                 clipboard.write(paste);
                 clipboard.mark_as_synchronized();
+                self.mark_clipboard_paste_received();
                 input_keyboard = Some(kbmod::CTRL | vk::V);
             }
             Some(Input::Keyboard(keyboard)) => {
@@ -680,6 +744,11 @@ impl Tui {
                 self.mouse_position = next_position;
                 self.mouse_state = next_state;
             }
+        }
+
+        if input_keyboard.is_none() && self.synthetic_ctrl_v_pending {
+            input_keyboard = Some(kbmod::CTRL | vk::V);
+            input_consumed = false;
         }
 
         if !input_consumed {
@@ -1390,6 +1459,27 @@ impl<'a> Context<'a, '_> {
         self.tui.framebuffer.contrasted(color)
     }
 
+    pub fn set_color_palette(&mut self, colors: [StraightRgba; INDEXED_COLORS_COUNT]) {
+        self.tui.setup_indexed_colors(colors);
+        self.tui.framebuffer.set_indexed_colors(colors);
+    }
+
+    pub fn set_floater_default_bg(&mut self, color: StraightRgba) {
+        self.tui.set_floater_default_bg(color);
+    }
+
+    pub fn set_floater_default_fg(&mut self, color: StraightRgba) {
+        self.tui.set_floater_default_fg(color);
+    }
+
+    pub fn set_modal_default_bg(&mut self, color: StraightRgba) {
+        self.tui.set_modal_default_bg(color);
+    }
+
+    pub fn set_modal_default_fg(&mut self, color: StraightRgba) {
+        self.tui.set_modal_default_fg(color);
+    }
+
     /// Returns the clipboard.
     pub fn clipboard_ref(&self) -> &Clipboard {
         &self.tui.clipboard
@@ -1398,6 +1488,11 @@ impl<'a> Context<'a, '_> {
     /// Returns the clipboard (mutable).
     pub fn clipboard_mut(&mut self) -> &mut Clipboard {
         &mut self.tui.clipboard
+    }
+
+    /// Returns whether the terminal supports OSC 52 clipboard reads.
+    pub fn clipboard_host_support(&self) -> Option<bool> {
+        self.tui.clipboard_host_supported
     }
 
     /// Tell the UI framework that your state changed and you need another layout pass.
@@ -1525,7 +1620,7 @@ impl<'a> Context<'a, '_> {
         self.next_block_id_mixin = id;
     }
 
-    fn attr_focusable(&mut self) {
+    pub fn attr_focusable(&mut self) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.focusable = true;
     }
@@ -2013,6 +2108,7 @@ impl<'a> Context<'a, '_> {
     pub fn button(&mut self, classname: &'static str, text: &str, style: ButtonStyle) -> bool {
         self.button_label(classname, text, style);
         self.attr_focusable();
+        self.inherit_focus();
         if self.is_focused() {
             self.attr_reverse();
         }
@@ -2024,6 +2120,7 @@ impl<'a> Context<'a, '_> {
     pub fn checkbox(&mut self, classname: &'static str, text: &str, checked: &mut bool) -> bool {
         self.styled_label_begin(classname);
         self.attr_focusable();
+        self.inherit_focus();
         if self.is_focused() {
             self.attr_reverse();
         }
@@ -2324,6 +2421,15 @@ impl<'a> Context<'a, '_> {
         let mut write: &[u8] = &[];
 
         if let Some(input) = &self.input_text {
+            if !single_line {
+                let mut chars = input.chars();
+                if let (Some(ch), None) = (chars.next(), chars.next()) {
+                    if tb.handle_auto_pair_typed(ch) {
+                        self.set_input_consumed();
+                        return true;
+                    }
+                }
+            }
             write = input.as_bytes();
         } else if let Some(input) = &self.input_keyboard {
             let key = input.key();
@@ -2682,7 +2788,10 @@ impl<'a> Context<'a, '_> {
                     _ => return false,
                 },
                 vk::V => match modifiers {
-                    kbmod::CTRL => tb.paste(self.clipboard_ref()),
+                    kbmod::CTRL => match self.tui.ctrl_v_decision() {
+                        CtrlVPasteDecision::PasteNow => tb.paste(self.clipboard_ref()),
+                        CtrlVPasteDecision::Wait => self.needs_rerender(),
+                    },
                     _ => return false,
                 },
                 vk::Y => match modifiers {
@@ -2935,6 +3044,7 @@ impl<'a> Context<'a, '_> {
         let selected_before;
         let selected_now;
         let focused;
+        let select_requested = select;
         {
             let mut list = list.borrow_mut();
             let content = match &mut list.content {
@@ -2948,15 +3058,16 @@ impl<'a> Context<'a, '_> {
             focused = self.is_focused();
 
             // Inherit the default selection & Click changes selection
-            selected_now = selected_before || (select && content.selected == 0) || focused;
+            selected_now = selected_before || select_requested || focused;
 
             // Note down the selected node for keyboard navigation.
             if selected_now {
                 content.selected_node = Some(self.tree.last_node);
-                if !selected_before {
-                    content.selected = item_id;
-                    self.needs_rerender();
-                }
+            }
+
+            if !selected_before && (select_requested || focused) {
+                content.selected = item_id;
+                self.needs_rerender();
             }
         }
 

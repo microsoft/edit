@@ -131,8 +131,8 @@ impl Framebuffer {
     /// successfully detect the light/dark mode of the terminal.
     pub fn set_indexed_colors(&mut self, colors: [StraightRgba; INDEXED_COLORS_COUNT]) {
         self.indexed_colors = colors;
-        self.background_fill = StraightRgba::zero();
-        self.foreground_fill = StraightRgba::zero();
+        self.background_fill = self.indexed_colors[IndexedColor::Background as usize];
+        self.foreground_fill = self.indexed_colors[IndexedColor::Foreground as usize];
 
         self.auto_colors = [
             self.indexed_colors[IndexedColor::Black as usize],

@@ -42,6 +42,7 @@ use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
+use crate::highlight::{self, HighlightClass, HighlightSpan, SyntaxKind};
 use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
 use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
@@ -58,6 +59,7 @@ const VISUAL_SPACE: &str = "･";
 const VISUAL_SPACE_PREFIX_ADD: usize = '･'.len_utf8() - 1;
 const VISUAL_TAB: &str = "￫       ";
 const VISUAL_TAB_PREFIX_ADD: usize = '￫'.len_utf8() - 1;
+const HIGHLIGHT_LEFT_CONTEXT_BYTES: usize = 2048;
 
 /// Stores statistics about the whole document.
 #[derive(Copy, Clone)]
@@ -179,6 +181,7 @@ struct ActiveEditGroupInfo {
 }
 
 /// Char- or word-wise navigation? Your choice.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CursorMovement {
     Grapheme,
     Word,
@@ -243,8 +246,10 @@ pub struct TextBuffer {
     newlines_are_crlf: bool,
     insert_final_newline: bool,
     overtype: bool,
+    auto_pair_enabled: bool,
 
     wants_cursor_visibility: bool,
+    syntax: SyntaxKind,
 }
 
 impl TextBuffer {
@@ -291,8 +296,10 @@ impl TextBuffer {
             newlines_are_crlf: cfg!(windows), // Windows users want CRLF
             insert_final_newline: false,
             overtype: false,
+            auto_pair_enabled: true,
 
             wants_cursor_visibility: false,
+            syntax: SyntaxKind::Plain,
         })
     }
 
@@ -345,6 +352,14 @@ impl TextBuffer {
             self.encoding = encoding;
             self.mark_as_dirty();
         }
+    }
+
+    pub fn syntax(&self) -> SyntaxKind {
+        self.syntax
+    }
+
+    pub fn set_syntax(&mut self, syntax: SyntaxKind) {
+        self.syntax = syntax;
     }
 
     /// The newline type used in the document. LF or CRLF.
@@ -576,6 +591,14 @@ impl TextBuffer {
     /// Sets whether the line the cursor is on should be highlighted.
     pub fn set_line_highlight_enabled(&mut self, enabled: bool) {
         self.line_highlight_enabled = enabled;
+    }
+
+    pub fn auto_pair_enabled(&self) -> bool {
+        self.auto_pair_enabled
+    }
+
+    pub fn set_auto_pair_enabled(&mut self, enabled: bool) {
+        self.auto_pair_enabled = enabled;
     }
 
     /// Sets a ruler column, e.g. 80.
@@ -1721,6 +1744,8 @@ impl TextBuffer {
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut line = ArenaString::new_in(&scratch);
+        let mut highlight_line_text = ArenaString::new_in(&scratch);
+        let mut highlight_spans: Vec<HighlightSpan> = Vec::new();
         let mut visual_pos_x_max = 0;
 
         // Pick the cursor closer to the `origin.y`.
@@ -1738,9 +1763,12 @@ impl TextBuffer {
         };
 
         line.reserve(width as usize * 2);
+        let highlight_enabled = self.syntax.has_highlighting();
 
         for y in 0..height {
             line.clear();
+            highlight_line_text.clear();
+            highlight_spans.clear();
 
             let visual_line = origin.y + y;
             let mut cursor_beg =
@@ -1749,6 +1777,22 @@ impl TextBuffer {
                 cursor_beg,
                 Point { x: origin.x + text_width, y: visual_line },
             );
+            let mut highlight_offset_base = cursor_beg.offset;
+            let mut highlight_has_visible = false;
+
+            if highlight_enabled && cursor_beg.offset > 0 {
+                let line_start = self.goto_line_start(cursor_beg, cursor_beg.logical_pos.y);
+                let available = cursor_beg.offset.saturating_sub(line_start.offset);
+                if available > 0 {
+                    let context_bytes = available.min(HIGHLIGHT_LEFT_CONTEXT_BYTES);
+                    highlight_offset_base = cursor_beg.offset - context_bytes;
+                    self.append_utf8_range(
+                        highlight_offset_base,
+                        cursor_beg.offset,
+                        &mut highlight_line_text,
+                    );
+                }
+            }
 
             // Accelerate the next render pass by remembering where we started off.
             if y == 0 {
@@ -1883,6 +1927,11 @@ impl TextBuffer {
                             break;
                         };
 
+                        if highlight_enabled {
+                            highlight_line_text.push(ch);
+                            highlight_has_visible = true;
+                        }
+
                         if ch == ' ' || ch == '\t' {
                             let is_tab = ch == '\t';
                             let visualize = selection_off.contains(&global_off);
@@ -1961,6 +2010,20 @@ impl TextBuffer {
                 }
 
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
+            }
+
+            if highlight_enabled && highlight_has_visible {
+                highlight::highlight_line(self.syntax, &highlight_line_text, &mut highlight_spans);
+                self.paint_highlight_spans(
+                    cursor_end,
+                    highlight_offset_base,
+                    &highlight_spans,
+                    &selection_off,
+                    origin,
+                    destination,
+                    text_width,
+                    fb,
+                );
             }
 
             fb.replace_text(destination.top + y, destination.left, destination.right, &line);
@@ -2068,6 +2131,288 @@ impl TextBuffer {
         }
     }
 
+    /// Handles automatic pair insertion and skipping for typed characters.
+    pub fn handle_auto_pair_typed(&mut self, ch: char) -> bool {
+        if !self.auto_pair_enabled {
+            return false;
+        }
+        if self.try_insert_matching_pair(ch) {
+            return true;
+        }
+        if self.try_insert_quote_pair(ch) {
+            return true;
+        }
+        if self.try_skip_closing_delimiter(ch) {
+            return true;
+        }
+        false
+    }
+
+    fn try_insert_matching_pair(&mut self, ch: char) -> bool {
+        let closing = match ch {
+            '(' => ')',
+            '[' => ']',
+            '{' => '}',
+            _ => return false,
+        };
+        self.insert_pair(ch, closing);
+        true
+    }
+
+    fn try_insert_quote_pair(&mut self, ch: char) -> bool {
+        match ch {
+            '"' | '`' => {
+                if self.try_skip_closing_delimiter(ch) {
+                    return true;
+                }
+                self.insert_pair(ch, ch);
+                true
+            }
+            '\'' => {
+                if self.has_selection() {
+                    self.insert_pair('\'', '\'');
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn try_skip_closing_delimiter(&mut self, ch: char) -> bool {
+        if !matches!(ch, ')' | ']' | '}' | '"' | '\'' | '`') {
+            return false;
+        }
+        if self.byte_at(self.cursor.offset) == Some(ch as u8) {
+            self.cursor_move_delta(CursorMovement::Grapheme, 1);
+            return true;
+        }
+        false
+    }
+
+    fn insert_pair(&mut self, open: char, close: char) {
+        let mut open_buf = [0u8; 4];
+        let mut close_buf = [0u8; 4];
+        let open_bytes = open.encode_utf8(&mut open_buf).as_bytes();
+        let close_bytes = close.encode_utf8(&mut close_buf).as_bytes();
+
+        if self.has_selection() {
+            let selection = self.extract_selection(true);
+            self.write_canon(open_bytes);
+            if !selection.is_empty() {
+                self.write_raw(&selection);
+            }
+            self.write_canon(close_bytes);
+        } else {
+            self.write_canon(open_bytes);
+            self.write_canon(close_bytes);
+        }
+
+        self.cursor_move_delta(CursorMovement::Grapheme, -1);
+    }
+
+    fn byte_at(&self, offset: usize) -> Option<u8> {
+        self.read_forward(offset).first().copied()
+    }
+
+    fn char_at(&self, offset: usize) -> Option<char> {
+        let chunk = self.read_forward(offset);
+        if chunk.is_empty() {
+            return None;
+        }
+        Utf8Chars::new(chunk, 0).next()
+    }
+
+    fn char_before(&self, offset: usize) -> Option<char> {
+        if offset == 0 {
+            return None;
+        }
+        let chunk = self.read_backward(offset);
+        if chunk.is_empty() {
+            return None;
+        }
+        let mut it = Utf8Chars::new(chunk, 0);
+        let mut last = None;
+        while let Some(ch) = it.next() {
+            last = Some(ch);
+        }
+        last
+    }
+
+    fn prev_non_whitespace_byte(&self, mut offset: usize) -> Option<u8> {
+        if offset == 0 {
+            return None;
+        }
+
+        while offset > 0 {
+            let chunk = self.read_backward(offset);
+            if chunk.is_empty() {
+                break;
+            }
+
+            for &byte in chunk.iter().rev() {
+                offset = offset.saturating_sub(1);
+                if !byte.is_ascii_whitespace() {
+                    return Some(byte);
+                }
+                if offset == 0 {
+                    break;
+                }
+            }
+        }
+
+        None
+    }
+
+    fn push_indent_columns(&self, buffer: &mut ArenaString, mut columns: CoordType) {
+        if columns <= 0 {
+            return;
+        }
+
+        if self.indent_with_tabs && self.tab_size > 0 {
+            let tab_count = columns / self.tab_size;
+            if tab_count > 0 {
+                buffer.push_repeat('\t', tab_count as usize);
+                columns -= tab_count * self.tab_size;
+            }
+        }
+
+        if columns > 0 {
+            buffer.push_repeat(' ', columns as usize);
+        }
+    }
+
+    fn should_increase_indent_after(&self, byte: u8) -> bool {
+        matches!(byte, b'{' | b'[' | b'(') || (byte == b':' && self.syntax.indent_after_colon())
+    }
+
+    fn try_delete_matching_pair_before_cursor(&mut self) -> bool {
+        let cursor_offset = self.cursor.offset;
+        let Some(open) = self.char_before(cursor_offset) else {
+            return false;
+        };
+        let Some(close) = self.char_at(cursor_offset) else {
+            return false;
+        };
+        if !is_matching_pair(open, close) {
+            return false;
+        }
+
+        let start = self.cursor_move_delta_internal(self.cursor, CursorMovement::Grapheme, -1);
+        let end = self.cursor_move_delta_internal(self.cursor, CursorMovement::Grapheme, 1);
+        self.edit_begin(HistoryType::Delete, start);
+        self.edit_delete(end);
+        self.edit_end();
+        self.set_selection(None);
+        self.cursor_move_to_offset(start.offset);
+        true
+    }
+
+    fn paint_highlight_spans(
+        &mut self,
+        cursor_hint: Cursor,
+        line_offset: usize,
+        spans: &[HighlightSpan],
+        selection: &Range<usize>,
+        origin: Point,
+        destination: Rect,
+        text_width: CoordType,
+        fb: &mut Framebuffer,
+    ) {
+        if spans.is_empty() {
+            return;
+        }
+
+        let mut cursor = self.cursor_move_to_offset_internal(cursor_hint, line_offset);
+        let mut current_offset = line_offset;
+
+        for span in spans {
+            let start = line_offset + span.range.start;
+            let end = line_offset + span.range.end;
+            if selection.start < selection.end && end > selection.start && start < selection.end {
+                continue;
+            }
+
+            if start < current_offset {
+                cursor = self.cursor_move_to_offset_internal(cursor_hint, start);
+            } else {
+                cursor = self.cursor_move_to_offset_internal(cursor, start);
+            }
+            let start_cursor = cursor;
+            cursor = self.cursor_move_to_offset_internal(cursor, end);
+            let end_cursor = cursor;
+            current_offset = end;
+
+            self.paint_highlight_segment(
+                start_cursor,
+                end_cursor,
+                span.class,
+                origin,
+                destination,
+                text_width,
+                fb,
+            );
+        }
+    }
+
+    fn paint_highlight_segment(
+        &self,
+        start: Cursor,
+        end: Cursor,
+        class: HighlightClass,
+        origin: Point,
+        destination: Rect,
+        text_width: CoordType,
+        fb: &mut Framebuffer,
+    ) {
+        if start.offset >= end.offset {
+            return;
+        }
+
+        let color = self.highlight_color(class, fb);
+        let mut row = start.visual_pos.y;
+
+        while row <= end.visual_pos.y {
+            let row_start_x = if row == start.visual_pos.y { start.visual_pos.x } else { origin.x };
+            let row_end_x =
+                if row == end.visual_pos.y { end.visual_pos.x } else { origin.x + text_width };
+
+            if row_end_x <= row_start_x {
+                row += 1;
+                continue;
+            }
+
+            let screen_y = destination.top + row - origin.y;
+            if screen_y < destination.top || screen_y >= destination.bottom {
+                row += 1;
+                continue;
+            }
+
+            let base_left = destination.left + self.margin_width;
+            let mut left = base_left + (row_start_x - origin.x).clamp(0, text_width);
+            let mut right = base_left + (row_end_x - origin.x).clamp(0, text_width);
+            left = left.clamp(base_left, destination.right);
+            right = right.clamp(base_left, destination.right);
+
+            if left < right {
+                fb.blend_fg(Rect { left, top: screen_y, right, bottom: screen_y + 1 }, color);
+            }
+            row += 1;
+        }
+    }
+
+    fn highlight_color(&self, class: HighlightClass, fb: &Framebuffer) -> StraightRgba {
+        match class {
+            HighlightClass::Keyword => fb.indexed(IndexedColor::BrightMagenta),
+            HighlightClass::Type => fb.indexed(IndexedColor::BrightBlue),
+            HighlightClass::String => fb.indexed(IndexedColor::BrightGreen),
+            HighlightClass::Number => fb.indexed(IndexedColor::BrightCyan),
+            HighlightClass::Comment => fb.indexed_alpha(IndexedColor::BrightBlack, 1, 2),
+            HighlightClass::Macro => fb.indexed(IndexedColor::Yellow),
+        }
+    }
+
     /// Inserts the user input `text` at the current cursor position.
     /// Replaces tabs with whitespace if needed, etc.
     pub fn write_canon(&mut self, text: &[u8]) {
@@ -2158,16 +2503,14 @@ impl TextBuffer {
             newline_buffer.clear();
             newline_buffer.push_str(if self.newlines_are_crlf { "\r\n" } else { "\n" });
 
+            let mut newline_indentation = 0;
+            let mut block_indent_columns = 0;
+
             if !raw {
                 // We'll give the next line the same indentation as the previous one.
-                // This block figures out how much that is. We can't reuse that value,
-                // because "  a\n  a\n" should give the 3rd line a total indentation of 4.
-                // Assuming your terminal has bracketed paste, this won't be a concern though.
-                // (If it doesn't, use a different terminal.)
                 let line_beg = self.goto_line_start(self.cursor, self.cursor.logical_pos.y);
                 let limit = self.cursor.offset;
                 let mut off = line_beg.offset;
-                let mut newline_indentation = 0;
 
                 'outer: while off < limit {
                     let chunk = self.read_forward(off);
@@ -2186,19 +2529,33 @@ impl TextBuffer {
                     off += chunk.len();
                 }
 
-                // If tabs are enabled, add as many tabs as we can.
-                if self.indent_with_tabs {
-                    let tab_count = newline_indentation / self.tab_size;
-                    newline_buffer.push_repeat('\t', tab_count as usize);
-                    newline_indentation -= tab_count * self.tab_size;
+                if let Some(prev) = self.prev_non_whitespace_byte(self.cursor.offset) {
+                    if self.should_increase_indent_after(prev) {
+                        block_indent_columns = self.tab_size_eval(newline_indentation.max(0));
+                        newline_indentation += block_indent_columns;
+                    }
                 }
 
-                // If tabs are disabled, or if the indentation wasn't a multiple of the tab size,
-                // add spaces to make up the difference.
-                newline_buffer.push_repeat(' ', newline_indentation as usize);
+                self.push_indent_columns(&mut newline_buffer, newline_indentation);
             }
 
             self.edit_write(newline_buffer.as_bytes());
+
+            if !raw && block_indent_columns > 0 {
+                if let Some(next) = self.byte_at(self.cursor.offset) {
+                    if matches!(next, b')' | b']' | b'}') {
+                        let cursor_restore = self.cursor;
+                        newline_buffer.clear();
+                        newline_buffer.push_str(if self.newlines_are_crlf { "\r\n" } else { "\n" });
+                        self.push_indent_columns(
+                            &mut newline_buffer,
+                            newline_indentation - block_indent_columns,
+                        );
+                        self.edit_write(newline_buffer.as_bytes());
+                        self.set_cursor_internal(cursor_restore);
+                    }
+                }
+            }
 
             // Skip one CR/LF/CRLF.
             if offset >= text.len() {
@@ -2243,6 +2600,12 @@ impl TextBuffer {
     /// The selection is cleared after the call.
     /// Deletes characters from the buffer based on a delta from the cursor.
     pub fn delete(&mut self, granularity: CursorMovement, delta: CoordType) {
+        if delta == -1 && granularity == CursorMovement::Grapheme && !self.has_selection() {
+            if self.try_delete_matching_pair_before_cursor() {
+                return;
+            }
+        }
+
         if delta == 0 {
             return;
         }
@@ -2844,6 +3207,23 @@ impl TextBuffer {
     pub fn read_forward(&self, off: usize) -> &[u8] {
         self.buffer.read_forward(off)
     }
+
+    fn append_utf8_range(&self, mut start: usize, end: usize, out: &mut ArenaString) {
+        let end = end.min(self.text_length());
+        start = start.min(end);
+        while start < end {
+            let chunk = self.read_forward(start);
+            if chunk.is_empty() {
+                break;
+            }
+            let take = (end - start).min(chunk.len());
+            let mut it = Utf8Chars::new(&chunk[..take], 0);
+            while let Some(ch) = it.next() {
+                out.push(ch);
+            }
+            start += take;
+        }
+    }
 }
 
 pub enum Bom {
@@ -2857,6 +3237,13 @@ pub enum Bom {
 }
 
 const BOM_MAX_LEN: usize = 4;
+
+fn is_matching_pair(open: char, close: char) -> bool {
+    matches!(
+        (open, close),
+        ('(', ')') | ('[', ']') | ('{', '}') | ('\"', '\"') | ('\'', '\'') | ('`', '`')
+    )
+}
 
 fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
     if bytes.len() >= 4 {

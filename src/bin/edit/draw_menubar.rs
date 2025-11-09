@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use edit::arena_format;
+use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::input::{kbmod, vk};
 use edit::tui::*;
@@ -37,12 +38,63 @@ pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
     ctx.menubar_end();
 }
 
+pub fn draw_tabstrip(ctx: &mut Context, state: &mut State) {
+    if state.documents.len() <= 1 {
+        return;
+    }
+
+    let mut tabs = Vec::new();
+    for doc in state.documents.iter() {
+        let dirty = doc.buffer.borrow().is_dirty();
+        tabs.push((doc.id, doc.filename.clone(), dirty));
+    }
+
+    let active_id = state.documents.active().map(|doc| doc.id);
+
+    ctx.block_begin("tabstrip");
+    ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Background, 5, 6));
+    ctx.attr_padding(Rect::three(0, 1, 0));
+    let columns = vec![0; tabs.len().max(1)];
+    ctx.table_begin("tabstrip-row");
+    ctx.table_set_columns(&columns);
+    ctx.table_next_row();
+    ctx.table_set_cell_gap(Size { width: 1, height: 0 });
+    for (id, title, dirty) in tabs {
+        ctx.next_block_id_mixin(id);
+        if Some(id) == active_id {
+            ctx.attr_background_rgba(state.menubar_color_bg);
+            ctx.attr_foreground_rgba(state.menubar_color_fg);
+        } else {
+            ctx.attr_background_rgba(ctx.indexed(IndexedColor::Background));
+            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Foreground));
+        }
+
+        let mut label = title.clone();
+        if dirty {
+            label.push('*');
+        }
+
+        if ctx.button("tab", &label, ButtonStyle::default()) {
+            if state.documents.activate(id) {
+                ctx.needs_rerender();
+            }
+        }
+    }
+    ctx.table_end();
+    ctx.block_end();
+}
+
 fn draw_menu_file(ctx: &mut Context, state: &mut State) {
     if ctx.menubar_menu_button(loc(LocId::FileNew), 'N', kbmod::CTRL | vk::N) {
         draw_add_untitled_document(ctx, state);
     }
     if ctx.menubar_menu_button(loc(LocId::FileOpen), 'O', kbmod::CTRL | vk::O) {
         state.wants_file_picker = StateFilePicker::Open;
+    }
+    if !state.recent_files.is_empty()
+        && ctx.menubar_menu_button(loc(LocId::FileOpenRecent), 'R', vk::NULL)
+    {
+        state.wants_recent_files = true;
     }
     if state.documents.active().is_some() {
         if ctx.menubar_menu_button(loc(LocId::FileSave), 'S', kbmod::CTRL | vk::S) {
@@ -69,7 +121,7 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
         tb.undo();
         ctx.needs_rerender();
     }
-    if ctx.menubar_menu_button(loc(LocId::EditRedo), 'R', kbmod::CTRL | vk::Y) {
+    if ctx.menubar_menu_button(loc(LocId::EditRedo), 'D', kbmod::CTRL | vk::Y) {
         tb.redo();
         ctx.needs_rerender();
     }
@@ -98,6 +150,10 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
     if ctx.menubar_menu_button(loc(LocId::EditSelectAll), 'A', kbmod::CTRL | vk::A) {
         tb.select_all();
         ctx.needs_rerender();
+    }
+    if ctx.menubar_menu_button(loc(LocId::EditPreferences), 'R', vk::NULL) {
+        state.wants_preferences = true;
+        state.preferences_focus_reset = true;
     }
     ctx.menubar_menu_end();
 }

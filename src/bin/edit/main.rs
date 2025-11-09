@@ -4,11 +4,13 @@
 #![feature(allocator_api, linked_list_cursors, string_from_utf8_lossy_owned)]
 
 mod documents;
+mod draw_command_palette;
 mod draw_editor;
 mod draw_filepicker;
 mod draw_menubar;
 mod draw_statusbar;
-mod localization;
+pub(crate) mod localization;
+mod session;
 mod state;
 
 use std::borrow::Cow;
@@ -18,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{env, process};
 
+use draw_command_palette::*;
 use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
@@ -70,6 +73,8 @@ fn run() -> apperr::Result<()> {
         return Ok(());
     }
 
+    state.initialize_session();
+
     // This will reopen stdin if it's redirected (which may fail) and switch
     // the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // `handle_args` may want to print a help message (must not fail),
@@ -83,25 +88,12 @@ fn run() -> apperr::Result<()> {
 
     let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
 
-    state.menubar_color_bg = tui.indexed(IndexedColor::Background).oklab_blend(tui.indexed_alpha(
-        IndexedColor::BrightBlue,
-        1,
-        2,
-    ));
-    state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
-    let floater_bg = tui
-        .indexed_alpha(IndexedColor::Background, 2, 3)
-        .oklab_blend(tui.indexed_alpha(IndexedColor::Foreground, 1, 3));
-    let floater_fg = tui.contrasted(floater_bg);
+    state.apply_colorscheme_to_tui(&mut tui);
     tui.setup_modifier_translations(ModifierTranslations {
         ctrl: loc(LocId::Ctrl),
         alt: loc(LocId::Alt),
         shift: loc(LocId::Shift),
     });
-    tui.set_floater_default_bg(floater_bg);
-    tui.set_floater_default_fg(floater_fg);
-    tui.set_modal_default_bg(floater_bg);
-    tui.set_modal_default_fg(floater_fg);
 
     sys::inject_window_size_into_stdin();
 
@@ -175,6 +167,10 @@ fn run() -> apperr::Result<()> {
                 write_osc_clipboard(&mut tui, &mut state, &mut output);
             }
 
+            if tui.take_clipboard_request() {
+                output.push_str("\x1b]52;c;?\x1b\\");
+            }
+
             #[cfg(feature = "debug-latency")]
             {
                 // Print the number of passes and latency in the top right corner.
@@ -217,6 +213,8 @@ fn run() -> apperr::Result<()> {
             sys::write_stdout(&output);
         }
     }
+
+    state.save_session();
 
     Ok(())
 }
@@ -261,17 +259,29 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     }
 
     for p in &paths {
-        state.documents.add_file_path(p)?;
+        let prefs = state.preferences.clone();
+        let doc = state.documents.add_file_path(p)?;
+        prefs.apply_to_document(doc);
+        state.mark_file_recent_path(p);
+    }
+
+    if !paths.is_empty() {
+        state.skip_session_restore = true;
     }
 
     if let Some(mut file) = sys::open_stdin_if_redirected() {
+        state.skip_session_restore = true;
+        let prefs = state.preferences.clone();
         let doc = state.documents.add_untitled()?;
+        prefs.apply_to_document(doc);
         let mut tb = doc.buffer.borrow_mut();
         tb.read_file(&mut file, None)?;
         tb.mark_as_dirty();
     } else if paths.is_empty() {
         // No files were passed, and stdin is not redirected.
-        state.documents.add_untitled()?;
+        let prefs = state.preferences.clone();
+        let doc = state.documents.add_untitled()?;
+        prefs.apply_to_document(doc);
     }
 
     if dir.is_none()
@@ -302,6 +312,7 @@ fn print_version() {
 
 fn draw(ctx: &mut Context, state: &mut State) {
     draw_menubar(ctx, state);
+    draw_tabstrip(ctx, state);
     draw_editor(ctx, state);
     draw_statusbar(ctx, state);
 
@@ -329,6 +340,16 @@ fn draw(ctx: &mut Context, state: &mut State) {
     if state.wants_about {
         draw_dialog_about(ctx, state);
     }
+    if state.wants_preferences {
+        draw_dialog_preferences(ctx, state);
+    }
+    if state.wants_recent_files {
+        draw_recent_files_dialog(ctx, state);
+    }
+    if state.wants_command_palette {
+        draw_command_palette(ctx, state);
+        return;
+    }
     if ctx.clipboard_ref().wants_host_sync() {
         draw_handle_clipboard_change(ctx, state);
     }
@@ -339,7 +360,15 @@ fn draw(ctx: &mut Context, state: &mut State) {
     if let Some(key) = ctx.keyboard_input() {
         // Shortcuts that are not handled as part of the textarea, etc.
 
-        if key == kbmod::CTRL | vk::N {
+        if key == vk::F1 {
+            state.wants_command_palette = true;
+            state.command_palette_filter.clear();
+            state.command_palette_selection = 0;
+            state.command_palette_reset_selection = true;
+            state.command_palette_focus_filter = true;
+            ctx.needs_rerender();
+            return;
+        } else if key == kbmod::CTRL | vk::N {
             draw_add_untitled_document(ctx, state);
         } else if key == kbmod::CTRL | vk::O {
             state.wants_file_picker = StateFilePicker::Open;
@@ -652,8 +681,10 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
     }
 
     if color_responses == indexed_colors.len() {
-        tui.setup_indexed_colors(indexed_colors);
+        state.set_system_palette(indexed_colors);
     }
+
+    state.apply_colorscheme_to_tui(tui);
 
     RestoreModes
 }
