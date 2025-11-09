@@ -4,6 +4,8 @@
 use std::cell::RefMut;
 use std::iter::repeat_n;
 
+use stdext::arena::scratch_arena;
+
 use super::*;
 
 pub fn optimize<'a>(compiler: &mut Compiler<'a>) {

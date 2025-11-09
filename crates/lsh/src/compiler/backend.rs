@@ -28,8 +28,10 @@ impl<'a> Backend<'a> {
         Self {
             assembly: Assembly {
                 instructions: Vec::new(),
+                entrypoints: Vec::new(),
                 charsets: Vec::new(),
                 strings: Vec::new(),
+                highlight_kinds: Vec::new(),
             },
 
             stack: VecDeque::new(),
@@ -152,6 +154,13 @@ impl<'a> Backend<'a> {
             });
         }
 
+        self.assembly.entrypoints = compiler
+            .functions
+            .iter()
+            .filter(|f| f.public)
+            .map(|f| (f.name, f.body.borrow().offset))
+            .collect();
+        self.assembly.highlight_kinds = compiler.highlight_kinds.clone();
         Ok(self.assembly)
     }
 
