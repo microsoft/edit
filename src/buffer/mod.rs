@@ -59,6 +59,7 @@ const VISUAL_SPACE: &str = "･";
 const VISUAL_SPACE_PREFIX_ADD: usize = '･'.len_utf8() - 1;
 const VISUAL_TAB: &str = "￫       ";
 const VISUAL_TAB_PREFIX_ADD: usize = '￫'.len_utf8() - 1;
+const HIGHLIGHT_LEFT_CONTEXT_BYTES: usize = 2048;
 
 /// Stores statistics about the whole document.
 #[derive(Copy, Clone)]
@@ -1762,6 +1763,7 @@ impl TextBuffer {
         };
 
         line.reserve(width as usize * 2);
+        let highlight_enabled = self.syntax.has_highlighting();
 
         for y in 0..height {
             line.clear();
@@ -1775,7 +1777,22 @@ impl TextBuffer {
                 cursor_beg,
                 Point { x: origin.x + text_width, y: visual_line },
             );
-            let line_offset_base = cursor_beg.offset;
+            let mut highlight_offset_base = cursor_beg.offset;
+            let mut highlight_has_visible = false;
+
+            if highlight_enabled && cursor_beg.offset > 0 {
+                let line_start = self.goto_line_start(cursor_beg, cursor_beg.logical_pos.y);
+                let available = cursor_beg.offset.saturating_sub(line_start.offset);
+                if available > 0 {
+                    let context_bytes = available.min(HIGHLIGHT_LEFT_CONTEXT_BYTES);
+                    highlight_offset_base = cursor_beg.offset - context_bytes;
+                    self.append_utf8_range(
+                        highlight_offset_base,
+                        cursor_beg.offset,
+                        &mut highlight_line_text,
+                    );
+                }
+            }
 
             // Accelerate the next render pass by remembering where we started off.
             if y == 0 {
@@ -1910,8 +1927,9 @@ impl TextBuffer {
                             break;
                         };
 
-                        if self.syntax.has_highlighting() {
+                        if highlight_enabled {
                             highlight_line_text.push(ch);
+                            highlight_has_visible = true;
                         }
 
                         if ch == ' ' || ch == '\t' {
@@ -1994,11 +2012,11 @@ impl TextBuffer {
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
 
-            if self.syntax.has_highlighting() && !highlight_line_text.is_empty() {
+            if highlight_enabled && highlight_has_visible {
                 highlight::highlight_line(self.syntax, &highlight_line_text, &mut highlight_spans);
                 self.paint_highlight_spans(
                     cursor_end,
-                    line_offset_base,
+                    highlight_offset_base,
                     &highlight_spans,
                     &selection_off,
                     origin,
@@ -3188,6 +3206,23 @@ impl TextBuffer {
     /// For interfacing with ICU.
     pub fn read_forward(&self, off: usize) -> &[u8] {
         self.buffer.read_forward(off)
+    }
+
+    fn append_utf8_range(&self, mut start: usize, end: usize, out: &mut ArenaString) {
+        let end = end.min(self.text_length());
+        start = start.min(end);
+        while start < end {
+            let chunk = self.read_forward(start);
+            if chunk.is_empty() {
+                break;
+            }
+            let take = (end - start).min(chunk.len());
+            let mut it = Utf8Chars::new(&chunk[..take], 0);
+            while let Some(ch) = it.next() {
+                out.push(ch);
+            }
+            start += take;
+        }
     }
 }
 

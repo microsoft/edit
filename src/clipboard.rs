@@ -39,11 +39,9 @@ impl Clipboard {
 
     /// Fill the clipboard with the given data.
     pub fn write(&mut self, data: Vec<u8>) {
-        if !data.is_empty() {
-            self.data = data;
-            self.line_copy = false;
-            self.wants_host_sync = true;
-        }
+        self.line_copy = false;
+        self.wants_host_sync = !data.is_empty();
+        self.data = data;
     }
 
     /// See [`Clipboard::is_line_copy`].

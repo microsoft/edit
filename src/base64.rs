@@ -7,6 +7,19 @@ use crate::arena::ArenaString;
 
 const CHARSET: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+fn decode_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        b'=' => Some(64),
+        b'\r' | b'\n' => None,
+        _ => Some(0xff),
+    }
+}
+
 /// One aspect of base64 is that the encoded length can be
 /// calculated accurately in advance, which is what this returns.
 #[inline]
@@ -77,6 +90,63 @@ pub fn encode(dst: &mut ArenaString, src: &[u8]) {
     }
 }
 
+/// Decodes a base64 string into raw bytes.
+pub fn decode(src: &str) -> Option<Vec<u8>> {
+    let mut chunk = [0u8; 4];
+    let mut chunk_len = 0;
+    let mut out = Vec::with_capacity(src.len().saturating_sub(3) / 4 * 3);
+
+    for &byte in src.as_bytes() {
+        let Some(val) = decode_value(byte) else {
+            continue;
+        };
+        if val == 0xff {
+            return None;
+        }
+        chunk[chunk_len] = val;
+        chunk_len += 1;
+
+        if chunk_len == 4 {
+            if chunk[0] == 64 || chunk[1] == 64 {
+                return None;
+            }
+
+            out.push((chunk[0] << 2) | (chunk[1] >> 4));
+
+            match chunk[2] {
+                64 => {
+                    if chunk[3] != 64 {
+                        return None;
+                    }
+                }
+                val => {
+                    out.push((chunk[1] << 4) | (val >> 2));
+                }
+            }
+
+            if let (Some(c), Some(d)) =
+                ((chunk[2] != 64).then_some(chunk[2]), (chunk[3] != 64).then_some(chunk[3]))
+            {
+                out.push((c << 6) | d);
+            } else if chunk[3] != 64 {
+                return None;
+            }
+
+            if chunk[2] == 64 && chunk[3] != 64 {
+                return None;
+            }
+
+            chunk_len = 0;
+        }
+    }
+
+    if chunk_len != 0 {
+        return None;
+    }
+
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::encode;
@@ -117,5 +187,14 @@ mod tests {
         assert_eq!(enc(b"abcdefghijklmNOPQRSTUVWX"), "YWJjZGVmZ2hpamtsbU5PUFFSU1RVVldY");
         assert_eq!(enc(b"abcdefghijklmNOPQRSTUVWXY"), "YWJjZGVmZ2hpamtsbU5PUFFSU1RVVldYWQ==");
         assert_eq!(enc(b"abcdefghijklmNOPQRSTUVWXYZ"), "YWJjZGVmZ2hpamtsbU5PUFFSU1RVVldYWVo=");
+    }
+
+    #[test]
+    fn roundtrip_decode() {
+        let arena = Arena::new(4 * 1024).unwrap();
+        let mut dst = ArenaString::new_in(&arena);
+        encode(&mut dst, b"hello clipboard");
+        let decoded = super::decode(&dst).unwrap();
+        assert_eq!(decoded, b"hello clipboard");
     }
 }

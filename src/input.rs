@@ -9,7 +9,7 @@
 use std::mem;
 
 use crate::helpers::{CoordType, Point, Size};
-use crate::vt;
+use crate::{base64, vt};
 
 /// Represents a key/modifier combination.
 ///
@@ -270,6 +270,7 @@ pub struct Parser {
     x10_mouse_want: bool,
     x10_mouse_buf: [u8; 3],
     x10_mouse_len: usize,
+    osc_buf: String,
 }
 
 impl Parser {
@@ -283,6 +284,7 @@ impl Parser {
             x10_mouse_want: false,
             x10_mouse_buf: [0; 3],
             x10_mouse_len: 0,
+            osc_buf: String::new(),
         }
     }
 
@@ -329,6 +331,11 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
             match self.stream.next()? {
                 vt::Token::Text(text) => {
                     return Some(Input::Text(text));
+                }
+                vt::Token::Osc { data, partial } => {
+                    if let Some(input) = self.handle_osc_sequence(data, partial) {
+                        return Some(input);
+                    }
                 }
                 vt::Token::Ctrl(ch) => match ch {
                     '\0' | '\t' | '\r' => return Some(Input::Keyboard(InputKey::new(ch as u32))),
@@ -526,6 +533,42 @@ impl<'input> Stream<'_, '_, 'input> {
         }
     }
 
+    fn handle_osc_sequence(&mut self, data: &str, partial: bool) -> Option<Input<'input>> {
+        if partial {
+            self.parser.osc_buf.push_str(data);
+            return None;
+        }
+
+        if self.parser.osc_buf.is_empty() {
+            return Self::parse_clipboard_osc(data);
+        }
+
+        self.parser.osc_buf.push_str(data);
+        let result = Self::parse_clipboard_osc(&self.parser.osc_buf);
+        self.parser.osc_buf.clear();
+        result
+    }
+
+    fn parse_clipboard_osc(data: &str) -> Option<Input<'input>> {
+        let mut parts = data.splitn(3, ';');
+        match parts.next()? {
+            "52" => {}
+            _ => return None,
+        }
+
+        // selection parameter, e.g. "c". We currently accept any value.
+        let _ = parts.next();
+        let payload = parts.next().unwrap_or("");
+
+        if payload == "?" {
+            return None;
+        }
+
+        let bytes = if payload.is_empty() { Vec::new() } else { base64::decode(payload)? };
+
+        Some(Input::Paste(bytes))
+    }
+
     /// Implements the X10 mouse protocol via `CSI M CbCxCy`.
     ///
     /// You want to send numeric mouse coordinates.
@@ -582,5 +625,22 @@ impl<'input> Stream<'_, '_, 'input> {
             modifiers |= kbmod::CTRL;
         }
         modifiers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn osc52_response_emits_paste() {
+        let mut vt_parser = vt::Parser::new();
+        let mut parser = Parser::new();
+        let vt_stream = vt_parser.parse("\x1b]52;c;U3lzdGVtIFBhc3Rl\x07");
+        let mut iter = parser.parse(vt_stream);
+        match iter.next() {
+            Some(Input::Paste(bytes)) => assert_eq!(bytes, b"System Paste"),
+            _ => panic!("unexpected input"),
+        }
     }
 }

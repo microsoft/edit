@@ -167,6 +167,10 @@ fn run() -> apperr::Result<()> {
                 write_osc_clipboard(&mut tui, &mut state, &mut output);
             }
 
+            if tui.take_clipboard_request() {
+                output.push_str("\x1b]52;c;?\x1b\\");
+            }
+
             #[cfg(feature = "debug-latency")]
             {
                 // Print the number of passes and latency in the top right corner.
