@@ -96,6 +96,16 @@ impl<T: ?Sized + AsRef<OsStr>> From<&T> for DisplayablePathBuf {
 
 const RECENT_FILES_LIMIT: usize = 15;
 const SESSION_DOCUMENT_LIMIT: usize = 8;
+const TAB_WIDTH_WIDGET_IDS: [&str; 8] = [
+    "tab-width-1",
+    "tab-width-2",
+    "tab-width-3",
+    "tab-width-4",
+    "tab-width-5",
+    "tab-width-6",
+    "tab-width-7",
+    "tab-width-8",
+];
 
 pub struct StateSearch {
     pub kind: StateSearchKind,
@@ -334,7 +344,6 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
 
         ctx.table_next_row();
         ctx.label("general-label", loc(LocId::PreferencesGeneral));
-        ctx.attr_padding(Rect::three(0, 0, 1));
         ctx.focus_on_first_present();
 
         ctx.table_next_row();
@@ -403,33 +412,34 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
         take_focus!(ctx);
 
         ctx.table_next_row();
-        ctx.attr_focusable();
-        let tab_width_text = arena_format!(
-            ctx.arena(),
-            "{}: {} (←/→)",
-            loc(LocId::PreferencesTabWidth),
-            state.preferences.tab_width
-        );
-        ctx.label("pref-tab-width", &tab_width_text);
-        if ctx.is_focused() {
-            let mut new_width = state.preferences.tab_width;
-            if ctx.consume_shortcut(vk::LEFT) && new_width > 1 {
-                new_width -= 1;
-            } else if ctx.consume_shortcut(vk::RIGHT) && new_width < 8 {
-                new_width += 1;
-            }
-            if new_width != state.preferences.tab_width {
-                state.preferences.tab_width = new_width;
+        ctx.label("spacer-indent-tabwidth", " ");
+
+        ctx.table_next_row();
+        ctx.label("tab-width-label", loc(LocId::PreferencesTabWidth));
+
+        for width in 1..=8 {
+            ctx.table_next_row();
+            ctx.attr_focusable();
+            let selected = state.preferences.tab_width == width;
+            let text =
+                arena_format!(ctx.arena(), "{} {}", if selected { "(●)" } else { "(○)" }, width);
+            let widget_id = TAB_WIDTH_WIDGET_IDS[(width - 1) as usize];
+            if ctx.button(widget_id, &text, ButtonStyle::default())
+                && state.preferences.tab_width != width
+            {
+                state.preferences.tab_width = width;
                 state.apply_preferences_to_documents();
                 state.save_preferences();
                 ctx.needs_rerender();
             }
+            take_focus!(ctx);
         }
-        take_focus!(ctx);
+
+        ctx.table_next_row();
+        ctx.label("spacer-colorscheme", " ");
 
         ctx.table_next_row();
         ctx.label("colorscheme-label", loc(LocId::PreferencesColorscheme));
-        ctx.attr_padding(Rect::three(0, 0, 1));
 
         for &scheme in ColorScheme::ALL.iter() {
             ctx.table_next_row();
@@ -454,11 +464,9 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
 
         ctx.table_next_row();
         ctx.label("spacer-colors-language", " ");
-        ctx.attr_padding(Rect::three(0, 0, 1));
 
         ctx.table_next_row();
         ctx.label("language-label", loc(LocId::PreferencesLanguage));
-        ctx.attr_padding(Rect::three(0, 0, 1));
 
         ctx.table_next_row();
         ctx.attr_focusable();
@@ -509,7 +517,6 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
 
         ctx.table_next_row();
         ctx.label("spacer-language-close", " ");
-        ctx.attr_padding(Rect::three(0, 0, 1));
 
         ctx.table_next_row();
         ctx.attr_focusable();
