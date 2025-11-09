@@ -25,7 +25,7 @@ pub fn parse<'a>(
         Err(e) => return Err(format!("{e}")),
     };
 
-    let src = transform(compiler, dst_good, &hir);
+    let src = transform(compiler, dst_good, &hir)?;
 
     // Connect all unset .next pointers to dst_bad.
     for node in compiler.visit_nodes_from(src) {
@@ -41,13 +41,17 @@ pub fn parse<'a>(
     Ok(src)
 }
 
-fn transform<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hir: &Hir) -> IRCell<'a> {
+fn transform<'a>(
+    compiler: &mut Compiler<'a>,
+    dst: IRCell<'a>,
+    hir: &Hir,
+) -> Result<IRCell<'a>, String> {
     fn is_any_class(class: &ClassBytes) -> bool {
         class.ranges() == [ClassBytesRange::new(0, 255)]
     }
 
     match hir.kind() {
-        HirKind::Empty => dst,
+        HirKind::Empty => Ok(dst),
         HirKind::Literal(lit) => transform_literal(compiler, dst, &lit.0),
         HirKind::Class(Class::Bytes(class)) if is_any_class(class) => transform_any(compiler, dst),
         HirKind::Class(Class::Bytes(class)) => transform_class(compiler, dst, class),
@@ -60,25 +64,23 @@ fn transform<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hir: &Hir) -> IRC
             // picked up with its unset .next pointer, and set to dst_bad automatically.
             let bad = compiler.alloc_noop();
             let c = compiler.intern_charset(&ASCII_WORD_CHARSET);
-            compiler.alloc_ir(IR {
+            Ok(compiler.alloc_ir(IR {
                 next: Some(dst),
                 instr: IRI::If { condition: Condition::Charset(c), then: bad },
                 offset: usize::MAX,
-            })
+            }))
         }
         HirKind::Repetition(rep) => match (rep.min, rep.max, rep.sub.kind()) {
             (0, None, HirKind::Class(Class::Bytes(class))) if is_any_class(class) => {
                 transform_any_star(compiler, dst)
             }
             (0, None, HirKind::Class(Class::Bytes(class))) => {
-                let src = transform_class_plus(compiler, dst, class);
-                transform_option(src, dst);
-                src
+                let src = transform_class_plus(compiler, dst, class)?;
+                transform_option(src, dst)
             }
             (0, Some(1), _) => {
-                let src = transform(compiler, dst, &rep.sub);
-                transform_option(src, dst);
-                src
+                let src = transform(compiler, dst, &rep.sub)?;
+                transform_option(src, dst)
             }
             (1, None, HirKind::Literal(lit)) => transform_literal_plus(compiler, dst, lit),
             (1, None, HirKind::Class(Class::Bytes(class))) => {
@@ -93,10 +95,14 @@ fn transform<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hir: &Hir) -> IRC
 }
 
 // string
-fn transform_literal<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, lit: &[u8]) -> IRCell<'a> {
+fn transform_literal<'a>(
+    compiler: &mut Compiler<'a>,
+    dst: IRCell<'a>,
+    lit: &[u8],
+) -> Result<IRCell<'a>, String> {
     let s = String::from_utf8(lit.to_vec()).unwrap();
     let s = compiler.intern_string(&s);
-    compiler.alloc_iri(IRI::If { condition: Condition::Prefix(s), then: dst })
+    Ok(compiler.alloc_iri(IRI::If { condition: Condition::Prefix(s), then: dst }))
 }
 
 // a+
@@ -104,12 +110,12 @@ fn transform_literal_plus<'a>(
     compiler: &mut Compiler<'a>,
     dst: IRCell<'a>,
     lit: &regex_syntax::hir::Literal,
-) -> IRCell<'a> {
+) -> Result<IRCell<'a>, String> {
     assert!(lit.0.len() == 1);
     let mut c = Charset::default();
     c[lit.0[0] as usize] = true;
     let c = compiler.intern_charset(&c);
-    compiler.alloc_iri(IRI::If { condition: Condition::Charset(c), then: dst })
+    Ok(compiler.alloc_iri(IRI::If { condition: Condition::Charset(c), then: dst }))
 }
 
 // [a-z]+
@@ -117,10 +123,10 @@ fn transform_class_plus<'a>(
     compiler: &mut Compiler<'a>,
     dst: IRCell<'a>,
     class: &ClassBytes,
-) -> IRCell<'a> {
+) -> Result<IRCell<'a>, String> {
     let c = class_to_charset(class);
     let c = compiler.intern_charset(&c);
-    compiler.alloc_iri(IRI::If { condition: Condition::Charset(c), then: dst })
+    Ok(compiler.alloc_iri(IRI::If { condition: Condition::Charset(c), then: dst }))
 }
 
 // [eE]
@@ -128,7 +134,7 @@ fn transform_class<'a>(
     compiler: &mut Compiler<'a>,
     dst: IRCell<'a>,
     class: &ClassBytes,
-) -> IRCell<'a> {
+) -> Result<IRCell<'a>, String> {
     let mut charset = class_to_charset(class);
     let mut first: Option<IRCell<'a>> = None;
     let mut last: Option<IRCell<'a>> = None;
@@ -170,35 +176,42 @@ fn transform_class<'a>(
         last = Some(node);
     }
 
-    first.unwrap()
+    Ok(first.unwrap())
 }
 
 // .?
-fn transform_option<'a>(src: IRCell<'a>, dst: IRCell<'a>) -> IRCell<'a> {
+fn transform_option<'a>(src: IRCell<'a>, dst: IRCell<'a>) -> Result<IRCell<'a>, String> {
     src.borrow_mut().set_next(dst);
-    src
+    Ok(src)
 }
 
 // .*
-fn transform_any_star<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>) -> IRCell<'a> {
-    compiler.alloc_ir(IR {
+fn transform_any_star<'a>(
+    compiler: &mut Compiler<'a>,
+    dst: IRCell<'a>,
+) -> Result<IRCell<'a>, String> {
+    Ok(compiler.alloc_ir(IR {
         next: Some(dst),
         instr: IRI::Add { dst: Register::InputOffset, src: Register::Zero, imm: usize::MAX },
         offset: usize::MAX,
-    })
+    }))
 }
 
 // .
-fn transform_any<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>) -> IRCell<'a> {
-    compiler.alloc_ir(IR {
+fn transform_any<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>) -> Result<IRCell<'a>, String> {
+    Ok(compiler.alloc_ir(IR {
         next: Some(dst),
         instr: IRI::Add { dst: Register::InputOffset, src: Register::InputOffset, imm: 1 },
         offset: usize::MAX,
-    })
+    }))
 }
 
 // (a)(b)
-fn transform_concat<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hir]) -> IRCell<'a> {
+fn transform_concat<'a>(
+    compiler: &mut Compiler<'a>,
+    dst: IRCell<'a>,
+    hirs: &[Hir],
+) -> Result<IRCell<'a>, String> {
     fn is_lowercase_literal(hir: &Hir) -> Option<u8> {
         if let HirKind::Class(Class::Bytes(class)) = hir.kind()
             && let ranges = class.ranges()
@@ -243,7 +256,7 @@ fn transform_concat<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hi
             let str = compiler.intern_string(&str);
             compiler.alloc_iri(IRI::If { condition: Condition::PrefixInsensitive(str), then: dst })
         } else {
-            transform(compiler, dst, hir)
+            transform(compiler, dst, hir)?
         };
         if first.is_none() {
             first = Some(src);
@@ -258,16 +271,20 @@ fn transform_concat<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hi
         last.borrow_mut().set_next(dst);
     }
 
-    first.unwrap()
+    Ok(first.unwrap())
 }
 
 // (a|b)
-fn transform_alt<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hir]) -> IRCell<'a> {
+fn transform_alt<'a>(
+    compiler: &mut Compiler<'a>,
+    dst: IRCell<'a>,
+    hirs: &[Hir],
+) -> Result<IRCell<'a>, String> {
     let mut first: Option<IRCell<'a>> = None;
     let mut last: Option<IRCell<'a>> = None;
 
     for hir in hirs {
-        let node = transform(compiler, dst, hir);
+        let node = transform(compiler, dst, hir)?;
         if first.is_none() {
             first = Some(node);
         }
@@ -277,7 +294,7 @@ fn transform_alt<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>, hirs: &[Hir])
         last = Some(node);
     }
 
-    first.unwrap()
+    Ok(first.unwrap())
 }
 
 // [a-z] -> 256-ary LUT
