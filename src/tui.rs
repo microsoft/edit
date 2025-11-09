@@ -1620,7 +1620,7 @@ impl<'a> Context<'a, '_> {
         self.next_block_id_mixin = id;
     }
 
-    fn attr_focusable(&mut self) {
+    pub fn attr_focusable(&mut self) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.focusable = true;
     }
@@ -2108,6 +2108,7 @@ impl<'a> Context<'a, '_> {
     pub fn button(&mut self, classname: &'static str, text: &str, style: ButtonStyle) -> bool {
         self.button_label(classname, text, style);
         self.attr_focusable();
+        self.inherit_focus();
         if self.is_focused() {
             self.attr_reverse();
         }
@@ -2119,6 +2120,7 @@ impl<'a> Context<'a, '_> {
     pub fn checkbox(&mut self, classname: &'static str, text: &str, checked: &mut bool) -> bool {
         self.styled_label_begin(classname);
         self.attr_focusable();
+        self.inherit_focus();
         if self.is_focused() {
             self.attr_reverse();
         }
@@ -3042,6 +3044,7 @@ impl<'a> Context<'a, '_> {
         let selected_before;
         let selected_now;
         let focused;
+        let select_requested = select;
         {
             let mut list = list.borrow_mut();
             let content = match &mut list.content {
@@ -3055,15 +3058,16 @@ impl<'a> Context<'a, '_> {
             focused = self.is_focused();
 
             // Inherit the default selection & Click changes selection
-            selected_now = selected_before || (select && content.selected == 0) || focused;
+            selected_now = selected_before || select_requested || focused;
 
             // Note down the selected node for keyboard navigation.
             if selected_now {
                 content.selected_node = Some(self.tree.last_node);
-                if !selected_before {
-                    content.selected = item_id;
-                    self.needs_rerender();
-                }
+            }
+
+            if !selected_before && (select_requested || focused) {
+                content.selected = item_id;
+                self.needs_rerender();
             }
         }
 

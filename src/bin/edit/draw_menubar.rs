@@ -121,7 +121,7 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
         tb.undo();
         ctx.needs_rerender();
     }
-    if ctx.menubar_menu_button(loc(LocId::EditRedo), 'R', kbmod::CTRL | vk::Y) {
+    if ctx.menubar_menu_button(loc(LocId::EditRedo), 'D', kbmod::CTRL | vk::Y) {
         tb.redo();
         ctx.needs_rerender();
     }
@@ -153,6 +153,7 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
     }
     if ctx.menubar_menu_button(loc(LocId::EditPreferences), 'R', vk::NULL) {
         state.wants_preferences = true;
+        state.preferences_focus_reset = true;
     }
     ctx.menubar_menu_end();
 }

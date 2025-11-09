@@ -9,7 +9,7 @@ mod draw_editor;
 mod draw_filepicker;
 mod draw_menubar;
 mod draw_statusbar;
-mod localization;
+pub(crate) mod localization;
 mod session;
 mod state;
 

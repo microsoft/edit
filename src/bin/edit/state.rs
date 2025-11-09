@@ -15,7 +15,7 @@ use edit::{apperr, arena_format, buffer, icu, path, sys};
 
 use crate::documents::{Document, DocumentManager};
 use crate::localization::*;
-use crate::session;
+use crate::{localization, session};
 
 #[repr(transparent)]
 pub struct FormatApperr(apperr::Error);
@@ -187,12 +187,14 @@ pub struct State {
     pub command_palette_selection: usize,
     pub command_palette_reset_selection: bool,
     pub command_palette_focus_filter: bool,
+    pub preferences_focus_reset: bool,
     system_palette: [StraightRgba; INDEXED_COLORS_COUNT],
 }
 
 impl State {
     pub fn new() -> apperr::Result<Self> {
         let preferences = Preferences::load_from_disk();
+        preferences.apply_language();
         Ok(Self {
             menubar_color_bg: StraightRgba::zero(),
             menubar_color_fg: StraightRgba::zero(),
@@ -247,6 +249,7 @@ impl State {
             command_palette_selection: 0,
             command_palette_reset_selection: false,
             command_palette_focus_filter: false,
+            preferences_focus_reset: false,
             system_palette: framebuffer::DEFAULT_THEME,
         })
     }
@@ -316,6 +319,26 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
     ctx.block_begin("content");
     ctx.attr_padding(Rect::three(0, 0, 1));
     {
+        macro_rules! take_focus {
+            ($ctx:expr) => {
+                if state.preferences_focus_reset {
+                    $ctx.steal_focus();
+                    state.preferences_focus_reset = false;
+                }
+            };
+        }
+
+        ctx.table_begin("preferences-controls");
+        ctx.attr_padding(Rect::three(0, 0, 1));
+        ctx.inherit_focus();
+
+        ctx.table_next_row();
+        ctx.label("general-label", loc(LocId::PreferencesGeneral));
+        ctx.attr_padding(Rect::three(0, 0, 1));
+        ctx.focus_on_first_present();
+
+        ctx.table_next_row();
+        ctx.attr_focusable();
         if ctx.checkbox(
             "pref-auto-close",
             loc(LocId::PreferencesAutoClose),
@@ -325,7 +348,10 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
             state.save_preferences();
             ctx.needs_rerender();
         }
+        take_focus!(ctx);
 
+        ctx.table_next_row();
+        ctx.attr_focusable();
         if ctx.checkbox(
             "pref-line-highlight",
             loc(LocId::PreferencesLineHighlight),
@@ -335,7 +361,10 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
             state.save_preferences();
             ctx.needs_rerender();
         }
+        take_focus!(ctx);
 
+        ctx.table_next_row();
+        ctx.attr_focusable();
         if ctx.checkbox(
             "pref-line-numbers",
             loc(LocId::PreferencesShowLineNumbers),
@@ -345,7 +374,10 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
             state.save_preferences();
             ctx.needs_rerender();
         }
+        take_focus!(ctx);
 
+        ctx.table_next_row();
+        ctx.attr_focusable();
         if ctx.checkbox(
             "pref-word-wrap",
             loc(LocId::PreferencesWordWrap),
@@ -355,7 +387,10 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
             state.save_preferences();
             ctx.needs_rerender();
         }
+        take_focus!(ctx);
 
+        ctx.table_next_row();
+        ctx.attr_focusable();
         if ctx.checkbox(
             "pref-indent-tabs",
             loc(LocId::PreferencesIndentWithTabs),
@@ -365,44 +400,40 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
             state.save_preferences();
             ctx.needs_rerender();
         }
+        take_focus!(ctx);
 
-        ctx.table_begin("pref-tab-width");
-        ctx.attr_padding(Rect::three(0, 0, 1));
-        ctx.table_set_cell_gap(Size { width: 1, height: 0 });
         ctx.table_next_row();
-        {
-            ctx.label("pref-tab-width-label", loc(LocId::PreferencesTabWidth));
-            ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
-
-            let mut changed = None;
-            if ctx.button("pref-tab-dec", "-", ButtonStyle::default()) {
-                changed = Some(state.preferences.tab_width.saturating_sub(1));
+        ctx.attr_focusable();
+        let tab_width_text = arena_format!(
+            ctx.arena(),
+            "{}: {} (←/→)",
+            loc(LocId::PreferencesTabWidth),
+            state.preferences.tab_width
+        );
+        ctx.label("pref-tab-width", &tab_width_text);
+        if ctx.is_focused() {
+            let mut new_width = state.preferences.tab_width;
+            if ctx.consume_shortcut(vk::LEFT) && new_width > 1 {
+                new_width -= 1;
+            } else if ctx.consume_shortcut(vk::RIGHT) && new_width < 8 {
+                new_width += 1;
             }
-            ctx.label(
-                "pref-tab-width-value",
-                &arena_format!(ctx.arena(), "{}", state.preferences.tab_width),
-            );
-            ctx.attr_position(Position::Center);
-            if ctx.button("pref-tab-inc", "+", ButtonStyle::default()) {
-                changed = Some(state.preferences.tab_width.saturating_add(1));
-            }
-
-            if let Some(new_width) = changed {
-                let new_width = new_width.clamp(1, 8);
-                if state.preferences.tab_width != new_width {
-                    state.preferences.tab_width = new_width;
-                    state.apply_preferences_to_documents();
-                    state.save_preferences();
-                    ctx.needs_rerender();
-                }
+            if new_width != state.preferences.tab_width {
+                state.preferences.tab_width = new_width;
+                state.apply_preferences_to_documents();
+                state.save_preferences();
+                ctx.needs_rerender();
             }
         }
-        ctx.table_end();
+        take_focus!(ctx);
 
+        ctx.table_next_row();
         ctx.label("colorscheme-label", loc(LocId::PreferencesColorscheme));
         ctx.attr_padding(Rect::three(0, 0, 1));
 
         for &scheme in ColorScheme::ALL.iter() {
+            ctx.table_next_row();
+            ctx.attr_focusable();
             let selected = state.preferences.colorscheme == scheme;
             let text = arena_format!(
                 ctx.arena(),
@@ -418,17 +449,82 @@ pub fn draw_dialog_preferences(ctx: &mut Context, state: &mut State) {
                 state.save_preferences();
                 ctx.needs_rerender();
             }
+            take_focus!(ctx);
         }
+
+        ctx.table_next_row();
+        ctx.label("spacer-colors-language", " ");
+        ctx.attr_padding(Rect::three(0, 0, 1));
+
+        ctx.table_next_row();
+        ctx.label("language-label", loc(LocId::PreferencesLanguage));
+        ctx.attr_padding(Rect::three(0, 0, 1));
+
+        ctx.table_next_row();
+        ctx.attr_focusable();
+        let system_selected = state.preferences.language.is_none();
+        let system_text = arena_format!(
+            ctx.arena(),
+            "{} {}",
+            if system_selected { "(●)" } else { "(○)" },
+            loc(LocId::PreferencesLanguageSystem)
+        );
+        if ctx.button("language-system", &system_text, ButtonStyle::default()) && !system_selected {
+            state.preferences.language = None;
+            localization::reset_language();
+            state.save_preferences();
+            ctx.needs_rerender();
+        }
+        take_focus!(ctx);
+
+        let mut lang_idx = 0u64;
+        for (tag, _) in localization::unique_languages() {
+            ctx.table_next_row();
+            ctx.attr_focusable();
+            ctx.next_block_id_mixin(lang_idx);
+            lang_idx += 1;
+
+            let selected = state
+                .preferences
+                .language
+                .as_deref()
+                .map_or(false, |saved| lang_tag_eq(saved, tag));
+            let pretty_tag = tag.replace('_', "-");
+            let text = arena_format!(
+                ctx.arena(),
+                "{} {} ({})",
+                if selected { "(●)" } else { "(○)" },
+                localization::language_display_name(tag),
+                pretty_tag
+            );
+            if ctx.button("language-option", &text, ButtonStyle::default()) && !selected {
+                if localization::set_language_tag(tag).is_some() {
+                    state.preferences.language = Some(tag.to_string());
+                    state.save_preferences();
+                    ctx.needs_rerender();
+                }
+            }
+            take_focus!(ctx);
+        }
+
+        ctx.table_next_row();
+        ctx.label("spacer-language-close", " ");
+        ctx.attr_padding(Rect::three(0, 0, 1));
+
+        ctx.table_next_row();
+        ctx.attr_focusable();
+        if ctx.button("preferences-close", loc(LocId::SearchClose), ButtonStyle::default()) {
+            close = true;
+        }
+        take_focus!(ctx);
+
+        ctx.table_end();
     }
     ctx.block_end();
 
-    ctx.attr_position(Position::Center);
-    if ctx.button("preferences-close", loc(LocId::SearchClose), ButtonStyle::default()) {
-        close = true;
-    }
-
     if close || ctx.modal_end() {
         state.wants_preferences = false;
+        state.preferences_focus_reset = false;
     }
 }
 
@@ -646,6 +742,13 @@ impl State {
             ColorScheme::Daylight => COLOR_SCHEME_DAYLIGHT,
             ColorScheme::Nord => COLOR_SCHEME_NORD,
             ColorScheme::HighContrast => COLOR_SCHEME_HIGH_CONTRAST,
+            ColorScheme::GruvboxDark => COLOR_SCHEME_GRUVBOX_DARK,
+            ColorScheme::GruvboxLight => COLOR_SCHEME_GRUVBOX_LIGHT,
+            ColorScheme::Dracula => COLOR_SCHEME_DRACULA,
+            ColorScheme::Kanagawa => COLOR_SCHEME_KANAGAWA,
+            ColorScheme::Tokyonight => COLOR_SCHEME_TOKYONIGHT,
+            ColorScheme::Monokai => COLOR_SCHEME_MONOKAI,
+            ColorScheme::AtomOneDark => COLOR_SCHEME_ATOM_ONE_DARK,
         }
     }
 }
@@ -657,15 +760,29 @@ pub enum ColorScheme {
     Daylight,
     Nord,
     HighContrast,
+    GruvboxDark,
+    GruvboxLight,
+    Dracula,
+    Kanagawa,
+    Tokyonight,
+    Monokai,
+    AtomOneDark,
 }
 
 impl ColorScheme {
-    const ALL: [ColorScheme; 5] = [
+    const ALL: [ColorScheme; 12] = [
         ColorScheme::System,
         ColorScheme::Midnight,
         ColorScheme::Daylight,
         ColorScheme::Nord,
         ColorScheme::HighContrast,
+        ColorScheme::GruvboxDark,
+        ColorScheme::GruvboxLight,
+        ColorScheme::Dracula,
+        ColorScheme::Kanagawa,
+        ColorScheme::Tokyonight,
+        ColorScheme::Monokai,
+        ColorScheme::AtomOneDark,
     ];
 
     fn label_loc(self) -> LocId {
@@ -675,6 +792,13 @@ impl ColorScheme {
             ColorScheme::Daylight => LocId::PreferencesSchemeDaylight,
             ColorScheme::Nord => LocId::PreferencesSchemeNord,
             ColorScheme::HighContrast => LocId::PreferencesSchemeHighContrast,
+            ColorScheme::GruvboxDark => LocId::PreferencesSchemeGruvboxDark,
+            ColorScheme::GruvboxLight => LocId::PreferencesSchemeGruvboxLight,
+            ColorScheme::Dracula => LocId::PreferencesSchemeDracula,
+            ColorScheme::Kanagawa => LocId::PreferencesSchemeKanagawa,
+            ColorScheme::Tokyonight => LocId::PreferencesSchemeTokyonight,
+            ColorScheme::Monokai => LocId::PreferencesSchemeMonokai,
+            ColorScheme::AtomOneDark => LocId::PreferencesSchemeAtom,
         }
     }
 
@@ -685,6 +809,13 @@ impl ColorScheme {
             ColorScheme::Daylight => "scheme-daylight",
             ColorScheme::Nord => "scheme-nord",
             ColorScheme::HighContrast => "scheme-high-contrast",
+            ColorScheme::GruvboxDark => "scheme-gruvbox-dark",
+            ColorScheme::GruvboxLight => "scheme-gruvbox-light",
+            ColorScheme::Dracula => "scheme-dracula",
+            ColorScheme::Kanagawa => "scheme-kanagawa",
+            ColorScheme::Tokyonight => "scheme-tokyonight",
+            ColorScheme::Monokai => "scheme-monokai",
+            ColorScheme::AtomOneDark => "scheme-atom-one-dark",
         }
     }
 
@@ -695,6 +826,13 @@ impl ColorScheme {
             ColorScheme::Daylight => "daylight",
             ColorScheme::Nord => "nord",
             ColorScheme::HighContrast => "high_contrast",
+            ColorScheme::GruvboxDark => "gruvbox_dark",
+            ColorScheme::GruvboxLight => "gruvbox_light",
+            ColorScheme::Dracula => "dracula",
+            ColorScheme::Kanagawa => "kanagawa",
+            ColorScheme::Tokyonight => "tokyonight",
+            ColorScheme::Monokai => "monokai",
+            ColorScheme::AtomOneDark => "atom_one_dark",
         }
     }
 
@@ -705,6 +843,13 @@ impl ColorScheme {
             "daylight" => Some(ColorScheme::Daylight),
             "nord" => Some(ColorScheme::Nord),
             "high_contrast" | "high-contrast" => Some(ColorScheme::HighContrast),
+            "gruvbox_dark" | "gruvbox-dark" => Some(ColorScheme::GruvboxDark),
+            "gruvbox_light" | "gruvbox-light" => Some(ColorScheme::GruvboxLight),
+            "dracula" => Some(ColorScheme::Dracula),
+            "kanagawa" => Some(ColorScheme::Kanagawa),
+            "tokyonight" | "tokyo_night" | "tokyo-night" => Some(ColorScheme::Tokyonight),
+            "monokai" => Some(ColorScheme::Monokai),
+            "atom_one_dark" | "atom-one-dark" | "atom" => Some(ColorScheme::AtomOneDark),
             _ => None,
         }
     }
@@ -719,6 +864,7 @@ pub struct Preferences {
     pub word_wrap: bool,
     pub indent_with_tabs: bool,
     pub tab_width: u8,
+    pub language: Option<String>,
 }
 
 impl Default for Preferences {
@@ -731,6 +877,7 @@ impl Default for Preferences {
             word_wrap: false,
             indent_with_tabs: false,
             tab_width: 4,
+            language: None,
         }
     }
 }
@@ -804,6 +951,14 @@ impl Preferences {
                         prefs.tab_width = val;
                     }
                 }
+                "language" => {
+                    let value = value.trim();
+                    if value.is_empty() {
+                        prefs.language = None;
+                    } else {
+                        prefs.language = Some(value.to_string());
+                    }
+                }
                 _ => {}
             }
         }
@@ -826,7 +981,8 @@ impl Preferences {
              show_line_numbers={}\n\
              word_wrap={}\n\
              indent_with_tabs={}\n\
-             tab_width={}\n",
+             tab_width={}\n\
+             language={}\n",
             self.auto_close_pairs,
             self.line_highlight,
             self.colorscheme.as_str(),
@@ -834,9 +990,33 @@ impl Preferences {
             self.word_wrap,
             self.indent_with_tabs,
             self.tab_width,
+            self.language.as_deref().unwrap_or(""),
         );
         let _ = fs::write(path, contents);
     }
+
+    fn apply_language(&self) {
+        if let Some(lang) = &self.language {
+            if localization::set_language_tag(lang).is_none() {
+                // If the stored tag is invalid, fall back to system default.
+                localization::reset_language();
+            }
+        }
+    }
+}
+
+fn normalize_lang_tag_value(tag: &str) -> String {
+    tag.chars()
+        .map(|c| match c {
+            'A'..='Z' => c.to_ascii_lowercase(),
+            '-' => '_',
+            _ => c,
+        })
+        .collect()
+}
+
+fn lang_tag_eq(a: &str, b: &str) -> bool {
+    normalize_lang_tag_value(a) == normalize_lang_tag_value(b)
 }
 
 const fn rgba(color: u32) -> StraightRgba {
@@ -925,6 +1105,153 @@ const COLOR_SCHEME_HIGH_CONTRAST: [StraightRgba; INDEXED_COLORS_COUNT] = [
     rgba(0xffffffff),
     rgba(0x000000ff),
     rgba(0xffffffff),
+];
+
+const COLOR_SCHEME_GRUVBOX_DARK: [StraightRgba; INDEXED_COLORS_COUNT] = [
+    rgba(0x282828ff),
+    rgba(0xcc241dff),
+    rgba(0x98971aff),
+    rgba(0xd79921ff),
+    rgba(0x458588ff),
+    rgba(0xb16286ff),
+    rgba(0x689d6aff),
+    rgba(0xa89984ff),
+    rgba(0x928374ff),
+    rgba(0xfb4934ff),
+    rgba(0xb8bb26ff),
+    rgba(0xfabd2fff),
+    rgba(0x83a598ff),
+    rgba(0xd3869bff),
+    rgba(0x8ec07cff),
+    rgba(0xebdbb2ff),
+    rgba(0x282828ff),
+    rgba(0xebdbb2ff),
+];
+
+const COLOR_SCHEME_GRUVBOX_LIGHT: [StraightRgba; INDEXED_COLORS_COUNT] = [
+    rgba(0xfbf1c7ff),
+    rgba(0xcc241dff),
+    rgba(0x98971aff),
+    rgba(0xd79921ff),
+    rgba(0x458588ff),
+    rgba(0xb16286ff),
+    rgba(0x689d6aff),
+    rgba(0x7c6f64ff),
+    rgba(0x928374ff),
+    rgba(0x9d0006ff),
+    rgba(0x79740eff),
+    rgba(0xb57614ff),
+    rgba(0x076678ff),
+    rgba(0x8f3f71ff),
+    rgba(0x427b58ff),
+    rgba(0x3c3836ff),
+    rgba(0xfbf1c7ff),
+    rgba(0x3c3836ff),
+];
+
+const COLOR_SCHEME_DRACULA: [StraightRgba; INDEXED_COLORS_COUNT] = [
+    rgba(0x282a36ff),
+    rgba(0xff5555ff),
+    rgba(0x50fa7bff),
+    rgba(0xf1fa8cff),
+    rgba(0x6272a4ff),
+    rgba(0xff79c6ff),
+    rgba(0x8be9fdff),
+    rgba(0xf8f8f2ff),
+    rgba(0x44475aff),
+    rgba(0xff6e6eff),
+    rgba(0x69ff94ff),
+    rgba(0xffffa5ff),
+    rgba(0xbd93f9ff),
+    rgba(0xff92dfff),
+    rgba(0xa4ffffff),
+    rgba(0xffffffff),
+    rgba(0x282a36ff),
+    rgba(0xf8f8f2ff),
+];
+
+const COLOR_SCHEME_KANAGAWA: [StraightRgba; INDEXED_COLORS_COUNT] = [
+    rgba(0x1f1f28ff),
+    rgba(0xc34043ff),
+    rgba(0x76946aff),
+    rgba(0xc0a36eff),
+    rgba(0x7e9cd8ff),
+    rgba(0x957fb8ff),
+    rgba(0x6a9589ff),
+    rgba(0xdcd7baff),
+    rgba(0x2a2a37ff),
+    rgba(0xe82424ff),
+    rgba(0x98bb6cff),
+    rgba(0xe6c384ff),
+    rgba(0x7fb4caff),
+    rgba(0x938aa9ff),
+    rgba(0x7aa89fff),
+    rgba(0xf2ecbcff),
+    rgba(0x1f1f28ff),
+    rgba(0xdcd7baff),
+];
+
+const COLOR_SCHEME_TOKYONIGHT: [StraightRgba; INDEXED_COLORS_COUNT] = [
+    rgba(0x1a1b26ff),
+    rgba(0xf7768eff),
+    rgba(0x9ece6aff),
+    rgba(0xe0af68ff),
+    rgba(0x7aa2f7ff),
+    rgba(0xbb9af7ff),
+    rgba(0x7dcfffff),
+    rgba(0xc0caf5ff),
+    rgba(0x24283bff),
+    rgba(0xff9e64ff),
+    rgba(0xc3e88dff),
+    rgba(0xffc777ff),
+    rgba(0x82aaffff),
+    rgba(0xc5a3ffff),
+    rgba(0x89dcebff),
+    rgba(0xe5e9f0ff),
+    rgba(0x1a1b26ff),
+    rgba(0xc0caf5ff),
+];
+
+const COLOR_SCHEME_MONOKAI: [StraightRgba; INDEXED_COLORS_COUNT] = [
+    rgba(0x272822ff),
+    rgba(0xf92672ff),
+    rgba(0xa6e22eff),
+    rgba(0xf4bf75ff),
+    rgba(0x66d9efff),
+    rgba(0xae81ffff),
+    rgba(0xa1efe4ff),
+    rgba(0xf9f8f5ff),
+    rgba(0x383830ff),
+    rgba(0xfd5ff1ff),
+    rgba(0xb6e354ff),
+    rgba(0xfbe760ff),
+    rgba(0x9effffff),
+    rgba(0xc4a3ffff),
+    rgba(0xaffff8ff),
+    rgba(0xffffffff),
+    rgba(0x272822ff),
+    rgba(0xf9f8f5ff),
+];
+
+const COLOR_SCHEME_ATOM_ONE_DARK: [StraightRgba; INDEXED_COLORS_COUNT] = [
+    rgba(0x282c34ff),
+    rgba(0xe06c75ff),
+    rgba(0x98c379ff),
+    rgba(0xe5c07bff),
+    rgba(0x61afefff),
+    rgba(0xc678ddff),
+    rgba(0x56b6c2ff),
+    rgba(0xabb2bfff),
+    rgba(0x323842ff),
+    rgba(0xff7b86ff),
+    rgba(0xb1d196ff),
+    rgba(0xffd689ff),
+    rgba(0x73c8ffff),
+    rgba(0xd7a1ffff),
+    rgba(0x65d4d5ff),
+    rgba(0xe6eaf3ff),
+    rgba(0x282c34ff),
+    rgba(0xabb2bfff),
 ];
 
 pub(crate) fn config_dir() -> Option<PathBuf> {

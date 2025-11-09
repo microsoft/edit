@@ -202,12 +202,14 @@ pub fn draw_command_palette(ctx: &mut Context, state: &mut State) {
         close = true;
     }
 
+    let filter_focused;
     ctx.block_begin("filter");
     ctx.attr_padding(Rect::three(0, 0, 1));
     ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
     if ctx.editline("command-filter", &mut state.command_palette_filter) {
         state.command_palette_selection = 0;
     }
+    filter_focused = ctx.is_focused();
     if state.command_palette_focus_filter {
         state.command_palette_focus_filter = false;
         ctx.steal_focus();
@@ -223,6 +225,16 @@ pub fn draw_command_palette(ctx: &mut Context, state: &mut State) {
         selection = 0;
     } else {
         selection = selection.min(visible_len.saturating_sub(1));
+    }
+
+    if filter_focused && visible_len > 0 {
+        if ctx.consume_shortcut(vk::DOWN) {
+            selection = (selection + 1).min(visible_len - 1);
+            ctx.needs_rerender();
+        } else if ctx.consume_shortcut(vk::UP) && selection > 0 {
+            selection -= 1;
+            ctx.needs_rerender();
+        }
     }
 
     ctx.block_begin("results");
@@ -262,7 +274,15 @@ pub fn draw_command_palette(ctx: &mut Context, state: &mut State) {
     }
     ctx.block_end();
 
-    drop(filtered);
+    if activate.is_none()
+        && filter_focused
+        && visible_len > 0
+        && ctx.consume_shortcut(vk::RETURN)
+        && filtered.get(selection).is_some_and(|entry| entry.enabled)
+    {
+        activate = Some(filtered[selection].action);
+    }
+
     state.command_palette_selection = selection;
 
     if ctx.modal_end() {
@@ -393,6 +413,7 @@ fn execute_command(ctx: &mut Context, state: &mut State, action: CommandAction) 
             }
             StaticCommand::Preferences => {
                 state.wants_preferences = true;
+                state.preferences_focus_reset = true;
                 ctx.needs_rerender();
             }
             StaticCommand::About => {

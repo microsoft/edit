@@ -8,6 +8,7 @@ __default__ = [
     "ja",
     "ko",
     "pt_br",
+    "ro",
     "pl",
     "ru",
     "zh_hans",
@@ -21,10 +22,12 @@ zh = "zh_hans"
 [Ctrl]
 en = "Ctrl"
 de = "Strg"
+ro = "Ctrl"
 
 # The keyboard key
 [Alt]
 en = "Alt"
+ro = "Alt"
 
 # The keyboard key
 [Shift]
@@ -35,6 +38,7 @@ es = "Mayús"
 fi = "Vaihto"
 fr = "Maj"
 it = "Maiusc"
+ro = "Shift"
 
 # Used as a common dialog button
 [Ok]
@@ -291,6 +295,7 @@ zh_hant = "開啟檔案…"
 [FileOpenRecent]
 en = "Open Recent…"
 pl = "Otwórz ostatnie…"
+ro = "Deschide recent…"
 
 [FileSave]
 en = "Save"
@@ -718,6 +723,7 @@ zh_hant = "全選"
 
 [EditPreferences]
 en = "Preferences"
+ro = "Preferințe"
 
 # A menu bar item
 [View]
@@ -1779,63 +1785,129 @@ zh_hant = "檔案已存在。要覆蓋它嗎？"
 [PreferencesDialogTitle]
 en = "Preferences"
 pl = "Preferencje"
+ro = "Preferințe"
 
 [PreferencesAutoClose]
 en = "Auto close brackets"
 pl = "Automatycznie domykaj nawiasy"
+ro = "Închide automat parantezele"
+
+[PreferencesGeneral]
+en = "General"
+pl = "Ogólne"
+ro = "General"
 
 [PreferencesLineHighlight]
 en = "Highlight current line"
 pl = "Podświetlaj bieżący wiersz"
+ro = "Evidențiază linia curentă"
 
 [PreferencesColorscheme]
 en = "Color scheme"
 pl = "Motyw kolorów"
+ro = "Schemat de culori"
 
 [PreferencesShowLineNumbers]
 en = "Show line numbers"
 pl = "Pokaż numery wierszy"
+ro = "Afișează numerele liniilor"
 
 [PreferencesWordWrap]
 en = "Wrap long lines"
 pl = "Zawijaj długie wiersze"
+ro = "Încadrează liniile lungi"
 
 [PreferencesIndentWithTabs]
 en = "Use tabs for indentation"
 pl = "Używaj tabulatorów do wcięć"
+ro = "Folosește tabulatori pentru indentare"
 
 [PreferencesTabWidth]
 en = "Tab width"
 pl = "Szerokość tabulatora"
+ro = "Lățimea tabulatorului"
+
+[PreferencesLanguage]
+en = "Language"
+pl = "Język"
+ro = "Limba"
+
+[PreferencesLanguageSystem]
+en = "Match system language"
+pl = "Język systemu"
+ro = "Potrivește limba sistemului"
 
 [PreferencesSchemeSystem]
 en = "System"
 pl = "Systemowy"
+ro = "Sistem"
 
 [PreferencesSchemeMidnight]
 en = "Midnight"
 pl = "Północ"
+ro = "Miez de noapte"
 
 [PreferencesSchemeDaylight]
 en = "Daylight"
 pl = "Światło dzienne"
+ro = "Lumina zilei"
 
 [PreferencesSchemeNord]
 en = "Nord"
 pl = "Nord"
+ro = "Nord"
 
 [PreferencesSchemeHighContrast]
 en = "High Contrast"
 pl = "Wysoki kontrast"
+ro = "Contrast ridicat"
+
+[PreferencesSchemeGruvboxDark]
+en = "Gruvbox (Dark)"
+pl = "Gruvbox (ciemny)"
+ro = "Gruvbox (întunecat)"
+
+[PreferencesSchemeGruvboxLight]
+en = "Gruvbox (Light)"
+pl = "Gruvbox (jasny)"
+ro = "Gruvbox (luminos)"
+
+[PreferencesSchemeDracula]
+en = "Dracula"
+pl = "Dracula"
+ro = "Dracula"
+
+[PreferencesSchemeKanagawa]
+en = "Kanagawa"
+pl = "Kanagawa"
+ro = "Kanagawa"
+
+[PreferencesSchemeTokyonight]
+en = "Tokyo Night"
+pl = "Tokyo Night"
+ro = "Tokyo Night"
+
+[PreferencesSchemeMonokai]
+en = "Monokai"
+pl = "Monokai"
+ro = "Monokai"
+
+[PreferencesSchemeAtom]
+en = "Atom One Dark"
+pl = "Atom One Dark"
+ro = "Atom One Dark"
 
 [RecentFilesDialogTitle]
 en = "Recent Files"
 pl = "Ostatnie pliki"
+ro = "Fișiere recente"
 
 [CommandPaletteTitle]
 en = "Command Palette"
 pl = "Paleta poleceń"
+ro = "Paleta de comenzi"
 
 [CommandPaletteNoResults]
 en = "No commands found"
 pl = "Brak wyników"
+ro = "Nicio comandă găsită"
