@@ -3,8 +3,6 @@
 
 #![allow(irrefutable_let_patterns)]
 
-use std::path::Path;
-
 use stdext::arena::scratch_arena;
 
 use crate::helpers::env_opt;
@@ -38,16 +36,16 @@ fn main() {
 fn compile_lsh() {
     let scratch = scratch_arena(None);
 
-    let lsh_path = "../../lsh/";
+    let lsh_path = lsh::builtin_definitions_path();
     let out_dir = env_opt("OUT_DIR");
     let out_path = format!("{out_dir}/lsh_definitions.rs");
 
     let mut generator = lsh::Generator::new(&scratch);
-    generator.read_directory(Path::new(lsh_path)).unwrap();
+    generator.read_directory(lsh_path).unwrap();
     let contents = generator.generate_rust().unwrap();
     std::fs::write(out_path, contents).unwrap();
 
-    println!("cargo::rerun-if-changed={lsh_path}");
+    println!("cargo::rerun-if-changed={}", lsh_path.display());
 }
 
 fn compile_i18n() {

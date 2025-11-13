@@ -1,0 +1,27 @@
+pub fn markdown() {
+    // Gobble any leading whitespace on the line.
+    if /\s+/ {}
+
+    if /#+.*/ {
+        yield keyword;
+    } else if />.*/ {
+        yield comment;
+    } else if /```.*/ {
+        loop {
+            if /\s*```.*/ {
+                break;
+            } else if /.*/ {
+                // Gobble the rest of the line with no highlighting.
+            }
+        }
+    } else {
+        loop {
+            if /(?:__|\*\*).*?(?:__|\*\*)/ {
+                yield markup.bold;
+            } else if /(?:_|\*).*?(?:_|\*)/ {
+                yield markup.italic;
+            } else if /./ {
+            }
+        }
+    }
+}

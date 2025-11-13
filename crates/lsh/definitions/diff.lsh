@@ -1,0 +1,9 @@
+pub fn diff() {
+    if /(?:diff|---|\+\+\+).*/ {
+        yield meta.diff.header;
+    } else if /-.*/ {
+        yield markup.deleted;
+    } else if /\+.*/ {
+        yield markup.inserted;
+    }
+}

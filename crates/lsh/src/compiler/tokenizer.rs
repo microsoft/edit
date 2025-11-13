@@ -16,6 +16,8 @@ pub enum Token<'a> {
     If,
     Else,
     Loop,
+    Break,
+    Continue,
     Return,
     Yield,
 
@@ -153,6 +155,8 @@ impl<'a> Tokenizer<'a> {
             "if" => Token::If,
             "else" => Token::Else,
             "loop" => Token::Loop,
+            "break" => Token::Break,
+            "continue" => Token::Continue,
             "return" => Token::Return,
             "yield" => Token::Yield,
             ident => Token::Identifier(ident),

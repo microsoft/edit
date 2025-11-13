@@ -40,7 +40,7 @@ use stdext::arena::{Arena, ArenaString, scratch_arena};
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
-use crate::framebuffer::{Framebuffer, IndexedColor};
+use crate::framebuffer::{Attributes, Framebuffer, IndexedColor};
 use crate::helpers::*;
 use crate::lsh::cache::HighlighterCache;
 use crate::lsh::{HighlightKind, Highlighter, Language};
@@ -1996,38 +1996,37 @@ impl TextBuffer {
                             highlight_beg =
                                 self.cursor_move_to_offset_internal(highlight_beg, next.start);
                             let end = highlight_beg.visual_pos;
-
-                            let color = match kind {
-                                HighlightKind::Comment => IndexedColor::Green,
-                                HighlightKind::Keyword => IndexedColor::BrightMagenta,
-                                HighlightKind::Number => IndexedColor::BrightBlue,
-                                HighlightKind::Other => continue,
-                                HighlightKind::MarkupChanged => IndexedColor::BrightBlue,
-                                HighlightKind::MarkupDeleted => IndexedColor::BrightRed,
-                                HighlightKind::MarkupInserted => IndexedColor::BrightGreen,
-                                HighlightKind::MetaDiffHeader => IndexedColor::BrightBlue,
+                            let target = Rect {
+                                left: destination.left + self.margin_width + beg.x - origin.x,
+                                top: destination.top + y,
+                                right: destination.left + self.margin_width + end.x - origin.x,
+                                bottom: destination.top + y + 1,
                             };
-                            fb.blend_fg(
-                                Rect {
-                                    left: destination.left + self.margin_width + beg.x - origin.x,
-                                    top: destination.top + y,
-                                    right: destination.left + self.margin_width + end.x - origin.x,
-                                    bottom: destination.top + y + 1,
-                                },
-                                fb.indexed(color),
-                            );
 
-                            if matches!(kind, )
-                            let color = match kind {
-                                HighlightKind::Comment => IndexedColor::Green,
-                                HighlightKind::Keyword => IndexedColor::BrightMagenta,
-                                HighlightKind::Number => IndexedColor::BrightBlue,
-                                HighlightKind::Other => continue,
-                                HighlightKind::MarkupChanged => IndexedColor::BrightBlue,
-                                HighlightKind::MarkupDeleted => IndexedColor::BrightRed,
-                                HighlightKind::MarkupInserted => IndexedColor::BrightGreen,
-                                HighlightKind::MetaDiffHeader => IndexedColor::BrightBlue,
-                            };
+                            'block: {
+                                let color = match kind {
+                                    HighlightKind::Comment => IndexedColor::Green,
+                                    HighlightKind::Keyword => IndexedColor::BrightMagenta,
+                                    HighlightKind::Number => IndexedColor::BrightBlue,
+                                    HighlightKind::MarkupBold => break 'block,
+                                    HighlightKind::MarkupChanged => IndexedColor::BrightBlue,
+                                    HighlightKind::MarkupDeleted => IndexedColor::BrightRed,
+                                    HighlightKind::MarkupInserted => IndexedColor::BrightGreen,
+                                    HighlightKind::MarkupItalic => break 'block,
+                                    HighlightKind::MetaDiffHeader => IndexedColor::BrightBlue,
+                                    HighlightKind::Other => break 'block,
+                                };
+                                fb.blend_fg(target, fb.indexed(color));
+                            }
+
+                            'block: {
+                                let attr = match kind {
+                                    HighlightKind::MarkupBold => Attributes::Bold,
+                                    HighlightKind::MarkupItalic => Attributes::Italic,
+                                    _ => break 'block,
+                                };
+                                fb.replace_attr(target, Attributes::All, attr);
+                            }
                         }
                     }
                 }

@@ -17,13 +17,21 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Write as _;
 use std::ops::{Index, IndexMut};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use stdext::arena::*;
 
 pub use crate::compiler::CompileResult;
 pub use crate::generator::Generator;
+
+pub fn builtin_definitions_path() -> &'static Path {
+    #[cfg(windows)]
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "\\definitions");
+    #[cfg(not(windows))]
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/definitions");
+    Path::new(path)
+}
 
 fn arena_clone_str<'a>(arena: &'a Arena, s: &str) -> &'a str {
     ArenaString::from_str(arena, s).leak()

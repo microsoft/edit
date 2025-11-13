@@ -32,15 +32,50 @@ struct RegexSpan<'a> {
     pub dst_bad: IRCell<'a>,
 }
 
+enum LoopFlowControlKind {
+    Break,
+    Continue,
+}
+
+struct LoopFlowControl<'a> {
+    line: usize,
+    column: usize,
+    kind: LoopFlowControlKind,
+    ir: IRCell<'a>,
+}
+
+struct Context<'a> {
+    loop_start: Option<IRCell<'a>>,
+    loop_exit: Option<IRCell<'a>>,
+}
+
+impl<'a> Context<'a> {
+    fn add_break(&mut self, compiler: &mut Compiler<'a>) -> IRCell<'a> {
+        let exit = self.loop_exit.get_or_insert_with(|| compiler.alloc_noop());
+        let ir = compiler.alloc_noop();
+        ir.borrow_mut().set_next(exit);
+        ir
+    }
+
+    fn add_continue(&mut self, compiler: &mut Compiler<'a>) -> IRCell<'a> {
+        let start = self.loop_start.get_or_insert_with(|| compiler.alloc_noop());
+        let ir = compiler.alloc_noop();
+        ir.borrow_mut().set_next(start);
+        ir
+    }
+}
+
 pub struct Parser<'a, 'c, 'src> {
     compiler: &'c mut Compiler<'a>,
     tokenizer: Tokenizer<'src>,
     current_token: Token<'src>,
+    context: Vec<Context<'a>, &'a Arena>,
 }
 
 impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     pub fn new(compiler: &'c mut Compiler<'a>, src: &'src str) -> Self {
-        Self { compiler, tokenizer: Tokenizer::new(src), current_token: Token::Eof }
+        let context = Vec::new_in(compiler.arena);
+        Self { compiler, tokenizer: Tokenizer::new(src), current_token: Token::Eof, context }
     }
 
     pub fn run(&mut self) -> CompileResult<()> {
@@ -107,22 +142,65 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
     fn parse_statement(&mut self) -> CompileResult<IRSpan<'a>> {
         match self.current_token {
-            Token::Loop => {
-                self.advance();
-                let mut span = self.parse_block()?;
-                span.last = self.compiler.chain_iri(span.last, IRI::Loop { dst: span.first });
-                Ok(span)
-            }
-            Token::Return => {
-                self.advance();
-                self.expect_token(Token::Semicolon)?;
-                Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Return)))
-            }
+            Token::Loop => self.parse_loop(),
+            Token::Break => self.parse_break(),
+            Token::Continue => self.parse_continue(),
+            Token::Return => self.parse_return(),
             Token::If => self.parse_if_statement(),
             Token::Yield => self.parse_yield(),
             Token::Identifier(_) => self.parse_call(),
             _ => raise!(self, "Unexpected token: {:?}", self.current_token),
         }
+    }
+
+    fn parse_loop(&mut self) -> CompileResult<IRSpan<'a>> {
+        self.expect_token(Token::Loop)?;
+
+        self.context.push(Context { loop_start: None, loop_exit: None });
+        let mut span = self.parse_block()?;
+        let ctx = self.context.pop().unwrap();
+
+        // Connect the end of the block back to the beginning of the loop.
+        span.last = self.compiler.chain_iri(span.last, IRI::Loop { dst: span.first });
+
+        // Patch up break and continue statements.
+        if let Some(loop_start) = ctx.loop_start {
+            loop_start.borrow_mut().set_next(span.first);
+            span.first = loop_start;
+        }
+        if let Some(loop_exit) = ctx.loop_exit {
+            span.last = loop_exit;
+        }
+
+        Ok(span)
+    }
+
+    fn parse_break(&mut self) -> CompileResult<IRSpan<'a>> {
+        self.expect_token(Token::Break)?;
+        self.expect_token(Token::Semicolon)?;
+
+        let ir = match self.context.last_mut() {
+            Some(ctx) => ctx.add_break(self.compiler),
+            _ => raise!(self, "loop control statement outside of a loop"),
+        };
+        Ok(IRSpan::single(ir))
+    }
+
+    fn parse_continue(&mut self) -> CompileResult<IRSpan<'a>> {
+        self.expect_token(Token::Continue)?;
+        self.expect_token(Token::Semicolon)?;
+
+        let ir = match self.context.last_mut() {
+            Some(ctx) => ctx.add_continue(self.compiler),
+            _ => raise!(self, "loop control statement outside of a loop"),
+        };
+        Ok(IRSpan::single(ir))
+    }
+
+    fn parse_return(&mut self) -> CompileResult<IRSpan<'a>> {
+        self.expect_token(Token::Return)?;
+        self.expect_token(Token::Semicolon)?;
+        Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Return)))
     }
 
     fn parse_if_statement(&mut self) -> CompileResult<IRSpan<'a>> {
@@ -148,7 +226,11 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             // Connect the if to the {}.
             re.dst_good.borrow_mut().set_next(bl.first);
             // Connect the end of the {} to the end of the if/else chain.
-            bl.last.borrow_mut().set_next(last);
+            if let mut block_last = bl.last.borrow_mut()
+                && block_last.wants_next()
+            {
+                block_last.set_next(last);
+            }
 
             // No else branch? Create a hidden connection to the end.
             if !matches!(self.current_token, Token::Else) {

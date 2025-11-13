@@ -298,18 +298,18 @@ impl<'a> fmt::Display for HighlightKindCamelcaseFormatter<'a> {
 
 #[derive(Debug, Clone)]
 struct Function<'a> {
-    pub name: &'a str,
-    pub body: IRCell<'a>,
-    pub public: bool,
+    name: &'a str,
+    body: IRCell<'a>,
+    public: bool,
 }
 
 // To be honest, I don't think this qualifies as an "intermediate representation",
 // if we compare this to popular compilers. But whatever. It's still intermediate to us.
 #[derive(Debug)]
 struct IR<'a> {
-    pub next: Option<IRCell<'a>>,
-    pub instr: IRI<'a>,
-    pub offset: usize,
+    next: Option<IRCell<'a>>,
+    instr: IRI<'a>,
+    offset: usize,
 }
 
 type IRCell<'a> = &'a RefCell<IR<'a>>;
@@ -333,12 +333,12 @@ enum Condition<'a> {
 }
 
 impl<'a> IR<'a> {
-    pub fn wants_next(&self) -> bool {
-        self.next.is_none() && !matches!(self.instr, IRI::Return | IRI::Loop { .. })
+    fn wants_next(&self) -> bool {
+        self.next.is_none() && !matches!(self.instr, IRI::Return)
     }
 
-    pub fn set_next(&mut self, n: IRCell<'a>) {
-        debug_assert!(self.next.is_none());
+    fn set_next(&mut self, n: IRCell<'a>) {
+        debug_assert!(self.wants_next());
         self.next = Some(n);
     }
 }
@@ -349,57 +349,57 @@ pub struct Charset {
 }
 
 impl Charset {
-    pub const fn no() -> Self {
+    const fn no() -> Self {
         Charset { bits: [false; 256] }
     }
 
-    pub const fn yes() -> Self {
+    const fn yes() -> Self {
         Charset { bits: [true; 256] }
     }
 
-    pub fn fill(&mut self, value: bool) {
+    fn fill(&mut self, value: bool) {
         self.bits.fill(value);
     }
 
-    pub fn invert(&mut self) {
+    fn invert(&mut self) {
         for b in &mut self.bits {
             *b = !*b;
         }
     }
 
-    pub fn set(&mut self, index: u8, value: bool) {
+    fn set(&mut self, index: u8, value: bool) {
         self.bits[index as usize] = value;
     }
 
-    pub fn merge(&mut self, other: &Charset) {
+    fn merge(&mut self, other: &Charset) {
         for (a, b) in self.bits.iter_mut().zip(other.bits.iter()) {
             *a |= *b;
         }
     }
 
-    pub fn covers_all(&self) -> bool {
+    fn covers_all(&self) -> bool {
         self.bits.iter().all(|&b| b)
     }
 
-    pub fn covers_char(&self, b: u8) -> bool {
+    fn covers_char(&self, b: u8) -> bool {
         self.bits[b as usize]
     }
 
-    pub fn covers_char_insensitive(&self, b: u8) -> bool {
+    fn covers_char_insensitive(&self, b: u8) -> bool {
         self.bits[b.to_ascii_uppercase() as usize] && self.bits[b.to_ascii_lowercase() as usize]
     }
 
-    pub fn covers_str(&self, s: &str) -> bool {
+    fn covers_str(&self, s: &str) -> bool {
         s.as_bytes().iter().all(|&b| self.bits[b as usize])
     }
 
-    pub fn covers_str_insensitive(&self, s: &str) -> bool {
+    fn covers_str_insensitive(&self, s: &str) -> bool {
         s.as_bytes().iter().all(|&b| {
             self.bits[b.to_ascii_uppercase() as usize] && self.bits[b.to_ascii_lowercase() as usize]
         })
     }
 
-    pub fn is_superset(&self, other: &Charset) -> bool {
+    fn is_superset(&self, other: &Charset) -> bool {
         for (&s, &o) in self.bits.iter().zip(other.bits.iter()) {
             if s && !o {
                 return false;
@@ -408,7 +408,7 @@ impl Charset {
         true
     }
 
-    pub fn is_strict_superset(&self, other: &Charset) -> bool {
+    fn is_strict_superset(&self, other: &Charset) -> bool {
         let mut has_extra = false;
         for (&s, &o) in self.bits.iter().zip(other.bits.iter()) {
             if !s && o {
@@ -525,7 +525,7 @@ pub enum Register {
 }
 
 impl Register {
-    pub fn mnemonic(&self) -> &'static str {
+    fn mnemonic(&self) -> &'static str {
         match self {
             Register::Zero => "zero",
             Register::ProgramCounter => "pc",
@@ -539,22 +539,22 @@ impl Register {
 #[allow(dead_code)]
 #[repr(C)]
 pub struct Registers {
-    pub zero: u32, // Zero
-    pub pc: u32,   // ProgramCounter
-    pub off: u32,  // InputOffset
-    pub hs: u32,   // HighlightStart
-    pub hk: u32,   // HighlightKind
+    zero: u32, // Zero
+    pc: u32,   // ProgramCounter
+    off: u32,  // InputOffset
+    hs: u32,   // HighlightStart
+    hk: u32,   // HighlightKind
 }
 
 impl Registers {
     #[inline(always)]
-    pub fn get(&self, reg: usize) -> u32 {
+    fn get(&self, reg: usize) -> u32 {
         debug_assert!(reg < 5);
         unsafe { (self as *const _ as *const u32).add(reg).read() }
     }
 
     #[inline(always)]
-    pub fn set(&mut self, reg: usize, val: u32) {
+    fn set(&mut self, reg: usize, val: u32) {
         debug_assert!(reg < 5);
         unsafe { (self as *mut _ as *mut u32).add(reg).write(val) }
     }

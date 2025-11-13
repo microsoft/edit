@@ -1,0 +1,17 @@
+pub fn git_commit_message() {
+    if /#/ {
+        yield comment;
+        if /(?:\tmodified:|\trenamed:).*/ {
+            yield markup.changed;
+        } else if /\tdeleted:.*/ {
+            yield markup.deleted;
+        } else if /\tnew file:.*/ {
+            yield markup.inserted;
+        }
+    } else if /diff --git.*/ {
+        yield meta.diff.header;
+        loop {
+            diff();
+        }
+    }
+}

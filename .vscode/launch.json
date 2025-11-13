@@ -2,6 +2,17 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Launch lsh-gen (Windows)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "console": "externalTerminal",
+            "program": "${workspaceFolder}/target/debug/lsh-gen",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "${workspaceFolder}/lsh/markdown.lsh"
+            ],
+        },
+        {
             "name": "Launch Debug (Windows)",
             "preLaunchTask": "rust: cargo build",
             "type": "cppvsdbg",
