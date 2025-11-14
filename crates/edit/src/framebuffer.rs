@@ -519,6 +519,13 @@ impl Framebuffer {
                             result.push_str("\x1b[24m");
                         }
                     }
+                    if diff.is(Attributes::Strikethrough) {
+                        if attr.is(Attributes::Strikethrough) {
+                            result.push_str("\x1b[9m");
+                        } else {
+                            result.push_str("\x1b[29m");
+                        }
+                    }
                     last_attr = attr;
                 }
 
@@ -827,10 +834,11 @@ pub struct Attributes(u8);
 #[allow(non_upper_case_globals)]
 impl Attributes {
     pub const None: Self = Self(0);
-    pub const Bold: Self = Self(0b001);
-    pub const Italic: Self = Self(0b010);
-    pub const Underlined: Self = Self(0b100);
-    pub const All: Self = Self(0b111);
+    pub const Bold: Self = Self(1);
+    pub const Italic: Self = Self(2);
+    pub const Underlined: Self = Self(4);
+    pub const Strikethrough: Self = Self(8);
+    pub const All: Self = Self(16 - 1);
 
     pub const fn is(self, attr: Self) -> bool {
         (self.0 & attr.0) == attr.0

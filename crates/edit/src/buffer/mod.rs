@@ -2005,16 +2005,20 @@ impl TextBuffer {
 
                             'block: {
                                 let color = match kind {
+                                    HighlightKind::Other => break 'block,
+
                                     HighlightKind::Comment => IndexedColor::Green,
                                     HighlightKind::Keyword => IndexedColor::BrightMagenta,
                                     HighlightKind::Number => IndexedColor::BrightBlue,
+                                    HighlightKind::String => IndexedColor::BrightRed,
+
                                     HighlightKind::MarkupBold => break 'block,
                                     HighlightKind::MarkupChanged => IndexedColor::BrightBlue,
                                     HighlightKind::MarkupDeleted => IndexedColor::BrightRed,
                                     HighlightKind::MarkupInserted => IndexedColor::BrightGreen,
                                     HighlightKind::MarkupItalic => break 'block,
+                                    HighlightKind::MarkupStrikethrough => break 'block,
                                     HighlightKind::MetaDiffHeader => IndexedColor::BrightBlue,
-                                    HighlightKind::Other => break 'block,
                                 };
                                 fb.blend_fg(target, fb.indexed(color));
                             }
@@ -2023,6 +2027,7 @@ impl TextBuffer {
                                 let attr = match kind {
                                     HighlightKind::MarkupBold => Attributes::Bold,
                                     HighlightKind::MarkupItalic => Attributes::Italic,
+                                    HighlightKind::MarkupStrikethrough => Attributes::Strikethrough,
                                     _ => break 'block,
                                 };
                                 fb.replace_attr(target, Attributes::All, attr);

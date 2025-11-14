@@ -3,9 +3,11 @@ pub fn markdown() {
     if /\s+/ {}
 
     if /#+.*/ {
-        yield keyword;
+        yield markup.heading;
     } else if />.*/ {
         yield comment;
+    } else if /\*\s+/ {
+        yield markup.list;
     } else if /```.*/ {
         loop {
             if /\s*```.*/ {
@@ -16,11 +18,16 @@ pub fn markdown() {
         }
     } else {
         loop {
-            if /(?:__|\*\*).*?(?:__|\*\*)/ {
+            if /(?:__|\*\*)/ {
                 yield markup.bold;
-            } else if /(?:_|\*).*?(?:_|\*)/ {
+            } else if /(?:_|\*)/ {
                 yield markup.italic;
+            } else if /~~/ {
+                yield markup.strikethrough;
+            } else if /`/ {
+                yield string;
             } else if /./ {
+                // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
             }
         }
     }

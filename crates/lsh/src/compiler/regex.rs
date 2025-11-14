@@ -70,20 +70,21 @@ fn transform<'a>(
                 offset: usize::MAX,
             }))
         }
-        HirKind::Repetition(rep) => match (rep.min, rep.max, rep.sub.kind()) {
-            (0, None, HirKind::Class(Class::Bytes(class))) if is_any_class(class) => {
+        HirKind::Repetition(rep) => match (rep.min, rep.max, rep.greedy, rep.sub.kind()) {
+            // Greedy cases
+            (0, None, true, HirKind::Class(Class::Bytes(class))) if is_any_class(class) => {
                 transform_any_star(compiler, dst)
             }
-            (0, None, HirKind::Class(Class::Bytes(class))) => {
+            (0, None, true, HirKind::Class(Class::Bytes(class))) => {
                 let src = transform_class_plus(compiler, dst, class)?;
                 transform_option(src, dst)
             }
-            (0, Some(1), _) => {
+            (0, Some(1), true, _) => {
                 let src = transform(compiler, dst, &rep.sub)?;
                 transform_option(src, dst)
             }
-            (1, None, HirKind::Literal(lit)) => transform_literal_plus(compiler, dst, lit),
-            (1, None, HirKind::Class(Class::Bytes(class))) => {
+            (1, None, true, HirKind::Literal(lit)) => transform_literal_plus(compiler, dst, lit),
+            (1, None, true, HirKind::Class(Class::Bytes(class))) => {
                 transform_class_plus(compiler, dst, class)
             }
             _ => panic!("Unsupported HIR: {hir:?}"),

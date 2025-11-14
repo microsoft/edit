@@ -80,17 +80,13 @@ impl<'a> Generator<'a> {
         if let Some(last) = assembly.highlight_kinds.last() {
             _ = write!(
                 output,
-                "impl HighlightKind {{
-    #[inline]
-    pub const fn as_usize(self) -> usize {{
-        unsafe {{ std::mem::transmute::<Self, u8>(self) as usize }}
-    }}
-
+                "
+impl HighlightKind {{
     /// # Safety
     /// Don't pass the wrong thing you dummy.
     #[inline]
     pub const unsafe fn from_usize(value: usize) -> Self {{
-        debug_assert!(value <= Self::{}.as_usize());
+        debug_assert!(value <= Self::{} as usize);
         unsafe {{ std::mem::transmute::<u8, Self>(value as u8) }}
     }}
 }}
@@ -104,23 +100,34 @@ impl<'a> Generator<'a> {
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct Registers {
-    pub zero: u32, // Zero
-    pub pc: u32,   // ProgramCounter
-    pub off: u32,  // InputOffset
-    pub hs: u32,   // HighlightStart
-    pub hk: u32,   // HighlightKind
+    pub zero: u32, // x0 = Zero
+    pub pc: u32,   // x1 = ProgramCounter
+    pub off: u32,  // x2 = InputOffset
+    pub hs: u32,   // z3 = HighlightStart
+    pub hk: u32,   // x4 = HighlightKind
+    pub x5: u32,
+    pub x6: u32,
+    pub x7: u32,
+    pub x8: u32,
+    pub x9: u32,
+    pub x10: u32,
+    pub x11: u32,
+    pub x12: u32,
+    pub x13: u32,
+    pub x14: u32,
+    pub x15: u32,
 }
 
 impl Registers {
     #[inline(always)]
     pub fn get(&self, reg: usize) -> u32 {
-        debug_assert!(reg < 5);
+        debug_assert!(reg < 16);
         unsafe { (self as *const _ as *const u32).add(reg).read() }
     }
 
     #[inline(always)]
     pub fn set(&mut self, reg: usize, val: u32) {
-        debug_assert!(reg < 5);
+        debug_assert!(reg < 16);
         unsafe { (self as *mut _ as *mut u32).add(reg).write(val) }
     }
 }

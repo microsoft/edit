@@ -68,16 +68,16 @@ fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
         let b = b.identifier;
 
         // Global identifiers without a dot come first.
-        let global_a = a.contains('.');
-        let global_b = b.contains('.');
-        let cmp = global_a.cmp(&global_b);
+        let nested_a = a.contains('.');
+        let nested_b = b.contains('.');
+        let cmp = nested_a.cmp(&nested_b);
         if cmp != std::cmp::Ordering::Equal {
             return cmp;
         }
 
-        // Among globals, "other" comes first.
-        // Due to the above `global_a == true` implies `global_b == true`.
-        if global_a {
+        // Among globals, "other" comes first. Due to the above,
+        // `nested_a == false` implies `nested_b == false`.
+        if !nested_a {
             if a == "other" {
                 return std::cmp::Ordering::Less;
             }

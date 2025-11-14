@@ -75,6 +75,7 @@ pub struct State {}
 #[derive(Clone)]
 pub struct Highlighter<'a> {
     doc: &'a dyn ReadableDocument,
+    language: &'static Language,
     offset: usize,
     logical_pos_y: CoordType,
     stack: Vec<Registers>,
@@ -93,12 +94,13 @@ impl<'doc> Highlighter<'doc> {
     pub fn new(doc: &'doc dyn ReadableDocument, language: &'static Language) -> Self {
         Self {
             doc,
+            language,
             offset: 0,
             logical_pos_y: 0,
             stack: Default::default(),
             registers: Registers {
                 pc: language.entrypoint,
-                hk: HighlightKind::Other.as_usize() as u32,
+                hk: HighlightKind::Other as u32,
                 ..Default::default()
             },
         }
@@ -236,8 +238,11 @@ impl<'doc> Highlighter<'doc> {
                             self.registers = *last;
                             self.stack.pop();
                         } else {
+                            const _: () = assert!(HighlightKind::Other as u32 == 0);
+                            let hs = self.registers.hs;
                             self.registers = mem::zeroed();
-                            self.registers.hk = HighlightKind::Other.as_usize() as u32;
+                            self.registers.pc = self.language.entrypoint;
+                            self.registers.hs = hs;
                             break;
                         }
                     }
@@ -309,7 +314,10 @@ impl<'doc> Highlighter<'doc> {
             }
         }
 
-        res.push(Higlight { start: line.len(), kind: HighlightKind::Other });
+        if res.last().is_none_or(|last| last.start < line.len()) {
+            // TODO: Can `hs` be > line.len() here? If so, would that even matter?
+            res.push(Higlight { start: self.registers.hs as usize, kind: HighlightKind::Other });
+        }
 
         // Adjust the range to account for the line offset.
         for h in &mut res {

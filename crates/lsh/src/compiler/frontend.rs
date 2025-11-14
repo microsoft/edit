@@ -70,12 +70,49 @@ pub struct Parser<'a, 'c, 'src> {
     tokenizer: Tokenizer<'src>,
     current_token: Token<'src>,
     context: Vec<Context<'a>, &'a Arena>,
+    /// Bitfield tracking allocated registers. Bit 5-15 correspond to x5-x15.
+    /// A set bit means the register is in use.
+    allocated_registers: u16,
 }
 
 impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     pub fn new(compiler: &'c mut Compiler<'a>, src: &'src str) -> Self {
         let context = Vec::new_in(compiler.arena);
-        Self { compiler, tokenizer: Tokenizer::new(src), current_token: Token::Eof, context }
+        Self {
+            compiler,
+            tokenizer: Tokenizer::new(src),
+            current_token: Token::Eof,
+            context,
+            allocated_registers: 0, // No registers allocated initially
+        }
+    }
+
+    /// Allocate a temporary register from the pool (x5-x15).
+    /// Returns the lowest available register number.
+    fn alloc_register(&mut self) -> Register {
+        let available = !self.allocated_registers & 0xFFE0; // 0xFFE0 = bits 5-15
+        if available == 0 {
+            panic!("Register allocation failed: all 11 registers (x5-x15) are in use");
+        }
+        let bit = available.trailing_zeros();
+        self.allocated_registers |= 1u16 << bit;
+        unsafe { std::mem::transmute(bit as u8) }
+    }
+
+    /// Free a previously allocated register.
+    fn free_register(&mut self, reg: Register) {
+        let bit = reg as u8;
+        debug_assert!(
+            reg >= Register::X5 && reg <= Register::X15,
+            "Attempted to free non-allocatable register: {:?}",
+            reg
+        );
+        debug_assert!(
+            (self.allocated_registers & (1u16 << bit)) != 0,
+            "Double-free of register: {:?}",
+            reg
+        );
+        self.allocated_registers &= !(1u16 << bit);
     }
 
     pub fn run(&mut self) -> CompileResult<()> {
@@ -160,6 +197,10 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         let mut span = self.parse_block()?;
         let ctx = self.context.pop().unwrap();
 
+        if !span.last.borrow().wants_next() {
+            raise!(self, "loop body has an unreachable end");
+        }
+
         // Connect the end of the block back to the beginning of the loop.
         span.last = self.compiler.chain_iri(span.last, IRI::Loop { dst: span.first });
 
@@ -204,23 +245,31 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_if_statement(&mut self) -> CompileResult<IRSpan<'a>> {
+        // Allocate a register to save the position for backtracking across if/else branches
+        let save_reg = self.alloc_register();
+
         let mut first: Option<IRCell<'a>> = None;
         let mut else_branch: Option<IRCell<'a>> = None;
         let last = self.compiler.alloc_noop();
+
+        // Save the current position before trying the first if condition
+        let save_pos = self.compiler.save_position(save_reg);
+        first = Some(save_pos);
 
         loop {
             self.expect_token(Token::If)?;
             let re = self.parse_if_regex()?;
             let bl = self.parse_block()?;
 
-            // Keep track of the first node to later return it.
-            if first.is_none() {
-                first = Some(re.src);
-            }
-
-            // Connect the last else branch to form an "else if".
+            // Connect the last else branch (or the initial save) to form an "else if".
             if let Some(n) = else_branch {
-                n.borrow_mut().set_next(re.src);
+                // Restore position before trying the next regex
+                let restore_pos = self.compiler.restore_position(save_reg);
+                n.borrow_mut().set_next(restore_pos);
+                restore_pos.borrow_mut().set_next(re.src);
+            } else {
+                // First if: connect save_pos to regex
+                save_pos.borrow_mut().set_next(re.src);
             }
 
             // Connect the if to the {}.
@@ -246,13 +295,18 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 let bl = self.parse_block()?;
                 re.dst_bad.borrow_mut().set_next(bl.first);
                 // Connect the end of the {} to the end of the if/else chain.
-                bl.last.borrow_mut().set_next(last);
+                if bl.last.borrow().wants_next() {
+                    bl.last.borrow_mut().set_next(last);
+                }
                 break;
             }
 
             // Otherwise, we expect an "if" in the next iteration to form an "else if".
             else_branch = Some(re.dst_bad);
         }
+
+        // Free the register after the if/else chain is complete
+        self.free_register(save_reg);
 
         Ok(IRSpan { first: first.unwrap(), last })
     }

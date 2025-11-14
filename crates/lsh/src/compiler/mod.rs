@@ -109,6 +109,16 @@ impl<'a> Compiler<'a> {
         &self.highlight_kinds[idx]
     }
 
+    /// Create IR to save InputOffset to a register (for backtracking).
+    fn save_position(&self, dst: Register) -> IRCell<'a> {
+        self.alloc_iri(IRI::Add { dst, src: Register::InputOffset, imm: 0 })
+    }
+
+    /// Create IR to restore InputOffset from a register (for backtracking).
+    fn restore_position(&self, src: Register) -> IRCell<'a> {
+        self.alloc_iri(IRI::Add { dst: Register::InputOffset, src, imm: 0 })
+    }
+
     fn visit_nodes_from(&self, root: IRCell<'a>) -> TreeVisitor<'a> {
         let mut stack = VecDeque::new();
         stack.push_back(root);
@@ -315,7 +325,7 @@ struct IR<'a> {
 type IRCell<'a> = &'a RefCell<IR<'a>>;
 
 // IRI = Immediate Representation Instruction
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum IRI<'a> {
     Add { dst: Register, src: Register, imm: usize },
     If { condition: Condition<'a>, then: IRCell<'a> },
@@ -334,7 +344,7 @@ enum Condition<'a> {
 
 impl<'a> IR<'a> {
     fn wants_next(&self) -> bool {
-        self.next.is_none() && !matches!(self.instr, IRI::Return)
+        self.next.is_none() && !matches!(self.instr, IRI::Return | IRI::Loop { .. })
     }
 
     fn set_next(&mut self, n: IRCell<'a>) {
@@ -515,13 +525,24 @@ pub struct Assembly<'a> {
     pub highlight_kinds: Vec<HighlightKind<'a>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Register {
     Zero,
     ProgramCounter,
     InputOffset,
     HighlightStart,
     HighlightKind,
+    X5,
+    X6,
+    X7,
+    X8,
+    X9,
+    X10,
+    X11,
+    X12,
+    X13,
+    X14,
+    X15,
 }
 
 impl Register {
@@ -532,30 +553,52 @@ impl Register {
             Register::InputOffset => "off",
             Register::HighlightStart => "hs",
             Register::HighlightKind => "hk",
+            Register::X5 => "x5",
+            Register::X6 => "x6",
+            Register::X7 => "x7",
+            Register::X8 => "x8",
+            Register::X9 => "x9",
+            Register::X10 => "x10",
+            Register::X11 => "x11",
+            Register::X12 => "x12",
+            Register::X13 => "x13",
+            Register::X14 => "x14",
+            Register::X15 => "x15",
         }
     }
 }
 
-#[allow(dead_code)]
 #[repr(C)]
+#[derive(Default, Clone, Copy)]
 pub struct Registers {
-    zero: u32, // Zero
-    pc: u32,   // ProgramCounter
-    off: u32,  // InputOffset
-    hs: u32,   // HighlightStart
-    hk: u32,   // HighlightKind
+    zero: u32, // x0 = Zero
+    pc: u32,   // x1 = ProgramCounter
+    off: u32,  // x2 = InputOffset
+    hs: u32,   // z3 = HighlightStart
+    hk: u32,   // x4 = HighlightKind
+    x5: u32,
+    x6: u32,
+    x7: u32,
+    x8: u32,
+    x9: u32,
+    x10: u32,
+    x11: u32,
+    x12: u32,
+    x13: u32,
+    x14: u32,
+    x15: u32,
 }
 
 impl Registers {
     #[inline(always)]
     fn get(&self, reg: usize) -> u32 {
-        debug_assert!(reg < 5);
+        debug_assert!(reg < 16);
         unsafe { (self as *const _ as *const u32).add(reg).read() }
     }
 
     #[inline(always)]
     fn set(&mut self, reg: usize, val: u32) {
-        debug_assert!(reg < 5);
+        debug_assert!(reg < 16);
         unsafe { (self as *mut _ as *mut u32).add(reg).write(val) }
     }
 }
