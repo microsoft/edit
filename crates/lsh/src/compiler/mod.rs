@@ -186,6 +186,9 @@ impl<'a> Compiler<'a> {
                     }
                     IRI::If { condition, then } => {
                         match condition {
+                            Condition::EndOfLine => {
+                                _ = writeln!(output, "{{\"eol\"}}");
+                            }
                             Condition::Charset(cs) => {
                                 _ = writeln!(output, "{{\"charset: {cs:?}\"}}");
                             }
@@ -337,6 +340,7 @@ enum IRI<'a> {
 
 #[derive(Debug, Clone, Copy)]
 enum Condition<'a> {
+    EndOfLine,
     Charset(&'a Charset),
     Prefix(&'a str),
     PrefixInsensitive(&'a str),
@@ -628,28 +632,34 @@ pub enum Instruction {
     Return,
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 0011
+    //   dst[31:12] |                      | 0011
+    //
+    // Jumps to `dst` if we're at the end of the line.
+    JumpIfEndOfLine { dst: usize },
+
+    // Encoding:
+    //   dst[31:12] |      idx[11:4]       | 0100
     //
     // Jumps to `dst` if the test succeeds.
     // `idx` specifies the charset/string to use.
     JumpIfMatchCharset { idx: usize, dst: usize },
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 0100
+    //   dst[31:12] |      idx[11:4]       | 0101
     JumpIfMatchPrefix { idx: usize, dst: usize },
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 0101
+    //   dst[31:12] |      idx[11:4]       | 0110
     JumpIfMatchPrefixInsensitive { idx: usize, dst: usize },
 
     // Encoding:
-    //                                       0110
+    //                                       0111
     //
     // Flushes the current HighlightKind to the output.
     FlushHighlight,
 
     // Encoding:
-    //   dst[31:12] |                      | 0111
+    //   dst[31:12] |                      | 1000
     //
     // Checks if we're at the end and exit if so.
     // Otherwise, jumps to `dst`.
@@ -670,17 +680,18 @@ impl Instruction {
             }
             Instruction::Call { dst } => Self::cast_imm(dst) | 0b0001,
             Instruction::Return => 0b0010,
+            Instruction::JumpIfEndOfLine { dst } => Self::cast_imm(dst) | 0b0011,
             Instruction::JumpIfMatchCharset { idx, dst } => {
-                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0011
-            }
-            Instruction::JumpIfMatchPrefix { idx, dst } => {
                 Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0100
             }
-            Instruction::JumpIfMatchPrefixInsensitive { idx, dst } => {
+            Instruction::JumpIfMatchPrefix { idx, dst } => {
                 Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0101
             }
-            Instruction::FlushHighlight => 0b0110,
-            Instruction::Loop { dst } => Self::cast_imm(dst) | 0b0111,
+            Instruction::JumpIfMatchPrefixInsensitive { idx, dst } => {
+                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0110
+            }
+            Instruction::FlushHighlight => 0b0111,
+            Instruction::Loop { dst } => Self::cast_imm(dst) | 0b1000,
         }
     }
 
@@ -698,6 +709,7 @@ impl Instruction {
             }
             Instruction::Call { dst } => format!("call  {dst}"),
             Instruction::Return => "ret".to_string(),
+            Instruction::JumpIfEndOfLine { dst } => format!("jeol  {dst}"),
             Instruction::JumpIfMatchCharset { idx, dst } => {
                 format!("jc    {idx:?}, {dst}")
             }

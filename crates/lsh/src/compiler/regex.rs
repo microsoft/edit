@@ -58,6 +58,9 @@ fn transform<'a>(
         HirKind::Class(Class::Unicode(class)) => {
             transform_class(compiler, dst, &class.to_byte_class().unwrap())
         }
+        HirKind::Look(Look::End) => {
+            Ok(compiler.alloc_iri(IRI::If { condition: Condition::EndOfLine, then: dst }))
+        }
         HirKind::Look(Look::WordEndHalfAscii) => {
             // If the test hits, then we failed the word boundary, so go to dst_bad.
             // We don't have dst_bad here, so allocate a noop node, which later gets
@@ -71,7 +74,6 @@ fn transform<'a>(
             }))
         }
         HirKind::Repetition(rep) => match (rep.min, rep.max, rep.greedy, rep.sub.kind()) {
-            // Greedy cases
             (0, None, true, HirKind::Class(Class::Bytes(class))) if is_any_class(class) => {
                 transform_any_star(compiler, dst)
             }

@@ -247,6 +247,15 @@ impl<'doc> Highlighter<'doc> {
                         }
                     }
                     3 => {
+                        // JumpIfEndOfLine
+                        let dst = op >> 12;
+                        let off = self.registers.off as usize;
+
+                        if off >= line.len() {
+                            self.registers.pc = dst;
+                        }
+                    }
+                    4 => {
                         // JumpIfMatchCharset
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
@@ -258,7 +267,7 @@ impl<'doc> Highlighter<'doc> {
                             self.registers.pc = dst;
                         }
                     }
-                    4 => {
+                    5 => {
                         // JumpIfMatchPrefix
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
@@ -270,7 +279,7 @@ impl<'doc> Highlighter<'doc> {
                             self.registers.pc = dst;
                         }
                     }
-                    5 => {
+                    6 => {
                         // JumpIfMatchPrefixInsensitive
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
@@ -282,7 +291,7 @@ impl<'doc> Highlighter<'doc> {
                             self.registers.pc = dst;
                         }
                     }
-                    6 => {
+                    7 => {
                         // FlushHighlight
                         let start = self.registers.hs as usize;
                         let kind = self.registers.hk as usize;
@@ -298,7 +307,7 @@ impl<'doc> Highlighter<'doc> {
 
                         self.registers.hs = self.registers.off;
                     }
-                    7 => {
+                    8 => {
                         // Loop
                         let dst = op >> 12;
                         let off = self.registers.off as usize;

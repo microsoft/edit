@@ -2015,8 +2015,10 @@ impl TextBuffer {
                                     HighlightKind::MarkupBold => break 'block,
                                     HighlightKind::MarkupChanged => IndexedColor::BrightBlue,
                                     HighlightKind::MarkupDeleted => IndexedColor::BrightRed,
+                                    HighlightKind::MarkupHeading => IndexedColor::BrightBlue,
                                     HighlightKind::MarkupInserted => IndexedColor::BrightGreen,
                                     HighlightKind::MarkupItalic => break 'block,
+                                    HighlightKind::MarkupList => IndexedColor::BrightBlue,
                                     HighlightKind::MarkupStrikethrough => break 'block,
                                     HighlightKind::MetaDiffHeader => IndexedColor::BrightBlue,
                                 };

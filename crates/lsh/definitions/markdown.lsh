@@ -17,17 +17,81 @@ pub fn markdown() {
             }
         }
     } else {
-        loop {
-            if /(?:__|\*\*)/ {
-                yield markup.bold;
-            } else if /(?:_|\*)/ {
-                yield markup.italic;
-            } else if /~~/ {
-                yield markup.strikethrough;
-            } else if /`/ {
-                yield string;
-            } else if /./ {
-                // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+        if /__/ {
+            loop {
+                if /$/ {
+                    break;
+                } else if /\w+/ {
+                    break;
+                } else if /__/ {
+                    yield markup.bold;
+                    break;
+                } else if /./ {
+                    // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+                }
+            }
+        } else if /\*\*/ {
+            loop {
+                if /$/ {
+                    break;
+                } else if /\w+/ {
+                    break;
+                } else if /\*\*/ {
+                    yield markup.bold;
+                    break;
+                } else if /./ {
+                    // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+                }
+            }
+        } else if /_/ {
+            loop {
+                if /$/ {
+                    break;
+                } else if /\w+/ {
+                    break;
+                } else if /_/ {
+                    yield markup.italic;
+                    break;
+                } else if /./ {
+                    // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+                }
+            }
+        } else if /\*/ {
+            loop {
+                if /$/ {
+                    break;
+                } else if /\w+/ {
+                    break;
+                } else if /\*/ {
+                    yield markup.italic;
+                    break;
+                } else if /./ {
+                    // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+                }
+            }
+        } else if /~~/ {
+            loop {
+                if /$/ {
+                    break;
+                } else if /\w+/ {
+                    break;
+                } else if /~~/ {
+                    yield markup.strikethrough;
+                    break;
+                } else if /./ {
+                    // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+                }
+            }
+        } else if /`/ {
+            loop {
+                if /$/ {
+                    break;
+                } else if /`/ {
+                    yield string;
+                    break;
+                } else if /./ {
+                    // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+                }
             }
         }
     }

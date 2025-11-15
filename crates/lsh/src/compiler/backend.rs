@@ -69,6 +69,7 @@ impl<'a> Backend<'a> {
                             self.stack.push_back(then);
                             let dst = self.dst_by_node(then);
                             let instr = match condition {
+                                Condition::EndOfLine => Instruction::JumpIfEndOfLine { dst },
                                 Condition::Charset(h) => {
                                     let idx = self.visit_charset(h);
                                     Instruction::JumpIfMatchCharset { idx, dst }
@@ -218,6 +219,7 @@ impl<'a> Backend<'a> {
                     *imm = resolved;
                 }
                 Instruction::Call { dst }
+                | Instruction::JumpIfEndOfLine { dst }
                 | Instruction::JumpIfMatchCharset { dst, .. }
                 | Instruction::JumpIfMatchPrefix { dst, .. }
                 | Instruction::JumpIfMatchPrefixInsensitive { dst, .. } => {
