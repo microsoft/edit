@@ -312,8 +312,24 @@ impl<'doc> Highlighter<'doc> {
                         let dst = op >> 12;
                         let off = self.registers.off as usize;
 
+                        if off < line.len() {
+                            self.registers.pc = dst;
+                        }
+                    }
+                    9 => {
+                        // LoopMultiline
+                        let dst = op >> 12;
+                        let off = self.registers.off as usize;
+
                         self.registers.pc = dst;
 
+                        if off >= line.len() {
+                            break;
+                        }
+                    }
+                    10 => {
+                        // AwaitInput
+                        let off = self.registers.off as usize;
                         if off >= line.len() {
                             break;
                         }

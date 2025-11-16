@@ -184,6 +184,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             Token::Continue => self.parse_continue(),
             Token::Return => self.parse_return(),
             Token::If => self.parse_if_statement(),
+            Token::Await => self.parse_await(),
             Token::Yield => self.parse_yield(),
             Token::Identifier(_) => self.parse_call(),
             _ => raise!(self, "Unexpected token: {:?}", self.current_token),
@@ -192,6 +193,14 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
     fn parse_loop(&mut self) -> CompileResult<IRSpan<'a>> {
         self.expect_token(Token::Loop)?;
+
+        let multiline = match self.current_token {
+            Token::Identifier("multiline") => {
+                self.advance();
+                true
+            }
+            _ => false,
+        };
 
         self.context.push(Context { loop_start: None, loop_exit: None });
         let mut span = self.parse_block()?;
@@ -202,7 +211,14 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         }
 
         // Connect the end of the block back to the beginning of the loop.
-        span.last = self.compiler.chain_iri(span.last, IRI::Loop { dst: span.first });
+        span.last = self.compiler.chain_iri(
+            span.last,
+            if multiline {
+                IRI::LoopMultiline { dst: span.first }
+            } else {
+                IRI::Loop { dst: span.first }
+            },
+        );
 
         // Patch up break and continue statements.
         if let Some(loop_start) = ctx.loop_start {
@@ -326,6 +342,20 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.advance();
 
         Ok(RegexSpan { src, dst_good, dst_bad })
+    }
+
+    fn parse_await(&mut self) -> CompileResult<IRSpan<'a>> {
+        self.expect_token(Token::Await)?;
+
+        match self.current_token {
+            Token::Identifier("input") => self.advance(),
+            _ => raise!(self, "Expected 'input' after await"),
+        }
+
+        self.expect_token(Token::Semicolon)?;
+
+        let ir = self.compiler.alloc_iri(IRI::AwaitInput);
+        Ok(IRSpan::single(ir))
     }
 
     fn parse_yield(&mut self) -> CompileResult<IRSpan<'a>> {

@@ -99,6 +99,13 @@ impl<'a> Backend<'a> {
                             let dst = self.dst_by_node(dst);
                             self.push_instruction(Instruction::Loop { dst });
                         }
+                        IRI::LoopMultiline { dst } => {
+                            let dst = self.dst_by_node(dst);
+                            self.push_instruction(Instruction::LoopMultiline { dst });
+                        }
+                        IRI::AwaitInput => {
+                            self.push_instruction(Instruction::AwaitInput);
+                        }
                     }
 
                     ir = match ir.next {

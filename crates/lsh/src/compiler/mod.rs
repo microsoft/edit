@@ -139,7 +139,12 @@ impl<'a> Compiler<'a> {
         for func in &self.functions {
             _ = writeln!(output, "  subgraph {}", func.name);
             _ = writeln!(output, "    direction TB");
-            _ = writeln!(output, "    {}_start@{{shape: start}} --> N{:p}", func.name, func.body);
+            _ = writeln!(
+                output,
+                "    {}_start@{{shape: start}} --> {}",
+                func.name,
+                func.body.borrow()
+            );
 
             let mut visited = HashSet::new();
             let mut to_visit = vec![func.body];
@@ -150,21 +155,26 @@ impl<'a> Compiler<'a> {
                 }
 
                 let node = node_cell.borrow();
-                _ = write!(output, "    N{node_cell:p}");
+                let offset = node.offset;
+                _ = write!(output, "    {}", node);
 
                 match node.instr {
                     IRI::Add { dst: Register::Zero, src: Register::Zero, imm: 0 } => {
-                        output.push_str("[noop]");
+                        _ = write!(output, "[{offset}: noop]");
                     }
                     IRI::Add { dst: Register::HighlightKind, src: Register::Zero, imm } => {
                         if let Some(hk) = self.highlight_kinds.iter().find(|hk| hk.value == imm) {
-                            _ = write!(output, "[\"hk = {} ({})\"]", hk.value, hk.identifier);
+                            _ = write!(
+                                output,
+                                "[\"{offset}: hk = {} ({})\"]",
+                                hk.value, hk.identifier
+                            );
                         } else {
-                            _ = write!(output, "[\"hk = {imm}\"]");
+                            _ = write!(output, "[\"{offset}: hk = {imm}\"]");
                         }
                     }
                     IRI::Add { dst, src, imm } => {
-                        _ = write!(output, "[\"{} = ", dst.mnemonic());
+                        _ = write!(output, "[\"{offset}: {} = ", dst.mnemonic());
                         match (src, imm) {
                             (Register::Zero, 0) => {
                                 _ = write!(output, "0");
@@ -185,46 +195,46 @@ impl<'a> Compiler<'a> {
                         output.push_str("\"]");
                     }
                     IRI::If { condition, then } => {
-                        match condition {
-                            Condition::EndOfLine => {
-                                _ = writeln!(output, "{{\"eol\"}}");
-                            }
-                            Condition::Charset(cs) => {
-                                _ = writeln!(output, "{{\"charset: {cs:?}\"}}");
-                            }
-                            Condition::Prefix(s) => {
-                                _ = writeln!(output, "{{\"match: {s}\"}}");
-                            }
-                            Condition::PrefixInsensitive(s) => {
-                                _ = writeln!(output, "{{\"imatch: {s}\"}}");
-                            }
-                        }
-                        _ = writeln!(output, "    N{node_cell:p} -->|yes| N{then:p}");
+                        _ = write!(output, "{{\"{offset}: ");
+                        _ = match condition {
+                            Condition::EndOfLine => write!(output, "eol"),
+                            Condition::Charset(cs) => write!(output, "charset: {cs:?}"),
+                            Condition::Prefix(s) => write!(output, "match: {s}"),
+                            Condition::PrefixInsensitive(s) => write!(output, "imatch: {s}"),
+                        };
+                        _ = writeln!(output, "\"}}");
+                        _ = writeln!(output, "    {} -->|yes| {}", node, then.borrow());
                         to_visit.push(then);
                     }
                     IRI::Call { name } => {
-                        _ = write!(output, "[\"Call {name}\"]");
+                        _ = write!(output, "[\"{offset}: call {name}\"]");
                     }
                     IRI::Return => {
-                        output.push_str("[return]");
+                        _ = write!(output, "[{offset}: return]");
                     }
                     IRI::Flush => {
-                        output.push_str("[flush]");
+                        _ = write!(output, "[{offset}: flush]");
                     }
                     IRI::Loop { dst } => {
-                        _ = write!(output, "[loop] --> N{dst:p}");
+                        _ = write!(output, "[{offset}: loop] --> {}", dst.borrow());
+                    }
+                    IRI::LoopMultiline { dst } => {
+                        _ = write!(output, "[{offset}: loop multiline] --> {}", dst.borrow());
+                    }
+                    IRI::AwaitInput => {
+                        _ = write!(output, "[{offset}: await input]");
                     }
                 }
 
                 match node.instr {
                     IRI::If { .. } => {
                         if let Some(next) = node.next {
-                            _ = writeln!(output, "    N{node_cell:p} -->|no| N{next:p}");
+                            _ = writeln!(output, "    {} -->|no| {}", node, next.borrow());
                         }
                     }
                     _ => {
                         if let Some(next) = node.next {
-                            _ = writeln!(output, " --> N{next:p}");
+                            _ = writeln!(output, " --> {}", next.borrow());
                         } else {
                             _ = writeln!(output);
                         }
@@ -325,6 +335,12 @@ struct IR<'a> {
     offset: usize,
 }
 
+impl<'a> fmt::Display for IR<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "i{}", self.offset)
+    }
+}
+
 type IRCell<'a> = &'a RefCell<IR<'a>>;
 
 // IRI = Immediate Representation Instruction
@@ -336,6 +352,8 @@ enum IRI<'a> {
     Return,
     Flush,
     Loop { dst: IRCell<'a> },
+    LoopMultiline { dst: IRCell<'a> },
+    AwaitInput,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -348,7 +366,7 @@ enum Condition<'a> {
 
 impl<'a> IR<'a> {
     fn wants_next(&self) -> bool {
-        self.next.is_none() && !matches!(self.instr, IRI::Return | IRI::Loop { .. })
+        self.next.is_none() && !matches!(self.instr, IRI::Return | IRI::LoopMultiline { .. })
     }
 
     fn set_next(&mut self, n: IRCell<'a>) {
@@ -664,6 +682,18 @@ pub enum Instruction {
     // Checks if we're at the end and exit if so.
     // Otherwise, jumps to `dst`.
     Loop { dst: usize },
+
+    // Encoding:
+    //   dst[31:12] |                      | 1001
+    //
+    // Checks if we're at the end and exit if so.
+    // Otherwise, jumps to `dst`.
+    LoopMultiline { dst: usize },
+
+    // Encoding:
+    //                                       1010
+    // Awaits more input to be available.
+    AwaitInput,
 }
 
 impl Instruction {
@@ -692,6 +722,8 @@ impl Instruction {
             }
             Instruction::FlushHighlight => 0b0111,
             Instruction::Loop { dst } => Self::cast_imm(dst) | 0b1000,
+            Instruction::LoopMultiline { dst } => Self::cast_imm(dst) | 0b1001,
+            Instruction::AwaitInput => 0b1010,
         }
     }
 
@@ -721,8 +753,12 @@ impl Instruction {
             }
             Instruction::FlushHighlight => "flush".to_string(),
             Instruction::Loop { dst } => {
-                format!("loop  {dst}")
+                format!("lp    {dst}")
             }
+            Instruction::LoopMultiline { dst } => {
+                format!("lpml  {dst}")
+            }
+            Instruction::AwaitInput => "await".to_string(),
         }
     }
 

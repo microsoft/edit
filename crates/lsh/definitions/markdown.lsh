@@ -1,13 +1,13 @@
 pub fn markdown() {
     // Gobble any leading whitespace on the line.
-    if /\s+/ {}
+    if /\s+/ {
+        yield other;
+    }
 
-    if /#+.*/ {
+    if /#+\s+.*/ {
         yield markup.heading;
     } else if />.*/ {
         yield comment;
-    } else if /\*\s+/ {
-        yield markup.list;
     } else if /```.*/ {
         loop {
             if /\s*```.*/ {
@@ -15,83 +15,131 @@ pub fn markdown() {
             } else if /.*/ {
                 // Gobble the rest of the line with no highlighting.
             }
+            await input;
         }
     } else {
-        if /__/ {
-            loop {
-                if /$/ {
-                    break;
-                } else if /\w+/ {
-                    break;
-                } else if /__/ {
-                    yield markup.bold;
-                    break;
-                } else if /./ {
-                    // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+        if /[\*-]\s+/ {
+            yield markup.list;
+        }
+
+        // The structure of inline emphasis, etc., matchers is
+        // awfully wrong, but parsing Markdown is also awful in general.
+        // In fact I think it's categorically impossible to implement like this,
+        // because it requires lookahead across potentially infinite lines:
+        // The Markdown spec describes its "parsing strategy" as "two phase"
+        // where the first phase segments the document into block structures.
+        // For instance, a `comment` may span multiple lines, _unless_
+        // there's a paragraph break inbetween, e.g. due to a ">" comment.
+        loop {
+            if /__/ {
+                if /_+/ {
+                    // "_____" = no hit
+                } else if /\s+/ {
+                    // "__ foo __" = no hit
+                } else {
+                    loop {
+                        if /\\./ {
+                            // gobble escape char
+                        } else if /[^\s_]+__/ {
+                            yield markup.bold;
+                            break;
+                        } else if /__/ {
+                            break;
+                        } else if /./ {
+                        }
+                    }
                 }
-            }
-        } else if /\*\*/ {
-            loop {
-                if /$/ {
-                    break;
-                } else if /\w+/ {
-                    break;
-                } else if /\*\*/ {
-                    yield markup.bold;
-                    break;
-                } else if /./ {
-                    // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+            } else if /\*\*/ {
+                if /\s+/ {
+                    // "__ foo __" = no hit
+                } else {
+                    loop {
+                        if /\\./ {
+                            // gobble escape char
+                        } else if /[^\s*]+\*\*/ {
+                            yield markup.bold;
+                            break;
+                        } else if /\*\*/ {
+                            break;
+                        } else if /./ {
+                        }
+                    }
                 }
-            }
-        } else if /_/ {
-            loop {
-                if /$/ {
-                    break;
-                } else if /\w+/ {
-                    break;
-                } else if /_/ {
-                    yield markup.italic;
-                    break;
-                } else if /./ {
-                    // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+            } else if /_/ {
+                if /\s+/ {
+                    // "_ foo _" = no hit
+                } else {
+                    loop {
+                        if /\\./ {
+                            // gobble escape char
+                        } else if /[^\s_]+_/ {
+                            yield markup.italic;
+                            break;
+                        } else if /_/ {
+                            break;
+                        } else if /./ {
+                        }
+                    }
                 }
-            }
-        } else if /\*/ {
-            loop {
-                if /$/ {
-                    break;
-                } else if /\w+/ {
-                    break;
-                } else if /\*/ {
-                    yield markup.italic;
-                    break;
-                } else if /./ {
-                    // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+            } else if /\*/ {
+                if /\s+/ {
+                    // "_ foo _" = no hit
+                } else {
+                    loop {
+                        if /\\./ {
+                            // gobble escape char
+                        } else if /[^\s*]+\*/ {
+                            yield markup.italic;
+                            break;
+                        } else if /\*/ {
+                            break;
+                        } else if /./ {
+                        }
+                    }
                 }
-            }
-        } else if /~~/ {
-            loop {
-                if /$/ {
-                    break;
-                } else if /\w+/ {
-                    break;
-                } else if /~~/ {
-                    yield markup.strikethrough;
-                    break;
-                } else if /./ {
-                    // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+            } else if /~~/ {
+                if /\s+/ {
+                    // "~~ foo ~~" = no hit
+                } else {
+                    loop {
+                        if /\\./ {
+                            // gobble escape char
+                        } else if /[^\s~]+~~/ {
+                            yield markup.strikethrough;
+                            break;
+                        } else if /~~/ {
+                            break;
+                        } else if /./ {
+                        }
+                    }
                 }
-            }
-        } else if /`/ {
-            loop {
-                if /$/ {
-                    break;
-                } else if /`/ {
-                    yield string;
-                    break;
-                } else if /./ {
-                    // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+            } else if /```/ {
+                loop {
+                    if /```/ {
+                        yield string;
+                        break;
+                    } else if /./ {
+                    }
                 }
+            } else if /``/ {
+                loop {
+                    if /``/ {
+                        yield string;
+                        break;
+                    } else if /./ {
+                    }
+                }
+            } else if /`/ {
+                loop {
+                    if /`/ {
+                        yield string;
+                        break;
+                    } else if /./ {
+                    }
+                }
+            } else if /./ {
+                // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
+                yield other;
             }
         }
     }

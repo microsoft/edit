@@ -19,6 +19,7 @@ pub enum Token<'a> {
     Break,
     Continue,
     Return,
+    Await,
     Yield,
 
     // Punctuation
@@ -158,6 +159,7 @@ impl<'a> Tokenizer<'a> {
             "break" => Token::Break,
             "continue" => Token::Continue,
             "return" => Token::Return,
+            "await" => Token::Await,
             "yield" => Token::Yield,
             ident => Token::Identifier(ident),
         }
