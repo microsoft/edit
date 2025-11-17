@@ -19,19 +19,21 @@ impl<'a> Generator<'a> {
     }
 
     pub fn read_file(&mut self, path: &Path) -> CompileResult<()> {
-        let src = std::fs::read_to_string(path).map_err(|e| CompileError {
-            line: 0,
-            column: 0,
-            message: format!("Failed to read {}: {}", path.display(), e),
-        })?;
-        self.compiler.parse(&src)
+        let path_str = path.display().to_string();
+        match std::fs::read_to_string(path) {
+            Ok(src) => self.compiler.parse(&path_str, &src),
+            Err(e) => {
+                Err(CompileError { path: path_str, line: 0, column: 0, message: e.to_string() })
+            }
+        }
     }
 
     pub fn read_directory(&mut self, path: &Path) -> CompileResult<()> {
         let files = Self::read_dir_to_vec(path).map_err(|e| CompileError {
+            path: path.display().to_string(),
             line: 0,
             column: 0,
-            message: format!("Failed to read directory {}: {}", path.display(), e),
+            message: e.to_string(),
         })?;
 
         for path in files {
@@ -153,7 +155,7 @@ impl Registers {
             "\n#[rustfmt::skip] pub const ASSEMBLY: [u32; {len}] = [",
             len = assembly.instructions.len(),
         );
-        let line_num_width = assembly.instructions.len().ilog10() as usize + 1;
+        let line_num_width = assembly.instructions.len().checked_ilog10().unwrap_or(0) as usize + 1;
         for (i, ai) in assembly.instructions.iter().enumerate() {
             if !ai.label.is_empty() {
                 if i != 0 {

@@ -108,10 +108,18 @@ impl<'a> Backend<'a> {
                         }
                     }
 
-                    ir = match ir.next {
-                        Some(next) => next.borrow_mut(),
-                        None => break,
+                    let Some(next) = ir.next else {
+                        break;
                     };
+
+                    // The current IR node may be fully circular, like
+                    //   loop {
+                    //     foo();
+                    //   }
+                    // so we need to drop the borrow before re-borrowing.
+                    drop(ir);
+
+                    ir = next.borrow_mut();
 
                     // If the tail end of this IR chain is already compiled, we jump there.
                     if ir.offset != usize::MAX {
@@ -149,16 +157,18 @@ impl<'a> Backend<'a> {
 
             if !names.is_empty() {
                 return Err(CompileError {
+                    path: String::new(),
                     line: 0,
                     column: 0,
-                    message: format!("Unresolved function call names: {names}"),
+                    message: format!("unresolved function call names: {names}"),
                 });
             }
 
             return Err(CompileError {
+                path: String::new(),
                 line: 0,
                 column: 0,
-                message: "Unresolved IR nodes".to_string(),
+                message: "unresolved IR nodes".to_string(),
             });
         }
 

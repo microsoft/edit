@@ -41,9 +41,12 @@ fn compile_lsh() {
     let out_path = format!("{out_dir}/lsh_definitions.rs");
 
     let mut generator = lsh::Generator::new(&scratch);
-    generator.read_directory(lsh_path).unwrap();
-    let contents = generator.generate_rust().unwrap();
-    std::fs::write(out_path, contents).unwrap();
+    match generator.read_directory(lsh_path).and_then(|_| generator.generate_rust()) {
+        Ok(c) => std::fs::write(out_path, c).unwrap(),
+        Err(err) => {
+            panic!("failed to compile lsh definitions: {err}");
+        }
+    };
 
     println!("cargo::rerun-if-changed={}", lsh_path.display());
 }

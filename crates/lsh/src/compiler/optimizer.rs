@@ -3,6 +3,7 @@
 
 use std::cell::RefMut;
 use std::iter::repeat_n;
+use std::ptr;
 
 use stdext::arena::scratch_arena;
 
@@ -27,9 +28,9 @@ fn optimize_noop<'a>(compiler: &mut Compiler<'a>) {
 
     // Remove noops from the rest of the tree.
     for function in &compiler.functions {
-        for current in compiler.visit_nodes_from(function.body) {
+        for current_cell in compiler.visit_nodes_from(function.body) {
             // First, filter down to nodes that are not no-ops.
-            if let mut current = current.borrow_mut()
+            if let mut current = current_cell.borrow_mut()
                 && !matches!(current.instr, IRI::Add { dst: Register::Zero, .. })
             {
                 // `IRI::If` nodes have an additional "next" pointer.
@@ -45,7 +46,8 @@ fn optimize_noop<'a>(compiler: &mut Compiler<'a>) {
                 // Now, "pop_front" no-ops from the next pointer, until it
                 // points to a real op (or None, but that shouldn't happen).
                 for next_ref in nexts.into_iter().flatten() {
-                    while let next = next_ref.borrow()
+                    while !ptr::eq(*next_ref, current_cell)
+                        && let next = next_ref.borrow()
                         && matches!(next.instr, IRI::Add { dst: Register::Zero, .. })
                         && let Some(skip_next) = next.next
                     {

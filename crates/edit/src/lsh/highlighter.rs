@@ -239,10 +239,10 @@ impl<'doc> Highlighter<'doc> {
                             self.stack.pop();
                         } else {
                             const _: () = assert!(HighlightKind::Other as u32 == 0);
-                            let hs = self.registers.hs;
+                            let off = self.registers.off;
                             self.registers = mem::zeroed();
                             self.registers.pc = self.language.entrypoint;
-                            self.registers.hs = hs;
+                            self.registers.off = off;
                             break;
                         }
                     }
@@ -340,8 +340,11 @@ impl<'doc> Highlighter<'doc> {
         }
 
         if res.last().is_none_or(|last| last.start < line.len()) {
-            // TODO: Can `hs` be > line.len() here? If so, would that even matter?
-            res.push(Higlight { start: self.registers.hs as usize, kind: HighlightKind::Other });
+            let start = line.len().min(self.registers.off as usize);
+            res.push(Higlight { start, kind: HighlightKind::Other });
+        }
+        if res.last().is_none_or(|last| last.start < line.len()) {
+            res.push(Higlight { start: line.len(), kind: HighlightKind::Other });
         }
 
         // Adjust the range to account for the line offset.

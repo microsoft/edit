@@ -6,12 +6,14 @@ use super::*;
 
 macro_rules! raise {
     ($self:ident, $msg:literal) => {{
+        let path = $self.path.to_string();
         let (line, column) = $self.tokenizer.position();
-        return Err(CompileError { line, column, message: $msg.to_string() })
+        return Err(CompileError { path, line, column, message: $msg.to_string() })
     }};
     ($self:ident, $($arg:tt)*) => {{
+        let path = $self.path.to_string();
         let (line, column) = $self.tokenizer.position();
-        return Err(CompileError { line, column, message: format!($($arg)*) })
+        return Err(CompileError { path, line, column, message: format!($($arg)*) })
     }};
 }
 
@@ -67,6 +69,7 @@ impl<'a> Context<'a> {
 
 pub struct Parser<'a, 'c, 'src> {
     compiler: &'c mut Compiler<'a>,
+    path: &'src str,
     tokenizer: Tokenizer<'src>,
     current_token: Token<'src>,
     context: Vec<Context<'a>, &'a Arena>,
@@ -76,10 +79,11 @@ pub struct Parser<'a, 'c, 'src> {
 }
 
 impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
-    pub fn new(compiler: &'c mut Compiler<'a>, src: &'src str) -> Self {
+    pub fn new(compiler: &'c mut Compiler<'a>, path: &'src str, src: &'src str) -> Self {
         let context = Vec::new_in(compiler.arena);
         Self {
             compiler,
+            path,
             tokenizer: Tokenizer::new(src),
             current_token: Token::Eof,
             context,
@@ -136,7 +140,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         let name = match self.current_token {
             Token::Identifier(n) => arena_clone_str(self.compiler.arena, n),
-            _ => raise!(self, "Expected function name"),
+            _ => raise!(self, "expected function name"),
         };
         self.advance();
 
@@ -180,6 +184,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     fn parse_statement(&mut self) -> CompileResult<IRSpan<'a>> {
         match self.current_token {
             Token::Loop => self.parse_loop(),
+            Token::Until => self.parse_until(),
             Token::Break => self.parse_break(),
             Token::Continue => self.parse_continue(),
             Token::Return => self.parse_return(),
@@ -187,49 +192,42 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             Token::Await => self.parse_await(),
             Token::Yield => self.parse_yield(),
             Token::Identifier(_) => self.parse_call(),
-            _ => raise!(self, "Unexpected token: {:?}", self.current_token),
+            _ => raise!(self, "unexpected token: {:?}", self.current_token),
         }
     }
 
     fn parse_loop(&mut self) -> CompileResult<IRSpan<'a>> {
         self.expect_token(Token::Loop)?;
 
-        let multiline = match self.current_token {
-            Token::Identifier("multiline") => {
-                self.advance();
-                true
-            }
-            _ => false,
-        };
+        let loop_start = self.compiler.alloc_noop();
+        let loop_exit = self.compiler.alloc_noop();
+        self.parse_until_impl(loop_start, loop_start, loop_exit)
+    }
 
-        self.context.push(Context { loop_start: None, loop_exit: None });
-        let mut span = self.parse_block()?;
-        let ctx = self.context.pop().unwrap();
+    fn parse_until(&mut self) -> CompileResult<IRSpan<'a>> {
+        self.expect_token(Token::Until)?;
 
-        if !span.last.borrow().wants_next() {
-            raise!(self, "loop body has an unreachable end");
-        }
+        let re = self.parse_if_regex()?;
 
-        // Connect the end of the block back to the beginning of the loop.
-        span.last = self.compiler.chain_iri(
-            span.last,
-            if multiline {
-                IRI::LoopMultiline { dst: span.first }
-            } else {
-                IRI::Loop { dst: span.first }
-            },
-        );
+        let loop_exit = self.compiler.alloc_noop();
+        re.dst_good.borrow_mut().set_next(loop_exit);
+        self.parse_until_impl(re.src, re.dst_bad, loop_exit)
+    }
 
-        // Patch up break and continue statements.
-        if let Some(loop_start) = ctx.loop_start {
-            loop_start.borrow_mut().set_next(span.first);
-            span.first = loop_start;
-        }
-        if let Some(loop_exit) = ctx.loop_exit {
-            span.last = loop_exit;
-        }
+    fn parse_until_impl(
+        &mut self,
+        loop_start: IRCell<'a>,
+        loop_good: IRCell<'a>,
+        loop_exit: IRCell<'a>,
+    ) -> CompileResult<IRSpan<'a>> {
+        self.context.push(Context { loop_start: Some(loop_start), loop_exit: Some(loop_exit) });
+        let block = self.parse_block();
+        self.context.pop();
 
-        Ok(span)
+        let block = block?;
+        loop_good.borrow_mut().set_next(block.first);
+        block.last.borrow_mut().set_next(loop_start);
+        Ok(IRSpan { first: loop_start, last: loop_exit })
     }
 
     fn parse_break(&mut self) -> CompileResult<IRSpan<'a>> {
@@ -330,7 +328,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     fn parse_if_regex(&mut self) -> CompileResult<RegexSpan<'a>> {
         let pattern = match self.current_token {
             Token::Regex(s) => s,
-            _ => raise!(self, "Expected regex after if"),
+            _ => raise!(self, "expected regex"),
         };
         let dst_good = self.compiler.alloc_noop();
         let dst_bad = self.compiler.alloc_noop();
@@ -349,7 +347,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         match self.current_token {
             Token::Identifier("input") => self.advance(),
-            _ => raise!(self, "Expected 'input' after await"),
+            _ => raise!(self, "expected 'input' after await"),
         }
 
         self.expect_token(Token::Semicolon)?;
@@ -363,7 +361,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         let color = match self.current_token {
             Token::Identifier(c) => c,
-            _ => raise!(self, "Expected color name after yield"),
+            _ => raise!(self, "expected color name after yield"),
         };
         let imm = self.compiler.intern_highlight_kind(color).value;
 
@@ -382,7 +380,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     fn parse_call(&mut self) -> CompileResult<IRSpan<'a>> {
         let name = match self.current_token {
             Token::Identifier(n) => self.compiler.strings.intern(self.compiler.arena, n),
-            _ => raise!(self, "Expected function name"),
+            _ => raise!(self, "expected function name"),
         };
         self.advance();
 
@@ -398,7 +396,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             self.advance();
             Ok(())
         } else {
-            raise!(self, "Expected {:?}, found {:?}", expected, self.current_token)
+            raise!(self, "expected {:?}, found {:?}", expected, self.current_token)
         }
     }
 

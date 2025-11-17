@@ -22,6 +22,7 @@ pub type CompileResult<T> = Result<T, CompileError>;
 
 #[derive(Debug)]
 pub struct CompileError {
+    pub path: String,
     pub line: usize,
     pub column: usize,
     pub message: String,
@@ -29,7 +30,7 @@ pub struct CompileError {
 
 impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "error at {}:{}: {}", self.line, self.column, self.message)
+        write!(f, "error at {}:{}:{}: {}", self.path, self.line, self.column, self.message)
     }
 }
 
@@ -52,8 +53,8 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    pub fn parse(&mut self, src: &str) -> CompileResult<()> {
-        let mut parser = Parser::new(self, src);
+    pub fn parse<'src>(&mut self, path: &'src str, src: &'src str) -> CompileResult<()> {
+        let mut parser = Parser::new(self, path, src);
         parser.run()?;
         Ok(())
     }

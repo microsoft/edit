@@ -7,11 +7,16 @@ pub fn git_commit_message() {
             yield markup.deleted;
         } else if /\tnew file:.*/ {
             yield markup.inserted;
+        } else if /.*/ {
         }
     } else if /diff --git.*/ {
         yield meta.diff.header;
         loop {
+            await input;
             diff();
+            // diff() may not have eaten that line.
+            // It doesn't have to. That's our responsibility.
+            if /.*/ {}
         }
     }
 }

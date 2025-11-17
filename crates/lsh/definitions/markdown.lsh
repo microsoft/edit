@@ -8,14 +8,28 @@ pub fn markdown() {
         yield markup.heading;
     } else if />.*/ {
         yield comment;
-    } else if /```.*/ {
-        loop {
-            if /\s*```.*/ {
-                break;
-            } else if /.*/ {
-                // Gobble the rest of the line with no highlighting.
+    } else if /```/ {
+        if /diff/ {
+            loop {
+                await input;
+                if /\s*```diff/ {
+                    return;
+                } else {
+                    diff();
+                    // diff() may not have eaten that line.
+                    // It doesn't have to. That's our responsibility.
+                    if /.*/ {}
+                }
             }
-            await input;
+        } else {
+            loop {
+                await input;
+                if /\s*```.*/ {
+                    return;
+                } else if /.*/ {
+                    // Gobble the rest of the line with no highlighting.
+                }
+            }
         }
     } else {
         if /[\*-]\s+/ {
@@ -30,14 +44,14 @@ pub fn markdown() {
         // where the first phase segments the document into block structures.
         // For instance, a `comment` may span multiple lines, _unless_
         // there's a paragraph break inbetween, e.g. due to a ">" comment.
-        loop {
+        until /$/ {
             if /__/ {
                 if /_+/ {
                     // "_____" = no hit
                 } else if /\s+/ {
                     // "__ foo __" = no hit
                 } else {
-                    loop {
+                    until /$/ {
                         if /\\./ {
                             // gobble escape char
                         } else if /[^\s_]+__/ {
@@ -51,9 +65,9 @@ pub fn markdown() {
                 }
             } else if /\*\*/ {
                 if /\s+/ {
-                    // "__ foo __" = no hit
+                    // "** foo **" = no hit
                 } else {
-                    loop {
+                    until /$/ {
                         if /\\./ {
                             // gobble escape char
                         } else if /[^\s*]+\*\*/ {
@@ -69,7 +83,7 @@ pub fn markdown() {
                 if /\s+/ {
                     // "_ foo _" = no hit
                 } else {
-                    loop {
+                    until /$/ {
                         if /\\./ {
                             // gobble escape char
                         } else if /[^\s_]+_/ {
@@ -83,9 +97,9 @@ pub fn markdown() {
                 }
             } else if /\*/ {
                 if /\s+/ {
-                    // "_ foo _" = no hit
+                    // "* foo *" = no hit
                 } else {
-                    loop {
+                    until /$/ {
                         if /\\./ {
                             // gobble escape char
                         } else if /[^\s*]+\*/ {
@@ -101,7 +115,7 @@ pub fn markdown() {
                 if /\s+/ {
                     // "~~ foo ~~" = no hit
                 } else {
-                    loop {
+                    until /$/ {
                         if /\\./ {
                             // gobble escape char
                         } else if /[^\s~]+~~/ {
@@ -114,29 +128,14 @@ pub fn markdown() {
                     }
                 }
             } else if /```/ {
-                loop {
-                    if /```/ {
-                        yield string;
-                        break;
-                    } else if /./ {
-                    }
-                }
+                until /```/ { if /./ {} }
+                yield string;
             } else if /``/ {
-                loop {
-                    if /``/ {
-                        yield string;
-                        break;
-                    } else if /./ {
-                    }
-                }
+                until /``/ { if /./ {} }
+                yield string;
             } else if /`/ {
-                loop {
-                    if /`/ {
-                        yield string;
-                        break;
-                    } else if /./ {
-                    }
-                }
+                until /`/ { if /./ {} }
+                yield string;
             } else if /./ {
                 // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
                 yield other;
