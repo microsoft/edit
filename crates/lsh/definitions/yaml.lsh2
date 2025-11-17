@@ -1,0 +1,219 @@
+pub fn yaml() {
+    if /---/ {
+        yield keyword;
+        if /.*/ {}
+    } else if /\.\.\./ {
+        yield keyword;
+        if /.*/ {}
+    }
+
+    yaml_line();
+}
+
+fn yaml_line() {
+    if /\s+/ {
+        yield other;
+    }
+
+    if /#.*/ {
+        yield comment;
+    } else if /-\s+/ {
+        // Sequence item
+        yield other;
+        yaml_value();
+    } else if /\w[\w\s]*:(?:\s|$)/ {
+        // Key in mapping (unquoted)
+        yield entity.name;
+        yaml_value();
+    } else if /"/ {
+        // Quoted key
+        yaml_string_double();
+        if /\s*:\s*/ {
+            yield entity.name;
+            yaml_value();
+        }
+    } else if /'/ {
+        // Quoted key (single quote)
+        yaml_string_single();
+        if /\s*:\s*/ {
+            yield entity.name;
+            yaml_value();
+        }
+    } else if /[|>][-+]?\d*\s*/ {
+        // Block scalar
+        yield string;
+        loop {
+            await input;
+            if /\s+\S.*/ {
+                yield string;
+            } else {
+                break;
+            }
+        }
+    } else if /\[/ {
+        // Flow sequence
+        yield other;
+        yaml_flow_sequence();
+    } else if /\{/ {
+        // Flow mapping
+        yield other;
+        yaml_flow_mapping();
+    } else {
+        yaml_value();
+    }
+}
+
+fn yaml_value() {
+    if /\s+/ {
+        yield other;
+    }
+
+    if /"/ {
+        yaml_string_double();
+    } else if /'/ {
+        yaml_string_single();
+    } else if /[-+]?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?(?:\s|$|,)/ {
+        // Number
+        yield number;
+    } else if /true|false|yes|no|on|off|True|False|TRUE|FALSE|YES|NO|ON|OFF(?:\s|$|,)/ {
+        // Boolean
+        yield keyword;
+    } else if /null|~|Null|NULL(?:\s|$|,)/ {
+        // Null
+        yield keyword;
+    } else if /\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?(?:\s|$|,)/ {
+        // Date/timestamp
+        yield number;
+    } else if /&\w+/ {
+        // Anchor
+        yield entity.name;
+    } else if /\*\w+/ {
+        // Alias
+        yield entity.name;
+    } else if /!\w+/ {
+        // Tag
+        yield keyword;
+    } else if /\[/ {
+        // Flow sequence
+        yield other;
+        yaml_flow_sequence();
+    } else if /\{/ {
+        // Flow mapping
+        yield other;
+        yaml_flow_mapping();
+    } else if /#.*/ {
+        // Inline comment
+        yield comment;
+    } else if /[^\s#\[\]{},:]+/ {
+        // Plain scalar
+        yield other;
+    }
+}
+
+fn yaml_string_double() {
+    until /"/ {
+        if /\\[0abtnvfre "\/\\N_LP]/ {
+            // Escape sequences
+        } else if /\\x[0-9a-fA-F]{2}/ {
+            // Hex escape
+        } else if /\\u[0-9a-fA-F]{4}/ {
+            // Unicode escape
+        } else if /\\U[0-9a-fA-F]{8}/ {
+            // Unicode escape
+        } else if /./ {
+        }
+    }
+    yield string;
+}
+
+fn yaml_string_single() {
+    until /'/ {
+        if /''/ {
+            // Escaped single quote
+        } else if /./ {
+        }
+    }
+    yield string;
+}
+
+fn yaml_flow_sequence() {
+    loop {
+        if /\s+/ {
+            yield other;
+        }
+
+        if /\]/ {
+            yield other;
+            break;
+        } else if /#.*/ {
+            yield comment;
+            await input;
+        } else if /,/ {
+            yield other;
+        } else {
+            yaml_value();
+        }
+
+        if /\s+/ {
+            yield other;
+        }
+
+        if /\]/ {
+            yield other;
+            break;
+        } else if /./ {
+        } else {
+            break;
+        }
+    }
+}
+
+fn yaml_flow_mapping() {
+    loop {
+        if /\s+/ {
+            yield other;
+        }
+
+        if /\}/ {
+            yield other;
+            break;
+        } else if /#.*/ {
+            yield comment;
+            await input;
+        } else if /"/ {
+            yaml_string_double();
+            if /\s*:\s*/ {
+                yield entity.name;
+                yaml_value();
+            }
+        } else if /'/ {
+            yaml_string_single();
+            if /\s*:\s*/ {
+                yield entity.name;
+                yaml_value();
+            }
+        } else if /\w+\s*:/ {
+            yield entity.name;
+            yaml_value();
+        } else if /,/ {
+            yield other;
+        } else if /./ {
+            yield other;
+        } else {
+            break;
+        }
+
+        if /\s+/ {
+            yield other;
+        }
+
+        if /,/ {
+            yield other;
+        }
+
+        if /\}/ {
+            yield other;
+            break;
+        }
+    }
+}

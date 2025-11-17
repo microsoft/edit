@@ -1,11 +1,11 @@
 pub fn git_commit_message() {
-    if /#/ {
+    if /#\s*/ {
         yield comment;
-        if /(?:\tmodified:|\trenamed:).*/ {
+        if /(?:modified:|renamed:).*/ {
             yield markup.changed;
-        } else if /\tdeleted:.*/ {
+        } else if /deleted:.*/ {
             yield markup.deleted;
-        } else if /\tnew file:.*/ {
+        } else if /new file:.*/ {
             yield markup.inserted;
         } else if /.*/ {
         }

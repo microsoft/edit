@@ -1,0 +1,38 @@
+pub fn json() {
+    until /$/ {
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                } else if /./ {
+                }
+            }
+        } else if /"/ {
+            until /$/ {
+                if /\\./ {
+                    // Escape sequences
+                } else if /"/ {
+                    yield string;
+                    break;
+                } else if /./ {
+                }
+            }
+        } else if /true|false|null/ {
+            if /\w+/ {
+                // Not a keyword after all.
+            } else {
+                yield keyword;
+            }
+        } else if /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/ {
+            yield number;
+        } else if /./ {
+        }
+
+        yield other;
+    }
+}

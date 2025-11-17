@@ -91,8 +91,8 @@ fn transform<'a>(
             }
             _ => panic!("Unsupported HIR: {hir:?}"),
         },
-        HirKind::Concat(hirs) if hirs.len() >= 2 => transform_concat(compiler, dst, hirs),
-        HirKind::Alternation(hirs) if hirs.len() >= 2 => transform_alt(compiler, dst, hirs),
+        HirKind::Concat(hirs) => transform_concat(compiler, dst, hirs),
+        HirKind::Alternation(hirs) => transform_alt(compiler, dst, hirs),
         _ => panic!("Unsupported HIR: {hir:?}"),
     }
 }

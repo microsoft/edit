@@ -9,7 +9,7 @@
             "program": "${workspaceFolder}/target/debug/lsh-gen",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/crates/lsh/definitions/markdown.lsh"
+                "${workspaceFolder}/crates/lsh/definitions"
             ],
         },
         {
