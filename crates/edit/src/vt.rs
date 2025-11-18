@@ -128,17 +128,13 @@ impl<'input> Stream<'_, 'input> {
         self.off
     }
 
-    /// Reads and consumes raw bytes from the input.
-    pub fn read(&mut self, dst: &mut [u8]) -> usize {
-        let bytes = self.input.as_bytes();
-        let off = self.off.min(bytes.len());
-        let len = dst.len().min(bytes.len() - off);
-        dst[..len].copy_from_slice(&bytes[off..off + len]);
-        self.off += len;
-        len
+    /// Returns `true` if the input has been fully parsed.
+    pub fn done(&self) -> bool {
+        self.off >= self.input.len()
     }
 
-    fn decode_next(&mut self) -> char {
+    /// Decodes and consumes the next UTF-8 character from the input.
+    pub fn next_char(&mut self) -> char {
         let mut iter = Utf8Chars::new(self.input.as_bytes(), self.off);
         let c = iter.next().unwrap_or('\0');
         self.off = iter.offset();
@@ -190,7 +186,7 @@ impl<'input> Stream<'_, 'input> {
                         return Some(Token::Text(&input[beg..self.off]));
                     }
                 },
-                State::Esc => match self.decode_next() {
+                State::Esc => match self.next_char() {
                     '[' => {
                         self.parser.state = State::Csi;
                         self.parser.csi.private_byte = '\0';
@@ -216,7 +212,7 @@ impl<'input> Stream<'_, 'input> {
                 },
                 State::Ss3 => {
                     self.parser.state = State::Ground;
-                    return Some(Token::SS3(self.decode_next()));
+                    return Some(Token::SS3(self.next_char()));
                 }
                 State::Csi => {
                     loop {
