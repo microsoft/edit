@@ -76,7 +76,7 @@ pub fn switch_modes() -> apperr::Result<()> {
 
         // Set STATE.inject_resize to true whenever we get a SIGWINCH.
         let mut sigwinch_action: libc::sigaction = mem::zeroed();
-        sigwinch_action.sa_sigaction = sigwinch_handler as libc::sighandler_t;
+        sigwinch_action.sa_sigaction = sigwinch_handler as *const () as libc::sighandler_t;
         check_int_return(libc::sigaction(libc::SIGWINCH, &sigwinch_action, null_mut()))?;
 
         // Get the original terminal modes so we can disable raw mode on exit.
