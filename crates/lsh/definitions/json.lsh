@@ -29,7 +29,12 @@ pub fn json() {
                 yield keyword;
             }
         } else if /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/ {
-            yield number;
+            if /\w+/ {
+                // Not a number after all.
+            } else {
+                yield number;
+            }
+        } else if /\S+/ {
         } else if /./ {
         }
 

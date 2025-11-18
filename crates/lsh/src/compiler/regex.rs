@@ -74,12 +74,13 @@ fn transform<'a>(
             }))
         }
         HirKind::Repetition(rep) => match (rep.min, rep.max, rep.greedy, rep.sub.kind()) {
-            (0, None, true, HirKind::Class(Class::Bytes(class))) if is_any_class(class) => {
-                transform_any_star(compiler, dst)
-            }
             (0, None, true, HirKind::Class(Class::Bytes(class))) => {
-                let src = transform_class_plus(compiler, dst, class)?;
-                transform_option(src, dst)
+                if is_any_class(class) {
+                    transform_any_star(compiler, dst)
+                } else {
+                    let src = transform_class_plus(compiler, dst, class)?;
+                    transform_option(src, dst)
+                }
             }
             (0, Some(1), true, _) => {
                 let src = transform(compiler, dst, &rep.sub)?;
@@ -184,7 +185,13 @@ fn transform_class<'a>(
 
 // .?
 fn transform_option<'a>(src: IRCell<'a>, dst: IRCell<'a>) -> Result<IRCell<'a>, String> {
-    src.borrow_mut().set_next(dst);
+    let mut n = src.borrow_mut();
+
+    while let Some(next) = n.next {
+        n = next.borrow_mut();
+    }
+
+    n.set_next(dst);
     Ok(src)
 }
 

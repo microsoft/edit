@@ -1,0 +1,39 @@
+pub fn yaml() {
+    if /\s+/ {
+        // Leading whitespace
+    }
+
+    if /-\s+/ {
+        // List item
+    }
+
+    if /\w+:\s+/ {
+        // Key: (Value follows)
+    }
+
+    yield other;
+
+    if /true|false|yes|no|null|~/ {
+        if /\s*\S+[^#]*/ {
+            yield string;
+        } else {
+            yield keyword;
+        }
+    } else if /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/ {
+        if /\s*\S+[^#]*/ {
+            yield string;
+        } else {
+            yield number;
+        }
+    } else if /\S+[^#]*/ {
+        yield string;
+    }
+
+    if /\s+/ {
+        yield other;
+    }
+
+    if /#.*/ {
+        yield comment;
+    }
+}

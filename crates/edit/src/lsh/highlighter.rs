@@ -35,9 +35,9 @@ pub const LANGUAGES: &[Language] = &[
     Language::new("Diff", &["*.diff", "*.patch"], ENTRYPOINT_DIFF),
     Language::new("Git Commit Message", &["COMMIT_EDITMSG", "MERGE_MSG"], ENTRYPOINT_GIT_COMMIT_MESSAGE),
     Language::new("Git Rebase Message", &["git-rebase-todo"], ENTRYPOINT_GIT_REBASE_TODO), // TODO: https://github.com/microsoft/vscode/issues/156954
-    Language::new("Markdown", &["*.md"], ENTRYPOINT_MARKDOWN),
     Language::new("JSON", &["*.json", "*.jsonc"], ENTRYPOINT_JSON),
-    //Language::new("YAML", &["*.yaml", "*.yml"], ENTRYPOINT_YAML),
+    Language::new("Markdown", &["*.md"], ENTRYPOINT_MARKDOWN),
+    Language::new("YAML", &["*.yaml", "*.yml"], ENTRYPOINT_YAML),
 ];
 
 pub fn language_from_path(path: &Path) -> Option<&'static Language> {

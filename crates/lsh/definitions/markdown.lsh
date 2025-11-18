@@ -9,6 +9,7 @@ pub fn markdown() {
     } else if />.*/ {
         yield comment;
     } else if /```/ {
+        // NOTE: These checks are sorted alphabetically.
         if /diff/ {
             loop {
                 await input;
@@ -18,6 +19,26 @@ pub fn markdown() {
                     diff();
                     // diff() may not have eaten that line.
                     // It doesn't have to. That's our responsibility.
+                    if /.*/ {}
+                }
+            }
+        } else if /json/ {
+            loop {
+                await input;
+                if /\s*```json/ {
+                    return;
+                } else {
+                    json();
+                    if /.*/ {}
+                }
+            }
+        } else if /yaml/ {
+            loop {
+                await input;
+                if /\s*```yaml/ {
+                    return;
+                } else {
+                    yaml();
                     if /.*/ {}
                 }
             }
