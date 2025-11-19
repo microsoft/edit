@@ -7,7 +7,7 @@ pub fn yaml() {
         // List item
     }
 
-    if /\w+:\s+/ {
+    if /\w+:(?:\s+|$)/ {
         // Key: (Value follows)
     }
 
@@ -19,7 +19,7 @@ pub fn yaml() {
         } else {
             yield keyword;
         }
-    } else if /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/ {
+    } else if /-?\d*\.?\d*(?:[eE][+-]?\d+)?/ {
         if /\s*\S+[^#]*/ {
             yield string;
         } else {

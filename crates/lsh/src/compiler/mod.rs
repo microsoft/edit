@@ -463,7 +463,9 @@ impl fmt::Debug for Charset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let show_char = |f: &mut fmt::Formatter<'_>, b: usize| {
             let b = b as u8;
-            if b.is_ascii_graphic() {
+            if b == b'"' {
+                write!(f, "&quot;")
+            } else if b.is_ascii_graphic() {
                 let b = b as char;
                 write!(f, "{b}")
             } else {

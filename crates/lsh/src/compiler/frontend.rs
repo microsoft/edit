@@ -262,29 +262,19 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         // Allocate a register to save the position for backtracking across if/else branches
         let save_reg = self.alloc_register();
 
-        let mut first: Option<IRCell<'a>> = None;
-        let mut else_branch: Option<IRCell<'a>> = None;
+        let mut prev: Option<IRCell<'a>> = None;
+        let first = self.compiler.save_position(save_reg);
         let last = self.compiler.alloc_noop();
-
-        // Save the current position before trying the first if condition
-        let save_pos = self.compiler.save_position(save_reg);
-        first = Some(save_pos);
 
         loop {
             self.expect_token(Token::If)?;
             let re = self.parse_if_regex()?;
             let bl = self.parse_block()?;
 
-            // Connect the last else branch (or the initial save) to form an "else if".
-            if let Some(n) = else_branch {
-                // Restore position before trying the next regex
-                let restore_pos = self.compiler.restore_position(save_reg);
-                n.borrow_mut().set_next(restore_pos);
-                restore_pos.borrow_mut().set_next(re.src);
-            } else {
-                // First if: connect save_pos to regex
-                save_pos.borrow_mut().set_next(re.src);
-            }
+            // Connect the previous else branch to form an "else if".
+            // If there's no previous one, we're in the first iteration,
+            // and so we connect it to the instruction that saves the position.
+            prev.unwrap_or(first).borrow_mut().set_next(re.src);
 
             // Connect the if to the {}.
             re.dst_good.borrow_mut().set_next(bl.first);
@@ -295,34 +285,36 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 block_last.set_next(last);
             }
 
-            // No else branch? Create a hidden connection to the end.
+            // The "else" branch of the if needs to restore the position.
+            let dst_bad = self.compiler.restore_position(save_reg);
+            re.dst_bad.borrow_mut().set_next(dst_bad);
+
+            // No else branch? dst_bad (= no hit) means we're done, so make that connection.
             if !matches!(self.current_token, Token::Else) {
-                re.dst_bad.borrow_mut().set_next(last);
+                dst_bad.borrow_mut().set_next(last);
                 break;
             }
 
             // Gobble the "else" token.
             self.advance();
 
-            // The else branch has a block? Connect it with the if.
+            // The else branch has a block? That's our dst_bad.
             if !matches!(self.current_token, Token::If) {
                 let bl = self.parse_block()?;
-                re.dst_bad.borrow_mut().set_next(bl.first);
+                dst_bad.borrow_mut().set_next(bl.first);
                 // Connect the end of the {} to the end of the if/else chain.
-                if bl.last.borrow().wants_next() {
-                    bl.last.borrow_mut().set_next(last);
-                }
+                bl.last.borrow_mut().set_next(last);
                 break;
             }
 
             // Otherwise, we expect an "if" in the next iteration to form an "else if".
-            else_branch = Some(re.dst_bad);
+            prev = Some(dst_bad);
         }
 
         // Free the register after the if/else chain is complete
         self.free_register(save_reg);
 
-        Ok(IRSpan { first: first.unwrap(), last })
+        Ok(IRSpan { first, last })
     }
 
     fn parse_if_regex(&mut self) -> CompileResult<RegexSpan<'a>> {
