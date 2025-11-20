@@ -80,7 +80,7 @@ pub struct Highlighter<'a> {
     language: &'static Language,
     offset: usize,
     logical_pos_y: CoordType,
-    stack: Vec<Registers>,
+    stack: Vec<u32>,
     registers: Registers,
 }
 
@@ -88,7 +88,7 @@ pub struct Highlighter<'a> {
 pub struct HighlighterState {
     offset: usize,
     logical_pos_y: CoordType,
-    stack: Vec<Registers>,
+    stack: Vec<u32>,
     registers: Registers,
 }
 
@@ -208,8 +208,13 @@ impl<'doc> Highlighter<'doc> {
             return res;
         }
 
-        self.registers.off = 0;
-        self.registers.hs = 0;
+        if self.stack.is_empty() {
+            self.registers = unsafe { mem::zeroed() };
+            self.registers.pc = self.language.entrypoint;
+        } else {
+            self.registers.off = 0;
+            self.registers.hs = 0;
+        }
 
         let line = unicode::strip_newline(line);
 
@@ -229,26 +234,39 @@ impl<'doc> Highlighter<'doc> {
                         self.registers.set(dst, self.registers.get(src) + imm);
                     }
                     1 => {
-                        // Call
-                        let dst = op >> 12;
-                        self.stack.push(self.registers);
-                        self.registers.pc = dst;
+                        // Push
+                        let mut regs = op >> 16;
+                        while regs != 0 {
+                            let idx = regs.trailing_zeros() as usize;
+                            self.stack.push(self.registers.get(idx));
+                            regs &= !(1 << idx);
+                        }
                     }
                     2 => {
-                        // Return
-                        if let Some(last) = self.stack.last() {
-                            self.registers = *last;
-                            self.stack.pop();
-                        } else {
-                            const _: () = assert!(HighlightKind::Other as u32 == 0);
-                            let off = self.registers.off;
-                            self.registers = mem::zeroed();
-                            self.registers.pc = self.language.entrypoint;
-                            self.registers.off = off;
-                            break;
+                        // Pop
+                        let mut regs = op >> 16;
+                        while regs != 0 {
+                            debug_assert!(!self.stack.is_empty());
+                            let idx = regs.trailing_zeros() as usize;
+                            self.registers.set(idx, self.stack.pop().unwrap_or_default());
+                            regs &= !(1 << idx);
                         }
                     }
                     3 => {
+                        // Call
+                        let dst = op >> 12;
+                        self.stack.push(self.registers.pc);
+                        self.registers.pc = dst;
+                    }
+                    4 => {
+                        // Return
+                        if let Some(pc) = self.stack.pop() {
+                            self.registers.pc = pc;
+                        } else {
+                            break;
+                        }
+                    }
+                    5 => {
                         // JumpIfEndOfLine
                         let dst = op >> 12;
                         let off = self.registers.off as usize;
@@ -257,7 +275,7 @@ impl<'doc> Highlighter<'doc> {
                             self.registers.pc = dst;
                         }
                     }
-                    4 => {
+                    6 => {
                         // JumpIfMatchCharset
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
@@ -269,7 +287,7 @@ impl<'doc> Highlighter<'doc> {
                             self.registers.pc = dst;
                         }
                     }
-                    5 => {
+                    7 => {
                         // JumpIfMatchPrefix
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
@@ -281,7 +299,7 @@ impl<'doc> Highlighter<'doc> {
                             self.registers.pc = dst;
                         }
                     }
-                    6 => {
+                    8 => {
                         // JumpIfMatchPrefixInsensitive
                         let idx = ((op >> 4) & 0xff) as usize;
                         let dst = op >> 12;
@@ -293,7 +311,7 @@ impl<'doc> Highlighter<'doc> {
                             self.registers.pc = dst;
                         }
                     }
-                    7 => {
+                    9 => {
                         // FlushHighlight
                         let start = self.registers.hs as usize;
                         let kind = self.registers.hk as usize;
@@ -308,26 +326,6 @@ impl<'doc> Highlighter<'doc> {
                         }
 
                         self.registers.hs = self.registers.off;
-                    }
-                    8 => {
-                        // Loop
-                        let dst = op >> 12;
-                        let off = self.registers.off as usize;
-
-                        if off < line.len() {
-                            self.registers.pc = dst;
-                        }
-                    }
-                    9 => {
-                        // LoopMultiline
-                        let dst = op >> 12;
-                        let off = self.registers.off as usize;
-
-                        self.registers.pc = dst;
-
-                        if off >= line.len() {
-                            break;
-                        }
                     }
                     10 => {
                         // AwaitInput

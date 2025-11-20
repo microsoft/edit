@@ -8,11 +8,13 @@ use std::str::Chars;
 pub enum Token<'a> {
     // Literals
     Identifier(&'a str),
+    Integer(i64),
     Regex(&'a str),
 
     // Keywords
     Pub,
     Fn,
+    Var,
     If,
     Else,
     Loop,
@@ -22,6 +24,11 @@ pub enum Token<'a> {
     Return,
     Await,
     Yield,
+
+    // Operators
+    Equals,
+    PlusEquals,
+    Plus,
 
     // Punctuation
     LeftBrace,
@@ -78,6 +85,16 @@ impl<'a> Tokenizer<'a> {
                 ')' => Token::RightParen,
                 ';' => Token::Semicolon,
                 '/' => self.read_regex(),
+                '=' => Token::Equals,
+                '+' => {
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        Token::PlusEquals
+                    } else {
+                        Token::Plus
+                    }
+                }
+                '0'..='9' => self.read_integer(ch),
                 c => self.read_identifier_or_keyword(c),
             },
         }
@@ -133,6 +150,20 @@ impl<'a> Tokenizer<'a> {
         Token::Regex(&self.input[beg..end])
     }
 
+    fn read_integer(&mut self, first: char) -> Token<'a> {
+        while let Some(ch) = self.peek()
+            && ch.is_ascii_digit()
+        {
+            self.advance();
+        }
+
+        let s = &self.input[self.start_pos..self.current_pos];
+        match s.parse::<i64>() {
+            Ok(val) => Token::Integer(val),
+            Err(_) => Token::Error(format!("Invalid integer: {s}")),
+        }
+    }
+
     fn read_identifier_or_keyword(&mut self, ch: char) -> Token<'a> {
         fn is_ident_start(ch: char) -> bool {
             ch.is_ascii_alphabetic() || ch == '_'
@@ -154,6 +185,7 @@ impl<'a> Tokenizer<'a> {
         match self.input.get(self.start_pos..self.current_pos).unwrap_or("") {
             "pub" => Token::Pub,
             "fn" => Token::Fn,
+            "var" => Token::Var,
             "if" => Token::If,
             "else" => Token::Else,
             "loop" => Token::Loop,

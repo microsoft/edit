@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::collections::HashMap;
+
 use super::tokenizer::*;
 use super::*;
 
@@ -73,9 +75,7 @@ pub struct Parser<'a, 'c, 'src> {
     tokenizer: Tokenizer<'src>,
     current_token: Token<'src>,
     context: Vec<Context<'a>, &'a Arena>,
-    /// Bitfield tracking allocated registers. Bit 5-15 correspond to x5-x15.
-    /// A set bit means the register is in use.
-    allocated_registers: u16,
+    variables: HashMap<&'src str, VRegId>,
 }
 
 impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
@@ -87,36 +87,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             tokenizer: Tokenizer::new(src),
             current_token: Token::Eof,
             context,
-            allocated_registers: 0, // No registers allocated initially
+            variables: Default::default(),
         }
-    }
-
-    /// Allocate a temporary register from the pool (x5-x15).
-    /// Returns the lowest available register number.
-    fn alloc_register(&mut self) -> Register {
-        let available = !self.allocated_registers & 0xFFE0; // 0xFFE0 = bits 5-15
-        if available == 0 {
-            panic!("Register allocation failed: all 11 registers (x5-x15) are in use");
-        }
-        let bit = available.trailing_zeros();
-        self.allocated_registers |= 1u16 << bit;
-        unsafe { std::mem::transmute(bit as u8) }
-    }
-
-    /// Free a previously allocated register.
-    fn free_register(&mut self, reg: Register) {
-        let bit = reg as u8;
-        debug_assert!(
-            reg >= Register::X5 && reg <= Register::X15,
-            "Attempted to free non-allocatable register: {:?}",
-            reg
-        );
-        debug_assert!(
-            (self.allocated_registers & (1u16 << bit)) != 0,
-            "Double-free of register: {:?}",
-            reg
-        );
-        self.allocated_registers &= !(1u16 << bit);
     }
 
     pub fn run(&mut self) -> CompileResult<()> {
@@ -129,6 +101,9 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_function(&mut self) -> CompileResult<Function<'a>> {
+        // Reset symbol table for new function
+        self.variables.clear();
+
         let public = if matches!(self.current_token, Token::Pub) {
             self.advance();
             true
@@ -155,7 +130,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             last.set_next(self.compiler.alloc_iri(IRI::Return));
         }
 
-        Ok(Function { name, body: span.first, public })
+        Ok(Function { name, body: span.first, public, used_registers: 0 })
     }
 
     fn parse_block(&mut self) -> CompileResult<IRSpan<'a>> {
@@ -183,15 +158,16 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
     fn parse_statement(&mut self) -> CompileResult<IRSpan<'a>> {
         match self.current_token {
+            Token::Var => self.parse_var_declaration(),
             Token::Loop => self.parse_loop(),
             Token::Until => self.parse_until(),
             Token::Break => self.parse_break(),
             Token::Continue => self.parse_continue(),
             Token::Return => self.parse_return(),
-            Token::If => self.parse_if_statement(),
+            Token::If => self.parse_if(),
             Token::Await => self.parse_await(),
             Token::Yield => self.parse_yield(),
-            Token::Identifier(_) => self.parse_call(),
+            Token::Identifier(_) => self.parse_identifier(),
             _ => raise!(self, "unexpected token: {:?}", self.current_token),
         }
     }
@@ -258,9 +234,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Return)))
     }
 
-    fn parse_if_statement(&mut self) -> CompileResult<IRSpan<'a>> {
-        // Allocate a register to save the position for backtracking across if/else branches
-        let save_reg = self.alloc_register();
+    fn parse_if(&mut self) -> CompileResult<IRSpan<'a>> {
+        let save_reg = self.compiler.alloc_vreg();
 
         let mut prev: Option<IRCell<'a>> = None;
         let first = self.compiler.save_position(save_reg);
@@ -311,9 +286,6 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             prev = Some(dst_bad);
         }
 
-        // Free the register after the if/else chain is complete
-        self.free_register(save_reg);
-
         Ok(IRSpan { first, last })
     }
 
@@ -355,32 +327,166 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             Token::Identifier(c) => c,
             _ => raise!(self, "expected color name after yield"),
         };
-        let imm = self.compiler.intern_highlight_kind(color).value;
+        let kind = self.compiler.intern_highlight_kind(color).value;
 
         self.advance();
         self.expect_token(Token::Semicolon)?;
 
-        let set = self.compiler.alloc_iri(IRI::Add {
-            dst: Register::HighlightKind,
-            src: Register::Zero,
-            imm,
-        });
+        let set = self.compiler.alloc_iri(IRI::SetHighlightKind { kind });
         let flush = self.compiler.chain_iri(set, IRI::Flush);
         Ok(IRSpan { first: set, last: flush })
     }
 
-    fn parse_call(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_identifier(&mut self) -> CompileResult<IRSpan<'a>> {
         let name = match self.current_token {
-            Token::Identifier(n) => self.compiler.strings.intern(self.compiler.arena, n),
-            _ => raise!(self, "expected function name"),
+            Token::Identifier(n) => n,
+            _ => raise!(self, "expected identifier"),
         };
         self.advance();
 
-        self.expect_token(Token::LeftParen)?;
-        self.expect_token(Token::RightParen)?;
+        match self.current_token {
+            Token::Equals => {
+                // Assignment: foo = expr;
+                self.advance();
+                let (value_vreg, expr_span) = self.parse_expression()?;
+                self.expect_token(Token::Semicolon)?;
+
+                // Update variable binding
+                self.variables.insert(name, value_vreg);
+
+                // Return the expression's IR span (LoadImm, AddImm, etc.)
+                Ok(expr_span)
+            }
+            Token::PlusEquals => {
+                // Compound assignment: foo += expr;
+                // Since we only support variable + literal, parse_expression will return
+                // a vreg containing the result of (foo + literal)
+                self.advance();
+
+                // Look up existing variable
+                let lhs_vreg = *self.variables.get(name).ok_or_else(|| CompileError {
+                    path: self.path.to_string(),
+                    line: self.tokenizer.position().0,
+                    column: self.tokenizer.position().1,
+                    message: format!("undefined variable: {name}"),
+                })?;
+
+                // Parse RHS - must be an integer literal (enforced in parse_expression)
+                match self.current_token {
+                    Token::Integer(val) => {
+                        self.advance();
+                        self.expect_token(Token::Semicolon)?;
+
+                        // Create new vreg and emit: result = lhs + val
+                        let result_vreg = self.compiler.alloc_vreg();
+                        let ir = self.compiler.alloc_iri(IRI::AddImm {
+                            dst: result_vreg,
+                            src: lhs_vreg,
+                            imm: val,
+                        });
+
+                        // Update variable to point to new vreg
+                        self.variables.insert(name, result_vreg);
+
+                        Ok(IRSpan::single(ir))
+                    }
+                    Token::Identifier(rhs_name) => {
+                        raise!(
+                            self,
+                            "variable += variable not supported, use variable += integer literal (found: '{}')",
+                            rhs_name
+                        )
+                    }
+                    _ => raise!(self, "expected integer literal after '+='"),
+                }
+            }
+            Token::LeftParen => {
+                // Function call: foo();
+                self.advance(); // Consume the '('
+                let func_name = self.compiler.strings.intern(self.compiler.arena, name);
+                self.expect_token(Token::RightParen)?;
+                self.expect_token(Token::Semicolon)?;
+                Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Call { name: func_name })))
+            }
+            _ => raise!(self, "expected '=', '+=', or '(' after identifier"),
+        }
+    }
+
+    fn parse_var_declaration(&mut self) -> CompileResult<IRSpan<'a>> {
+        self.expect_token(Token::Var)?;
+
+        let name = match self.current_token {
+            Token::Identifier(n) => n,
+            _ => raise!(self, "expected variable name"),
+        };
+        self.advance();
+
+        self.expect_token(Token::Equals)?;
+
+        let (value_vreg, expr_span) = self.parse_expression()?;
+
         self.expect_token(Token::Semicolon)?;
 
-        Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Call { name })))
+        // Register variable in symbol table
+        self.variables.insert(name, value_vreg);
+
+        // Return the expression's IR span (LoadImm, AddImm, etc.)
+        Ok(expr_span)
+    }
+
+    fn parse_expression(&mut self) -> CompileResult<(VRegId, IRSpan<'a>)> {
+        // Parse primary (integer literal or identifier)
+        let (lhs_vreg, lhs_span) = match self.current_token {
+            Token::Integer(val) => {
+                let vreg = self.compiler.alloc_vreg();
+                let ir = self.compiler.alloc_iri(IRI::LoadImm { dst: vreg, value: val });
+                self.advance();
+                (vreg, IRSpan::single(ir))
+            }
+            Token::Identifier(name) => {
+                let vreg = *self.variables.get(name).ok_or_else(|| CompileError {
+                    path: self.path.to_string(),
+                    line: self.tokenizer.position().0,
+                    column: self.tokenizer.position().1,
+                    message: format!("undefined variable: {name}"),
+                })?;
+                self.advance();
+                // Variable reference - no IR needed, just return a noop
+                (vreg, IRSpan::single(self.compiler.alloc_noop()))
+            }
+            _ => raise!(self, "expected integer or identifier in expression"),
+        };
+
+        // Check for binary operator
+        if matches!(self.current_token, Token::Plus) {
+            self.advance();
+
+            // Parse right-hand side - only integer literals supported
+            match self.current_token {
+                Token::Integer(val) => {
+                    self.advance();
+                    let result_vreg = self.compiler.alloc_vreg();
+                    let add_ir = self.compiler.alloc_iri(IRI::AddImm {
+                        dst: result_vreg,
+                        src: lhs_vreg,
+                        imm: val,
+                    });
+                    // Chain: lhs_span -> add_ir
+                    lhs_span.last.borrow_mut().set_next(add_ir);
+                    Ok((result_vreg, IRSpan { first: lhs_span.first, last: add_ir }))
+                }
+                Token::Identifier(name) => {
+                    raise!(
+                        self,
+                        "variable + variable not supported, use variable + integer literal (found: '{}')",
+                        name
+                    )
+                }
+                _ => raise!(self, "expected integer literal after '+'"),
+            }
+        } else {
+            Ok((lhs_vreg, lhs_span))
+        }
     }
 
     fn expect_token(&mut self, expected: Token) -> CompileResult<()> {

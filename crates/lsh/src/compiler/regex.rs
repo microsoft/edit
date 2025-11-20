@@ -202,7 +202,7 @@ fn transform_any_star<'a>(
 ) -> Result<IRCell<'a>, String> {
     Ok(compiler.alloc_ir(IR {
         next: Some(dst),
-        instr: IRI::Add { dst: Register::InputOffset, src: Register::Zero, imm: usize::MAX },
+        instr: IRI::IncOffset { amount: usize::MAX },
         offset: usize::MAX,
     }))
 }
@@ -211,7 +211,7 @@ fn transform_any_star<'a>(
 fn transform_any<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>) -> Result<IRCell<'a>, String> {
     Ok(compiler.alloc_ir(IR {
         next: Some(dst),
-        instr: IRI::Add { dst: Register::InputOffset, src: Register::InputOffset, imm: 1 },
+        instr: IRI::IncOffset { amount: 1 },
         offset: usize::MAX,
     }))
 }

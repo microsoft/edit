@@ -20,7 +20,7 @@ fn optimize_noop<'a>(compiler: &mut Compiler<'a>) {
     for function in &mut compiler.functions {
         while let body = function.body.borrow()
             && let Some(next) = body.next
-            && matches!(body.instr, IRI::Add { dst: Register::Zero, .. })
+            && matches!(body.instr, IRI::Noop)
         {
             function.body = next;
         }
@@ -31,7 +31,7 @@ fn optimize_noop<'a>(compiler: &mut Compiler<'a>) {
         for current_cell in compiler.visit_nodes_from(function.body) {
             // First, filter down to nodes that are not no-ops.
             if let mut current = current_cell.borrow_mut()
-                && !matches!(current.instr, IRI::Add { dst: Register::Zero, .. })
+                && !matches!(current.instr, IRI::Noop)
             {
                 // `IRI::If` nodes have an additional "next" pointer.
                 let current = &mut *current;
@@ -48,7 +48,7 @@ fn optimize_noop<'a>(compiler: &mut Compiler<'a>) {
                 for next_ref in nexts.into_iter().flatten() {
                     while !ptr::eq(*next_ref, current_cell)
                         && let next = next_ref.borrow()
-                        && matches!(next.instr, IRI::Add { dst: Register::Zero, .. })
+                        && matches!(next.instr, IRI::Noop)
                         && let Some(skip_next) = next.next
                     {
                         *next_ref = skip_next;
@@ -101,14 +101,8 @@ fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
     for function in &compiler.functions {
         for current in compiler.visit_nodes_from(function.body) {
             let mut current = current.borrow_mut();
-            match &mut current.instr {
-                IRI::Add { dst: Register::HighlightKind, src: Register::Zero, imm } => {
-                    *imm = mapping[*imm];
-                }
-                IRI::Add { dst: Register::HighlightKind, .. } => {
-                    panic!("Unexpected non-immediate highlight kind assignment");
-                }
-                _ => {}
+            if let IRI::SetHighlightKind { kind } = &mut current.instr {
+                *kind = mapping[*kind];
             }
         }
     }

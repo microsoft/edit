@@ -157,6 +157,8 @@ pub fn markdown() {
             } else if /`/ {
                 until /`/ { if /./ {} }
                 yield string;
+            } else if /\\./ {
+                yield other;
             } else if /./ {
                 // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
                 yield other;

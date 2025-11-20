@@ -40,6 +40,7 @@ pub struct Compiler<'a> {
     charsets: Vec<&'a Charset>,
     strings: Vec<&'a str>,
     highlight_kinds: Vec<HighlightKind<'a>>,
+    next_vreg_id: std::cell::Cell<u32>,
 }
 
 impl<'a> Compiler<'a> {
@@ -50,6 +51,7 @@ impl<'a> Compiler<'a> {
             charsets: Default::default(),
             strings: Default::default(),
             highlight_kinds: vec![HighlightKind { identifier: "other", value: 0 }],
+            next_vreg_id: std::cell::Cell::new(0),
         }
     }
 
@@ -76,7 +78,7 @@ impl<'a> Compiler<'a> {
     }
 
     fn alloc_noop(&self) -> IRCell<'a> {
-        self.alloc_iri(IRI::Add { dst: Register::Zero, src: Register::Zero, imm: 0 })
+        self.alloc_iri(IRI::Noop)
     }
 
     fn chain_iri(&self, prev: IRCell<'a>, instr: IRI<'a>) -> IRCell<'a> {
@@ -110,14 +112,21 @@ impl<'a> Compiler<'a> {
         &self.highlight_kinds[idx]
     }
 
-    /// Create IR to save InputOffset to a register (for backtracking).
-    fn save_position(&self, dst: Register) -> IRCell<'a> {
-        self.alloc_iri(IRI::Add { dst, src: Register::InputOffset, imm: 0 })
+    /// Allocate a new virtual register
+    pub fn alloc_vreg(&self) -> VRegId {
+        let id = self.next_vreg_id.get();
+        self.next_vreg_id.set(id + 1);
+        VRegId::new(id)
     }
 
-    /// Create IR to restore InputOffset from a register (for backtracking).
-    fn restore_position(&self, src: Register) -> IRCell<'a> {
-        self.alloc_iri(IRI::Add { dst: Register::InputOffset, src, imm: 0 })
+    /// Create IR to save InputOffset to a virtual register (for backtracking).
+    fn save_position(&self, dst: VRegId) -> IRCell<'a> {
+        self.alloc_iri(IRI::CopyFromPhys { dst, src: Register::InputOffset })
+    }
+
+    /// Create IR to restore InputOffset from a virtual register (for backtracking).
+    fn restore_position(&self, src: VRegId) -> IRCell<'a> {
+        self.alloc_iri(IRI::CopyToPhys { dst: Register::InputOffset, src })
     }
 
     fn visit_nodes_from(&self, root: IRCell<'a>) -> TreeVisitor<'a> {
@@ -160,40 +169,26 @@ impl<'a> Compiler<'a> {
                 _ = write!(output, "    {}", node);
 
                 match node.instr {
-                    IRI::Add { dst: Register::Zero, src: Register::Zero, imm: 0 } => {
+                    IRI::Noop => {
                         _ = write!(output, "[{offset}: noop]");
                     }
-                    IRI::Add { dst: Register::HighlightKind, src: Register::Zero, imm } => {
-                        if let Some(hk) = self.highlight_kinds.iter().find(|hk| hk.value == imm) {
+                    IRI::SetHighlightKind { kind } => {
+                        if let Some(hk) = self.highlight_kinds.iter().find(|hk| hk.value == kind) {
                             _ = write!(
                                 output,
                                 "[\"{offset}: hk = {} ({})\"]",
                                 hk.value, hk.identifier
                             );
                         } else {
-                            _ = write!(output, "[\"{offset}: hk = {imm}\"]");
+                            _ = write!(output, "[\"{offset}: hk = {kind}\"]");
                         }
                     }
-                    IRI::Add { dst, src, imm } => {
-                        _ = write!(output, "[\"{offset}: {} = ", dst.mnemonic());
-                        match (src, imm) {
-                            (Register::Zero, 0) => {
-                                _ = write!(output, "0");
-                            }
-                            (Register::Zero, usize::MAX) => {
-                                _ = write!(output, "max");
-                            }
-                            (Register::Zero, _) => {
-                                _ = write!(output, "{imm}");
-                            }
-                            (_, 0) => {
-                                _ = write!(output, "{}", src.mnemonic());
-                            }
-                            _ => {
-                                _ = write!(output, "{} + {}", src.mnemonic(), imm);
-                            }
+                    IRI::IncOffset { amount } => {
+                        if amount == usize::MAX {
+                            _ = write!(output, "[\"{offset}: off = max\"]");
+                        } else {
+                            _ = write!(output, "[\"{offset}: off += {amount}\"]");
                         }
-                        output.push_str("\"]");
                     }
                     IRI::If { condition, then } => {
                         _ = write!(output, "{{\"{offset}: ");
@@ -216,14 +211,26 @@ impl<'a> Compiler<'a> {
                     IRI::Flush => {
                         _ = write!(output, "[{offset}: flush]");
                     }
-                    IRI::Loop { dst } => {
-                        _ = write!(output, "[{offset}: loop] --> {}", dst.borrow());
-                    }
-                    IRI::LoopMultiline { dst } => {
-                        _ = write!(output, "[{offset}: loop multiline] --> {}", dst.borrow());
-                    }
                     IRI::AwaitInput => {
                         _ = write!(output, "[{offset}: await input]");
+                    }
+                    IRI::LoadImm { dst, value } => {
+                        _ = write!(output, "[\"{offset}: {dst} = {value}\"]");
+                    }
+                    IRI::AddImm { dst, src, imm } => {
+                        _ = write!(output, "[\"{{offset}}: {{dst}} = {{src}} + {{imm}}\"]");
+                    }
+                    IRI::CopyFromPhys { dst, src } => {
+                        _ = write!(output, "[\"{offset}: {dst} = {}\"]", src.mnemonic());
+                    }
+                    IRI::CopyToPhys { dst, src } => {
+                        _ = write!(output, "[\"{offset}: {} = {src}\"]", dst.mnemonic());
+                    }
+                    IRI::Push { mask } => {
+                        _ = write!(output, "[\"{offset}: push {mask:#06x}\"]");
+                    }
+                    IRI::Pop { mask } => {
+                        _ = write!(output, "[\"{offset}: pop {mask:#06x}\"]");
                     }
                 }
 
@@ -325,6 +332,7 @@ struct Function<'a> {
     name: &'a str,
     body: IRCell<'a>,
     public: bool,
+    used_registers: u16,
 }
 
 // To be honest, I don't think this qualifies as an "intermediate representation",
@@ -347,14 +355,59 @@ type IRCell<'a> = &'a RefCell<IR<'a>>;
 // IRI = Immediate Representation Instruction
 #[derive(Debug, Clone, Copy)]
 enum IRI<'a> {
-    Add { dst: Register, src: Register, imm: usize },
+    Noop,
+    SetHighlightKind { kind: usize },
+    IncOffset { amount: usize },
+    LoadImm { dst: VRegId, value: i64 },
+    AddImm { dst: VRegId, src: VRegId, imm: i64 },
+    CopyFromPhys { dst: VRegId, src: Register },
+    CopyToPhys { dst: Register, src: VRegId },
     If { condition: Condition<'a>, then: IRCell<'a> },
+    Push { mask: u16 },
+    Pop { mask: u16 },
     Call { name: &'a str },
     Return,
     Flush,
-    Loop { dst: IRCell<'a> },
-    LoopMultiline { dst: IRCell<'a> },
     AwaitInput,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VRegId(u32);
+
+impl VRegId {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
+impl fmt::Display for VRegId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "v{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Operand {
+    Physical(Register),
+    Virtual(VRegId),
+    Immediate(i64),
+}
+
+impl Operand {
+    pub fn is_virtual(&self) -> bool {
+        matches!(self, Operand::Virtual(_))
+    }
+
+    pub fn as_virtual(&self) -> Option<VRegId> {
+        match self {
+            Operand::Virtual(v) => Some(*v),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -367,7 +420,7 @@ enum Condition<'a> {
 
 impl<'a> IR<'a> {
     fn wants_next(&self) -> bool {
-        self.next.is_none() && !matches!(self.instr, IRI::Return | IRI::LoopMultiline { .. })
+        self.next.is_none() && !matches!(self.instr, IRI::Return)
     }
 
     fn set_next(&mut self, n: IRCell<'a>) {
@@ -643,55 +696,55 @@ pub enum Instruction {
     Add { dst: Register, src: Register, imm: usize },
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 0001
+    //   mask[31:16] |                     | 0001
+    //
+    // Push registers specified by bitmask to call stack.
+    // Bit N set means save register N.
+    Push { mask: u16 },
+
+    // Encoding:
+    //   mask[31:16] |                     | 0010
+    //
+    // Pop registers specified by bitmask from call stack.
+    // Bit N set means restore register N.
+    Pop { mask: u16 },
+
+    // Encoding:
+    //   dst[31:12] |      idx[11:4]       | 0011
     //
     // NOTE: The VM takes care of saving the return address.
     Call { dst: usize },
 
     // Encoding:
-    //                                       0010
+    //                                       0100
     Return,
 
     // Encoding:
-    //   dst[31:12] |                      | 0011
+    //   dst[31:12] |                      | 0101
     //
     // Jumps to `dst` if we're at the end of the line.
     JumpIfEndOfLine { dst: usize },
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 0100
+    //   dst[31:12] |      idx[11:4]       | 0110
     //
     // Jumps to `dst` if the test succeeds.
     // `idx` specifies the charset/string to use.
     JumpIfMatchCharset { idx: usize, dst: usize },
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 0101
+    //   dst[31:12] |      idx[11:4]       | 0111
     JumpIfMatchPrefix { idx: usize, dst: usize },
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 0110
+    //   dst[31:12] |      idx[11:4]       | 1000
     JumpIfMatchPrefixInsensitive { idx: usize, dst: usize },
 
     // Encoding:
-    //                                       0111
+    //                                       1001
     //
     // Flushes the current HighlightKind to the output.
     FlushHighlight,
-
-    // Encoding:
-    //   dst[31:12] |                      | 1000
-    //
-    // Checks if we're at the end and exit if so.
-    // Otherwise, jumps to `dst`.
-    Loop { dst: usize },
-
-    // Encoding:
-    //   dst[31:12] |                      | 1001
-    //
-    // Checks if we're at the end and exit if so.
-    // Otherwise, jumps to `dst`.
-    LoopMultiline { dst: usize },
 
     // Encoding:
     //                                       1010
@@ -711,21 +764,21 @@ impl Instruction {
                     | Self::cast_bits(dst as usize, 4, 4)
                     | 0b0000
             }
-            Instruction::Call { dst } => Self::cast_imm(dst) | 0b0001,
-            Instruction::Return => 0b0010,
-            Instruction::JumpIfEndOfLine { dst } => Self::cast_imm(dst) | 0b0011,
+            Instruction::Push { mask } => ((mask as u32) << 16) | 0b0001,
+            Instruction::Pop { mask } => ((mask as u32) << 16) | 0b0010,
+            Instruction::Call { dst } => Self::cast_imm(dst) | 0b0011,
+            Instruction::Return => 0b0100,
+            Instruction::JumpIfEndOfLine { dst } => Self::cast_imm(dst) | 0b0101,
             Instruction::JumpIfMatchCharset { idx, dst } => {
-                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0100
-            }
-            Instruction::JumpIfMatchPrefix { idx, dst } => {
-                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0101
-            }
-            Instruction::JumpIfMatchPrefixInsensitive { idx, dst } => {
                 Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0110
             }
-            Instruction::FlushHighlight => 0b0111,
-            Instruction::Loop { dst } => Self::cast_imm(dst) | 0b1000,
-            Instruction::LoopMultiline { dst } => Self::cast_imm(dst) | 0b1001,
+            Instruction::JumpIfMatchPrefix { idx, dst } => {
+                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0111
+            }
+            Instruction::JumpIfMatchPrefixInsensitive { idx, dst } => {
+                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b1000
+            }
+            Instruction::FlushHighlight => 0b1001,
             Instruction::AwaitInput => 0b1010,
         }
     }
@@ -742,6 +795,8 @@ impl Instruction {
                 }
                 str
             }
+            Instruction::Push { mask } => format!("push  {mask:#06x}"),
+            Instruction::Pop { mask } => format!("pop   {mask:#06x}"),
             Instruction::Call { dst } => format!("call  {dst}"),
             Instruction::Return => "ret".to_string(),
             Instruction::JumpIfEndOfLine { dst } => format!("jeol  {dst}"),
@@ -755,12 +810,6 @@ impl Instruction {
                 format!("jpi   {idx:?}, {dst}")
             }
             Instruction::FlushHighlight => "flush".to_string(),
-            Instruction::Loop { dst } => {
-                format!("lp    {dst}")
-            }
-            Instruction::LoopMultiline { dst } => {
-                format!("lpml  {dst}")
-            }
             Instruction::AwaitInput => "await".to_string(),
         }
     }
