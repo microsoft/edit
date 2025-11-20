@@ -337,81 +337,6 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         Ok(IRSpan { first: set, last: flush })
     }
 
-    fn parse_identifier(&mut self) -> CompileResult<IRSpan<'a>> {
-        let name = match self.current_token {
-            Token::Identifier(n) => n,
-            _ => raise!(self, "expected identifier"),
-        };
-        self.advance();
-
-        match self.current_token {
-            Token::Equals => {
-                // Assignment: foo = expr;
-                self.advance();
-                let (value_vreg, expr_span) = self.parse_expression()?;
-                self.expect_token(Token::Semicolon)?;
-
-                // Update variable binding
-                self.variables.insert(name, value_vreg);
-
-                // Return the expression's IR span (LoadImm, AddImm, etc.)
-                Ok(expr_span)
-            }
-            Token::PlusEquals => {
-                // Compound assignment: foo += expr;
-                // Since we only support variable + literal, parse_expression will return
-                // a vreg containing the result of (foo + literal)
-                self.advance();
-
-                // Look up existing variable
-                let lhs_vreg = *self.variables.get(name).ok_or_else(|| CompileError {
-                    path: self.path.to_string(),
-                    line: self.tokenizer.position().0,
-                    column: self.tokenizer.position().1,
-                    message: format!("undefined variable: {name}"),
-                })?;
-
-                // Parse RHS - must be an integer literal (enforced in parse_expression)
-                match self.current_token {
-                    Token::Integer(val) => {
-                        self.advance();
-                        self.expect_token(Token::Semicolon)?;
-
-                        // Create new vreg and emit: result = lhs + val
-                        let result_vreg = self.compiler.alloc_vreg();
-                        let ir = self.compiler.alloc_iri(IRI::AddImm {
-                            dst: result_vreg,
-                            src: lhs_vreg,
-                            imm: val,
-                        });
-
-                        // Update variable to point to new vreg
-                        self.variables.insert(name, result_vreg);
-
-                        Ok(IRSpan::single(ir))
-                    }
-                    Token::Identifier(rhs_name) => {
-                        raise!(
-                            self,
-                            "variable += variable not supported, use variable += integer literal (found: '{}')",
-                            rhs_name
-                        )
-                    }
-                    _ => raise!(self, "expected integer literal after '+='"),
-                }
-            }
-            Token::LeftParen => {
-                // Function call: foo();
-                self.advance(); // Consume the '('
-                let func_name = self.compiler.strings.intern(self.compiler.arena, name);
-                self.expect_token(Token::RightParen)?;
-                self.expect_token(Token::Semicolon)?;
-                Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Call { name: func_name })))
-            }
-            _ => raise!(self, "expected '=', '+=', or '(' after identifier"),
-        }
-    }
-
     fn parse_var_declaration(&mut self) -> CompileResult<IRSpan<'a>> {
         self.expect_token(Token::Var)?;
 
@@ -422,37 +347,73 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.advance();
 
         self.expect_token(Token::Equals)?;
-
-        let (value_vreg, expr_span) = self.parse_expression()?;
-
+        let (expr, vreg) = self.parse_expression()?;
         self.expect_token(Token::Semicolon)?;
-
-        // Register variable in symbol table
-        self.variables.insert(name, value_vreg);
-
-        // Return the expression's IR span (LoadImm, AddImm, etc.)
-        Ok(expr_span)
+        self.variables.insert(name, vreg);
+        Ok(expr)
     }
 
-    fn parse_expression(&mut self) -> CompileResult<(VRegId, IRSpan<'a>)> {
-        // Parse primary (integer literal or identifier)
-        let (lhs_vreg, lhs_span) = match self.current_token {
+    fn parse_identifier(&mut self) -> CompileResult<IRSpan<'a>> {
+        let name = match self.current_token {
+            Token::Identifier(n) => n,
+            _ => raise!(self, "expected identifier"),
+        };
+        self.advance();
+
+        match self.current_token {
+            // foo();
+            Token::LeftParen => {
+                self.advance();
+                self.expect_token(Token::RightParen)?;
+                self.expect_token(Token::Semicolon)?;
+                let name = self.compiler.strings.intern(self.compiler.arena, name);
+                Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Call { name })))
+            }
+            // foo = expr;
+            Token::Equals => {
+                self.advance();
+                let (expr, vreg) = self.parse_expression()?;
+                self.expect_token(Token::Semicolon)?;
+                self.variables.insert(name, vreg);
+                Ok(expr)
+            }
+            // foo += expr;
+            Token::PlusEquals => {
+                let lhs_vreg = self.get_variable(name)?;
+                self.advance();
+
+                let Token::Integer(val) = self.current_token else {
+                    raise!(self, "expected integer literal after '+='");
+                };
+                self.advance();
+
+                self.expect_token(Token::Semicolon)?;
+
+                let result_vreg = self.compiler.alloc_vreg();
+                let ir = self.compiler.alloc_iri(IRI::AddImm {
+                    dst: result_vreg,
+                    src: lhs_vreg,
+                    imm: val,
+                });
+                self.variables.insert(name, result_vreg);
+                Ok(IRSpan::single(ir))
+            }
+            _ => raise!(self, "expected '(', or '=', '+=' after identifier"),
+        }
+    }
+
+    fn parse_expression(&mut self) -> CompileResult<(IRSpan<'a>, VRegId)> {
+        let (lhs_span, lhs_vreg) = match self.current_token {
             Token::Integer(val) => {
                 let vreg = self.compiler.alloc_vreg();
                 let ir = self.compiler.alloc_iri(IRI::LoadImm { dst: vreg, value: val });
                 self.advance();
-                (vreg, IRSpan::single(ir))
+                (IRSpan::single(ir), vreg)
             }
             Token::Identifier(name) => {
-                let vreg = *self.variables.get(name).ok_or_else(|| CompileError {
-                    path: self.path.to_string(),
-                    line: self.tokenizer.position().0,
-                    column: self.tokenizer.position().1,
-                    message: format!("undefined variable: {name}"),
-                })?;
+                let vreg = self.get_variable(name)?;
                 self.advance();
-                // Variable reference - no IR needed, just return a noop
-                (vreg, IRSpan::single(self.compiler.alloc_noop()))
+                (IRSpan::single(self.compiler.alloc_noop()), vreg)
             }
             _ => raise!(self, "expected integer or identifier in expression"),
         };
@@ -473,19 +434,19 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                     });
                     // Chain: lhs_span -> add_ir
                     lhs_span.last.borrow_mut().set_next(add_ir);
-                    Ok((result_vreg, IRSpan { first: lhs_span.first, last: add_ir }))
-                }
-                Token::Identifier(name) => {
-                    raise!(
-                        self,
-                        "variable + variable not supported, use variable + integer literal (found: '{}')",
-                        name
-                    )
+                    Ok((IRSpan { first: lhs_span.first, last: add_ir }, result_vreg))
                 }
                 _ => raise!(self, "expected integer literal after '+'"),
             }
         } else {
-            Ok((lhs_vreg, lhs_span))
+            Ok((lhs_span, lhs_vreg))
+        }
+    }
+
+    fn get_variable(&self, name: &str) -> CompileResult<VRegId> {
+        match self.variables.get(name) {
+            Some(&vreg) => Ok(vreg),
+            None => raise!(self, "undefined variable '{}'", name),
         }
     }
 

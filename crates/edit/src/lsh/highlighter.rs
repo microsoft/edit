@@ -208,15 +208,11 @@ impl<'doc> Highlighter<'doc> {
             return res;
         }
 
-        if self.stack.is_empty() {
-            self.registers = unsafe { mem::zeroed() };
-            self.registers.pc = self.language.entrypoint;
-        } else {
-            self.registers.off = 0;
-            self.registers.hs = 0;
-        }
-
         let line = unicode::strip_newline(line);
+        let mut reset = false;
+
+        self.registers.off = 0;
+        self.registers.hs = 0;
 
         loop {
             unsafe {
@@ -263,6 +259,7 @@ impl<'doc> Highlighter<'doc> {
                         if let Some(pc) = self.stack.pop() {
                             self.registers.pc = pc;
                         } else {
+                            reset = true;
                             break;
                         }
                     }
@@ -345,6 +342,11 @@ impl<'doc> Highlighter<'doc> {
         }
         if res.last().is_none_or(|last| last.start < line.len()) {
             res.push(Higlight { start: line.len(), kind: HighlightKind::Other });
+        }
+
+        if reset {
+            self.registers = unsafe { mem::zeroed() };
+            self.registers.pc = self.language.entrypoint;
         }
 
         // Adjust the range to account for the line offset.
