@@ -2006,13 +2006,14 @@ impl TextBuffer {
                             'block: {
                                 let color = match kind {
                                     HighlightKind::Other => break 'block,
-
-                                    // control, function, type, variable
                                     HighlightKind::Comment => IndexedColor::Green,
-                                    HighlightKind::Keyword => IndexedColor::BrightMagenta,
-                                    HighlightKind::Number => IndexedColor::BrightBlue,
+                                    HighlightKind::Method => IndexedColor::BrightYellow,
                                     HighlightKind::String => IndexedColor::BrightRed,
-
+                                    HighlightKind::Variable => IndexedColor::BrightCyan,
+                                    HighlightKind::ConstantLanguage => IndexedColor::BrightBlue,
+                                    HighlightKind::ConstantNumeric => IndexedColor::BrightGreen,
+                                    HighlightKind::KeywordControl => IndexedColor::BrightMagenta,
+                                    HighlightKind::KeywordOther => IndexedColor::BrightBlue,
                                     HighlightKind::MarkupBold => break 'block,
                                     HighlightKind::MarkupChanged => IndexedColor::BrightBlue,
                                     HighlightKind::MarkupDeleted => IndexedColor::BrightRed,

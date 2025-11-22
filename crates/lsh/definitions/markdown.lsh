@@ -66,6 +66,8 @@ pub fn markdown() {
         // For instance, a `comment` may span multiple lines, _unless_
         // there's a paragraph break inbetween, e.g. due to a ">" comment.
         until /$/ {
+            yield other;
+
             if /\[/ {
                 // Anything inside [...] is a link text and is colored like a string.
                 yield other;
@@ -183,8 +185,6 @@ pub fn markdown() {
             } else if /\\./ {
                 // Gobble escape char
             }
-
-            yield other;
         }
     }
 }

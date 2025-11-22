@@ -38,6 +38,7 @@ pub const LANGUAGES: &[Language] = &[
     Language::new("JSON", &["*.json", "*.jsonc"], ENTRYPOINT_JSON),
     Language::new("LSH", &["*.lsh"], ENTRYPOINT_LSH),
     Language::new("Markdown", &["*.md"], ENTRYPOINT_MARKDOWN),
+    Language::new("PowerShell", &["*.ps1", "*.psm1"], ENTRYPOINT_POWERSHELL),
     Language::new("YAML", &["*.yaml", "*.yml"], ENTRYPOINT_YAML),
 ];
 

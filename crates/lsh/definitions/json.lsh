@@ -1,5 +1,7 @@
 pub fn json() {
     until /$/ {
+        yield other;
+
         if /\/\/.*/ {
             yield comment;
         } else if /\/\*/ {
@@ -24,18 +26,16 @@ pub fn json() {
             if /\w+/ {
                 // Not a keyword after all.
             } else {
-                yield keyword;
+                yield constant.language;
             }
         } else if /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/ {
             if /\w+/ {
                 // Not a number after all.
             } else {
-                yield number;
+                yield constant.numeric;
             }
         } else if /\S+/ {
             // Invalid token? Skip.
         }
-
-        yield other;
     }
 }
