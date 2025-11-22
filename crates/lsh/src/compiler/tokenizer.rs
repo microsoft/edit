@@ -27,6 +27,7 @@ pub enum Token<'a> {
 
     // Operators
     Equals,
+    EqualsEquals,
     PlusEquals,
     Plus,
 
@@ -85,7 +86,14 @@ impl<'a> Tokenizer<'a> {
                 ')' => Token::RightParen,
                 ';' => Token::Semicolon,
                 '/' => self.read_regex(),
-                '=' => Token::Equals,
+                '=' => {
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        Token::EqualsEquals
+                    } else {
+                        Token::Equals
+                    }
+                }
                 '+' => {
                     if self.peek() == Some('=') {
                         self.advance();

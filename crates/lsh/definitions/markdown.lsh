@@ -66,7 +66,35 @@ pub fn markdown() {
         // For instance, a `comment` may span multiple lines, _unless_
         // there's a paragraph break inbetween, e.g. due to a ">" comment.
         until /$/ {
-            if /__/ {
+            if /\[/ {
+                // Anything inside [...] is a link text and is colored like a string.
+                yield other;
+                if /[^\]]*/ {
+                    yield string;
+
+                    // Now look for the link target in parentheses.
+                    if /\]\(/ {
+                        yield other;
+                        if /[^\s\)]+/ {
+                            yield markup.link;
+                        }
+
+                        if /\s+/ {
+                        }
+
+                        // The link may have a title in quotes.
+                        yield other;
+                        if /"/ {
+                            if /[^"]+/ {
+                            }
+                            if /"/ {
+                                yield string;
+                            }
+                        }
+                    }
+
+                }
+            } else if /__/ {
                 if /_+/ {
                     // "_____" = no hit
                 } else if /\s+/ {
@@ -80,7 +108,6 @@ pub fn markdown() {
                             break;
                         } else if /__/ {
                             break;
-                        } else if /./ {
                         }
                     }
                 }
@@ -96,7 +123,6 @@ pub fn markdown() {
                             break;
                         } else if /\*\*/ {
                             break;
-                        } else if /./ {
                         }
                     }
                 }
@@ -112,7 +138,6 @@ pub fn markdown() {
                             break;
                         } else if /_/ {
                             break;
-                        } else if /./ {
                         }
                     }
                 }
@@ -128,7 +153,6 @@ pub fn markdown() {
                             break;
                         } else if /\*/ {
                             break;
-                        } else if /./ {
                         }
                     }
                 }
@@ -144,25 +168,23 @@ pub fn markdown() {
                             break;
                         } else if /~~/ {
                             break;
-                        } else if /./ {
                         }
                     }
                 }
             } else if /```/ {
-                until /```/ { if /./ {} }
+                until /$/ { if /```/ { break; } }
                 yield string;
             } else if /``/ {
-                until /``/ { if /./ {} }
+                until /$/ { if /``/ { break; } }
                 yield string;
             } else if /`/ {
-                until /`/ { if /./ {} }
+                until /$/ { if /`/ { break; } }
                 yield string;
             } else if /\\./ {
-                yield other;
-            } else if /./ {
-                // TODO: loop statements currently don't prevent deadlocks if it doesn't advance.
-                yield other;
+                // Gobble escape char
             }
+
+            yield other;
         }
     }
 }

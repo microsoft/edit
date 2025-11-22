@@ -73,9 +73,3 @@ echo "Hello, world" | tr a-z A-Z
   "scripts": { "test": "echo ok" }
 }
 ```
-
-````md
-```md
-Triple backticks inside quadruple fences work.
-```
-````

@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::ffi::OsStr;
 use std::fmt::format;
 use std::fs::read_dir;
 use std::io;
@@ -37,7 +38,9 @@ impl<'a> Generator<'a> {
         })?;
 
         for path in files {
-            self.read_file(&path)?;
+            if path.extension() == Some(OsStr::new("lsh")) {
+                self.read_file(&path)?;
+            }
         }
         Ok(())
     }
@@ -58,10 +61,84 @@ impl<'a> Generator<'a> {
         Ok(paths)
     }
 
-    pub fn generate_rust(mut self) -> CompileResult<String> {
-        self.compiler.optimize();
+    pub fn generate_assembly(mut self, vt: bool) -> CompileResult<String> {
+        let mut output = String::new();
         let assembly = self.compiler.assemble()?;
-        let mermaid = self.compiler.as_mermaid();
+        let line_num_width = assembly.instructions.len().checked_ilog10().unwrap_or(0) as usize + 1;
+        let mnemonic_config = if vt {
+            MnemonicFormattingConfig {
+                instruction_prefix: "\x1b[33m", // yellow
+                instruction_suffix: "\x1b[39m", // default
+
+                register_prefix: "\x1b[32m", // green
+                register_suffix: "\x1b[39m",
+
+                numeric_prefix: "\x1b[36m", // cyan
+                numeric_suffix: "\x1b[39m",
+            }
+        } else {
+            Default::default()
+        };
+        let label_prefix = if vt { "\x1b[4;94m" } else { "" }; // underlined & bright blue
+        let label_suffix = if vt { "\x1b[m" } else { "" };
+        let line_prefix = if vt { "\x1b[90m" } else { "" }; // bright black
+        let comment_prefix = if vt { "\x1b[32m" } else { "" }; // green
+        let comment_suffix = if vt { "\x1b[39m" } else { "" };
+
+        for (i, ai) in assembly.instructions.iter().enumerate() {
+            if !ai.label.is_empty() {
+                if i != 0 {
+                    output.push('\n');
+                }
+                _ = writeln!(output, "{label_prefix}{}:{label_suffix}", ai.label);
+            }
+
+            let mnemonic_width = match ai.instr {
+                Instruction::JumpIfMatchCharset { idx, .. }
+                | Instruction::JumpIfMatchPrefix { idx, .. }
+                | Instruction::JumpIfMatchPrefixInsensitive { idx, .. } => {
+                    if vt {
+                        60
+                    } else {
+                        30
+                    }
+                }
+                _ => 0,
+            };
+
+            _ = write!(
+                output,
+                "{line_prefix}{i:>line_num_width$}:  {mnemonic:mnemonic_width$}",
+                mnemonic = ai.instr.mnemonic(&mnemonic_config)
+            );
+
+            match ai.instr {
+                Instruction::JumpIfMatchCharset { idx, .. } => {
+                    _ = write!(
+                        output,
+                        "{comment_prefix}// {:?}{comment_suffix}",
+                        assembly.charsets[idx]
+                    )
+                }
+                Instruction::JumpIfMatchPrefix { idx, .. }
+                | Instruction::JumpIfMatchPrefixInsensitive { idx, .. } => {
+                    _ = write!(
+                        output,
+                        "{comment_prefix}// {:?}{comment_suffix}",
+                        assembly.strings[idx]
+                    )
+                }
+                _ => {}
+            }
+
+            output.push('\n');
+        }
+
+        Ok(output)
+    }
+
+    pub fn generate_rust(mut self) -> CompileResult<String> {
+        let assembly = self.compiler.assemble()?;
 
         let mut output = String::new();
 
@@ -138,7 +215,7 @@ impl Registers {
         );
 
         output.push_str("/**\n");
-        output.push_str(&mermaid);
+        output.push_str(&self.compiler.as_mermaid());
         output.push_str("**/\n");
 
         for (name, offset) in &assembly.entrypoints {
@@ -167,7 +244,7 @@ impl Registers {
                 output,
                 "        {instr:#010x}, // {i:>line_num_width$}:  {mnemonic}",
                 instr = ai.instr.encode(),
-                mnemonic = ai.instr.mnemonic()
+                mnemonic = ai.instr.mnemonic(&Default::default())
             );
         }
         output.push_str("];\n");

@@ -1,0 +1,37 @@
+pub fn lsh() {
+    until /$/ {
+        if /\/\/.*/ {
+            yield comment;
+        } else if /pub|fn|if|else|until|loop/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield keyword;
+            }
+        } else if /yield/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield keyword;
+                if /\s+/ {
+                    // Gobble space to the argument
+                    yield other;
+                }
+                if /[\w.]+/ {
+                    // The yield argument
+                    yield string;
+                }
+            }
+        } else if /\// {
+            until /$/ {
+                if /\\./ {
+                    // Skip escape char
+                } else if /\// {
+                    break;
+                }
+            }
+        }
+
+        yield other;
+    }
+}

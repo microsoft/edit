@@ -7,10 +7,11 @@ mod optimizer;
 mod regex;
 mod tokenizer;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::fmt::Write as _;
+use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
 use stdext::arena::Arena;
@@ -61,11 +62,8 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub fn optimize(&mut self) {
-        optimizer::optimize(self);
-    }
-
     pub fn assemble(&mut self) -> CompileResult<Assembly<'a>> {
+        optimizer::optimize(self);
         backend::Backend::new().compile(self)
     }
 
@@ -113,19 +111,20 @@ impl<'a> Compiler<'a> {
     }
 
     /// Allocate a new virtual register
-    pub fn alloc_vreg(&self) -> VRegId {
+    pub fn alloc_vreg(&self) -> RegId<'a> {
         let id = self.next_vreg_id.get();
         self.next_vreg_id.set(id + 1);
-        VRegId::new(id)
+        let vreg = self.arena.alloc_uninit().write(VReg::new(id));
+        RegId::Virtual(vreg)
     }
 
     /// Create IR to save InputOffset to a virtual register (for backtracking).
-    fn save_position(&self, dst: VRegId) -> IRCell<'a> {
+    fn save_position(&self, dst: RegId<'a>) -> IRCell<'a> {
         self.alloc_iri(IRI::CopyFromPhys { dst, src: Register::InputOffset })
     }
 
     /// Create IR to restore InputOffset from a virtual register (for backtracking).
-    fn restore_position(&self, src: VRegId) -> IRCell<'a> {
+    fn restore_position(&self, src: RegId<'a>) -> IRCell<'a> {
         self.alloc_iri(IRI::CopyToPhys { dst: Register::InputOffset, src })
     }
 
@@ -133,6 +132,46 @@ impl<'a> Compiler<'a> {
         let mut stack = VecDeque::new();
         stack.push_back(root);
         TreeVisitor { current: None, stack, visited: Default::default() }
+    }
+
+    /// Collect all "interesting" characters from conditions in a loop body.
+    /// Returns a charset where true = interesting character that should be checked.
+    fn collect_interesting_charset(&self, loop_body: IRCell<'a>) -> Charset {
+        let mut charset = Charset::no();
+        let mut visited = HashSet::new();
+
+        for node in self.visit_nodes_from(loop_body) {
+            let node_ptr = node as *const _;
+            if !visited.insert(node_ptr) {
+                continue;
+            }
+
+            if let IRI::If { condition, .. } = node.borrow().instr {
+                match condition {
+                    Condition::Eq { .. } => {}
+                    Condition::EndOfLine => {
+                        // EOL is interesting
+                        charset.set(b'\n', true);
+                    }
+                    Condition::Charset(cs) => {
+                        // Merge this charset
+                        charset.merge(cs);
+                    }
+                    Condition::Prefix(s) | Condition::PrefixInsensitive(s) => {
+                        // First character of the prefix is interesting
+                        if let Some(&b) = s.as_bytes().first() {
+                            charset.set(b, true);
+                            if matches!(condition, Condition::PrefixInsensitive(_)) {
+                                charset.set(b.to_ascii_uppercase(), true);
+                                charset.set(b.to_ascii_lowercase(), true);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        charset
     }
 
     pub fn as_mermaid(&self) -> String {
@@ -193,6 +232,7 @@ impl<'a> Compiler<'a> {
                     IRI::If { condition, then } => {
                         _ = write!(output, "{{\"{offset}: ");
                         _ = match condition {
+                            Condition::Eq { lhs, rhs } => write!(output, "{lhs:?} == {rhs:?}"),
                             Condition::EndOfLine => write!(output, "eol"),
                             Condition::Charset(cs) => write!(output, "charset: {cs:?}"),
                             Condition::Prefix(s) => write!(output, "match: {s}"),
@@ -215,16 +255,16 @@ impl<'a> Compiler<'a> {
                         _ = write!(output, "[{offset}: await input]");
                     }
                     IRI::LoadImm { dst, value } => {
-                        _ = write!(output, "[\"{offset}: {dst} = {value}\"]");
+                        _ = write!(output, "[\"{offset}: {dst:?} = {value}\"]");
                     }
                     IRI::AddImm { dst, src, imm } => {
                         _ = write!(output, "[\"{{offset}}: {{dst}} = {{src}} + {{imm}}\"]");
                     }
                     IRI::CopyFromPhys { dst, src } => {
-                        _ = write!(output, "[\"{offset}: {dst} = {}\"]", src.mnemonic());
+                        _ = write!(output, "[\"{offset}: {dst:?} = {}\"]", src.mnemonic());
                     }
                     IRI::CopyToPhys { dst, src } => {
-                        _ = write!(output, "[\"{offset}: {} = {src}\"]", dst.mnemonic());
+                        _ = write!(output, "[\"{offset}: {} = {src:?}\"]", dst.mnemonic());
                     }
                     IRI::Push { mask } => {
                         _ = write!(output, "[\"{offset}: push {mask:#06x}\"]");
@@ -358,10 +398,10 @@ enum IRI<'a> {
     Noop,
     SetHighlightKind { kind: usize },
     IncOffset { amount: usize },
-    LoadImm { dst: VRegId, value: i64 },
-    AddImm { dst: VRegId, src: VRegId, imm: i64 },
-    CopyFromPhys { dst: VRegId, src: Register },
-    CopyToPhys { dst: Register, src: VRegId },
+    LoadImm { dst: RegId<'a>, value: i64 },
+    AddImm { dst: RegId<'a>, src: RegId<'a>, imm: i64 },
+    CopyFromPhys { dst: RegId<'a>, src: Register },
+    CopyToPhys { dst: Register, src: RegId<'a> },
     If { condition: Condition<'a>, then: IRCell<'a> },
     Push { mask: u16 },
     Pop { mask: u16 },
@@ -371,47 +411,42 @@ enum IRI<'a> {
     AwaitInput,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VRegId(u32);
+pub struct VReg {
+    id: u32,
+    physical: Cell<Option<Register>>,
+    use_count: Cell<u32>,
+}
 
-impl VRegId {
-    pub fn new(id: u32) -> Self {
-        Self(id)
-    }
-
-    pub fn as_u32(self) -> u32 {
-        self.0
+impl VReg {
+    fn new(id: u32) -> Self {
+        Self { id, physical: Cell::new(None), use_count: Cell::new(0) }
     }
 }
 
-impl fmt::Display for VRegId {
+impl fmt::Debug for VReg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "v{}", self.0)
+        write!(f, "v{}", self.id)
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Operand {
+#[derive(Clone, Copy)]
+pub enum RegId<'a> {
     Physical(Register),
-    Virtual(VRegId),
-    Immediate(i64),
+    Virtual(&'a VReg),
 }
 
-impl Operand {
-    pub fn is_virtual(&self) -> bool {
-        matches!(self, Operand::Virtual(_))
-    }
-
-    pub fn as_virtual(&self) -> Option<VRegId> {
+impl<'a> fmt::Debug for RegId<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Operand::Virtual(v) => Some(*v),
-            _ => None,
+            RegId::Physical(p) => write!(f, "{}", p.mnemonic()),
+            RegId::Virtual(v) => write!(f, "{:?}", v),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 enum Condition<'a> {
+    Eq { lhs: RegId<'a>, rhs: RegId<'a> },
     EndOfLine,
     Charset(&'a Charset),
     Prefix(&'a str),
@@ -720,28 +755,34 @@ pub enum Instruction {
     Return,
 
     // Encoding:
-    //   dst[31:12] |                      | 0101
+    //   dst[31:12] | rhs[11:8] | lhs[7:4] | 0101
+    //
+    // Jumps to `dst` if register lhs == register rhs.
+    JumpIfEq { lhs: Register, rhs: Register, dst: usize },
+
+    // Encoding:
+    //   dst[31:12] |                      | 0110
     //
     // Jumps to `dst` if we're at the end of the line.
     JumpIfEndOfLine { dst: usize },
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 0110
+    //   dst[31:12] |      idx[11:4]       | 0111
     //
     // Jumps to `dst` if the test succeeds.
     // `idx` specifies the charset/string to use.
     JumpIfMatchCharset { idx: usize, dst: usize },
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 0111
+    //   dst[31:12] |      idx[11:4]       | 1000
     JumpIfMatchPrefix { idx: usize, dst: usize },
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 1000
+    //   dst[31:12] |      idx[11:4]       | 1001
     JumpIfMatchPrefixInsensitive { idx: usize, dst: usize },
 
     // Encoding:
-    //                                       1001
+    //                                       1010
     //
     // Flushes the current HighlightKind to the output.
     FlushHighlight,
@@ -768,49 +809,74 @@ impl Instruction {
             Instruction::Pop { mask } => ((mask as u32) << 16) | 0b0010,
             Instruction::Call { dst } => Self::cast_imm(dst) | 0b0011,
             Instruction::Return => 0b0100,
-            Instruction::JumpIfEndOfLine { dst } => Self::cast_imm(dst) | 0b0101,
-            Instruction::JumpIfMatchCharset { idx, dst } => {
-                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0110
+            Instruction::JumpIfEq { lhs, rhs, dst } => {
+                Self::cast_imm(dst)
+                    | Self::cast_bits(rhs as usize, 4, 8)
+                    | Self::cast_bits(lhs as usize, 4, 4)
+                    | 0b0101
             }
-            Instruction::JumpIfMatchPrefix { idx, dst } => {
+            Instruction::JumpIfEndOfLine { dst } => Self::cast_imm(dst) | 0b0110,
+            Instruction::JumpIfMatchCharset { idx, dst } => {
                 Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0111
             }
-            Instruction::JumpIfMatchPrefixInsensitive { idx, dst } => {
+            Instruction::JumpIfMatchPrefix { idx, dst } => {
                 Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b1000
             }
-            Instruction::FlushHighlight => 0b1001,
-            Instruction::AwaitInput => 0b1010,
+            Instruction::JumpIfMatchPrefixInsensitive { idx, dst } => {
+                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b1001
+            }
+            Instruction::FlushHighlight => 0b1010,
+            Instruction::AwaitInput => 0b1011,
         }
     }
 
-    pub fn mnemonic(&self) -> String {
+    pub fn mnemonic(&self, config: &MnemonicFormattingConfig) -> String {
+        let ip = config.instruction_prefix;
+        let is = config.instruction_suffix;
+        let rp = config.register_prefix;
+        let rs = config.register_suffix;
+        let np = config.numeric_prefix;
+        let ns = config.numeric_suffix;
+
         match *self {
             Instruction::Add { dst, src, imm } => {
                 let mut str = String::with_capacity(48);
-                _ = write!(str, "add   {}, {}, ", dst.mnemonic(), src.mnemonic());
+                _ = write!(
+                    str,
+                    "{ip}add   {rp}{dst}{rs}, {rp}{src}{rs}, ",
+                    dst = dst.mnemonic(),
+                    src = src.mnemonic()
+                );
                 if imm > 1024 * 1024 {
-                    _ = write!(str, "{:#x}", imm & Self::IMM_MAX);
+                    _ = write!(str, "{np}{:#x}{ns}", imm & Self::IMM_MAX);
                 } else {
-                    _ = write!(str, "{imm}");
+                    _ = write!(str, "{np}{imm}{ns}");
                 }
                 str
             }
-            Instruction::Push { mask } => format!("push  {mask:#06x}"),
-            Instruction::Pop { mask } => format!("pop   {mask:#06x}"),
-            Instruction::Call { dst } => format!("call  {dst}"),
-            Instruction::Return => "ret".to_string(),
-            Instruction::JumpIfEndOfLine { dst } => format!("jeol  {dst}"),
+            Instruction::Push { mask } => format!("{ip}push{is}  {np}{mask:#06x}{ns}"),
+            Instruction::Pop { mask } => format!("{ip}pop{is}   {np}{mask:#06x}{ns}"),
+            Instruction::Call { dst } => format!("{ip}call{is}  {np}{dst}{ns}"),
+            Instruction::Return => format!("{ip}ret{is}"),
+            Instruction::JumpIfEq { lhs, rhs, dst } => {
+                format!(
+                    "{ip}jeq{is}   {rp}{lhs}{rs}, {rp}{rhs}{rs}, {np}{dst}{ns}",
+                    lhs = lhs.mnemonic(),
+                    rhs = rhs.mnemonic()
+                )
+            }
+            Instruction::JumpIfEndOfLine { dst } => format!("{ip}jeol  {np}{dst}{ns}"),
             Instruction::JumpIfMatchCharset { idx, dst } => {
-                format!("jc    {idx:?}, {dst}")
+                format!("{ip}jc{is}    {np}{idx:?}{ns}, {np}{dst}{ns}")
             }
             Instruction::JumpIfMatchPrefix { idx, dst } => {
-                format!("jp    {idx:?}, {dst}")
+                format!("{ip}jp{is}    {np}{idx:?}{ns}, {np}{dst}{ns}")
             }
             Instruction::JumpIfMatchPrefixInsensitive { idx, dst } => {
-                format!("jpi   {idx:?}, {dst}")
+                format!("{ip}jpi{is}   {np}{idx:?}{ns}, {np}{dst}{ns}")
             }
-            Instruction::FlushHighlight => "flush".to_string(),
-            Instruction::AwaitInput => "await".to_string(),
+            Instruction::FlushHighlight => format!("{ip}flush{is}"),
+            Instruction::AwaitInput => format!("{ip}await{is}"),
         }
     }
 
@@ -827,4 +893,19 @@ impl Instruction {
         assert!(val < (1 << bits));
         (val as u32) << shift
     }
+}
+
+#[derive(Default)]
+pub struct MnemonicFormattingConfig<'a> {
+    // Color used for highlighting the instruction.
+    pub instruction_prefix: &'a str,
+    pub instruction_suffix: &'a str,
+
+    // Color used for highlighting a register name.
+    pub register_prefix: &'a str,
+    pub register_suffix: &'a str,
+
+    // Color used for highlighting an immediate value.
+    pub numeric_prefix: &'a str,
+    pub numeric_suffix: &'a str,
 }

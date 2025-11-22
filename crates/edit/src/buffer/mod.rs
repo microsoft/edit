@@ -2007,6 +2007,7 @@ impl TextBuffer {
                                 let color = match kind {
                                     HighlightKind::Other => break 'block,
 
+                                    // control, function, type, variable
                                     HighlightKind::Comment => IndexedColor::Green,
                                     HighlightKind::Keyword => IndexedColor::BrightMagenta,
                                     HighlightKind::Number => IndexedColor::BrightBlue,
@@ -2018,6 +2019,7 @@ impl TextBuffer {
                                     HighlightKind::MarkupHeading => IndexedColor::BrightBlue,
                                     HighlightKind::MarkupInserted => IndexedColor::BrightGreen,
                                     HighlightKind::MarkupItalic => break 'block,
+                                    HighlightKind::MarkupLink => break 'block,
                                     HighlightKind::MarkupList => IndexedColor::BrightBlue,
                                     HighlightKind::MarkupStrikethrough => break 'block,
                                     HighlightKind::MetaDiffHeader => IndexedColor::BrightBlue,
@@ -2029,6 +2031,7 @@ impl TextBuffer {
                                 let attr = match kind {
                                     HighlightKind::MarkupBold => Attributes::Bold,
                                     HighlightKind::MarkupItalic => Attributes::Italic,
+                                    HighlightKind::MarkupLink => Attributes::Underlined,
                                     HighlightKind::MarkupStrikethrough => Attributes::Strikethrough,
                                     _ => break 'block,
                                 };

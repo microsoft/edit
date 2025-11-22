@@ -9,7 +9,6 @@ pub fn json() {
                 if /\*\// {
                     yield comment;
                     break;
-                } else if /./ {
                 }
             }
         } else if /"/ {
@@ -19,7 +18,6 @@ pub fn json() {
                 } else if /"/ {
                     yield string;
                     break;
-                } else if /./ {
                 }
             }
         } else if /true|false|null/ {
@@ -35,7 +33,7 @@ pub fn json() {
                 yield number;
             }
         } else if /\S+/ {
-        } else if /./ {
+            // Invalid token? Skip.
         }
 
         yield other;
