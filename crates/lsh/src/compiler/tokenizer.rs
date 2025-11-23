@@ -8,7 +8,7 @@ use std::str::Chars;
 pub enum Token<'a> {
     // Literals
     Identifier(&'a str),
-    Integer(i64),
+    Integer(i32),
     Regex(&'a str),
 
     // Keywords
@@ -166,7 +166,7 @@ impl<'a> Tokenizer<'a> {
         }
 
         let s = &self.input[self.start_pos..self.current_pos];
-        match s.parse::<i64>() {
+        match s.parse::<i32>() {
             Ok(val) => Token::Integer(val),
             Err(_) => Token::Error(format!("Invalid integer: {s}")),
         }

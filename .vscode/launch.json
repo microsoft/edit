@@ -2,11 +2,12 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Launch lsh-gen (Windows)",
-            "type": "cppvsdbg",
+            "name": "Launch lsh (Windows)",
+            "type": "cppdbg",
             "request": "launch",
-            "console": "externalTerminal",
-            "program": "${workspaceFolder}/target/debug/lsh-gen",
+            "miDebuggerPath": "rust-gdb",
+            "externalConsole": true,
+            "program": "${workspaceFolder}/target/debug/lsh",
             "cwd": "${workspaceFolder}",
             "args": [
                 "${workspaceFolder}/crates/lsh/definitions"

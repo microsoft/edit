@@ -75,7 +75,7 @@ pub struct Parser<'a, 'c, 'src> {
     tokenizer: Tokenizer<'src>,
     current_token: Token<'src>,
     context: Vec<Context<'a>, &'a Arena>,
-    variables: HashMap<&'src str, RegId<'a>>,
+    variables: HashMap<&'src str, IRRegCell<'a>>,
 }
 
 impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
@@ -130,7 +130,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             last.set_next(self.compiler.alloc_iri(IRI::Return));
         }
 
-        Ok(Function { name, body: span.first, public, used_registers: 0 })
+        Ok(Function { name, body: span.first, public })
     }
 
     fn parse_block(&mut self) -> CompileResult<IRSpan<'a>> {
@@ -196,8 +196,14 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         loop_good: IRCell<'a>,
         loop_exit: IRCell<'a>,
     ) -> CompileResult<IRSpan<'a>> {
+        // First, save the current input offset.
+        // This is used to detect if the loop made any progress.
         let saved_offset = self.compiler.alloc_vreg();
-        let first = self.compiler.save_position(saved_offset);
+        let first = self.compiler.alloc_iri(IRI::Add {
+            dst: saved_offset,
+            src: self.compiler.get_reg(Register::InputOffset),
+            imm: 0,
+        });
 
         self.context.push(Context { loop_start: Some(loop_start), loop_exit: Some(loop_exit) });
         let block = self.parse_block()?;
@@ -207,21 +213,20 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         //   if input_offset == saved_offset {
         //       input_offset += 1;
         //   }
-        // Translated to IR:
-        //   CopyFromPhys
-        //   If Eq {
-        //     then: IncOffset 1
-        //   }
         let advance = self.compiler.alloc_ir(IR {
             next: Some(first),
-            instr: IRI::IncOffset { amount: 1 },
+            instr: IRI::Add {
+                dst: self.compiler.get_reg(Register::InputOffset),
+                src: self.compiler.get_reg(Register::InputOffset),
+                imm: 1,
+            },
             offset: usize::MAX,
         });
         let advance_check = self.compiler.alloc_ir(IR {
             next: Some(first),
             instr: IRI::If {
                 condition: Condition::Eq {
-                    lhs: RegId::Physical(Register::InputOffset),
+                    lhs: self.compiler.get_reg(Register::InputOffset),
                     rhs: saved_offset,
                 },
                 then: advance,
@@ -291,10 +296,17 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_if_regex_chain(&mut self) -> CompileResult<IRSpan<'a>> {
-        let save_reg = self.compiler.alloc_vreg();
-
         let mut prev: Option<IRCell<'a>> = None;
-        let first = self.compiler.save_position(save_reg);
+
+        // First, save the current input offset.
+        // This is used to restore the position on failed matches.
+        let save_reg = self.compiler.alloc_vreg();
+        let first = self.compiler.alloc_iri(IRI::Add {
+            dst: save_reg,
+            src: self.compiler.get_reg(Register::InputOffset),
+            imm: 0,
+        });
+
         let last = self.compiler.alloc_noop();
 
         loop {
@@ -316,7 +328,11 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             }
 
             // The "else" branch of the if needs to restore the position.
-            let dst_bad = self.compiler.restore_position(save_reg);
+            let dst_bad = self.compiler.alloc_iri(IRI::Add {
+                dst: self.compiler.get_reg(Register::InputOffset),
+                src: save_reg,
+                imm: 0,
+            });
             re.dst_bad.borrow_mut().set_next(dst_bad);
 
             // No else branch? dst_bad (= no hit) means we're done, so make that connection.
@@ -437,7 +453,11 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.advance();
         self.expect_token(Token::Semicolon)?;
 
-        let set = self.compiler.alloc_iri(IRI::SetHighlightKind { kind });
+        let set = self.compiler.alloc_iri(IRI::Add {
+            dst: self.compiler.get_reg(Register::HighlightKind),
+            src: self.compiler.get_reg(Register::Zero),
+            imm: kind,
+        });
         let flush = self.compiler.chain_iri(set, IRI::Flush);
         Ok(IRSpan { first: set, last: flush })
     }
@@ -495,11 +515,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 self.expect_token(Token::Semicolon)?;
 
                 let result_vreg = self.compiler.alloc_vreg();
-                let ir = self.compiler.alloc_iri(IRI::AddImm {
-                    dst: result_vreg,
-                    src: lhs_vreg,
-                    imm: val,
-                });
+                let ir =
+                    self.compiler.alloc_iri(IRI::Add { dst: result_vreg, src: lhs_vreg, imm: val });
                 self.variables.insert(name, result_vreg);
                 Ok(IRSpan::single(ir))
             }
@@ -507,11 +524,15 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         }
     }
 
-    fn parse_expression(&mut self) -> CompileResult<(IRSpan<'a>, RegId<'a>)> {
+    fn parse_expression(&mut self) -> CompileResult<(IRSpan<'a>, IRRegCell<'a>)> {
         let (lhs_span, lhs_vreg) = match self.current_token {
             Token::Integer(val) => {
                 let vreg = self.compiler.alloc_vreg();
-                let ir = self.compiler.alloc_iri(IRI::LoadImm { dst: vreg, value: val });
+                let ir = self.compiler.alloc_iri(IRI::Add {
+                    dst: vreg,
+                    src: self.compiler.get_reg(Register::Zero),
+                    imm: val,
+                });
                 self.advance();
                 (IRSpan::single(ir), vreg)
             }
@@ -532,7 +553,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 Token::Integer(val) => {
                     self.advance();
                     let result_vreg = self.compiler.alloc_vreg();
-                    let add_ir = self.compiler.alloc_iri(IRI::AddImm {
+                    let add_ir = self.compiler.alloc_iri(IRI::Add {
                         dst: result_vreg,
                         src: lhs_vreg,
                         imm: val,
@@ -548,7 +569,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         }
     }
 
-    fn get_variable(&self, name: &str) -> CompileResult<RegId<'a>> {
+    fn get_variable(&self, name: &str) -> CompileResult<IRRegCell<'a>> {
         match self.variables.get(name) {
             Some(&reg) => Ok(reg),
             None => raise!(self, "undefined variable '{}'", name),

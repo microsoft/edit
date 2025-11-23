@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::mem::transmute;
 
 use super::*;
 
@@ -13,46 +14,53 @@ enum Relocation<'a> {
 
 pub struct Backend<'a> {
     assembly: Assembly<'a>,
-
     stack: VecDeque<IRCell<'a>>,
     relocations: Vec<Relocation<'a>>,
-
     functions_seen: HashMap<&'a str, usize>,
     charsets_seen: HashMap<*const Charset, usize>,
     strings_seen: HashMap<*const str, usize>,
-
-    // Register allocation state for eager allocation
-    available_regs: Vec<Register>,
-    used_registers_mask: u16,
+    registers: RegisterAllocator,
 }
 
 impl<'a> Backend<'a> {
     pub fn new() -> Self {
         Self {
             assembly: Assembly {
-                instructions: Vec::new(),
-                entrypoints: Vec::new(),
-                charsets: Vec::new(),
-                strings: Vec::new(),
-                highlight_kinds: Vec::new(),
+                instructions: Default::default(),
+                entrypoints: Default::default(),
+                charsets: Default::default(),
+                strings: Default::default(),
+                highlight_kinds: Default::default(),
             },
-
-            stack: VecDeque::new(),
-            relocations: Vec::new(),
-
-            functions_seen: HashMap::new(),
-            charsets_seen: HashMap::new(),
-            strings_seen: HashMap::new(),
-            available_regs: Vec::new(),
-            used_registers_mask: 0,
+            stack: Default::default(),
+            relocations: Default::default(),
+            functions_seen: Default::default(),
+            charsets_seen: Default::default(),
+            strings_seen: Default::default(),
+            registers: Default::default(),
         }
     }
 
     pub fn compile(mut self, compiler: &Compiler<'a>) -> CompileResult<Assembly<'a>> {
+        use Instruction::*;
+
         for function in &mut compiler.functions.clone() {
-            // Count uses of vregs and initialize register pool
-            self.allocate_registers(compiler, function)?;
-            self.init_available_registers();
+            // First pass: count register usage.
+            // That way we know once a register is no longer needed and can be freed.
+            self.registers = Default::default();
+            for node in compiler.visit_nodes_from(function.body) {
+                let node = node.borrow();
+                match node.instr {
+                    IRI::Add { dst, src, imm } => {
+                        src.borrow_mut().read_count += 1;
+                    }
+                    IRI::If { condition: Condition::Eq { lhs, rhs }, .. } => {
+                        lhs.borrow_mut().read_count += 1;
+                        rhs.borrow_mut().read_count += 1;
+                    }
+                    _ => {}
+                }
+            }
 
             let entrypoint_offset = self.assembly.instructions.len();
             self.functions_seen.insert(function.name, entrypoint_offset);
@@ -71,169 +79,60 @@ impl<'a> Backend<'a> {
 
                     match ir.instr {
                         IRI::Noop => {}
-                        IRI::SetHighlightKind { kind } => {
-                            self.push_instruction(Instruction::Add {
-                                dst: Register::HighlightKind,
-                                src: Register::Zero,
-                                imm: kind,
-                            });
-                        }
-                        IRI::IncOffset { amount } => {
-                            if amount == usize::MAX {
-                                self.push_instruction(Instruction::Add {
-                                    dst: Register::InputOffset,
-                                    src: Register::Zero,
-                                    imm: usize::MAX,
-                                });
-                            } else {
-                                self.push_instruction(Instruction::Add {
-                                    dst: Register::InputOffset,
-                                    src: Register::InputOffset,
-                                    imm: amount,
-                                });
-                            }
+                        IRI::Add { dst, src, imm } => {
+                            // NOTE: read/write call order is crucial.
+                            let src = self.read_reg(src)?;
+                            let dst = self.write_reg(dst)?;
+                            self.push_instruction(Add { dst, src, imm });
                         }
                         IRI::If { condition, then } => {
                             self.stack.push_back(then);
-                            let dst = self.dst_by_node(then);
-                            let instr = match condition {
-                                Condition::Eq { lhs, rhs } => {
-                                    // Track uses
-                                    if let RegId::Virtual(v) = lhs {
-                                        self.handle_vreg_use(v);
-                                    }
-                                    if let RegId::Virtual(v) = rhs {
-                                        self.handle_vreg_use(v);
-                                    }
 
-                                    let Some(lhs) = self.get_physical_reg(lhs) else {
-                                        panic!("Condition::Eq: vregs {lhs:?} not allocated");
-                                    };
-                                    let Some(rhs) = self.get_physical_reg(rhs) else {
-                                        panic!("Condition::Eq: vregs {rhs:?} not allocated");
-                                    };
-                                    Instruction::JumpIfEq { lhs, rhs, dst }
+                            let dst = self.dst_by_node(then);
+
+                            match condition {
+                                Condition::Eq { lhs, rhs } => {
+                                    let lhs = self.read_reg(lhs)?;
+                                    let rhs = self.read_reg(rhs)?;
+                                    self.push_instruction(JumpIfEq { lhs, rhs, dst });
                                 }
-                                Condition::EndOfLine => Instruction::JumpIfEndOfLine { dst },
+                                Condition::EndOfLine => {
+                                    self.push_instruction(JumpIfEndOfLine { dst });
+                                }
                                 Condition::Charset(h) => {
                                     let idx = self.visit_charset(h);
-                                    Instruction::JumpIfMatchCharset { idx, dst }
+                                    self.push_instruction(JumpIfMatchCharset { idx, dst });
                                 }
                                 Condition::Prefix(s) => {
                                     let idx = self.visit_string(s);
-                                    Instruction::JumpIfMatchPrefix { idx, dst }
+                                    self.push_instruction(JumpIfMatchPrefix { idx, dst });
                                 }
                                 Condition::PrefixInsensitive(s) => {
                                     let idx = self.visit_string(s);
-                                    Instruction::JumpIfMatchPrefixInsensitive { idx, dst }
+                                    self.push_instruction(
+                                        Instruction::JumpIfMatchPrefixInsensitive { idx, dst },
+                                    );
                                 }
-                            };
-                            self.push_instruction(instr);
-                        }
-                        IRI::Call { name } => {
-                            let dst = self.dst_by_name(name);
-                            self.push_instruction(Instruction::Call { dst });
-                        }
-                        IRI::Return => {
-                            self.push_instruction(Instruction::Return);
-                        }
-                        IRI::Flush => {
-                            self.push_instruction(Instruction::FlushHighlight);
-                        }
-                        IRI::AwaitInput => {
-                            self.push_instruction(Instruction::AwaitInput);
-                        }
-                        // Virtual register instructions - lower to physical instructions
-                        IRI::LoadImm { dst, value } => {
-                            // Allocate a physical register on first def
-                            if let RegId::Virtual(v) = dst {
-                                if v.physical.get().is_none() {
-                                    if self.allocate_physical_register(v).is_none() {
-                                        panic!("LoadImm: out of physical registers for {dst:?}");
-                                    }
-                                }
-                            }
-
-                            if let Some(phys) = self.get_physical_reg(dst) {
-                                self.push_instruction(Instruction::Add {
-                                    dst: phys,
-                                    src: Register::Zero,
-                                    imm: value as usize,
-                                });
-                            } else {
-                                panic!("LoadImm: vreg {dst:?} not allocated");
-                            }
-                        }
-                        IRI::AddImm { dst, src, imm } => {
-                            // Mark src as used
-                            if let RegId::Virtual(v) = src {
-                                self.handle_vreg_use(v);
-                            }
-                            // Mark dst as used (for read-modify-write)
-                            if let RegId::Virtual(v) = dst {
-                                self.handle_vreg_use(v);
-                                // Allocate if not yet allocated
-                                if v.physical.get().is_none() {
-                                    if self.allocate_physical_register(v).is_none() {
-                                        panic!("AddImm: out of physical registers for {dst:?}");
-                                    }
-                                }
-                            }
-
-                            match (self.get_physical_reg(dst), self.get_physical_reg(src)) {
-                                (Some(dst_phys), Some(src_phys)) => {
-                                    self.push_instruction(Instruction::Add {
-                                        dst: dst_phys,
-                                        src: src_phys,
-                                        imm: imm as usize,
-                                    });
-                                }
-                                _ => panic!("AddImm: vregs not allocated"),
-                            }
-                        }
-                        IRI::CopyFromPhys { dst, src } => {
-                            // Allocate a physical register on first def
-                            if let RegId::Virtual(v) = dst {
-                                if v.physical.get().is_none() {
-                                    if self.allocate_physical_register(v).is_none() {
-                                        panic!(
-                                            "CopyFromPhys: out of physical registers for {dst:?}"
-                                        );
-                                    }
-                                }
-                            }
-
-                            if let Some(dst_phys) = self.get_physical_reg(dst) {
-                                self.push_instruction(Instruction::Add {
-                                    dst: dst_phys,
-                                    src,
-                                    imm: 0,
-                                });
-                            } else {
-                                panic!("CopyFromPhys: vreg {dst:?} not allocated");
-                            }
-                        }
-                        IRI::CopyToPhys { dst, src } => {
-                            // Mark src as used
-                            if let RegId::Virtual(v) = src {
-                                self.handle_vreg_use(v);
-                            }
-
-                            if let Some(src_phys) = self.get_physical_reg(src) {
-                                self.push_instruction(Instruction::Add {
-                                    dst,
-                                    src: src_phys,
-                                    imm: 0,
-                                });
-                            } else {
-                                panic!("CopyToPhys: vreg {src:?} not allocated");
                             }
                         }
                         IRI::Push { mask } => {
-                            self.push_instruction(Instruction::Push { mask });
+                            self.push_instruction(Push { mask });
                         }
                         IRI::Pop { mask } => {
-                            self.push_instruction(Instruction::Pop { mask });
+                            self.push_instruction(Pop { mask });
+                        }
+                        IRI::Call { name } => {
+                            let dst = self.dst_by_name(name);
+                            self.push_instruction(Call { dst });
+                        }
+                        IRI::Return => {
+                            self.push_instruction(Return);
+                        }
+                        IRI::Flush => {
+                            self.push_instruction(FlushHighlight);
+                        }
+                        IRI::AwaitInput => {
+                            self.push_instruction(AwaitInput);
                         }
                     }
 
@@ -252,10 +151,10 @@ impl<'a> Backend<'a> {
 
                     // If the tail end of this IR chain is already compiled, we jump there.
                     if ir.offset != usize::MAX {
-                        self.push_instruction(Instruction::Add {
+                        self.push_instruction(Add {
                             dst: Register::ProgramCounter,
                             src: Register::Zero,
-                            imm: ir.offset,
+                            imm: ir.offset as i32,
                         });
                         break;
                     }
@@ -264,7 +163,6 @@ impl<'a> Backend<'a> {
 
             self.process_relocations();
 
-            function.used_registers = self.used_registers_mask;
             self.assembly.instructions[entrypoint_offset].label = function.name;
         }
 
@@ -304,6 +202,62 @@ impl<'a> Backend<'a> {
             .collect();
         self.assembly.highlight_kinds = compiler.highlight_kinds.clone();
         Ok(self.assembly)
+    }
+
+    fn push_instruction(&mut self, instr: Instruction) {
+        self.assembly.instructions.push(AnnotatedInstruction { instr, label: "" });
+    }
+
+    /// Prepares a virtual register from IR for write-use in an instruction.
+    ///
+    /// # Warnings
+    ///
+    /// *ALWAYS* call [`Backend::read_reg`] *BEFORE* [`Backend::write_reg`].
+    /// This is because the former frees physical registers for use by the latter.
+    fn write_reg(&mut self, reg: IRRegCell<'a>) -> CompileResult<Register> {
+        let mut reg = reg.borrow_mut();
+
+        if let Some(r) = reg.physical {
+            Ok(r)
+        } else if let Some(r) = self.registers.alloc() {
+            reg.physical = Some(r);
+            Ok(r)
+        } else {
+            Err(CompileError {
+                path: String::new(),
+                line: 0,
+                column: 0,
+                message: "out of physical registers".to_string(),
+            })
+        }
+    }
+
+    /// Prepares a virtual register from IR for read-use in an instruction.
+    ///
+    /// # Warnings
+    ///
+    /// *ALWAYS* call [`Backend::read_reg`] *BEFORE* [`Backend::write_reg`].
+    /// This is because the former frees physical registers for use by the latter.
+    fn read_reg(&mut self, reg: IRRegCell<'a>) -> CompileResult<Register> {
+        let mut reg = reg.borrow_mut();
+
+        let Some(r) = reg.physical else {
+            return Err(CompileError {
+                path: String::new(),
+                line: 0,
+                column: 0,
+                message: "reading from unallocated register".to_string(),
+            });
+        };
+
+        reg.read_count -= 1;
+        assert!(reg.read_count >= 0);
+
+        if reg.read_count == 0 {
+            self.registers.dealloc(r);
+        }
+
+        Ok(r)
     }
 
     fn visit_charset(&mut self, h: &'a Charset) -> usize {
@@ -357,7 +311,7 @@ impl<'a> Backend<'a> {
 
             match &mut self.assembly.instructions[off].instr {
                 Instruction::Add { dst: Register::ProgramCounter, src: Register::Zero, imm } => {
-                    *imm = resolved;
+                    *imm = resolved as i32;
                 }
                 Instruction::Call { dst }
                 | Instruction::JumpIfEndOfLine { dst }
@@ -372,116 +326,5 @@ impl<'a> Backend<'a> {
 
             false
         });
-    }
-
-    fn allocate_registers(
-        &mut self,
-        _compiler: &Compiler<'a>,
-        function: &mut Function<'a>,
-    ) -> CompileResult<()> {
-        // Count how many times each virtual register is used
-        fn count_vreg_uses<'a>(root: IRCell<'a>) {
-            let mut visited = HashSet::new();
-            let mut queue = VecDeque::new();
-            queue.push_back(root);
-
-            while let Some(cell) = queue.pop_front() {
-                if !visited.insert(cell.as_ptr()) {
-                    continue;
-                }
-
-                let ir = cell.borrow();
-
-                // Count uses (reads) of vregs
-                match ir.instr {
-                    IRI::AddImm { src, dst, .. } => {
-                        if let RegId::Virtual(v) = src {
-                            v.use_count.set(v.use_count.get() + 1);
-                        }
-                        if let RegId::Virtual(v) = dst {
-                            v.use_count.set(v.use_count.get() + 1);
-                        }
-                    }
-                    IRI::CopyToPhys { src, .. } => {
-                        if let RegId::Virtual(v) = src {
-                            v.use_count.set(v.use_count.get() + 1);
-                        }
-                    }
-                    IRI::If { condition: Condition::Eq { lhs, rhs }, .. } => {
-                        if let RegId::Virtual(v) = lhs {
-                            v.use_count.set(v.use_count.get() + 1);
-                        }
-                        if let RegId::Virtual(v) = rhs {
-                            v.use_count.set(v.use_count.get() + 1);
-                        }
-                    }
-                    _ => {}
-                }
-
-                if let Some(next) = ir.next {
-                    queue.push_back(next);
-                }
-                if let IRI::If { then, .. } = ir.instr {
-                    queue.push_back(then);
-                }
-            }
-        }
-
-        count_vreg_uses(function.body);
-
-        // Now during compile(), we'll allocate registers eagerly
-        function.used_registers = 0;
-        Ok(())
-    }
-
-    fn get_physical_reg(&self, reg: RegId<'a>) -> Option<Register> {
-        match reg {
-            RegId::Physical(p) => Some(p),
-            RegId::Virtual(v) => v.physical.get(),
-        }
-    }
-
-    fn push_instruction(&mut self, instr: Instruction) {
-        self.assembly.instructions.push(AnnotatedInstruction { instr, label: "" });
-    }
-
-    fn allocate_physical_register(&mut self, vreg: &'a VReg) -> Option<Register> {
-        if let Some(reg) = self.available_regs.pop() {
-            vreg.physical.set(Some(reg));
-            self.used_registers_mask |= 1 << (reg as u16);
-            Some(reg)
-        } else {
-            None
-        }
-    }
-
-    fn free_physical_register(&mut self, vreg: &'a VReg) {
-        if let Some(reg) = vreg.physical.get() {
-            self.available_regs.push(reg);
-        }
-    }
-
-    fn handle_vreg_use(&mut self, vreg: &'a VReg) {
-        let remaining = vreg.use_count.get().saturating_sub(1);
-        vreg.use_count.set(remaining);
-        if remaining == 0 {
-            self.free_physical_register(vreg);
-        }
-    }
-
-    fn init_available_registers(&mut self) {
-        self.available_regs = vec![
-            Register::X15,
-            Register::X14,
-            Register::X13,
-            Register::X12,
-            Register::X11,
-            Register::X10,
-            Register::X9,
-            Register::X8,
-            Register::X7,
-            Register::X6,
-        ];
-        self.used_registers_mask = 0;
     }
 }

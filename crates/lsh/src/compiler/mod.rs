@@ -9,10 +9,11 @@ mod tokenizer;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
-use std::fmt;
 use std::fmt::Write as _;
 use std::marker::PhantomData;
+use std::mem::{MaybeUninit, transmute, zeroed};
 use std::ops::{Index, IndexMut};
+use std::{fmt, ptr};
 
 use stdext::arena::Arena;
 
@@ -37,23 +38,34 @@ impl fmt::Display for CompileError {
 
 pub struct Compiler<'a> {
     arena: &'a Arena,
+    physical_registers: [IRRegCell<'a>; Register::COUNT],
     functions: Vec<Function<'a>>,
     charsets: Vec<&'a Charset>,
     strings: Vec<&'a str>,
     highlight_kinds: Vec<HighlightKind<'a>>,
-    next_vreg_id: std::cell::Cell<u32>,
+    next_vreg_id: Cell<u32>,
 }
 
 impl<'a> Compiler<'a> {
     pub fn new(arena: &'a Arena) -> Self {
-        Self {
+        #[allow(invalid_value)]
+        let mut s = Self {
             arena,
+            physical_registers: unsafe { zeroed() },
             functions: Default::default(),
             charsets: Default::default(),
             strings: Default::default(),
             highlight_kinds: vec![HighlightKind { identifier: "other", value: 0 }],
-            next_vreg_id: std::cell::Cell::new(0),
+            next_vreg_id: Cell::new(0),
+        };
+
+        for i in 0..Register::COUNT {
+            let reg = s.alloc_vreg();
+            reg.borrow_mut().physical = Some(Register::from_usize(i));
+            s.physical_registers[i] = reg;
         }
+
+        s
     }
 
     pub fn parse<'src>(&mut self, path: &'src str, src: &'src str) -> CompileResult<()> {
@@ -89,6 +101,16 @@ impl<'a> Compiler<'a> {
         ir
     }
 
+    fn get_reg(&self, reg: Register) -> IRRegCell<'a> {
+        self.physical_registers[reg as usize]
+    }
+
+    fn alloc_vreg(&self) -> IRRegCell<'a> {
+        let id = self.next_vreg_id.get();
+        self.next_vreg_id.set(id + 1);
+        self.arena.alloc_uninit().write(RefCell::new(IRReg::new(id)))
+    }
+
     fn intern_charset(&mut self, charset: &Charset) -> &'a Charset {
         self.charsets.intern(self.arena, charset)
     }
@@ -102,30 +124,12 @@ impl<'a> Compiler<'a> {
             Ok(idx) => idx,
             Err(idx) => {
                 let identifier = arena_clone_str(self.arena, identifier);
-                let value = self.highlight_kinds.len();
+                let value = self.highlight_kinds.len() as i32;
                 self.highlight_kinds.insert(idx, HighlightKind { identifier, value });
                 idx
             }
         };
         &self.highlight_kinds[idx]
-    }
-
-    /// Allocate a new virtual register
-    pub fn alloc_vreg(&self) -> RegId<'a> {
-        let id = self.next_vreg_id.get();
-        self.next_vreg_id.set(id + 1);
-        let vreg = self.arena.alloc_uninit().write(VReg::new(id));
-        RegId::Virtual(vreg)
-    }
-
-    /// Create IR to save InputOffset to a virtual register (for backtracking).
-    fn save_position(&self, dst: RegId<'a>) -> IRCell<'a> {
-        self.alloc_iri(IRI::CopyFromPhys { dst, src: Register::InputOffset })
-    }
-
-    /// Create IR to restore InputOffset from a virtual register (for backtracking).
-    fn restore_position(&self, src: RegId<'a>) -> IRCell<'a> {
-        self.alloc_iri(IRI::CopyToPhys { dst: Register::InputOffset, src })
     }
 
     fn visit_nodes_from(&self, root: IRCell<'a>) -> TreeVisitor<'a> {
@@ -211,23 +215,37 @@ impl<'a> Compiler<'a> {
                     IRI::Noop => {
                         _ = write!(output, "[{offset}: noop]");
                     }
-                    IRI::SetHighlightKind { kind } => {
-                        if let Some(hk) = self.highlight_kinds.iter().find(|hk| hk.value == kind) {
-                            _ = write!(
-                                output,
-                                "[\"{offset}: hk = {} ({})\"]",
-                                hk.value, hk.identifier
-                            );
+                    IRI::Add { dst, src, imm } => {
+                        let src = src.borrow();
+                        let dst = dst.borrow();
+
+                        _ = write!(output, "[\"{offset}: {dst:?} = ");
+
+                        if dst.id == Register::HighlightKind as u32
+                            && let Some(hk) = self.highlight_kinds.iter().find(|hk| hk.value == imm)
+                        {
+                            _ = write!(output, "{} ({})", hk.value, hk.identifier);
                         } else {
-                            _ = write!(output, "[\"{offset}: hk = {kind}\"]");
+                            match (src.id, imm) {
+                                (0, 0) => {
+                                    _ = write!(output, "0");
+                                }
+                                (0, i32::MAX) => {
+                                    _ = write!(output, "max");
+                                }
+                                (0, _) => {
+                                    _ = write!(output, "{imm}");
+                                }
+                                (_, 0) => {
+                                    _ = write!(output, "{src:?}");
+                                }
+                                _ => {
+                                    _ = write!(output, "{src:?} + {imm}");
+                                }
+                            }
                         }
-                    }
-                    IRI::IncOffset { amount } => {
-                        if amount == usize::MAX {
-                            _ = write!(output, "[\"{offset}: off = max\"]");
-                        } else {
-                            _ = write!(output, "[\"{offset}: off += {amount}\"]");
-                        }
+
+                        output.push_str("\"]");
                     }
                     IRI::If { condition, then } => {
                         _ = write!(output, "{{\"{offset}: ");
@@ -242,6 +260,12 @@ impl<'a> Compiler<'a> {
                         _ = writeln!(output, "    {} -->|yes| {}", node, then.borrow());
                         to_visit.push(then);
                     }
+                    IRI::Push { mask } => {
+                        _ = write!(output, "[\"{offset}: push {mask:#06x}\"]");
+                    }
+                    IRI::Pop { mask } => {
+                        _ = write!(output, "[\"{offset}: pop {mask:#06x}\"]");
+                    }
                     IRI::Call { name } => {
                         _ = write!(output, "[\"{offset}: call {name}\"]");
                     }
@@ -253,24 +277,6 @@ impl<'a> Compiler<'a> {
                     }
                     IRI::AwaitInput => {
                         _ = write!(output, "[{offset}: await input]");
-                    }
-                    IRI::LoadImm { dst, value } => {
-                        _ = write!(output, "[\"{offset}: {dst:?} = {value}\"]");
-                    }
-                    IRI::AddImm { dst, src, imm } => {
-                        _ = write!(output, "[\"{{offset}}: {{dst}} = {{src}} + {{imm}}\"]");
-                    }
-                    IRI::CopyFromPhys { dst, src } => {
-                        _ = write!(output, "[\"{offset}: {dst:?} = {}\"]", src.mnemonic());
-                    }
-                    IRI::CopyToPhys { dst, src } => {
-                        _ = write!(output, "[\"{offset}: {} = {src:?}\"]", dst.mnemonic());
-                    }
-                    IRI::Push { mask } => {
-                        _ = write!(output, "[\"{offset}: push {mask:#06x}\"]");
-                    }
-                    IRI::Pop { mask } => {
-                        _ = write!(output, "[\"{offset}: pop {mask:#06x}\"]");
                     }
                 }
 
@@ -337,7 +343,7 @@ impl<'a> Iterator for TreeVisitor<'a> {
 #[derive(Clone)]
 pub struct HighlightKind<'a> {
     pub identifier: &'a str,
-    pub value: usize,
+    pub value: i32,
 }
 
 impl<'a> HighlightKind<'a> {
@@ -372,7 +378,6 @@ struct Function<'a> {
     name: &'a str,
     body: IRCell<'a>,
     public: bool,
-    used_registers: u16,
 }
 
 // To be honest, I don't think this qualifies as an "intermediate representation",
@@ -396,12 +401,7 @@ type IRCell<'a> = &'a RefCell<IR<'a>>;
 #[derive(Debug, Clone, Copy)]
 enum IRI<'a> {
     Noop,
-    SetHighlightKind { kind: usize },
-    IncOffset { amount: usize },
-    LoadImm { dst: RegId<'a>, value: i64 },
-    AddImm { dst: RegId<'a>, src: RegId<'a>, imm: i64 },
-    CopyFromPhys { dst: RegId<'a>, src: Register },
-    CopyToPhys { dst: Register, src: RegId<'a> },
+    Add { dst: IRRegCell<'a>, src: IRRegCell<'a>, imm: i32 },
     If { condition: Condition<'a>, then: IRCell<'a> },
     Push { mask: u16 },
     Pop { mask: u16 },
@@ -411,42 +411,36 @@ enum IRI<'a> {
     AwaitInput,
 }
 
-pub struct VReg {
+#[derive(Default)]
+pub struct IRReg {
     id: u32,
-    physical: Cell<Option<Register>>,
-    use_count: Cell<u32>,
+    read_count: i32,
+    physical: Option<Register>,
 }
 
-impl VReg {
+pub type IRRegCell<'a> = &'a RefCell<IRReg>;
+
+impl IRReg {
     fn new(id: u32) -> Self {
-        Self { id, physical: Cell::new(None), use_count: Cell::new(0) }
+        IRReg { id, read_count: 0, physical: None }
     }
 }
 
-impl fmt::Debug for VReg {
+impl fmt::Debug for IRReg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "v{}", self.id)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub enum RegId<'a> {
-    Physical(Register),
-    Virtual(&'a VReg),
-}
-
-impl<'a> fmt::Debug for RegId<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RegId::Physical(p) => write!(f, "{}", p.mnemonic()),
-            RegId::Virtual(v) => write!(f, "{:?}", v),
+        if let Some(p) = self.physical
+            && self.id < Register::COUNT as u32
+        {
+            write!(f, "{}", p.mnemonic())
+        } else {
+            write!(f, "v{}", self.id)
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 enum Condition<'a> {
-    Eq { lhs: RegId<'a>, rhs: RegId<'a> },
+    Eq { lhs: IRRegCell<'a>, rhs: IRRegCell<'a> },
     EndOfLine,
     Charset(&'a Charset),
     Prefix(&'a str),
@@ -659,6 +653,14 @@ pub enum Register {
 }
 
 impl Register {
+    const FIRST_USER_REG: usize = 5; // aka x5
+    const COUNT: usize = 16;
+
+    fn from_usize(value: usize) -> Self {
+        debug_assert!(value < Self::COUNT);
+        unsafe { transmute::<u8, Register>(value as u8) }
+    }
+
     fn mnemonic(&self) -> &'static str {
         match self {
             Register::Zero => "zero",
@@ -716,6 +718,38 @@ impl Registers {
     }
 }
 
+struct RegisterAllocator(u16);
+
+impl RegisterAllocator {
+    fn new() -> Self {
+        RegisterAllocator((1 << Register::FIRST_USER_REG) - 1)
+    }
+
+    fn alloc(&mut self) -> Option<Register> {
+        let available = !self.0;
+        if available == 0 {
+            return None;
+        }
+
+        let idx = available.trailing_zeros() as usize;
+        self.0 |= 1 << idx;
+        Some(Register::from_usize(idx))
+    }
+
+    fn dealloc(&mut self, reg: Register) {
+        let idx = reg as usize;
+        if idx >= Register::FIRST_USER_REG {
+            self.0 &= !(1 << idx);
+        }
+    }
+}
+
+impl Default for RegisterAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct AnnotatedInstruction<'a> {
     pub instr: Instruction,
     pub label: &'a str,
@@ -728,7 +762,7 @@ pub enum Instruction {
     //   imm[31:12] | src[11:8] | dst[7:4] | 0000
     //
     // NOTE: This allows for jumps by manipulating Register::ProgramCounter.
-    Add { dst: Register, src: Register, imm: usize },
+    Add { dst: Register, src: Register, imm: i32 },
 
     // Encoding:
     //   mask[31:16] |                     | 0001
@@ -794,36 +828,36 @@ pub enum Instruction {
 }
 
 impl Instruction {
-    const IMM_MAX: usize = (1 << 20) - 1;
+    const IMM_MAX: i32 = (1 << 20) - 1;
 
     #[allow(clippy::identity_op)]
     pub fn encode(&self) -> u32 {
         match *self {
             Instruction::Add { dst, src, imm } => {
                 Self::cast_imm(imm)
-                    | Self::cast_bits(src as usize, 4, 8)
-                    | Self::cast_bits(dst as usize, 4, 4)
+                    | Self::cast_bits(src as i32, 4, 8)
+                    | Self::cast_bits(dst as i32, 4, 4)
                     | 0b0000
             }
             Instruction::Push { mask } => ((mask as u32) << 16) | 0b0001,
             Instruction::Pop { mask } => ((mask as u32) << 16) | 0b0010,
-            Instruction::Call { dst } => Self::cast_imm(dst) | 0b0011,
+            Instruction::Call { dst } => Self::cast_imm(dst as i32) | 0b0011,
             Instruction::Return => 0b0100,
             Instruction::JumpIfEq { lhs, rhs, dst } => {
-                Self::cast_imm(dst)
-                    | Self::cast_bits(rhs as usize, 4, 8)
-                    | Self::cast_bits(lhs as usize, 4, 4)
+                Self::cast_imm(dst as i32)
+                    | Self::cast_bits(rhs as i32, 4, 8)
+                    | Self::cast_bits(lhs as i32, 4, 4)
                     | 0b0101
             }
-            Instruction::JumpIfEndOfLine { dst } => Self::cast_imm(dst) | 0b0110,
+            Instruction::JumpIfEndOfLine { dst } => Self::cast_imm(dst as i32) | 0b0110,
             Instruction::JumpIfMatchCharset { idx, dst } => {
-                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b0111
+                Self::cast_imm(dst as i32) | Self::cast_bits(idx as i32, 8, 4) | 0b0111
             }
             Instruction::JumpIfMatchPrefix { idx, dst } => {
-                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b1000
+                Self::cast_imm(dst as i32) | Self::cast_bits(idx as i32, 8, 4) | 0b1000
             }
             Instruction::JumpIfMatchPrefixInsensitive { idx, dst } => {
-                Self::cast_imm(dst) | Self::cast_bits(idx, 8, 4) | 0b1001
+                Self::cast_imm(dst as i32) | Self::cast_bits(idx as i32, 8, 4) | 0b1001
             }
             Instruction::FlushHighlight => 0b1010,
             Instruction::AwaitInput => 0b1011,
@@ -880,8 +914,8 @@ impl Instruction {
         }
     }
 
-    fn cast_imm(imm: usize) -> u32 {
-        if imm == usize::MAX {
+    fn cast_imm(imm: i32) -> u32 {
+        if imm == i32::MAX {
             (Self::IMM_MAX << 12) as u32
         } else {
             assert!(imm <= Self::IMM_MAX);
@@ -889,7 +923,7 @@ impl Instruction {
         }
     }
 
-    fn cast_bits(val: usize, bits: usize, shift: usize) -> u32 {
+    fn cast_bits(val: i32, bits: i32, shift: i32) -> u32 {
         assert!(val < (1 << bits));
         (val as u32) << shift
     }

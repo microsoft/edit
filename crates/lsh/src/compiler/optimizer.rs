@@ -92,17 +92,23 @@ fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
         a.split('.').cmp(b.split('.'))
     });
 
-    mapping.resize(compiler.highlight_kinds.len(), usize::MAX);
+    mapping.resize(compiler.highlight_kinds.len(), i32::MAX);
     for (idx, hk) in compiler.highlight_kinds.iter_mut().enumerate() {
-        mapping[hk.value] = idx;
+        let idx = idx as i32;
+        mapping[hk.value as usize] = idx;
         hk.value = idx;
     }
+
+    let hk_dst = compiler.get_reg(Register::HighlightKind);
 
     for function in &compiler.functions {
         for current in compiler.visit_nodes_from(function.body) {
             let mut current = current.borrow_mut();
-            if let IRI::SetHighlightKind { kind } = &mut current.instr {
-                *kind = mapping[*kind];
+
+            if let IRI::Add { dst, src, imm } = &mut current.instr
+                && ptr::eq(*dst, hk_dst)
+            {
+                *imm = mapping[*imm as usize];
             }
         }
     }
