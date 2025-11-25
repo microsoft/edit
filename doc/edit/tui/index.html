@@ -1,0 +1,140 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="An immediate mode UI framework for terminals."><title>edit::tui - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="edit" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (25d319a0f 2025-11-11)" data-channel="nightly" data-search-js="search-8e3fad08.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module tui</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../edit/index.html">edit</a><span class="version">1.2.1</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module tui</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#why-immediate-mode" title="Why immediate mode?">Why immediate mode?</a></li><li><a href="#design-overview" title="Design overview">Design overview</a></li><li><a href="#classnames-and-node-ids" title="Classnames and node IDs">Classnames and node IDs</a></li><li><a href="#example" title="Example">Example</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate edit</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">edit</a></div><h1>Module <span>tui</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/edit/tui.rs.html#4-4016">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>An immediate mode UI framework for terminals.</p>
+<h2 id="why-immediate-mode"><a class="doc-anchor" href="#why-immediate-mode">§</a>Why immediate mode?</h2>
+<p>This uses an “immediate mode” design, similar to <a href="https://github.com/ocornut/imgui">ImGui</a>.
+The reason for this is that I expect the UI needs for any terminal application to be
+fairly minimal, and for that purpose an immediate mode design is much simpler to use.</p>
+<p>So what’s “immediate mode”? The primary alternative is called “retained mode”.
+The difference is that when you create a button in this framework in one frame,
+and you stop telling this framework in the next frame, the button will vanish.
+When you use a regular retained mode UI framework, you create the button once,
+set up callbacks for when it is clicked, and then stop worrying about it.</p>
+<p>The downside of immediate mode is that your UI code <em>may</em> become cluttered.
+The upside however is that you cannot leak UI elements, you don’t need to
+worry about lifetimes nor callbacks, and that simple UIs are simple to write.</p>
+<p>More importantly though, the primary reason for this is that the
+lack of callbacks means we can use this design across a plain C ABI,
+which we’ll need once plugins come into play. GTK’s <code>g_signal_connect</code>
+shows that the alternative can be rather cumbersome.</p>
+<h2 id="design-overview"><a class="doc-anchor" href="#design-overview">§</a>Design overview</h2>
+<p>While this file is fairly lengthy, the overall algorithm is simple.
+On the first frame ever:</p>
+<ul>
+<li>Prepare an empty <code>arena_next</code>.</li>
+<li>Parse the incoming <a href="../input/enum.Input.html" title="enum edit::input::Input"><code>input::Input</code></a> which should be a resize event.</li>
+<li>Create a new <a href="struct.Context.html" title="struct edit::tui::Context"><code>Context</code></a> instance and give it the caller.</li>
+<li>Now the caller will draw their UI with the <a href="struct.Context.html" title="struct edit::tui::Context"><code>Context</code></a> by calling the
+various <a href="struct.Context.html" title="struct edit::tui::Context"><code>Context</code></a> UI methods, such as <a href="struct.Context.html#method.block_begin" title="method edit::tui::Context::block_begin"><code>Context::block_begin()</code></a> and
+<a href="struct.Context.html#method.block_end" title="method edit::tui::Context::block_end"><code>Context::block_end()</code></a>. These two are the basis which all other UI
+elements are built upon by the way. Each UI element that is created gets
+allocated onto <code>arena_next</code> and inserted into the UI tree.
+That tree works exactly like the DOM tree in HTML: Each node in the tree
+has a parent, children, and siblings. The tree layout at the end is then
+a direct mirror of the code “layout” that created it.</li>
+<li>Once the caller is done and drops the <a href="struct.Context.html" title="struct edit::tui::Context"><code>Context</code></a>, it’ll secretly call
+<code>report_context_completion</code>. This causes a number of things:
+<ul>
+<li>The DOM tree that was built is stored in <code>prev_tree</code>.</li>
+<li>A hashmap of all nodes is built and stored in <code>prev_node_map</code>.</li>
+<li><code>arena_next</code> is swapped with <code>arena_prev</code>.</li>
+<li>Each UI node is measured and laid out.</li>
+</ul>
+</li>
+<li>Now the caller is expected to repeat this process with a <a href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html#variant.None" title="variant core::option::Option::None"><code>None</code></a>
+input event until <a href="struct.Tui.html#method.needs_settling" title="method edit::tui::Tui::needs_settling"><code>Tui::needs_settling()</code></a> returns false.
+This is necessary, because when <a href="struct.Context.html#method.button" title="method edit::tui::Context::button"><code>Context::button()</code></a> returns <code>true</code>
+in one frame, it may change the state in the caller’s code
+and require another frame to be drawn.</li>
+<li>Finally a call to <a href="struct.Tui.html#method.render" title="method edit::tui::Tui::render"><code>Tui::render()</code></a> will render the UI tree into the
+framebuffer and return VT output.</li>
+</ul>
+<p>On every subsequent frame the process is similar, but one crucial element
+of any immediate mode UI framework is added:
+Now when the caller draws their UI, the various <a href="struct.Context.html" title="struct edit::tui::Context"><code>Context</code></a> UI elements
+have access to <code>prev_node_map</code> and the previously built UI tree.
+This allows the UI framework to reuse the previously computed layout for
+hit tests, caching scroll offsets, and so on.</p>
+<p>In the end it looks very similar:</p>
+<ul>
+<li>Prepare an empty <code>arena_next</code>.</li>
+<li>Parse the incoming <a href="../input/enum.Input.html" title="enum edit::input::Input"><code>input::Input</code></a>…
+<ul>
+<li><strong>BUT</strong> now we can hit-test mouse clicks onto the previously built
+UI tree. This way we can delegate focus on left mouse clicks.</li>
+</ul>
+</li>
+<li>Create a new <a href="struct.Context.html" title="struct edit::tui::Context"><code>Context</code></a> instance and give it the caller.</li>
+<li>The caller draws their UI with the <a href="struct.Context.html" title="struct edit::tui::Context"><code>Context</code></a>…
+<ul>
+<li><strong>BUT</strong> we can preserve the UI state across frames.</li>
+</ul>
+</li>
+<li>Continue rendering until <a href="struct.Tui.html#method.needs_settling" title="method edit::tui::Tui::needs_settling"><code>Tui::needs_settling()</code></a> returns false.</li>
+<li>And the final call to <a href="struct.Tui.html#method.render" title="method edit::tui::Tui::render"><code>Tui::render()</code></a>.</li>
+</ul>
+<h2 id="classnames-and-node-ids"><a class="doc-anchor" href="#classnames-and-node-ids">§</a>Classnames and node IDs</h2>
+<p>So how do we find which node from the previous tree correlates to the
+current node? Each node needs to be constructed with a “classname”.
+The classname is hashed with the parent node ID as the seed. This derived
+hash is then used as the new child node ID. Under the assumption that the
+collision likelihood of the hash function is low, this serves as true IDs.</p>
+<p>This has the nice added property that finding a node with the same ID
+guarantees that all of the parent nodes must have equivalent IDs as well.
+This turns “is the focus anywhere inside this subtree” into an O(1) check.</p>
+<p>The reason “classnames” are used is because I was hoping to add theming
+in the future with a syntax similar to CSS (simplified, however).</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>edit::helpers::Size;
+<span class="kw">use </span>edit::input::Input;
+<span class="kw">use </span>edit::tui::<span class="kw-2">*</span>;
+<span class="kw">use </span>edit::{arena, arena_format};
+
+<span class="kw">struct </span>State {
+    counter: i32,
+}
+
+<span class="kw">fn </span>main() {
+    arena::init(<span class="number">128 </span>* <span class="number">1024 </span>* <span class="number">1024</span>).unwrap();
+
+    <span class="comment">// Create a `Tui` instance which holds state across frames.
+    </span><span class="kw">let </span><span class="kw-2">mut </span>tui = Tui::new().unwrap();
+    <span class="kw">let </span><span class="kw-2">mut </span>state = State { counter: <span class="number">0 </span>};
+    <span class="kw">let </span>input = Input::Resize(Size { width: <span class="number">80</span>, height: <span class="number">24 </span>});
+
+    <span class="comment">// Pass the input to the TUI.
+    </span>{
+        <span class="kw">let </span><span class="kw-2">mut </span>ctx = tui.create_context(<span class="prelude-val">Some</span>(input));
+        draw(<span class="kw-2">&amp;mut </span>ctx, <span class="kw-2">&amp;mut </span>state);
+    }
+
+    <span class="comment">// Continue until the layout has settled.
+    </span><span class="kw">while </span>tui.needs_settling() {
+        <span class="kw">let </span><span class="kw-2">mut </span>ctx = tui.create_context(<span class="prelude-val">None</span>);
+        draw(<span class="kw-2">&amp;mut </span>ctx, <span class="kw-2">&amp;mut </span>state);
+    }
+
+    <span class="comment">// Render the output.
+    </span><span class="kw">let </span>scratch = arena::scratch_arena(<span class="prelude-val">None</span>);
+    <span class="kw">let </span>output = tui.render(<span class="kw-2">&amp;*</span>scratch);
+    <span class="macro">println!</span>(<span class="string">"{}"</span>, output);
+}
+
+<span class="kw">fn </span>draw(ctx: <span class="kw-2">&amp;mut </span>Context, state: <span class="kw-2">&amp;mut </span>State) {
+    ctx.table_begin(<span class="string">"classname"</span>);
+    {
+        ctx.table_next_row();
+
+        <span class="comment">// Thanks to the lack of callbacks, we can use a primitive
+        // if condition here, as well as in any potential C code.
+        </span><span class="kw">if </span>ctx.button(<span class="string">"button"</span>, <span class="string">"Click me!"</span>, ButtonStyle::default()) {
+            state.counter += <span class="number">1</span>;
+        }
+
+        <span class="comment">// Similarly, formatting and showing labels is straightforward.
+        // It's impossible to forget updating the label this way.
+        </span>ctx.label(<span class="string">"label"</span>, <span class="kw-2">&amp;</span><span class="macro">arena_format!</span>(ctx.arena(), <span class="string">"Counter: {}"</span>, state.counter));
+    }
+    ctx.table_end();
+}</code></pre></div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.ButtonStyle.html" title="struct edit::tui::ButtonStyle">Button<wbr>Style</a></dt><dd>Controls the style with which a button label renders</dd><dt><a class="struct" href="struct.Context.html" title="struct edit::tui::Context">Context</a></dt><dd>Context is a temporary object that is created for each frame.
+Its primary purpose is to build a UI tree.</dd><dt><a class="struct" href="struct.FloatSpec.html" title="struct edit::tui::FloatSpec">Float<wbr>Spec</a></dt><dd>Controls the position of the floater. See <a href="struct.Context.html#method.attr_float" title="method edit::tui::Context::attr_float"><code>Context::attr_float</code></a>.</dd><dt><a class="struct" href="struct.ModifierTranslations.html" title="struct edit::tui::ModifierTranslations">Modifier<wbr>Translations</a></dt><dd>In order for the TUI to show the correct Ctrl/Alt/Shift
+translations, this struct lets you set them.</dd><dt><a class="struct" href="struct.Tui.html" title="struct edit::tui::Tui">Tui</a></dt><dd>There’s two types of lifetimes the TUI code needs to manage:</dd></dl><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.Anchor.html" title="enum edit::tui::Anchor">Anchor</a></dt><dd>Controls to which node the floater is anchored.</dd><dt><a class="enum" href="enum.ListSelection.html" title="enum edit::tui::ListSelection">List<wbr>Selection</a></dt><dd>Informs you about the change that was made to the list selection.</dd><dt><a class="enum" href="enum.Overflow.html" title="enum edit::tui::Overflow">Overflow</a></dt><dd>Controls the text overflow behavior of a label
+when the text doesn’t fit the container.</dd><dt><a class="enum" href="enum.Position.html" title="enum edit::tui::Position">Position</a></dt><dd>Controls the position of a node relative to its parent.</dd></dl></section></div></main></body></html>

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["init","scratch_arena"],"struct":["Arena","ArenaString","ScratchArena"]};

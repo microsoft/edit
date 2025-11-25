@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["COORD_TYPE_SAFE_MAX","GIBI","GIGA","KIBI","KILO","MEBI","MEGA"],"fn":["file_read_uninit","minmax","opt_ptr","opt_ptr_eq","slice_as_uninit_mut","slice_as_uninit_ref","slice_copy_safe","str_from_raw_parts"],"struct":["MetricFormatter","Point","Rect","Size"],"trait":["AsciiStringHelpers","ReplaceRange"],"type":["CoordType"]};

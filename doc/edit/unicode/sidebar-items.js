@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["setup_ambiguous_width","skip_newline","strip_newline"],"struct":["Cursor","MeasurementConfig","Utf8Chars"]};

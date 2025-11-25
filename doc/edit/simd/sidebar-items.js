@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["memchr2","memset"],"mod":["lines_bwd","lines_fwd"],"trait":["MemsetSafe"]};

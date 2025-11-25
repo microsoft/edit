@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ALT","ALT_SHIFT","CTRL","CTRL_ALT","CTRL_ALT_SHIFT","CTRL_SHIFT","NONE","SHIFT"]};

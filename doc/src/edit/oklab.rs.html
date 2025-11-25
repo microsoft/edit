@@ -1,0 +1,243 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/oklab.rs`."><title>oklab.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="edit" data-themes="" data-resource-suffix="" data-rustdoc-version="1.93.0-nightly (25d319a0f 2025-11-11)" data-channel="nightly" data-search-js="search-8e3fad08.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">edit/</div>oklab.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Copyright (c) Microsoft Corporation.
+<a href=#2 id=2 data-nosnippet>2</a>// Licensed under the MIT License.
+<a href=#3 id=3 data-nosnippet>3</a>
+<a href=#4 id=4 data-nosnippet>4</a></span><span class="doccomment">//! Oklab colorspace conversions.
+<a href=#5 id=5 data-nosnippet>5</a>//!
+<a href=#6 id=6 data-nosnippet>6</a>//! Implements Oklab as defined at: &lt;https://bottosson.github.io/posts/oklab/&gt;
+<a href=#7 id=7 data-nosnippet>7</a>
+<a href=#8 id=8 data-nosnippet>8</a></span><span class="attr">#![allow(clippy::excessive_precision)]
+<a href=#9 id=9 data-nosnippet>9</a>
+<a href=#10 id=10 data-nosnippet>10</a></span><span class="kw">use </span>std::fmt::Debug;
+<a href=#11 id=11 data-nosnippet>11</a>
+<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span><span class="kw">crate</span>::simd::MemsetSafe;
+<a href=#13 id=13 data-nosnippet>13</a>
+<a href=#14 id=14 data-nosnippet>14</a><span class="doccomment">/// A sRGB color with straight (= not premultiplied) alpha.
+<a href=#15 id=15 data-nosnippet>15</a></span><span class="attr">#[derive(Default, Clone, Copy, PartialEq, Eq)]
+<a href=#16 id=16 data-nosnippet>16</a>#[repr(transparent)]
+<a href=#17 id=17 data-nosnippet>17</a></span><span class="kw">pub struct </span>StraightRgba(u32);
+<a href=#18 id=18 data-nosnippet>18</a>
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">impl </span>StraightRgba {
+<a href=#20 id=20 data-nosnippet>20</a>    <span class="attr">#[inline]
+<a href=#21 id=21 data-nosnippet>21</a>    </span><span class="kw">pub const fn </span>zero() -&gt; <span class="self">Self </span>{
+<a href=#22 id=22 data-nosnippet>22</a>        StraightRgba(<span class="number">0</span>)
+<a href=#23 id=23 data-nosnippet>23</a>    }
+<a href=#24 id=24 data-nosnippet>24</a>
+<a href=#25 id=25 data-nosnippet>25</a>    <span class="attr">#[inline]
+<a href=#26 id=26 data-nosnippet>26</a>    </span><span class="kw">pub const fn </span>from_le(color: u32) -&gt; <span class="self">Self </span>{
+<a href=#27 id=27 data-nosnippet>27</a>        StraightRgba(u32::from_le(color))
+<a href=#28 id=28 data-nosnippet>28</a>    }
+<a href=#29 id=29 data-nosnippet>29</a>
+<a href=#30 id=30 data-nosnippet>30</a>    <span class="attr">#[inline]
+<a href=#31 id=31 data-nosnippet>31</a>    </span><span class="kw">pub const fn </span>from_be(color: u32) -&gt; <span class="self">Self </span>{
+<a href=#32 id=32 data-nosnippet>32</a>        StraightRgba(u32::from_be(color))
+<a href=#33 id=33 data-nosnippet>33</a>    }
+<a href=#34 id=34 data-nosnippet>34</a>
+<a href=#35 id=35 data-nosnippet>35</a>    <span class="attr">#[inline]
+<a href=#36 id=36 data-nosnippet>36</a>    </span><span class="kw">pub const fn </span>to_ne(<span class="self">self</span>) -&gt; u32 {
+<a href=#37 id=37 data-nosnippet>37</a>        <span class="self">self</span>.<span class="number">0
+<a href=#38 id=38 data-nosnippet>38</a>    </span>}
+<a href=#39 id=39 data-nosnippet>39</a>
+<a href=#40 id=40 data-nosnippet>40</a>    <span class="attr">#[inline]
+<a href=#41 id=41 data-nosnippet>41</a>    </span><span class="kw">pub const fn </span>to_le(<span class="self">self</span>) -&gt; u32 {
+<a href=#42 id=42 data-nosnippet>42</a>        <span class="self">self</span>.<span class="number">0</span>.to_le()
+<a href=#43 id=43 data-nosnippet>43</a>    }
+<a href=#44 id=44 data-nosnippet>44</a>
+<a href=#45 id=45 data-nosnippet>45</a>    <span class="attr">#[inline]
+<a href=#46 id=46 data-nosnippet>46</a>    </span><span class="kw">pub const fn </span>to_be(<span class="self">self</span>) -&gt; u32 {
+<a href=#47 id=47 data-nosnippet>47</a>        <span class="self">self</span>.<span class="number">0</span>.to_be()
+<a href=#48 id=48 data-nosnippet>48</a>    }
+<a href=#49 id=49 data-nosnippet>49</a>
+<a href=#50 id=50 data-nosnippet>50</a>    <span class="attr">#[inline]
+<a href=#51 id=51 data-nosnippet>51</a>    </span><span class="kw">pub const fn </span>red(<span class="self">self</span>) -&gt; u32 {
+<a href=#52 id=52 data-nosnippet>52</a>        <span class="self">self</span>.<span class="number">0 </span>&amp; <span class="number">0xff
+<a href=#53 id=53 data-nosnippet>53</a>    </span>}
+<a href=#54 id=54 data-nosnippet>54</a>
+<a href=#55 id=55 data-nosnippet>55</a>    <span class="attr">#[inline]
+<a href=#56 id=56 data-nosnippet>56</a>    </span><span class="kw">pub const fn </span>green(<span class="self">self</span>) -&gt; u32 {
+<a href=#57 id=57 data-nosnippet>57</a>        (<span class="self">self</span>.<span class="number">0 </span>&gt;&gt; <span class="number">8</span>) &amp; <span class="number">0xff
+<a href=#58 id=58 data-nosnippet>58</a>    </span>}
+<a href=#59 id=59 data-nosnippet>59</a>
+<a href=#60 id=60 data-nosnippet>60</a>    <span class="attr">#[inline]
+<a href=#61 id=61 data-nosnippet>61</a>    </span><span class="kw">pub const fn </span>blue(<span class="self">self</span>) -&gt; u32 {
+<a href=#62 id=62 data-nosnippet>62</a>        (<span class="self">self</span>.<span class="number">0 </span>&gt;&gt; <span class="number">16</span>) &amp; <span class="number">0xff
+<a href=#63 id=63 data-nosnippet>63</a>    </span>}
+<a href=#64 id=64 data-nosnippet>64</a>
+<a href=#65 id=65 data-nosnippet>65</a>    <span class="attr">#[inline]
+<a href=#66 id=66 data-nosnippet>66</a>    </span><span class="kw">pub const fn </span>alpha(<span class="self">self</span>) -&gt; u32 {
+<a href=#67 id=67 data-nosnippet>67</a>        <span class="self">self</span>.<span class="number">0 </span>&gt;&gt; <span class="number">24
+<a href=#68 id=68 data-nosnippet>68</a>    </span>}
+<a href=#69 id=69 data-nosnippet>69</a>
+<a href=#70 id=70 data-nosnippet>70</a>    <span class="kw">pub fn </span>oklab_blend(<span class="self">self</span>, top: StraightRgba) -&gt; StraightRgba {
+<a href=#71 id=71 data-nosnippet>71</a>        <span class="kw">let </span>bottom = <span class="self">self</span>.as_oklab();
+<a href=#72 id=72 data-nosnippet>72</a>        <span class="kw">let </span>top = top.as_oklab();
+<a href=#73 id=73 data-nosnippet>73</a>        <span class="kw">let </span>result = bottom.blend(<span class="kw-2">&amp;</span>top);
+<a href=#74 id=74 data-nosnippet>74</a>        result.as_rgba()
+<a href=#75 id=75 data-nosnippet>75</a>    }
+<a href=#76 id=76 data-nosnippet>76</a>
+<a href=#77 id=77 data-nosnippet>77</a>    <span class="kw">pub fn </span>as_oklab(<span class="self">self</span>) -&gt; Oklab {
+<a href=#78 id=78 data-nosnippet>78</a>        <span class="kw">let </span>r = srgb_to_linear(<span class="self">self</span>.red());
+<a href=#79 id=79 data-nosnippet>79</a>        <span class="kw">let </span>g = srgb_to_linear(<span class="self">self</span>.green());
+<a href=#80 id=80 data-nosnippet>80</a>        <span class="kw">let </span>b = srgb_to_linear(<span class="self">self</span>.blue());
+<a href=#81 id=81 data-nosnippet>81</a>        <span class="kw">let </span>alpha = <span class="self">self</span>.alpha() <span class="kw">as </span>f32 * (<span class="number">1.0 </span>/ <span class="number">255.0</span>);
+<a href=#82 id=82 data-nosnippet>82</a>
+<a href=#83 id=83 data-nosnippet>83</a>        <span class="kw">let </span>l = <span class="number">0.4122214708 </span>* r + <span class="number">0.5363325363 </span>* g + <span class="number">0.0514459929 </span>* b;
+<a href=#84 id=84 data-nosnippet>84</a>        <span class="kw">let </span>m = <span class="number">0.2119034982 </span>* r + <span class="number">0.6806995451 </span>* g + <span class="number">0.1073969566 </span>* b;
+<a href=#85 id=85 data-nosnippet>85</a>        <span class="kw">let </span>s = <span class="number">0.0883024619 </span>* r + <span class="number">0.2817188376 </span>* g + <span class="number">0.6299787005 </span>* b;
+<a href=#86 id=86 data-nosnippet>86</a>
+<a href=#87 id=87 data-nosnippet>87</a>        <span class="kw">let </span>l_ = cbrtf_est(l);
+<a href=#88 id=88 data-nosnippet>88</a>        <span class="kw">let </span>m_ = cbrtf_est(m);
+<a href=#89 id=89 data-nosnippet>89</a>        <span class="kw">let </span>s_ = cbrtf_est(s);
+<a href=#90 id=90 data-nosnippet>90</a>
+<a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">let </span>l = <span class="number">0.2104542553 </span>* l_ + <span class="number">0.7936177850 </span>* m_ - <span class="number">0.0040720468 </span>* s_;
+<a href=#92 id=92 data-nosnippet>92</a>        <span class="kw">let </span>a = <span class="number">1.9779984951 </span>* l_ - <span class="number">2.4285922050 </span>* m_ + <span class="number">0.4505937099 </span>* s_;
+<a href=#93 id=93 data-nosnippet>93</a>        <span class="kw">let </span>b = <span class="number">0.0259040371 </span>* l_ + <span class="number">0.7827717662 </span>* m_ - <span class="number">0.8086757660 </span>* s_;
+<a href=#94 id=94 data-nosnippet>94</a>
+<a href=#95 id=95 data-nosnippet>95</a>        Oklab([l, a, b, alpha])
+<a href=#96 id=96 data-nosnippet>96</a>    }
+<a href=#97 id=97 data-nosnippet>97</a>}
+<a href=#98 id=98 data-nosnippet>98</a>
+<a href=#99 id=99 data-nosnippet>99</a><span class="kw">impl </span>Debug <span class="kw">for </span>StraightRgba {
+<a href=#100 id=100 data-nosnippet>100</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+<a href=#101 id=101 data-nosnippet>101</a>        <span class="macro">write!</span>(f, <span class="string">"#{:08x}"</span>, <span class="self">self</span>.<span class="number">0</span>.to_be()) <span class="comment">// Display as a hex color
+<a href=#102 id=102 data-nosnippet>102</a>    </span>}
+<a href=#103 id=103 data-nosnippet>103</a>}
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a><span class="kw">unsafe impl </span>MemsetSafe <span class="kw">for </span>StraightRgba {}
+<a href=#106 id=106 data-nosnippet>106</a>
+<a href=#107 id=107 data-nosnippet>107</a><span class="doccomment">/// An Oklab color with alpha. By convention, it uses straight alpha.
+<a href=#108 id=108 data-nosnippet>108</a></span><span class="attr">#[derive(Clone, Copy)]
+<a href=#109 id=109 data-nosnippet>109</a></span><span class="kw">pub struct </span>Oklab([f32; <span class="number">4</span>]);
+<a href=#110 id=110 data-nosnippet>110</a>
+<a href=#111 id=111 data-nosnippet>111</a><span class="kw">impl </span>Oklab {
+<a href=#112 id=112 data-nosnippet>112</a>    <span class="attr">#[inline]
+<a href=#113 id=113 data-nosnippet>113</a>    </span><span class="kw">pub const fn </span>lightness(<span class="self">self</span>) -&gt; f32 {
+<a href=#114 id=114 data-nosnippet>114</a>        <span class="self">self</span>.<span class="number">0</span>[<span class="number">0</span>]
+<a href=#115 id=115 data-nosnippet>115</a>    }
+<a href=#116 id=116 data-nosnippet>116</a>
+<a href=#117 id=117 data-nosnippet>117</a>    <span class="attr">#[inline]
+<a href=#118 id=118 data-nosnippet>118</a>    </span><span class="kw">pub const fn </span>a(<span class="self">self</span>) -&gt; f32 {
+<a href=#119 id=119 data-nosnippet>119</a>        <span class="self">self</span>.<span class="number">0</span>[<span class="number">1</span>]
+<a href=#120 id=120 data-nosnippet>120</a>    }
+<a href=#121 id=121 data-nosnippet>121</a>
+<a href=#122 id=122 data-nosnippet>122</a>    <span class="attr">#[inline]
+<a href=#123 id=123 data-nosnippet>123</a>    </span><span class="kw">pub const fn </span>b(<span class="self">self</span>) -&gt; f32 {
+<a href=#124 id=124 data-nosnippet>124</a>        <span class="self">self</span>.<span class="number">0</span>[<span class="number">2</span>]
+<a href=#125 id=125 data-nosnippet>125</a>    }
+<a href=#126 id=126 data-nosnippet>126</a>
+<a href=#127 id=127 data-nosnippet>127</a>    <span class="attr">#[inline]
+<a href=#128 id=128 data-nosnippet>128</a>    </span><span class="kw">pub const fn </span>alpha(<span class="self">self</span>) -&gt; f32 {
+<a href=#129 id=129 data-nosnippet>129</a>        <span class="self">self</span>.<span class="number">0</span>[<span class="number">3</span>]
+<a href=#130 id=130 data-nosnippet>130</a>    }
+<a href=#131 id=131 data-nosnippet>131</a>
+<a href=#132 id=132 data-nosnippet>132</a>    <span class="kw">pub fn </span>as_rgba(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; StraightRgba {
+<a href=#133 id=133 data-nosnippet>133</a>        <span class="kw">let </span>l_ = <span class="self">self</span>.lightness() + <span class="number">0.3963377774 </span>* <span class="self">self</span>.a() + <span class="number">0.2158037573 </span>* <span class="self">self</span>.b();
+<a href=#134 id=134 data-nosnippet>134</a>        <span class="kw">let </span>m_ = <span class="self">self</span>.lightness() - <span class="number">0.1055613458 </span>* <span class="self">self</span>.a() - <span class="number">0.0638541728 </span>* <span class="self">self</span>.b();
+<a href=#135 id=135 data-nosnippet>135</a>        <span class="kw">let </span>s_ = <span class="self">self</span>.lightness() - <span class="number">0.0894841775 </span>* <span class="self">self</span>.a() - <span class="number">1.2914855480 </span>* <span class="self">self</span>.b();
+<a href=#136 id=136 data-nosnippet>136</a>
+<a href=#137 id=137 data-nosnippet>137</a>        <span class="kw">let </span>l = l_ * l_ * l_;
+<a href=#138 id=138 data-nosnippet>138</a>        <span class="kw">let </span>m = m_ * m_ * m_;
+<a href=#139 id=139 data-nosnippet>139</a>        <span class="kw">let </span>s = s_ * s_ * s_;
+<a href=#140 id=140 data-nosnippet>140</a>
+<a href=#141 id=141 data-nosnippet>141</a>        <span class="kw">let </span>r = <span class="number">4.0767416621 </span>* l - <span class="number">3.3077115913 </span>* m + <span class="number">0.2309699292 </span>* s;
+<a href=#142 id=142 data-nosnippet>142</a>        <span class="kw">let </span>g = -<span class="number">1.2684380046 </span>* l + <span class="number">2.6097574011 </span>* m - <span class="number">0.3413193965 </span>* s;
+<a href=#143 id=143 data-nosnippet>143</a>        <span class="kw">let </span>b = -<span class="number">0.0041960863 </span>* l - <span class="number">0.7034186147 </span>* m + <span class="number">1.7076147010 </span>* s;
+<a href=#144 id=144 data-nosnippet>144</a>
+<a href=#145 id=145 data-nosnippet>145</a>        <span class="kw">let </span>r = r.clamp(<span class="number">0.0</span>, <span class="number">1.0</span>);
+<a href=#146 id=146 data-nosnippet>146</a>        <span class="kw">let </span>g = g.clamp(<span class="number">0.0</span>, <span class="number">1.0</span>);
+<a href=#147 id=147 data-nosnippet>147</a>        <span class="kw">let </span>b = b.clamp(<span class="number">0.0</span>, <span class="number">1.0</span>);
+<a href=#148 id=148 data-nosnippet>148</a>        <span class="kw">let </span>alpha = <span class="self">self</span>.alpha().clamp(<span class="number">0.0</span>, <span class="number">1.0</span>);
+<a href=#149 id=149 data-nosnippet>149</a>
+<a href=#150 id=150 data-nosnippet>150</a>        <span class="kw">let </span>r = linear_to_srgb(r);
+<a href=#151 id=151 data-nosnippet>151</a>        <span class="kw">let </span>g = linear_to_srgb(g);
+<a href=#152 id=152 data-nosnippet>152</a>        <span class="kw">let </span>b = linear_to_srgb(b);
+<a href=#153 id=153 data-nosnippet>153</a>        <span class="kw">let </span>a = (alpha * <span class="number">255.0</span>) <span class="kw">as </span>u32;
+<a href=#154 id=154 data-nosnippet>154</a>
+<a href=#155 id=155 data-nosnippet>155</a>        StraightRgba(r | (g &lt;&lt; <span class="number">8</span>) | (b &lt;&lt; <span class="number">16</span>) | (a &lt;&lt; <span class="number">24</span>))
+<a href=#156 id=156 data-nosnippet>156</a>    }
+<a href=#157 id=157 data-nosnippet>157</a>
+<a href=#158 id=158 data-nosnippet>158</a>    <span class="doccomment">/// Porter-Duff "over" composition. It's for Lab, but it works just like with RGB.
+<a href=#159 id=159 data-nosnippet>159</a>    /// The benefit of the Oklab colorspace is its perceptual uniformity, which RGB lacks.
+<a href=#160 id=160 data-nosnippet>160</a>    /// This can be observed easily when blending red and green for instance.
+<a href=#161 id=161 data-nosnippet>161</a>    </span><span class="kw">pub fn </span>blend(<span class="kw-2">&amp;</span><span class="self">self</span>, top: <span class="kw-2">&amp;</span><span class="self">Self</span>) -&gt; <span class="self">Self </span>{
+<a href=#162 id=162 data-nosnippet>162</a>        <span class="kw">let </span>top_a = top.alpha();
+<a href=#163 id=163 data-nosnippet>163</a>        <span class="kw">let </span>bottom_a = <span class="self">self</span>.alpha() * (<span class="number">1.0 </span>- top_a);
+<a href=#164 id=164 data-nosnippet>164</a>        <span class="kw">let </span>l = top.lightness() * top_a + <span class="self">self</span>.lightness() * bottom_a;
+<a href=#165 id=165 data-nosnippet>165</a>        <span class="kw">let </span>a = top.a() * top_a + <span class="self">self</span>.a() * bottom_a;
+<a href=#166 id=166 data-nosnippet>166</a>        <span class="kw">let </span>b = top.b() * top_a + <span class="self">self</span>.b() * bottom_a;
+<a href=#167 id=167 data-nosnippet>167</a>        <span class="kw">let </span>alpha = top_a + bottom_a;
+<a href=#168 id=168 data-nosnippet>168</a>
+<a href=#169 id=169 data-nosnippet>169</a>        <span class="kw">let </span>inv_alpha = <span class="kw">if </span>alpha &gt; <span class="number">0.0 </span>{ <span class="number">1.0 </span>/ alpha } <span class="kw">else </span>{ <span class="number">0.0 </span>};
+<a href=#170 id=170 data-nosnippet>170</a>        <span class="kw">let </span>l = l * inv_alpha;
+<a href=#171 id=171 data-nosnippet>171</a>        <span class="kw">let </span>a = a * inv_alpha;
+<a href=#172 id=172 data-nosnippet>172</a>        <span class="kw">let </span>b = b * inv_alpha;
+<a href=#173 id=173 data-nosnippet>173</a>
+<a href=#174 id=174 data-nosnippet>174</a>        <span class="self">Self</span>([l, a, b, alpha])
+<a href=#175 id=175 data-nosnippet>175</a>    }
+<a href=#176 id=176 data-nosnippet>176</a>}
+<a href=#177 id=177 data-nosnippet>177</a>
+<a href=#178 id=178 data-nosnippet>178</a><span class="kw">fn </span>srgb_to_linear(c: u32) -&gt; f32 {
+<a href=#179 id=179 data-nosnippet>179</a>    SRGB_TO_RGB_LUT[(c &amp; <span class="number">0xff</span>) <span class="kw">as </span>usize]
+<a href=#180 id=180 data-nosnippet>180</a>}
+<a href=#181 id=181 data-nosnippet>181</a>
+<a href=#182 id=182 data-nosnippet>182</a><span class="kw">fn </span>linear_to_srgb(c: f32) -&gt; u32 {
+<a href=#183 id=183 data-nosnippet>183</a>    (<span class="kw">if </span>c &gt; <span class="number">0.0031308 </span>{
+<a href=#184 id=184 data-nosnippet>184</a>        <span class="number">255.0 </span>* <span class="number">1.055 </span>* c.powf(<span class="number">1.0 </span>/ <span class="number">2.4</span>) - <span class="number">255.0 </span>* <span class="number">0.055
+<a href=#185 id=185 data-nosnippet>185</a>    </span>} <span class="kw">else </span>{
+<a href=#186 id=186 data-nosnippet>186</a>        <span class="number">255.0 </span>* <span class="number">12.92 </span>* c
+<a href=#187 id=187 data-nosnippet>187</a>    }) <span class="kw">as </span>u32
+<a href=#188 id=188 data-nosnippet>188</a>}
+<a href=#189 id=189 data-nosnippet>189</a>
+<a href=#190 id=190 data-nosnippet>190</a><span class="attr">#[inline]
+<a href=#191 id=191 data-nosnippet>191</a></span><span class="kw">fn </span>cbrtf_est(a: f32) -&gt; f32 {
+<a href=#192 id=192 data-nosnippet>192</a>    <span class="comment">// http://metamerist.com/cbrt/cbrt.htm showed a great estimator for the cube root:
+<a href=#193 id=193 data-nosnippet>193</a>    //   f32_as_uint32_t / 3 + 709921077
+<a href=#194 id=194 data-nosnippet>194</a>    // It's similar to the well known "fast inverse square root" trick.
+<a href=#195 id=195 data-nosnippet>195</a>    // Lots of numbers around 709921077 perform at least equally well to 709921077,
+<a href=#196 id=196 data-nosnippet>196</a>    // and it is unknown how and why 709921077 was chosen specifically.
+<a href=#197 id=197 data-nosnippet>197</a>    </span><span class="kw">let </span>u: u32 = f32::to_bits(a); <span class="comment">// evil f32ing point bit level hacking
+<a href=#198 id=198 data-nosnippet>198</a>    </span><span class="kw">let </span>u = u / <span class="number">3 </span>+ <span class="number">709921077</span>; <span class="comment">// what the fuck?
+<a href=#199 id=199 data-nosnippet>199</a>    </span><span class="kw">let </span>x: f32 = f32::from_bits(u);
+<a href=#200 id=200 data-nosnippet>200</a>
+<a href=#201 id=201 data-nosnippet>201</a>    <span class="comment">// One round of Newton's method. It follows the Wikipedia article at
+<a href=#202 id=202 data-nosnippet>202</a>    //   https://en.wikipedia.org/wiki/Cube_root#Numerical_methods
+<a href=#203 id=203 data-nosnippet>203</a>    // For `a`s in the range between 0 and 1, this results in a maximum error of
+<a href=#204 id=204 data-nosnippet>204</a>    // less than 6.7e-4f, which is not good, but good enough for us, because
+<a href=#205 id=205 data-nosnippet>205</a>    // we're not an image editor. The benefit is that it's really fast.
+<a href=#206 id=206 data-nosnippet>206</a>    </span>(<span class="number">1.0 </span>/ <span class="number">3.0</span>) * (a / (x * x) + (x + x)) <span class="comment">// 1st iteration
+<a href=#207 id=207 data-nosnippet>207</a></span>}
+<a href=#208 id=208 data-nosnippet>208</a>
+<a href=#209 id=209 data-nosnippet>209</a><span class="attr">#[rustfmt::skip]
+<a href=#210 id=210 data-nosnippet>210</a>#[allow(clippy::excessive_precision)]
+<a href=#211 id=211 data-nosnippet>211</a></span><span class="kw">const </span>SRGB_TO_RGB_LUT: [f32; <span class="number">256</span>] = [
+<a href=#212 id=212 data-nosnippet>212</a>    <span class="number">0.0000000000</span>, <span class="number">0.0003035270</span>, <span class="number">0.0006070540</span>, <span class="number">0.0009105810</span>, <span class="number">0.0012141080</span>, <span class="number">0.0015176350</span>, <span class="number">0.0018211619</span>, <span class="number">0.0021246888</span>, <span class="number">0.0024282159</span>, <span class="number">0.0027317430</span>, <span class="number">0.0030352699</span>, <span class="number">0.0033465356</span>, <span class="number">0.0036765069</span>, <span class="number">0.0040247170</span>, <span class="number">0.0043914421</span>, <span class="number">0.0047769533</span>,
+<a href=#213 id=213 data-nosnippet>213</a>    <span class="number">0.0051815170</span>, <span class="number">0.0056053917</span>, <span class="number">0.0060488326</span>, <span class="number">0.0065120910</span>, <span class="number">0.0069954102</span>, <span class="number">0.0074990317</span>, <span class="number">0.0080231922</span>, <span class="number">0.0085681248</span>, <span class="number">0.0091340570</span>, <span class="number">0.0097212177</span>, <span class="number">0.0103298230</span>, <span class="number">0.0109600937</span>, <span class="number">0.0116122449</span>, <span class="number">0.0122864870</span>, <span class="number">0.0129830306</span>, <span class="number">0.0137020806</span>,
+<a href=#214 id=214 data-nosnippet>214</a>    <span class="number">0.0144438436</span>, <span class="number">0.0152085144</span>, <span class="number">0.0159962922</span>, <span class="number">0.0168073755</span>, <span class="number">0.0176419523</span>, <span class="number">0.0185002182</span>, <span class="number">0.0193823613</span>, <span class="number">0.0202885624</span>, <span class="number">0.0212190095</span>, <span class="number">0.0221738834</span>, <span class="number">0.0231533647</span>, <span class="number">0.0241576303</span>, <span class="number">0.0251868572</span>, <span class="number">0.0262412224</span>, <span class="number">0.0273208916</span>, <span class="number">0.0284260381</span>,
+<a href=#215 id=215 data-nosnippet>215</a>    <span class="number">0.0295568332</span>, <span class="number">0.0307134409</span>, <span class="number">0.0318960287</span>, <span class="number">0.0331047624</span>, <span class="number">0.0343398079</span>, <span class="number">0.0356013142</span>, <span class="number">0.0368894450</span>, <span class="number">0.0382043645</span>, <span class="number">0.0395462364</span>, <span class="number">0.0409151986</span>, <span class="number">0.0423114114</span>, <span class="number">0.0437350273</span>, <span class="number">0.0451862030</span>, <span class="number">0.0466650836</span>, <span class="number">0.0481718220</span>, <span class="number">0.0497065634</span>,
+<a href=#216 id=216 data-nosnippet>216</a>    <span class="number">0.0512694679</span>, <span class="number">0.0528606549</span>, <span class="number">0.0544802807</span>, <span class="number">0.0561284944</span>, <span class="number">0.0578054339</span>, <span class="number">0.0595112406</span>, <span class="number">0.0612460710</span>, <span class="number">0.0630100295</span>, <span class="number">0.0648032799</span>, <span class="number">0.0666259527</span>, <span class="number">0.0684781820</span>, <span class="number">0.0703601092</span>, <span class="number">0.0722718611</span>, <span class="number">0.0742135793</span>, <span class="number">0.0761853904</span>, <span class="number">0.0781874284</span>,
+<a href=#217 id=217 data-nosnippet>217</a>    <span class="number">0.0802198276</span>, <span class="number">0.0822827145</span>, <span class="number">0.0843762159</span>, <span class="number">0.0865004659</span>, <span class="number">0.0886556059</span>, <span class="number">0.0908417329</span>, <span class="number">0.0930589810</span>, <span class="number">0.0953074843</span>, <span class="number">0.0975873619</span>, <span class="number">0.0998987406</span>, <span class="number">0.1022417471</span>, <span class="number">0.1046164930</span>, <span class="number">0.1070231125</span>, <span class="number">0.1094617173</span>, <span class="number">0.1119324341</span>, <span class="number">0.1144353822</span>,
+<a href=#218 id=218 data-nosnippet>218</a>    <span class="number">0.1169706732</span>, <span class="number">0.1195384338</span>, <span class="number">0.1221387982</span>, <span class="number">0.1247718409</span>, <span class="number">0.1274376959</span>, <span class="number">0.1301364899</span>, <span class="number">0.1328683347</span>, <span class="number">0.1356333494</span>, <span class="number">0.1384316236</span>, <span class="number">0.1412633061</span>, <span class="number">0.1441284865</span>, <span class="number">0.1470272839</span>, <span class="number">0.1499598026</span>, <span class="number">0.1529261619</span>, <span class="number">0.1559264660</span>, <span class="number">0.1589608639</span>,
+<a href=#219 id=219 data-nosnippet>219</a>    <span class="number">0.1620294005</span>, <span class="number">0.1651322246</span>, <span class="number">0.1682693958</span>, <span class="number">0.1714410931</span>, <span class="number">0.1746473908</span>, <span class="number">0.1778884083</span>, <span class="number">0.1811642349</span>, <span class="number">0.1844749898</span>, <span class="number">0.1878207624</span>, <span class="number">0.1912016720</span>, <span class="number">0.1946178079</span>, <span class="number">0.1980693042</span>, <span class="number">0.2015562356</span>, <span class="number">0.2050787061</span>, <span class="number">0.2086368501</span>, <span class="number">0.2122307271</span>,
+<a href=#220 id=220 data-nosnippet>220</a>    <span class="number">0.2158605307</span>, <span class="number">0.2195262313</span>, <span class="number">0.2232279778</span>, <span class="number">0.2269658893</span>, <span class="number">0.2307400703</span>, <span class="number">0.2345506549</span>, <span class="number">0.2383976579</span>, <span class="number">0.2422811985</span>, <span class="number">0.2462013960</span>, <span class="number">0.2501583695</span>, <span class="number">0.2541521788</span>, <span class="number">0.2581829131</span>, <span class="number">0.2622507215</span>, <span class="number">0.2663556635</span>, <span class="number">0.2704978585</span>, <span class="number">0.2746773660</span>,
+<a href=#221 id=221 data-nosnippet>221</a>    <span class="number">0.2788943350</span>, <span class="number">0.2831487954</span>, <span class="number">0.2874408960</span>, <span class="number">0.2917706966</span>, <span class="number">0.2961383164</span>, <span class="number">0.3005438447</span>, <span class="number">0.3049873710</span>, <span class="number">0.3094689548</span>, <span class="number">0.3139887452</span>, <span class="number">0.3185468316</span>, <span class="number">0.3231432438</span>, <span class="number">0.3277781308</span>, <span class="number">0.3324515820</span>, <span class="number">0.3371636569</span>, <span class="number">0.3419144452</span>, <span class="number">0.3467040956</span>,
+<a href=#222 id=222 data-nosnippet>222</a>    <span class="number">0.3515326977</span>, <span class="number">0.3564002514</span>, <span class="number">0.3613068759</span>, <span class="number">0.3662526906</span>, <span class="number">0.3712377846</span>, <span class="number">0.3762622178</span>, <span class="number">0.3813261092</span>, <span class="number">0.3864295185</span>, <span class="number">0.3915725648</span>, <span class="number">0.3967553079</span>, <span class="number">0.4019778669</span>, <span class="number">0.4072403014</span>, <span class="number">0.4125427008</span>, <span class="number">0.4178851545</span>, <span class="number">0.4232677519</span>, <span class="number">0.4286905527</span>,
+<a href=#223 id=223 data-nosnippet>223</a>    <span class="number">0.4341537058</span>, <span class="number">0.4396572411</span>, <span class="number">0.4452012479</span>, <span class="number">0.4507858455</span>, <span class="number">0.4564110637</span>, <span class="number">0.4620770514</span>, <span class="number">0.4677838385</span>, <span class="number">0.4735315442</span>, <span class="number">0.4793202281</span>, <span class="number">0.4851499796</span>, <span class="number">0.4910208881</span>, <span class="number">0.4969330430</span>, <span class="number">0.5028865933</span>, <span class="number">0.5088814497</span>, <span class="number">0.5149177909</span>, <span class="number">0.5209956765</span>,
+<a href=#224 id=224 data-nosnippet>224</a>    <span class="number">0.5271152258</span>, <span class="number">0.5332764983</span>, <span class="number">0.5394796133</span>, <span class="number">0.5457245708</span>, <span class="number">0.5520114899</span>, <span class="number">0.5583404899</span>, <span class="number">0.5647116303</span>, <span class="number">0.5711249113</span>, <span class="number">0.5775805116</span>, <span class="number">0.5840784907</span>, <span class="number">0.5906189084</span>, <span class="number">0.5972018838</span>, <span class="number">0.6038274169</span>, <span class="number">0.6104956269</span>, <span class="number">0.6172066331</span>, <span class="number">0.6239604354</span>,
+<a href=#225 id=225 data-nosnippet>225</a>    <span class="number">0.6307572126</span>, <span class="number">0.6375969648</span>, <span class="number">0.6444797516</span>, <span class="number">0.6514056921</span>, <span class="number">0.6583748460</span>, <span class="number">0.6653873324</span>, <span class="number">0.6724432111</span>, <span class="number">0.6795425415</span>, <span class="number">0.6866854429</span>, <span class="number">0.6938719153</span>, <span class="number">0.7011020184</span>, <span class="number">0.7083759308</span>, <span class="number">0.7156936526</span>, <span class="number">0.7230552435</span>, <span class="number">0.7304608822</span>, <span class="number">0.7379105687</span>,
+<a href=#226 id=226 data-nosnippet>226</a>    <span class="number">0.7454043627</span>, <span class="number">0.7529423237</span>, <span class="number">0.7605246305</span>, <span class="number">0.7681512833</span>, <span class="number">0.7758223414</span>, <span class="number">0.7835379243</span>, <span class="number">0.7912980318</span>, <span class="number">0.7991028428</span>, <span class="number">0.8069523573</span>, <span class="number">0.8148466945</span>, <span class="number">0.8227858543</span>, <span class="number">0.8307699561</span>, <span class="number">0.8387991190</span>, <span class="number">0.8468732834</span>, <span class="number">0.8549926877</span>, <span class="number">0.8631572723</span>,
+<a href=#227 id=227 data-nosnippet>227</a>    <span class="number">0.8713672161</span>, <span class="number">0.8796223402</span>, <span class="number">0.8879231811</span>, <span class="number">0.8962693810</span>, <span class="number">0.9046613574</span>, <span class="number">0.9130986929</span>, <span class="number">0.9215820432</span>, <span class="number">0.9301108718</span>, <span class="number">0.9386858940</span>, <span class="number">0.9473065734</span>, <span class="number">0.9559735060</span>, <span class="number">0.9646862745</span>, <span class="number">0.9734454751</span>, <span class="number">0.9822505713</span>, <span class="number">0.9911022186</span>, <span class="number">1.0000000000</span>,
+<a href=#228 id=228 data-nosnippet>228</a>];
+<a href=#229 id=229 data-nosnippet>229</a>
+<a href=#230 id=230 data-nosnippet>230</a><span class="attr">#[cfg(test)]
+<a href=#231 id=231 data-nosnippet>231</a></span><span class="kw">mod </span>tests {
+<a href=#232 id=232 data-nosnippet>232</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#233 id=233 data-nosnippet>233</a>
+<a href=#234 id=234 data-nosnippet>234</a>    <span class="attr">#[test]
+<a href=#235 id=235 data-nosnippet>235</a>    </span><span class="kw">fn </span>test_blending() {
+<a href=#236 id=236 data-nosnippet>236</a>        <span class="kw">let </span>lower = StraightRgba::from_be(<span class="number">0x3498dbff</span>);
+<a href=#237 id=237 data-nosnippet>237</a>        <span class="kw">let </span>upper = StraightRgba::from_be(<span class="number">0xe74c3c7f</span>);
+<a href=#238 id=238 data-nosnippet>238</a>        <span class="kw">let </span>expected = StraightRgba::from_be(<span class="number">0xa67f93ff</span>);
+<a href=#239 id=239 data-nosnippet>239</a>        <span class="kw">let </span>blended = lower.oklab_blend(upper);
+<a href=#240 id=240 data-nosnippet>240</a>        <span class="macro">assert_eq!</span>(blended, expected);
+<a href=#241 id=241 data-nosnippet>241</a>    }
+<a href=#242 id=242 data-nosnippet>242</a>}
+</code></pre></div></section></main></body></html>
