@@ -33,6 +33,7 @@ use std::mem::{self, MaybeUninit};
 use std::ops::Range;
 use std::rc::Rc;
 use std::str;
+use std::collections::HashMap;
 
 pub use gap_buffer::GapBuffer;
 
@@ -46,6 +47,7 @@ use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
 use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
 use crate::{apperr, icu, simd};
+use crate::syntax;
 
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,
@@ -245,6 +247,9 @@ pub struct TextBuffer {
     overtype: bool,
 
     wants_cursor_visibility: bool,
+    // Cache of tokenization results keyed by the starting byte-offset of
+    // the displayed fragment.
+    token_cache: HashMap<usize, Vec<crate::syntax::Token>>,
 }
 
 impl TextBuffer {
@@ -293,6 +298,7 @@ impl TextBuffer {
             overtype: false,
 
             wants_cursor_visibility: false,
+            token_cache: HashMap::new(),
         })
     }
 
@@ -655,6 +661,8 @@ impl TextBuffer {
         self.cursor = Default::default();
         self.set_selection(None);
         self.mark_as_clean();
+        // Clear token cache because the whole buffer changed.
+        self.token_cache.clear();
         self.reflow();
     }
 
@@ -1963,9 +1971,38 @@ impl TextBuffer {
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
 
-            fb.replace_text(destination.top + y, destination.left, destination.right, &line);
+                fb.replace_text(destination.top + y, destination.left, destination.right, &line);
 
-            cursor = cursor_end;
+                // Basic generic syntax highlighting (display-line tokenizer).
+                // Use a per-fragment cache keyed by the starting byte offset of the
+                // displayed fragment (`cursor_beg.offset`). This avoids re-tokenizing
+                // unchanged fragments.
+                let start_offset = cursor_beg.offset;
+                let tokens = if let Some(cached) = self.token_cache.get(&start_offset) {
+                    cached.clone()
+                } else {
+                    let t = crate::syntax::tokenize_display_line(&line);
+                    self.token_cache.insert(start_offset, t.clone());
+                    t
+                };
+
+                for tok in tokens.iter() {
+                    if matches!(tok.kind, crate::syntax::TokenKind::Whitespace) {
+                        continue;
+                    }
+
+                    let left = destination.left + self.margin_width + tok.start as CoordType;
+                    let right = left + (tok.end.saturating_sub(tok.start)) as CoordType;
+                    if left >= destination.right || right <= destination.left {
+                        continue;
+                    }
+
+                    let rect = Rect { left: left.max(destination.left), top: destination.top + y, right: right.min(destination.right), bottom: destination.top + y + 1 };
+                    let color = crate::syntax::token_kind_color(tok.kind);
+                    fb.blend_fg(rect, fb.indexed(color));
+                }
+
+                cursor = cursor_end;
         }
 
         // Colorize the margin that we wrote above.
@@ -2611,6 +2648,15 @@ impl TextBuffer {
     fn edit_write(&mut self, text: &[u8]) {
         let logical_y_before = self.cursor.logical_pos.y;
 
+        // Invalidate token cache entries starting at/after the line that contains
+        // the active edit offset. This makes the cache per-line relative to
+        // fragment starting offsets and avoids full-cache clears for small edits.
+        let off = self.active_edit_off;
+        let cursor_at_off = self.cursor_move_to_offset_internal(self.cursor, off);
+        let start_cursor = self.goto_line_start(cursor_at_off, cursor_at_off.logical_pos.y);
+        let start_off = start_cursor.offset;
+        self.token_cache.retain(|&k, _| k < start_off);
+
         // Copy the written portion into the undo entry.
         {
             let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
@@ -2635,6 +2681,14 @@ impl TextBuffer {
         let logical_y_before = self.cursor.logical_pos.y;
         let off = self.active_edit_off;
         let mut out_off = usize::MAX;
+
+        // Invalidate token cache entries starting at/after the line that contains
+        // the deletion start offset (`off`). This prevents stale tokens from
+        // being reused after deletion.
+        let cursor_at_off = self.cursor_move_to_offset_internal(self.cursor, off);
+        let start_cursor = self.goto_line_start(cursor_at_off, cursor_at_off.logical_pos.y);
+        let start_off = start_cursor.offset;
+        self.token_cache.retain(|&k, _| k < start_off);
 
         let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
 
