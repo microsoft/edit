@@ -250,6 +250,8 @@ pub struct TextBuffer {
     // Cache of tokenization results keyed by the starting byte-offset of
     // the displayed fragment.
     token_cache: HashMap<usize, Vec<crate::syntax::Token>>,
+    // Whether syntax highlighting is enabled for this buffer.
+    syntax_highlight_enabled: bool,
 }
 
 impl TextBuffer {
@@ -299,6 +301,7 @@ impl TextBuffer {
 
             wants_cursor_visibility: false,
             token_cache: HashMap::new(),
+            syntax_highlight_enabled: true,
         })
     }
 
@@ -663,6 +666,7 @@ impl TextBuffer {
         self.mark_as_clean();
         // Clear token cache because the whole buffer changed.
         self.token_cache.clear();
+        // Keep highlighting enabled by default; caller may toggle.
         self.reflow();
     }
 
@@ -1976,14 +1980,18 @@ impl TextBuffer {
                 // Basic generic syntax highlighting (display-line tokenizer).
                 // Use a per-fragment cache keyed by the starting byte offset of the
                 // displayed fragment (`cursor_beg.offset`). This avoids re-tokenizing
-                // unchanged fragments.
+                // unchanged fragments. Only run when enabled.
                 let start_offset = cursor_beg.offset;
-                let tokens = if let Some(cached) = self.token_cache.get(&start_offset) {
-                    cached.clone()
+                let tokens = if self.syntax_highlight_enabled {
+                    if let Some(cached) = self.token_cache.get(&start_offset) {
+                        cached.clone()
+                    } else {
+                        let t = crate::syntax::tokenize_display_line(&line);
+                        self.token_cache.insert(start_offset, t.clone());
+                        t
+                    }
                 } else {
-                    let t = crate::syntax::tokenize_display_line(&line);
-                    self.token_cache.insert(start_offset, t.clone());
-                    t
+                    Vec::new()
                 };
 
                 for tok in tokens.iter() {
@@ -2115,6 +2123,19 @@ impl TextBuffer {
     /// The only transformation applied is that newlines are normalized.
     pub fn write_raw(&mut self, text: &[u8]) {
         self.write(text, self.cursor, true);
+    }
+
+    /// Enable or disable syntax highlighting for this buffer.
+    pub fn set_syntax_highlight_enabled(&mut self, enabled: bool) {
+        if self.syntax_highlight_enabled != enabled {
+            self.syntax_highlight_enabled = enabled;
+            self.token_cache.clear();
+        }
+    }
+
+    /// Returns whether syntax highlighting is enabled for this buffer.
+    pub fn is_syntax_highlight_enabled(&self) -> bool {
+        self.syntax_highlight_enabled
     }
 
     fn write(&mut self, text: &[u8], at: Cursor, raw: bool) {
@@ -2651,11 +2672,13 @@ impl TextBuffer {
         // Invalidate token cache entries starting at/after the line that contains
         // the active edit offset. This makes the cache per-line relative to
         // fragment starting offsets and avoids full-cache clears for small edits.
-        let off = self.active_edit_off;
-        let cursor_at_off = self.cursor_move_to_offset_internal(self.cursor, off);
-        let start_cursor = self.goto_line_start(cursor_at_off, cursor_at_off.logical_pos.y);
-        let start_off = start_cursor.offset;
-        self.token_cache.retain(|&k, _| k < start_off);
+        if self.syntax_highlight_enabled {
+            let off = self.active_edit_off;
+            let cursor_at_off = self.cursor_move_to_offset_internal(self.cursor, off);
+            let start_cursor = self.goto_line_start(cursor_at_off, cursor_at_off.logical_pos.y);
+            let start_off = start_cursor.offset;
+            self.token_cache.retain(|&k, _| k < start_off);
+        }
 
         // Copy the written portion into the undo entry.
         {
@@ -2685,10 +2708,12 @@ impl TextBuffer {
         // Invalidate token cache entries starting at/after the line that contains
         // the deletion start offset (`off`). This prevents stale tokens from
         // being reused after deletion.
-        let cursor_at_off = self.cursor_move_to_offset_internal(self.cursor, off);
-        let start_cursor = self.goto_line_start(cursor_at_off, cursor_at_off.logical_pos.y);
-        let start_off = start_cursor.offset;
-        self.token_cache.retain(|&k, _| k < start_off);
+        if self.syntax_highlight_enabled {
+            let cursor_at_off = self.cursor_move_to_offset_internal(self.cursor, off);
+            let start_cursor = self.goto_line_start(cursor_at_off, cursor_at_off.logical_pos.y);
+            let start_off = start_cursor.offset;
+            self.token_cache.retain(|&k, _| k < start_off);
+        }
 
         let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
 

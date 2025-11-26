@@ -30,67 +30,59 @@ pub struct Token {
 /// keeps things minimal and avoids allocations where possible.
 pub fn tokenize_display_line(line: &str) -> Vec<Token> {
     let mut out = Vec::new();
-    let mut chars = line.chars().peekable();
-    let mut col = 0usize;
+    let mut iter = line.char_indices().peekable();
 
-    while let Some(&ch) = chars.peek() {
-        // Determine token start at current column.
-        let start = col;
-
+    while let Some(&(start, ch)) = iter.peek() {
+        // Whitespace run
         if ch.is_whitespace() {
-            // Whitespace run
-            let mut len = 0usize;
-            while let Some(&c) = chars.peek() {
+            // consume run
+            iter.next();
+            while let Some(&(_, c)) = iter.peek() {
                 if !c.is_whitespace() { break; }
-                chars.next();
-                len += 1;
+                iter.next();
             }
-            out.push(Token { kind: TokenKind::Whitespace, start, end: start + len });
-            col += len;
+            let end = iter.peek().map(|(i, _)| *i).unwrap_or(line.len());
+            out.push(Token { kind: TokenKind::Whitespace, start, end });
             continue;
         }
 
-        // Line comment: starts with '#' or '//' sequence.
+        // Line comment starting with '#'
         if ch == '#' {
-            // consume rest of line as comment
-            let mut len = 0usize;
-            while let Some(c) = chars.next() {
-                len += 1;
-            }
-            out.push(Token { kind: TokenKind::Comment, start, end: start + len });
-            col += len;
+            let end = line.len();
+            // consume remaining
+            iter.next();
+            while iter.next().is_some() {}
+            out.push(Token { kind: TokenKind::Comment, start, end });
             break;
         }
 
+        // Possible '//' comment or punctuation '/'
         if ch == '/' {
-            // possible // comment
-            chars.next();
-            if let Some(&'/') = chars.peek() {
-                // consume the second '/'
-                chars.next();
-                let mut len = 2usize;
-                while let Some(c) = chars.next() {
-                    len += 1;
-                }
-                out.push(Token { kind: TokenKind::Comment, start, end: start + len });
-                col += len;
+            iter.next();
+            if let Some(&(_, '/')) = iter.peek() {
+                // consume second '/'
+                iter.next();
+                // consume rest
+                while iter.next().is_some() {}
+                let end = line.len();
+                out.push(Token { kind: TokenKind::Comment, start, end });
                 break;
             } else {
-                // it's punctuation '/'
-                out.push(Token { kind: TokenKind::Punctuation, start, end: start + 1 });
-                col += 1;
+                let end = iter.peek().map(|(i, _)| *i).unwrap_or(line.len());
+                out.push(Token { kind: TokenKind::Punctuation, start, end });
                 continue;
             }
         }
 
-        // Strings: "..." or '...'
+        // Strings
         if ch == '"' || ch == '\'' {
             let quote = ch;
-            chars.next();
-            let mut len = 1usize;
+            // consume opening
+            iter.next();
+            let mut last_idx = start + quote.len_utf8();
             let mut escaped = false;
-            while let Some(c) = chars.next() {
-                len += 1;
+            while let Some((i, c)) = iter.next() {
+                last_idx = i + c.len_utf8();
                 if escaped {
                     escaped = false;
                     continue;
@@ -103,37 +95,37 @@ pub fn tokenize_display_line(line: &str) -> Vec<Token> {
                     break;
                 }
             }
-            out.push(Token { kind: TokenKind::String, start, end: start + len });
-            col += len;
+            let end = last_idx;
+            out.push(Token { kind: TokenKind::String, start, end });
             continue;
         }
 
-        // Numbers: start with digit
+        // Numbers
         if ch.is_ascii_digit() {
-            let mut len = 0usize;
-            while let Some(&c) = chars.peek() {
-                if c.is_ascii_digit() || c == '.' || c == '_' { chars.next(); len += 1; } else { break }
+            iter.next();
+            while let Some(&(_, c)) = iter.peek() {
+                if c.is_ascii_digit() || c == '.' || c == '_' { iter.next(); } else { break }
             }
-            out.push(Token { kind: TokenKind::Number, start, end: start + len });
-            col += len;
+            let end = iter.peek().map(|(i, _)| *i).unwrap_or(line.len());
+            out.push(Token { kind: TokenKind::Number, start, end });
             continue;
         }
 
-        // Identifier: starts with letter or underscore
+        // Identifier
         if ch.is_alphabetic() || ch == '_' {
-            let mut len = 0usize;
-            while let Some(&c) = chars.peek() {
-                if c.is_alphanumeric() || c == '_' { chars.next(); len += 1; } else { break }
+            iter.next();
+            while let Some(&(_, c)) = iter.peek() {
+                if c.is_alphanumeric() || c == '_' { iter.next(); } else { break }
             }
-            out.push(Token { kind: TokenKind::Identifier, start, end: start + len });
-            col += len;
+            let end = iter.peek().map(|(i, _)| *i).unwrap_or(line.len());
+            out.push(Token { kind: TokenKind::Identifier, start, end });
             continue;
         }
 
-        // Punctuation/other single char
-        chars.next();
-        out.push(Token { kind: TokenKind::Punctuation, start, end: start + 1 });
-        col += 1;
+        // Punctuation single char
+        iter.next();
+        let end = iter.peek().map(|(i, _)| *i).unwrap_or(line.len());
+        out.push(Token { kind: TokenKind::Punctuation, start, end });
     }
 
     out
