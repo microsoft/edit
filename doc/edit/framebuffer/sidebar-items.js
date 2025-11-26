@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["DEFAULT_THEME","INDEXED_COLORS_COUNT"],"enum":["IndexedColor"],"struct":["Attributes","Framebuffer"]};

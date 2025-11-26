@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Input","InputMouseState"],"mod":["kbmod","vk"],"struct":["InputKey","InputKeyMod","InputMouse","Parser","Stream"]};

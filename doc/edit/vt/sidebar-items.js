@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Token"],"struct":["Csi","Parser","Stream"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["hash","hash_str","wymix"],"struct":["WyHash"]};

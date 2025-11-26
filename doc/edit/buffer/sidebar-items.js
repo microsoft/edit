@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Bom","CursorMovement","MoveLineDirection"],"struct":["GapBuffer","RenderResult","SearchOptions","TextBuffer","TextBufferStatistics"],"type":["RcTextBuffer","TextBufferCell"]};

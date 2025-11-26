@@ -1,2 +1,0 @@
-createSrcSidebar('[["edit",["",[["arena",[],["debug.rs","mod.rs","release.rs","scratch.rs","string.rs"]],["buffer",[],["gap_buffer.rs","mod.rs","navigation.rs"]],["simd",[],["lines_bwd.rs","lines_fwd.rs","memchr2.rs","memset.rs","mod.rs"]],["sys",[],["mod.rs","unix.rs"]],["unicode",[],["measurement.rs","mod.rs","tables.rs","utf8.rs"]]],["apperr.rs","base64.rs","cell.rs","clipboard.rs","document.rs","framebuffer.rs","fuzzy.rs","hash.rs","helpers.rs","icu.rs","input.rs","lib.rs","oklab.rs","path.rs","tui.rs","vt.rs"]]]]');
-//{"start":19,"fragment_lengths":[503]}

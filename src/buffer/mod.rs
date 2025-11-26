@@ -47,7 +47,6 @@ use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
 use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
 use crate::{apperr, icu, simd};
-use crate::syntax;
 
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,

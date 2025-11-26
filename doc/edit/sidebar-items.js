@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"macro":["arena_format"],"mod":["apperr","arena","base64","buffer","cell","clipboard","document","framebuffer","fuzzy","hash","helpers","icu","input","oklab","path","simd","sys","tui","unicode","vt"]};

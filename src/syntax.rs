@@ -30,45 +30,44 @@ pub struct Token {
 /// keeps things minimal and avoids allocations where possible.
 pub fn tokenize_display_line(line: &str) -> Vec<Token> {
     let mut out = Vec::new();
-    let mut iter = line.char_indices().peekable();
+    let mut iter = line.chars().peekable();
+    let mut char_idx = 0usize;
 
-    while let Some(&(start, ch)) = iter.peek() {
+    while let Some(&ch) = iter.peek() {
+        let start = char_idx;
+
         // Whitespace run
         if ch.is_whitespace() {
-            // consume run
-            iter.next();
-            while let Some(&(_, c)) = iter.peek() {
+            iter.next(); char_idx += 1;
+            while let Some(&c) = iter.peek() {
                 if !c.is_whitespace() { break; }
-                iter.next();
+                iter.next(); char_idx += 1;
             }
-            let end = iter.peek().map(|(i, _)| *i).unwrap_or(line.len());
+            let end = char_idx;
             out.push(Token { kind: TokenKind::Whitespace, start, end });
             continue;
         }
 
         // Line comment starting with '#'
         if ch == '#' {
-            let end = line.len();
-            // consume remaining
-            iter.next();
-            while iter.next().is_some() {}
+            iter.next(); char_idx += 1;
+            while iter.next().is_some() { char_idx += 1; }
+            let end = char_idx;
             out.push(Token { kind: TokenKind::Comment, start, end });
             break;
         }
 
         // Possible '//' comment or punctuation '/'
         if ch == '/' {
-            iter.next();
-            if let Some(&(_, '/')) = iter.peek() {
-                // consume second '/'
-                iter.next();
-                // consume rest
-                while iter.next().is_some() {}
-                let end = line.len();
+            iter.next(); char_idx += 1;
+            if let Some(&'/') = iter.peek() {
+                iter.next(); char_idx += 1;
+                while iter.next().is_some() { char_idx += 1; }
+                let end = char_idx;
                 out.push(Token { kind: TokenKind::Comment, start, end });
                 break;
             } else {
-                let end = iter.peek().map(|(i, _)| *i).unwrap_or(line.len());
+                let end = char_idx;
                 out.push(Token { kind: TokenKind::Punctuation, start, end });
                 continue;
             }
@@ -77,54 +76,44 @@ pub fn tokenize_display_line(line: &str) -> Vec<Token> {
         // Strings
         if ch == '"' || ch == '\'' {
             let quote = ch;
-            // consume opening
-            iter.next();
-            let mut last_idx = start + quote.len_utf8();
+            iter.next(); char_idx += 1;
             let mut escaped = false;
-            while let Some((i, c)) = iter.next() {
-                last_idx = i + c.len_utf8();
-                if escaped {
-                    escaped = false;
-                    continue;
-                }
-                if c == '\\' {
-                    escaped = true;
-                    continue;
-                }
-                if c == quote {
-                    break;
-                }
+            while let Some(c) = iter.next() {
+                char_idx += 1;
+                if escaped { escaped = false; continue; }
+                if c == '\\' { escaped = true; continue; }
+                if c == quote { break; }
             }
-            let end = last_idx;
+            let end = char_idx;
             out.push(Token { kind: TokenKind::String, start, end });
             continue;
         }
 
         // Numbers
         if ch.is_ascii_digit() {
-            iter.next();
-            while let Some(&(_, c)) = iter.peek() {
-                if c.is_ascii_digit() || c == '.' || c == '_' { iter.next(); } else { break }
+            iter.next(); char_idx += 1;
+            while let Some(&c) = iter.peek() {
+                if c.is_ascii_digit() || c == '.' || c == '_' { iter.next(); char_idx += 1; } else { break }
             }
-            let end = iter.peek().map(|(i, _)| *i).unwrap_or(line.len());
+            let end = char_idx;
             out.push(Token { kind: TokenKind::Number, start, end });
             continue;
         }
 
         // Identifier
         if ch.is_alphabetic() || ch == '_' {
-            iter.next();
-            while let Some(&(_, c)) = iter.peek() {
-                if c.is_alphanumeric() || c == '_' { iter.next(); } else { break }
+            iter.next(); char_idx += 1;
+            while let Some(&c) = iter.peek() {
+                if c.is_alphanumeric() || c == '_' { iter.next(); char_idx += 1; } else { break }
             }
-            let end = iter.peek().map(|(i, _)| *i).unwrap_or(line.len());
+            let end = char_idx;
             out.push(Token { kind: TokenKind::Identifier, start, end });
             continue;
         }
 
         // Punctuation single char
-        iter.next();
-        let end = iter.peek().map(|(i, _)| *i).unwrap_or(line.len());
+        iter.next(); char_idx += 1;
+        let end = char_idx;
         out.push(Token { kind: TokenKind::Punctuation, start, end });
     }
 
@@ -161,7 +150,8 @@ mod tests {
         assert_eq!(toks[0].end, 3); // "let"
         // number token should cover "42"
         let num_tok = toks.iter().find(|t| t.kind == TokenKind::Number).unwrap();
-        assert_eq!(&s[num_tok.start..num_tok.end], "42");
+        let num_text: String = s.chars().skip(num_tok.start).take(num_tok.end - num_tok.start).collect();
+        assert_eq!(num_text, "42");
     }
 
     #[test]
@@ -169,10 +159,12 @@ mod tests {
         let s = "\"hello\" world";
         let toks = tokenize_display_line(s);
         assert_eq!(toks[0].kind, TokenKind::String);
-        assert_eq!(&s[toks[0].start..toks[0].end], "\"hello\"");
+        let str_text: String = s.chars().skip(toks[0].start).take(toks[0].end - toks[0].start).collect();
+        assert_eq!(str_text, "\"hello\"");
         assert_eq!(toks[1].kind, TokenKind::Whitespace);
         assert_eq!(toks[2].kind, TokenKind::Identifier);
-        assert_eq!(&s[toks[2].start..toks[2].end], "world");
+        let id_text: String = s.chars().skip(toks[2].start).take(toks[2].end - toks[2].start).collect();
+        assert_eq!(id_text, "world");
     }
 
     #[test]
@@ -181,6 +173,7 @@ mod tests {
         let toks = tokenize_display_line(s);
         assert_eq!(toks[0].kind, TokenKind::Whitespace);
         assert_eq!(toks[1].kind, TokenKind::Comment);
-        assert_eq!(&s[toks[1].start..toks[1].end], "#hi");
+        let c_text: String = s.chars().skip(toks[1].start).take(toks[1].end - toks[1].start).collect();
+        assert_eq!(c_text, "#hi");
     }
 }

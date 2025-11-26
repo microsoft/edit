@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["apperr_format","compare_strings","fold_case","get_available_encodings","init"],"struct":["Converter","Encoding","Encodings","Regex","Text"]};
