@@ -25,7 +25,7 @@ mod navigation;
 
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
-use std::collections::LinkedList;
+use std::collections::{HashMap, LinkedList};
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{Read as _, Write as _};
@@ -245,6 +245,11 @@ pub struct TextBuffer {
     overtype: bool,
 
     wants_cursor_visibility: bool,
+    // Cache of tokenization results keyed by the starting byte-offset of
+    // the displayed fragment.
+    token_cache: HashMap<usize, Vec<crate::syntax::Token>>,
+    // Whether syntax highlighting is enabled for this buffer.
+    syntax_highlight_enabled: bool,
 }
 
 impl TextBuffer {
@@ -293,6 +298,8 @@ impl TextBuffer {
             overtype: false,
 
             wants_cursor_visibility: false,
+            token_cache: HashMap::new(),
+            syntax_highlight_enabled: true,
         })
     }
 
@@ -655,6 +662,9 @@ impl TextBuffer {
         self.cursor = Default::default();
         self.set_selection(None);
         self.mark_as_clean();
+        // Clear token cache because the whole buffer changed.
+        self.token_cache.clear();
+        // Keep highlighting enabled by default; caller may toggle.
         self.reflow();
     }
 
@@ -1965,6 +1975,49 @@ impl TextBuffer {
 
             fb.replace_text(destination.top + y, destination.left, destination.right, &line);
 
+            // Basic generic syntax highlighting (display-line tokenizer).
+            // Use a per-fragment cache keyed by the starting byte offset of the
+            // displayed fragment (`cursor_beg.offset`). This avoids re-tokenizing
+            // unchanged fragments. Only run when enabled.
+            let start_offset = cursor_beg.offset;
+            let tokens = if self.syntax_highlight_enabled {
+                if let Some(cached) = self.token_cache.get(&start_offset) {
+                    cached.clone()
+                } else {
+                    // Skip margin characters to tokenize only text content.
+                    // margin_width is in visual columns, which equals char count for the margin.
+                    let margin_chars = self.margin_width as usize;
+                    let text_start =
+                        line.char_indices().nth(margin_chars).map_or(line.len(), |(i, _)| i);
+                    let t = crate::syntax::tokenize_display_line(&line[text_start..]);
+                    self.token_cache.insert(start_offset, t.clone());
+                    t
+                }
+            } else {
+                Vec::new()
+            };
+
+            for tok in tokens.iter() {
+                if matches!(tok.kind, crate::syntax::TokenKind::Whitespace) {
+                    continue;
+                }
+
+                let left = destination.left + self.margin_width + tok.start as CoordType;
+                let right = left + (tok.end.saturating_sub(tok.start)) as CoordType;
+                if left >= destination.right || right <= destination.left {
+                    continue;
+                }
+
+                let rect = Rect {
+                    left: left.max(destination.left),
+                    top: destination.top + y,
+                    right: right.min(destination.right),
+                    bottom: destination.top + y + 1,
+                };
+                let color = crate::syntax::token_kind_color(tok.kind);
+                fb.blend_fg(rect, fb.indexed(color));
+            }
+
             cursor = cursor_end;
         }
 
@@ -2078,6 +2131,19 @@ impl TextBuffer {
     /// The only transformation applied is that newlines are normalized.
     pub fn write_raw(&mut self, text: &[u8]) {
         self.write(text, self.cursor, true);
+    }
+
+    /// Enable or disable syntax highlighting for this buffer.
+    pub fn set_syntax_highlight_enabled(&mut self, enabled: bool) {
+        if self.syntax_highlight_enabled != enabled {
+            self.syntax_highlight_enabled = enabled;
+            self.token_cache.clear();
+        }
+    }
+
+    /// Returns whether syntax highlighting is enabled for this buffer.
+    pub fn is_syntax_highlight_enabled(&self) -> bool {
+        self.syntax_highlight_enabled
     }
 
     fn write(&mut self, text: &[u8], at: Cursor, raw: bool) {
@@ -2611,6 +2677,17 @@ impl TextBuffer {
     fn edit_write(&mut self, text: &[u8]) {
         let logical_y_before = self.cursor.logical_pos.y;
 
+        // Invalidate token cache entries starting at/after the line that contains
+        // the active edit offset. This makes the cache per-line relative to
+        // fragment starting offsets and avoids full-cache clears for small edits.
+        if self.syntax_highlight_enabled {
+            let off = self.active_edit_off;
+            let cursor_at_off = self.cursor_move_to_offset_internal(self.cursor, off);
+            let start_cursor = self.goto_line_start(cursor_at_off, cursor_at_off.logical_pos.y);
+            let start_off = start_cursor.offset;
+            self.token_cache.retain(|&k, _| k < start_off);
+        }
+
         // Copy the written portion into the undo entry.
         {
             let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
@@ -2635,6 +2712,16 @@ impl TextBuffer {
         let logical_y_before = self.cursor.logical_pos.y;
         let off = self.active_edit_off;
         let mut out_off = usize::MAX;
+
+        // Invalidate token cache entries starting at/after the line that contains
+        // the deletion start offset (`off`). This prevents stale tokens from
+        // being reused after deletion.
+        if self.syntax_highlight_enabled {
+            let cursor_at_off = self.cursor_move_to_offset_internal(self.cursor, off);
+            let start_cursor = self.goto_line_start(cursor_at_off, cursor_at_off.logical_pos.y);
+            let start_off = start_cursor.offset;
+            self.token_cache.retain(|&k, _| k < start_off);
+        }
 
         let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
 

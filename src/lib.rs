@@ -39,3 +39,4 @@ pub mod sys;
 pub mod tui;
 pub mod unicode;
 pub mod vt;
+pub mod syntax;
