@@ -25,7 +25,7 @@ mod navigation;
 
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
-use std::collections::LinkedList;
+use std::collections::{HashMap, LinkedList};
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{Read as _, Write as _};
@@ -33,7 +33,6 @@ use std::mem::{self, MaybeUninit};
 use std::ops::Range;
 use std::rc::Rc;
 use std::str;
-use std::collections::HashMap;
 
 pub use gap_buffer::GapBuffer;
 
@@ -1974,42 +1973,52 @@ impl TextBuffer {
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
 
-                fb.replace_text(destination.top + y, destination.left, destination.right, &line);
+            fb.replace_text(destination.top + y, destination.left, destination.right, &line);
 
-                // Basic generic syntax highlighting (display-line tokenizer).
-                // Use a per-fragment cache keyed by the starting byte offset of the
-                // displayed fragment (`cursor_beg.offset`). This avoids re-tokenizing
-                // unchanged fragments. Only run when enabled.
-                let start_offset = cursor_beg.offset;
-                let tokens = if self.syntax_highlight_enabled {
-                    if let Some(cached) = self.token_cache.get(&start_offset) {
-                        cached.clone()
-                    } else {
-                        let t = crate::syntax::tokenize_display_line(&line);
-                        self.token_cache.insert(start_offset, t.clone());
-                        t
-                    }
+            // Basic generic syntax highlighting (display-line tokenizer).
+            // Use a per-fragment cache keyed by the starting byte offset of the
+            // displayed fragment (`cursor_beg.offset`). This avoids re-tokenizing
+            // unchanged fragments. Only run when enabled.
+            let start_offset = cursor_beg.offset;
+            let tokens = if self.syntax_highlight_enabled {
+                if let Some(cached) = self.token_cache.get(&start_offset) {
+                    cached.clone()
                 } else {
-                    Vec::new()
-                };
+                    // Skip margin characters to tokenize only text content.
+                    // margin_width is in visual columns, which equals char count for the margin.
+                    let margin_chars = self.margin_width as usize;
+                    let text_start =
+                        line.char_indices().nth(margin_chars).map_or(line.len(), |(i, _)| i);
+                    let t = crate::syntax::tokenize_display_line(&line[text_start..]);
+                    self.token_cache.insert(start_offset, t.clone());
+                    t
+                }
+            } else {
+                Vec::new()
+            };
 
-                for tok in tokens.iter() {
-                    if matches!(tok.kind, crate::syntax::TokenKind::Whitespace) {
-                        continue;
-                    }
-
-                    let left = destination.left + self.margin_width + tok.start as CoordType;
-                    let right = left + (tok.end.saturating_sub(tok.start)) as CoordType;
-                    if left >= destination.right || right <= destination.left {
-                        continue;
-                    }
-
-                    let rect = Rect { left: left.max(destination.left), top: destination.top + y, right: right.min(destination.right), bottom: destination.top + y + 1 };
-                    let color = crate::syntax::token_kind_color(tok.kind);
-                    fb.blend_fg(rect, fb.indexed(color));
+            for tok in tokens.iter() {
+                if matches!(tok.kind, crate::syntax::TokenKind::Whitespace) {
+                    continue;
                 }
 
-                cursor = cursor_end;
+                let left = destination.left + self.margin_width + tok.start as CoordType;
+                let right = left + (tok.end.saturating_sub(tok.start)) as CoordType;
+                if left >= destination.right || right <= destination.left {
+                    continue;
+                }
+
+                let rect = Rect {
+                    left: left.max(destination.left),
+                    top: destination.top + y,
+                    right: right.min(destination.right),
+                    bottom: destination.top + y + 1,
+                };
+                let color = crate::syntax::token_kind_color(tok.kind);
+                fb.blend_fg(rect, fb.indexed(color));
+            }
+
+            cursor = cursor_end;
         }
 
         // Colorize the margin that we wrote above.
