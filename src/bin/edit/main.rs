@@ -248,6 +248,10 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
                 print_version();
                 return Ok(true);
             }
+            if arg == "--enable-exp-highlighting" {
+                state.exp_highlighting = true;
+                continue;
+            }
         }
 
         let p = cwd.join(Path::new(&arg));
@@ -259,6 +263,9 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
             paths.push(p);
         }
     }
+
+    // Apply experimental highlighting setting before adding documents
+    state.documents.set_exp_highlighting(state.exp_highlighting);
 
     for p in &paths {
         state.documents.add_file_path(p)?;
@@ -288,8 +295,9 @@ fn print_help() {
     sys::write_stdout(concat!(
         "Usage: edit [OPTIONS] [FILE[:LINE[:COLUMN]]]\n",
         "Options:\n",
-        "    -h, --help       Print this help message\n",
-        "    -v, --version    Print the version number\n",
+        "    -h, --help                  Print this help message\n",
+        "    -v, --version               Print the version number\n",
+        "    --enable-exp-highlighting   Enable experimental syntax highlighting\n",
         "\n",
         "Arguments:\n",
         "    FILE[:LINE[:COLUMN]]    The file to open, optionally with line and column (e.g., foo.txt:123:45)\n",

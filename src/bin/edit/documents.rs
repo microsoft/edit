@@ -64,24 +64,41 @@ impl Document {
         self.filename = filename;
         self.dir = Some(DisplayablePathBuf::from_path(dir));
         self.path = Some(path);
-        self.update_file_mode();
     }
 
-    fn update_file_mode(&mut self) {
+    fn apply_file_mode(&mut self, exp_highlighting: bool) {
+        self.update_file_mode(exp_highlighting);
+    }
+
+    fn update_file_mode(&mut self, exp_highlighting: bool) {
         let mut tb = self.buffer.borrow_mut();
         tb.set_ruler(if self.filename == "COMMIT_EDITMSG" { 72 } else { 0 });
+
+        // Syntax highlighting is disabled by default.
+        // Only enable when experimental highlighting flag is passed.
+        tb.set_syntax_highlight_enabled(exp_highlighting);
     }
 }
 
-#[derive(Default)]
 pub struct DocumentManager {
     list: LinkedList<Document>,
+    exp_highlighting: bool,
+}
+
+impl Default for DocumentManager {
+    fn default() -> Self {
+        Self { list: LinkedList::new(), exp_highlighting: false }
+    }
 }
 
 impl DocumentManager {
     #[inline]
     pub fn len(&self) -> usize {
         self.list.len()
+    }
+
+    pub fn set_exp_highlighting(&mut self, enabled: bool) {
+        self.exp_highlighting = enabled;
     }
 
     #[inline]
@@ -183,6 +200,7 @@ impl DocumentManager {
             new_file_counter: 0,
         };
         doc.set_path(path);
+        doc.apply_file_mode(self.exp_highlighting);
 
         if let Some(active) = self.active()
             && active.path.is_none()
