@@ -268,7 +268,7 @@ pub struct Parser {
     bracketed_paste: bool,
     bracketed_paste_buf: Vec<u8>,
     x10_mouse_want: bool,
-    x10_mouse_buf: [u8; 3],
+    x10_mouse_buf: [char; 3],
     x10_mouse_len: usize,
 }
 
@@ -281,7 +281,7 @@ impl Parser {
             bracketed_paste: false,
             bracketed_paste_buf: Vec::new(),
             x10_mouse_want: false,
-            x10_mouse_buf: [0; 3],
+            x10_mouse_buf: ['\0'; 3],
             x10_mouse_len: 0,
         }
     }
@@ -535,27 +535,35 @@ impl<'input> Stream<'_, '_, 'input> {
     /// This is so puzzling to me. The existence of this function makes me unhappy.
     #[cold]
     fn parse_x10_mouse_coordinates(&mut self) -> Option<Input<'input>> {
-        self.parser.x10_mouse_len +=
-            self.stream.read(&mut self.parser.x10_mouse_buf[self.parser.x10_mouse_len..]);
+        while self.parser.x10_mouse_len < 3 && !self.stream.done() {
+            self.parser.x10_mouse_buf[self.parser.x10_mouse_len] = self.stream.next_char();
+            self.parser.x10_mouse_len += 1;
+        }
         if self.parser.x10_mouse_len < 3 {
             return None;
         }
 
-        let button = self.parser.x10_mouse_buf[0] & 0b11;
-        let modifier = self.parser.x10_mouse_buf[0] & 0b11100;
+        let b = self.parser.x10_mouse_buf[0] as u32;
         let x = self.parser.x10_mouse_buf[1] as CoordType - 0x21;
         let y = self.parser.x10_mouse_buf[2] as CoordType - 0x21;
-        let action = match button {
+        let action = match b & 0b11 {
             0 => InputMouseState::Left,
             1 => InputMouseState::Middle,
             2 => InputMouseState::Right,
             _ => InputMouseState::None,
         };
-        let modifiers = match modifier {
-            4 => kbmod::SHIFT,
-            8 => kbmod::ALT,
-            16 => kbmod::CTRL,
-            _ => kbmod::NONE,
+        let modifiers = {
+            let mut m = kbmod::NONE;
+            if (b & 0b00100) != 0 {
+                m |= kbmod::SHIFT;
+            }
+            if (b & 0b01000) != 0 {
+                m |= kbmod::ALT;
+            }
+            if (b & 0b10000) != 0 {
+                m |= kbmod::CTRL;
+            }
+            m
         };
 
         self.parser.x10_mouse_want = false;
