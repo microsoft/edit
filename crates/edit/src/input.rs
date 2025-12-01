@@ -543,21 +543,27 @@ impl<'input> Stream<'_, '_, 'input> {
             return None;
         }
 
-        let button = self.parser.x10_mouse_buf[0] as u32 & 0b11;
-        let modifier = self.parser.x10_mouse_buf[0] as u32 & 0b11100;
+        let b = self.parser.x10_mouse_buf[0] as u32;
         let x = self.parser.x10_mouse_buf[1] as CoordType - 0x21;
         let y = self.parser.x10_mouse_buf[2] as CoordType - 0x21;
-        let action = match button {
+        let action = match b & 0b11 {
             0 => InputMouseState::Left,
             1 => InputMouseState::Middle,
             2 => InputMouseState::Right,
             _ => InputMouseState::None,
         };
-        let modifiers = match modifier {
-            4 => kbmod::SHIFT,
-            8 => kbmod::ALT,
-            16 => kbmod::CTRL,
-            _ => kbmod::NONE,
+        let modifiers = {
+            let mut m = kbmod::NONE;
+            if (b & 0b00100) != 0 {
+                m |= kbmod::SHIFT;
+            }
+            if (b & 0b01000) != 0 {
+                m |= kbmod::ALT;
+            }
+            if (b & 0b10000) != 0 {
+                m |= kbmod::CTRL;
+            }
+            m
         };
 
         self.parser.x10_mouse_want = false;

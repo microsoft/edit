@@ -10,7 +10,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/src/bin/edit/main.rs"
+                "${workspaceFolder}/crates/edit/src/bin/edit/main.rs"
             ],
         },
         {
@@ -23,7 +23,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/src/bin/edit/main.rs"
+                "${workspaceFolder}/crates/edit/src/bin/edit/main.rs"
             ],
         },
         {
@@ -34,7 +34,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/src/bin/edit/main.rs"
+                "${workspaceFolder}/crates/edit/src/bin/edit/main.rs"
             ],
         }
     ]
