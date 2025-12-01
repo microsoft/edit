@@ -543,8 +543,8 @@ impl<'input> Stream<'_, '_, 'input> {
             return None;
         }
 
-        let button = self.parser.x10_mouse_buf[0] as usize & 0b11;
-        let modifier = self.parser.x10_mouse_buf[0] as usize & 0b11100;
+        let button = self.parser.x10_mouse_buf[0] as u32 & 0b11;
+        let modifier = self.parser.x10_mouse_buf[0] as u32 & 0b11100;
         let x = self.parser.x10_mouse_buf[1] as CoordType - 0x21;
         let y = self.parser.x10_mouse_buf[2] as CoordType - 0x21;
         let action = match button {
