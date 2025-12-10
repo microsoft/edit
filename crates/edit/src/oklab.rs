@@ -232,6 +232,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_parsing() {
+        // Ensure that parsing a 0xRRGGBBAA colour is valid
+        let lower = StraightRgba::from_be(0xAABBCCDD);
+        assert_eq!(lower.red(), 0xAA);
+        assert_eq!(lower.green(), 0xBB);
+        assert_eq!(lower.blue(), 0xCC);
+        assert_eq!(lower.alpha(), 0xDD);
+    }
+
+    #[test]
     fn test_blending() {
         let lower = StraightRgba::from_be(0x3498dbff);
         let upper = StraightRgba::from_be(0xe74c3c7f);
