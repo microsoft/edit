@@ -14,57 +14,67 @@ use crate::simd::MemsetSafe;
 /// A sRGB color with straight (= not premultiplied) alpha.
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct StraightRgba(u32);
+pub struct StraightRgba([u8; 4]);
 
 impl StraightRgba {
     #[inline]
     pub const fn zero() -> Self {
-        StraightRgba(0)
+        StraightRgba([0, 0, 0, 0])
+    }
+
+    #[inline]
+    pub const fn from_bytes(color: [u8; 4]) -> Self {
+        StraightRgba(color)
     }
 
     #[inline]
     pub const fn from_le(color: u32) -> Self {
-        StraightRgba(u32::from_le(color))
+        StraightRgba(color.to_le_bytes())
     }
 
     #[inline]
     pub const fn from_be(color: u32) -> Self {
-        StraightRgba(u32::from_be(color))
+        StraightRgba(color.to_be_bytes())
     }
 
     #[inline]
     pub const fn to_ne(self) -> u32 {
-        self.0
+        u32::from_ne_bytes(self.0)
     }
 
     #[inline]
     pub const fn to_le(self) -> u32 {
-        self.0.to_le()
+        u32::from_le_bytes(self.0)
     }
 
     #[inline]
     pub const fn to_be(self) -> u32 {
-        self.0.to_be()
+        u32::from_be_bytes(self.0)
     }
 
     #[inline]
-    pub const fn red(self) -> u32 {
-        self.0 & 0xff
+    pub const fn to_bytes(self) -> [u8; 4] {
+        self.0
     }
 
     #[inline]
-    pub const fn green(self) -> u32 {
-        (self.0 >> 8) & 0xff
+    pub const fn red(self) -> u8 {
+        self.0[0]
     }
 
     #[inline]
-    pub const fn blue(self) -> u32 {
-        (self.0 >> 16) & 0xff
+    pub const fn green(self) -> u8 {
+        self.0[1]
     }
 
     #[inline]
-    pub const fn alpha(self) -> u32 {
-        self.0 >> 24
+    pub const fn blue(self) -> u8 {
+        self.0[2]
+    }
+
+    #[inline]
+    pub const fn alpha(self) -> u8 {
+        self.0[3]
     }
 
     pub fn oklab_blend(self, top: StraightRgba) -> StraightRgba {
@@ -98,7 +108,7 @@ impl StraightRgba {
 
 impl Debug for StraightRgba {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "#{:08x}", self.0.to_be()) // Display as a hex color
+        write!(f, "#{:02x}{:02x}{:02x}{:02x}", self.red(), self.green(), self.blue(), self.alpha()) // Display as a hex color
     }
 }
 
@@ -150,9 +160,9 @@ impl Oklab {
         let r = linear_to_srgb(r);
         let g = linear_to_srgb(g);
         let b = linear_to_srgb(b);
-        let a = (alpha * 255.0) as u32;
+        let a = (alpha * 255.0) as u8;
 
-        StraightRgba(r | (g << 8) | (b << 16) | (a << 24))
+        StraightRgba([r, g, b, a])
     }
 
     /// Porter-Duff "over" composition. It's for Lab, but it works just like with RGB.
@@ -175,16 +185,16 @@ impl Oklab {
     }
 }
 
-fn srgb_to_linear(c: u32) -> f32 {
+fn srgb_to_linear(c: u8) -> f32 {
     SRGB_TO_RGB_LUT[(c & 0xff) as usize]
 }
 
-fn linear_to_srgb(c: f32) -> u32 {
+fn linear_to_srgb(c: f32) -> u8 {
     (if c > 0.0031308 {
         255.0 * 1.055 * c.powf(1.0 / 2.4) - 255.0 * 0.055
     } else {
         255.0 * 12.92 * c
-    }) as u32
+    }) as u8
 }
 
 #[inline]
