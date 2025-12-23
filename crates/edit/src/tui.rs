@@ -1687,6 +1687,10 @@ impl<'a> Context<'a, '_> {
         }
     }
 
+    pub fn text_input(&self) -> Option<&str> {
+        self.input_text
+    }
+
     /// Returns current keyboard input, if any.
     /// Returns None if the input was already consumed.
     pub fn keyboard_input(&self) -> Option<InputKey> {
@@ -2359,15 +2363,11 @@ impl<'a> Context<'a, '_> {
                 vk::ESCAPE => {
                     // If there was a selection, clear it and show the cursor (= fallthrough).
                     if !tb.clear_selection() {
-                        if single_line {
-                            // If this is just a simple input field, don't consume the escape key
-                            // (early return) and don't show the cursor (= return false).
-                            return false;
-                        }
-
                         // If this is a textarea, don't show the cursor if
                         // the escape key was pressed and nothing happened.
-                        make_cursor_visible = false;
+                        // If this is just a simple input field, don't consume the escape key
+                        // (early return) and don't show the cursor (= return false).
+                        return false;
                     }
                 }
                 vk::PRIOR => {

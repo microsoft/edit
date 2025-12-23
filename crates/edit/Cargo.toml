@@ -15,6 +15,8 @@ name = "lib"
 harness = false
 
 [features]
+# If enabled, pressing F12 will toggle showing a log of all IO
+debug-io = []
 debug-latency = []
 
 [dependencies]

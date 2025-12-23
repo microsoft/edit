@@ -172,6 +172,15 @@ pub struct State {
     pub osc_clipboard_sync: bool,
     pub osc_clipboard_always_send: bool,
     pub exit: bool,
+
+    #[cfg(feature = "debug-io")]
+    pub debug_io_buffer: edit::buffer::RcTextBuffer,
+    #[cfg(feature = "debug-io")]
+    pub debug_io_start: std::time::Instant,
+    #[cfg(feature = "debug-io")]
+    pub debug_io_panel_open: bool,
+    #[cfg(feature = "debug-io")]
+    pub debug_io_gobble_next_line: bool,
 }
 
 impl State {
@@ -220,6 +229,22 @@ impl State {
             osc_clipboard_sync: false,
             osc_clipboard_always_send: false,
             exit: false,
+
+            #[cfg(feature = "debug-io")]
+            debug_io_buffer: {
+                let buf = edit::buffer::TextBuffer::new_rc(false)?;
+                {
+                    let mut tb = buf.borrow_mut();
+                    tb.set_crlf(false);
+                }
+                buf
+            },
+            #[cfg(feature = "debug-io")]
+            debug_io_start: std::time::Instant::now(),
+            #[cfg(feature = "debug-io")]
+            debug_io_panel_open: false,
+            #[cfg(feature = "debug-io")]
+            debug_io_gobble_next_line: false,
         })
     }
 }

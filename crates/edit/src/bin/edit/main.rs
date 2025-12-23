@@ -123,6 +123,9 @@ fn run() -> apperr::Result<()> {
                 break;
             };
 
+            #[cfg(feature = "debug-io")]
+            debug_io_log(&mut state, '>', &input);
+
             #[cfg(feature = "debug-latency")]
             {
                 time_beg = std::time::Instant::now();
@@ -214,6 +217,9 @@ fn run() -> apperr::Result<()> {
 
                 last_latency_width = cols;
             }
+
+            #[cfg(feature = "debug-io")]
+            debug_io_log(&mut state, '<', &output);
 
             sys::write_stdout(&output);
         }
@@ -337,6 +343,11 @@ fn draw(ctx: &mut Context, state: &mut State) {
         draw_error_log(ctx, state);
     }
 
+    #[cfg(feature = "debug-io")]
+    if state.debug_io_panel_open {
+        draw_debug_io(ctx, state);
+    }
+
     if let Some(key) = ctx.keyboard_input() {
         // Shortcuts that are not handled as part of the textarea, etc.
 
@@ -367,7 +378,11 @@ fn draw(ctx: &mut Context, state: &mut State) {
         } else if key == vk::F3 {
             search_execute(ctx, state, SearchAction::Search);
         } else {
-            return;
+            match key {
+                #[cfg(feature = "debug-io")]
+                vk::F12 => debug_io_toggle(state),
+                _ => return,
+            }
         }
 
         // All of the above shortcuts happen to require a rerender.
@@ -528,6 +543,79 @@ fn write_osc_clipboard(tui: &mut Tui, state: &mut State, output: &mut ArenaStrin
     state.osc_clipboard_sync = false;
 }
 
+#[cfg(feature = "debug-io")]
+fn draw_debug_io(ctx: &mut Context, state: &mut State) {
+    if ctx.text_input().is_some() {
+        ctx.set_input_consumed();
+    } else if ctx.keyboard_input() == Some(vk::F12) {
+        ctx.set_input_consumed();
+        debug_io_toggle(state);
+        return;
+    }
+
+    ctx.modal_begin("debug-io", "I/O Log");
+    ctx.attr_background_rgba(StraightRgba::from_le(0xE0000000));
+    ctx.attr_foreground_rgba(StraightRgba::from_le(0xFFFFFFFF));
+    {
+        ctx.textarea("log", state.debug_io_buffer.clone());
+        ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: COORD_TYPE_SAFE_MAX });
+        ctx.steal_focus();
+    }
+    if ctx.modal_end() {
+        debug_io_toggle(state);
+    }
+}
+
+#[cfg(feature = "debug-io")]
+fn debug_io_log(state: &mut State, direction: char, text: &str) {
+    use std::fmt::Write as _;
+
+    if text.is_empty() || state.debug_io_panel_open {
+        return;
+    }
+
+    if state.debug_io_gobble_next_line {
+        state.debug_io_gobble_next_line = false;
+        return;
+    }
+
+    let scratch = scratch_arena(None);
+    let mut str = ArenaString::with_capacity_in(text.len() + 32, &scratch);
+    let elapsed = state.debug_io_start.elapsed().as_secs_f64();
+
+    _ = str.write_fmt(format_args!("{} {:.3} ", direction, elapsed));
+    str.extend(text.chars().map(|ch| match ch as u32 {
+        0x00..=0x1f => char::from_u32(0x2400 + ch as u32).unwrap(),
+        0x20 => '\u{2423}',
+        0x7f => '\u{2421}',
+        _ => ch,
+    }));
+    str.push('\n');
+
+    let mut tb = state.debug_io_buffer.borrow_mut();
+    tb.cursor_move_to_logical(Point::MAX);
+    tb.write_raw(str.as_bytes());
+}
+
+#[cfg(feature = "debug-io")]
+fn debug_io_toggle(state: &mut State) {
+    // If the panel opens/closes, we don't want to log the stdout.
+    state.debug_io_gobble_next_line = true;
+
+    // Now also remove the stdin line that we added.
+    // This only happens when the panel is opened, since the input handling happens
+    // after the log call. This is all a bit shoddy, but whatever. Debug code.
+    if !state.debug_io_panel_open {
+        let mut tb = state.debug_io_buffer.borrow_mut();
+        let count = tb.logical_line_count();
+        tb.cursor_move_to_logical(Point { x: 0, y: count - 2 });
+        tb.select_line();
+        _ = tb.extract_user_selection(true);
+    }
+
+    state.debug_io_panel_open = !state.debug_io_panel_open;
+}
+
 struct RestoreModes;
 
 impl Drop for RestoreModes {
@@ -540,7 +628,7 @@ impl Drop for RestoreModes {
 }
 
 fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) -> RestoreModes {
-    sys::write_stdout(concat!(
+    const INIT: &str = concat!(
         // 1049: Alternative Screen Buffer
         //   I put the ASB switch in the beginning, just in case the terminal performs
         //   some additional state tracking beyond the modes we enable/disable.
@@ -564,7 +652,12 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         // It also helps us to detect the end of the responses, because not all
         // terminals support the OSC queries, but all of them support CSI c.
         "\x1b[c",
-    ));
+    );
+
+    #[cfg(feature = "debug-io")]
+    debug_io_log(state, '<', INIT);
+
+    sys::write_stdout(INIT);
 
     let mut done = false;
     let mut osc_buffer = String::new();
@@ -581,6 +674,9 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         let Some(input) = sys::read_stdin(&scratch, Duration::from_secs(3)) else {
             break;
         };
+
+        #[cfg(feature = "debug-io")]
+        debug_io_log(state, '>', &input);
 
         let mut vt_stream = vt_parser.parse(&input);
         while let Some(token) = vt_stream.next() {
