@@ -2,7 +2,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Launch Debug (Windows)",
+            "name": "Launch edit (Windows)",
             "preLaunchTask": "rust: cargo build",
             "type": "cppvsdbg",
             "request": "launch",
@@ -14,7 +14,7 @@
             ],
         },
         {
-            "name": "Launch Debug (GDB)",
+            "name": "Launch edit (GDB, Linux)",
             "preLaunchTask": "rust: cargo build",
             "type": "cppdbg",
             "request": "launch",
@@ -27,15 +27,28 @@
             ],
         },
         {
-            "name": "Launch Debug (LLDB)",
+            // NOTE for macOS: In order for this task to work you have to:
+            // 1. Run the "Fix externalConsole on macOS" task once
+            // 2. Add the following to your VS Code settings:
+            //    "lldb-dap.environment": {
+            //        "LLDB_LAUNCH_FLAG_LAUNCH_IN_TTY": "YES"
+            //    }
+            "name": "Launch edit (lldb-dap, macOS)",
             "preLaunchTask": "rust: cargo build",
-            "type": "lldb",
+            "type": "lldb-dap",
             "request": "launch",
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
                 "${workspaceFolder}/crates/edit/src/bin/edit/main.rs"
             ],
-        }
+        },
+        {
+            // This is a workaround for https://github.com/microsoft/vscode-cpptools/issues/5079
+            "name": "Fix externalConsole on macOS",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "osascript -e 'tell application \"Terminal\"\ndo script \"echo hello\"\nend tell'"
+        },
     ]
 }

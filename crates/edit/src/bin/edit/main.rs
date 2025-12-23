@@ -12,8 +12,6 @@ mod localization;
 mod state;
 
 use std::borrow::Cow;
-#[cfg(feature = "debug-latency")]
-use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{env, process};
@@ -23,7 +21,7 @@ use draw_filepicker::*;
 use draw_menubar::*;
 use draw_statusbar::*;
 use edit::framebuffer::{self, IndexedColor};
-use edit::helpers::{CoordType, KIBI, MEBI, MetricFormatter, Rect, Size};
+use edit::helpers::*;
 use edit::input::{self, kbmod, vk};
 use edit::oklab::StraightRgba;
 use edit::tui::*;
@@ -178,6 +176,8 @@ fn run() -> apperr::Result<()> {
 
             #[cfg(feature = "debug-latency")]
             {
+                use std::fmt::Write as _;
+
                 // Print the number of passes and latency in the top right corner.
                 let time_end = std::time::Instant::now();
                 let status = time_end - time_beg;
