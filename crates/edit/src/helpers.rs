@@ -82,6 +82,9 @@ pub struct Size {
 }
 
 impl Size {
+    pub const MIN: Self = Self { width: 0, height: 0 };
+    pub const MAX: Self = Self { width: CoordType::MAX, height: CoordType::MAX };
+
     pub fn as_rect(&self) -> Rect {
         Rect { left: 0, top: 0, right: self.width, bottom: self.height }
     }
