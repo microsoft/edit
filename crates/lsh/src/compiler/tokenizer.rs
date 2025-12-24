@@ -28,8 +28,13 @@ pub enum Token<'a> {
     // Operators
     Equals,
     EqualsEquals,
-    PlusEquals,
+    NotEquals,
+    LessThan,
+    LessThanEquals,
+    GreaterThan,
+    GreaterThanEquals,
     Plus,
+    PlusEquals,
 
     // Punctuation
     LeftBrace,
@@ -92,6 +97,30 @@ impl<'a> Tokenizer<'a> {
                         Token::EqualsEquals
                     } else {
                         Token::Equals
+                    }
+                }
+                '!' => {
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        Token::NotEquals
+                    } else {
+                        Token::Error("Unexpected character: '!'".to_string())
+                    }
+                }
+                '<' => {
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        Token::LessThanEquals
+                    } else {
+                        Token::LessThan
+                    }
+                }
+                '>' => {
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        Token::GreaterThanEquals
+                    } else {
+                        Token::GreaterThan
                     }
                 }
                 '+' => {

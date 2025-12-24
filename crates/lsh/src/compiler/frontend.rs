@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use super::tokenizer::*;
 use super::*;
@@ -102,7 +103,11 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
     fn parse_function(&mut self) -> CompileResult<Function<'a>> {
         // Reset symbol table for new function
-        self.variables.clear();
+        self.variables = HashMap::from_iter([
+            ("off", self.compiler.get_reg(Register::InputOffset)),
+            ("hs", self.compiler.get_reg(Register::HighlightStart)),
+            ("hk", self.compiler.get_reg(Register::HighlightKind)),
+        ]);
 
         let public = if matches!(self.current_token, Token::Pub) {
             self.advance();
@@ -225,9 +230,10 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         let advance_check = self.compiler.alloc_ir(IR {
             next: Some(first),
             instr: IRI::If {
-                condition: Condition::Eq {
+                condition: Condition::Cmp {
                     lhs: self.compiler.get_reg(Register::InputOffset),
                     rhs: saved_offset,
+                    op: ComparisonOp::Eq,
                 },
                 then: advance,
             },
@@ -362,21 +368,32 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_if_comparison(&mut self) -> CompileResult<IRSpan<'a>> {
-        // Parse: if var1 == var2 { block }
+        // Parse: if var1 OP var2 { block } where OP is ==, !=, <, >, <=, >=
         let lhs_name = match self.current_token {
             Token::Identifier(n) => n,
             _ => raise!(self, "expected variable name"),
         };
         let lhs_vreg = self.get_variable(lhs_name)?;
+        eprintln!("DEBUG: lhs_name = {}, lhs_vreg = {:?}", lhs_name, lhs_vreg);
         self.advance();
 
-        self.expect_token(Token::EqualsEquals)?;
+        let op = match self.current_token {
+            Token::EqualsEquals => ComparisonOp::Eq,
+            Token::NotEquals => ComparisonOp::Ne,
+            Token::LessThan => ComparisonOp::Lt,
+            Token::GreaterThan => ComparisonOp::Gt,
+            Token::LessThanEquals => ComparisonOp::Le,
+            Token::GreaterThanEquals => ComparisonOp::Ge,
+            _ => raise!(self, "expected comparison operator (==, !=, <, >, <=, >=)"),
+        };
+        self.advance();
 
         let rhs_name = match self.current_token {
             Token::Identifier(n) => n,
             _ => raise!(self, "expected variable name"),
         };
         let rhs_vreg = self.get_variable(rhs_name)?;
+        eprintln!("DEBUG: rhs_name = {}, rhs_vreg = {:?}", rhs_name, rhs_vreg);
         self.advance();
 
         let dst_good = self.compiler.alloc_noop();
@@ -384,7 +401,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         let cmp = self.compiler.alloc_ir(IR {
             next: Some(dst_bad),
             instr: IRI::If {
-                condition: Condition::Eq { lhs: lhs_vreg, rhs: rhs_vreg },
+                condition: Condition::Cmp { lhs: lhs_vreg, rhs: rhs_vreg, op },
                 then: dst_good,
             },
             offset: usize::MAX,
@@ -398,14 +415,44 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         // Handle optional else branch
         if matches!(self.current_token, Token::Else) {
             self.advance();
-            let else_bl = self.parse_block()?;
-            dst_bad.borrow_mut().set_next(else_bl.first);
-            bl.last.borrow_mut().set_next(end);
-            else_bl.last.borrow_mut().set_next(end);
-            Ok(IRSpan { first: cmp, last: end })
+
+            // Check for else if
+            if matches!(self.current_token, Token::If) {
+                let else_if_span = self.parse_if()?;
+                dst_bad.borrow_mut().set_next(else_if_span.first);
+                if let mut block_last = bl.last.borrow_mut()
+                    && block_last.wants_next()
+                {
+                    block_last.set_next(end);
+                }
+                if let mut else_if_last = else_if_span.last.borrow_mut()
+                    && else_if_last.wants_next()
+                {
+                    else_if_last.set_next(end);
+                }
+                Ok(IRSpan { first: cmp, last: end })
+            } else {
+                let else_bl = self.parse_block()?;
+                dst_bad.borrow_mut().set_next(else_bl.first);
+                if let mut block_last = bl.last.borrow_mut()
+                    && block_last.wants_next()
+                {
+                    block_last.set_next(end);
+                }
+                if let mut else_last = else_bl.last.borrow_mut()
+                    && else_last.wants_next()
+                {
+                    else_last.set_next(end);
+                }
+                Ok(IRSpan { first: cmp, last: end })
+            }
         } else {
             dst_bad.borrow_mut().set_next(end);
-            bl.last.borrow_mut().set_next(end);
+            if let mut block_last = bl.last.borrow_mut()
+                && block_last.wants_next()
+            {
+                block_last.set_next(end);
+            }
             Ok(IRSpan { first: cmp, last: end })
         }
     }
@@ -474,7 +521,12 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.expect_token(Token::Equals)?;
         let (expr, vreg) = self.parse_expression()?;
         self.expect_token(Token::Semicolon)?;
-        self.variables.insert(name, vreg);
+
+        match self.variables.entry(name) {
+            Entry::Vacant(e) => _ = e.insert(vreg),
+            Entry::Occupied(_) => raise!(self, "variable '{}' already declared", name),
+        }
+
         Ok(expr)
     }
 
@@ -564,6 +616,13 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 }
                 _ => raise!(self, "expected integer literal after '+'"),
             }
+        } else if lhs_vreg.borrow().physical.is_some() {
+            // For expressions of type `var virtual = phyiscal;`, we need to ensure
+            // that we actually copy the physical register into a new virtual one.
+            // The remaining code assumes single assignment form, while physical registers are permanent.
+            let vreg = self.compiler.alloc_vreg();
+            let node = self.compiler.alloc_iri(IRI::Add { dst: vreg, src: lhs_vreg, imm: 0 });
+            Ok((IRSpan::single(node), vreg))
         } else {
             Ok((lhs_span, lhs_vreg))
         }

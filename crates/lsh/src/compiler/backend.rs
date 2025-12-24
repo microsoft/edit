@@ -54,7 +54,7 @@ impl<'a> Backend<'a> {
                     IRI::Add { dst, src, imm } => {
                         src.borrow_mut().read_count += 1;
                     }
-                    IRI::If { condition: Condition::Eq { lhs, rhs }, .. } => {
+                    IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
                         lhs.borrow_mut().read_count += 1;
                         rhs.borrow_mut().read_count += 1;
                     }
@@ -88,27 +88,35 @@ impl<'a> Backend<'a> {
                         IRI::If { condition, then } => {
                             self.stack.push_back(then);
 
-                            let dst = self.dst_by_node(then);
-
                             match condition {
-                                Condition::Eq { lhs, rhs } => {
+                                Condition::Cmp { lhs, rhs, op } => {
                                     let lhs = self.read_reg(lhs)?;
                                     let rhs = self.read_reg(rhs)?;
-                                    self.push_instruction(JumpIfEq { lhs, rhs, dst });
+                                    self.push_instruction(If { lhs, rhs, op });
+                                    let dst = self.dst_by_node(then);
+                                    self.push_instruction(Add {
+                                        dst: Register::ProgramCounter,
+                                        src: Register::Zero,
+                                        imm: dst as i32,
+                                    });
                                 }
                                 Condition::EndOfLine => {
+                                    let dst = self.dst_by_node(then);
                                     self.push_instruction(JumpIfEndOfLine { dst });
                                 }
                                 Condition::Charset(h) => {
                                     let idx = self.visit_charset(h);
+                                    let dst = self.dst_by_node(then);
                                     self.push_instruction(JumpIfMatchCharset { idx, dst });
                                 }
                                 Condition::Prefix(s) => {
                                     let idx = self.visit_string(s);
+                                    let dst = self.dst_by_node(then);
                                     self.push_instruction(JumpIfMatchPrefix { idx, dst });
                                 }
                                 Condition::PrefixInsensitive(s) => {
                                     let idx = self.visit_string(s);
+                                    let dst = self.dst_by_node(then);
                                     self.push_instruction(
                                         Instruction::JumpIfMatchPrefixInsensitive { idx, dst },
                                     );
@@ -317,8 +325,7 @@ impl<'a> Backend<'a> {
                 | Instruction::JumpIfEndOfLine { dst }
                 | Instruction::JumpIfMatchCharset { dst, .. }
                 | Instruction::JumpIfMatchPrefix { dst, .. }
-                | Instruction::JumpIfMatchPrefixInsensitive { dst, .. }
-                | Instruction::JumpIfEq { dst, .. } => {
+                | Instruction::JumpIfMatchPrefixInsensitive { dst, .. } => {
                     *dst = resolved;
                 }
                 i => panic!("Unexpected relocation target: {i:?}"),

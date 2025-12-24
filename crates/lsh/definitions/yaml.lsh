@@ -3,12 +3,35 @@ pub fn yaml() {
         // Leading whitespace
     }
 
-    if /-\s+/ {
-        // List item
-    }
+    var indentation = off;
 
-    if /\w+:(?:\s+|$)/ {
-        // Key: (Value follows)
+    loop {
+        if /-\s+/ {
+            // List item
+        }
+        if /\w+:(?:\s+|$)/ {
+            // Key: (Value follows)
+        }
+
+        if /[|>][-+]?.*/ {
+            loop {
+                // Wait for the next line in this multiline string.
+                await input;
+
+                // Skip leading whitespace
+                if /\s+/ {
+                }
+
+                if off <= indentation {
+                    // Once the new indentation is smaller, the multiline string has ended.
+                    break;
+                } else if /.*/ {
+                    yield string;
+                }
+            }
+        } else {
+            break;
+        }
     }
 
     yield other;

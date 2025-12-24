@@ -152,7 +152,7 @@ impl<'a> Compiler<'a> {
 
             if let IRI::If { condition, .. } = node.borrow().instr {
                 match condition {
-                    Condition::Eq { .. } => {}
+                    Condition::Cmp { .. } => {}
                     Condition::EndOfLine => {
                         // EOL is interesting
                         charset.set(b'\n', true);
@@ -250,7 +250,17 @@ impl<'a> Compiler<'a> {
                     IRI::If { condition, then } => {
                         _ = write!(output, "{{\"{offset}: ");
                         _ = match condition {
-                            Condition::Eq { lhs, rhs } => write!(output, "{lhs:?} == {rhs:?}"),
+                            Condition::Cmp { lhs, rhs, op } => {
+                                let op_str = match op {
+                                    ComparisonOp::Eq => "==",
+                                    ComparisonOp::Ne => "!=",
+                                    ComparisonOp::Lt => "<",
+                                    ComparisonOp::Gt => ">",
+                                    ComparisonOp::Le => "<=",
+                                    ComparisonOp::Ge => ">=",
+                                };
+                                write!(output, "{lhs:?} {op_str} {rhs:?}")
+                            }
                             Condition::EndOfLine => write!(output, "eol"),
                             Condition::Charset(cs) => write!(output, "charset: {cs:?}"),
                             Condition::Prefix(s) => write!(output, "match: {s}"),
@@ -438,9 +448,19 @@ impl fmt::Debug for IRReg {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComparisonOp {
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Condition<'a> {
-    Eq { lhs: IRRegCell<'a>, rhs: IRRegCell<'a> },
+    Cmp { lhs: IRRegCell<'a>, rhs: IRRegCell<'a>, op: ComparisonOp },
     EndOfLine,
     Charset(&'a Charset),
     Prefix(&'a str),
@@ -789,40 +809,42 @@ pub enum Instruction {
     Return,
 
     // Encoding:
-    //   dst[31:12] | rhs[11:8] | lhs[7:4] | 0101
+    //   rhs[15:12] | lhs[11:8] |  op[7:4] | 0101
     //
-    // Jumps to `dst` if register lhs == register rhs.
-    JumpIfEq { lhs: Register, rhs: Register, dst: usize },
+    // Compare lhs and rhs using the comparison operator op.
+    // If the comparison fails, skip the next instruction (which must be a Jump).
+    // ComparisonOp encoding: Eq=0, Ne=1, Lt=2, Gt=3, Le=4, Ge=5
+    If { lhs: Register, rhs: Register, op: ComparisonOp },
 
     // Encoding:
-    //   dst[31:12] |                      | 0110
+    //   dst[31:12] |                      | 0111
     //
     // Jumps to `dst` if we're at the end of the line.
     JumpIfEndOfLine { dst: usize },
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 0111
+    //   dst[31:12] |      idx[11:4]       | 1000
     //
     // Jumps to `dst` if the test succeeds.
     // `idx` specifies the charset/string to use.
     JumpIfMatchCharset { idx: usize, dst: usize },
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 1000
+    //   dst[31:12] |      idx[11:4]       | 1001
     JumpIfMatchPrefix { idx: usize, dst: usize },
 
     // Encoding:
-    //   dst[31:12] |      idx[11:4]       | 1001
+    //   dst[31:12] |      idx[11:4]       | 1010
     JumpIfMatchPrefixInsensitive { idx: usize, dst: usize },
 
     // Encoding:
-    //                                       1010
+    //                                       1011
     //
     // Flushes the current HighlightKind to the output.
     FlushHighlight,
 
     // Encoding:
-    //                                       1010
+    //                                       1100
     // Awaits more input to be available.
     AwaitInput,
 }
@@ -843,13 +865,21 @@ impl Instruction {
             Instruction::Pop { mask } => ((mask as u32) << 16) | 0b0010,
             Instruction::Call { dst } => Self::cast_imm(dst as i32) | 0b0011,
             Instruction::Return => 0b0100,
-            Instruction::JumpIfEq { lhs, rhs, dst } => {
-                Self::cast_imm(dst as i32)
+            Instruction::If { lhs, rhs, op } => {
+                let op_bits = match op {
+                    ComparisonOp::Eq => 0,
+                    ComparisonOp::Ne => 1,
+                    ComparisonOp::Lt => 2,
+                    ComparisonOp::Gt => 3,
+                    ComparisonOp::Le => 4,
+                    ComparisonOp::Ge => 5,
+                };
+                Self::cast_bits(op_bits, 4, 28)
                     | Self::cast_bits(rhs as i32, 4, 8)
                     | Self::cast_bits(lhs as i32, 4, 4)
                     | 0b0101
             }
-            Instruction::JumpIfEndOfLine { dst } => Self::cast_imm(dst as i32) | 0b0110,
+            Instruction::JumpIfEndOfLine { dst } => Self::cast_imm(dst as i32) | 0b0111,
             Instruction::JumpIfMatchCharset { idx, dst } => {
                 Self::cast_imm(dst as i32) | Self::cast_bits(idx as i32, 8, 4) | 0b0111
             }
@@ -892,14 +922,22 @@ impl Instruction {
             Instruction::Pop { mask } => format!("{ip}pop{is}   {np}{mask:#06x}{ns}"),
             Instruction::Call { dst } => format!("{ip}call{is}  {np}{dst}{ns}"),
             Instruction::Return => format!("{ip}ret{is}"),
-            Instruction::JumpIfEq { lhs, rhs, dst } => {
+            Instruction::If { lhs, rhs, op } => {
+                let op_str = match op {
+                    ComparisonOp::Eq => "eq",
+                    ComparisonOp::Ne => "ne",
+                    ComparisonOp::Lt => "lt",
+                    ComparisonOp::Gt => "gt",
+                    ComparisonOp::Le => "le",
+                    ComparisonOp::Ge => "ge",
+                };
                 format!(
-                    "{ip}jeq{is}   {rp}{lhs}{rs}, {rp}{rhs}{rs}, {np}{dst}{ns}",
+                    "{ip}if{op_str}{is}  {rp}{lhs}{rs}, {rp}{rhs}{rs}",
                     lhs = lhs.mnemonic(),
                     rhs = rhs.mnemonic()
                 )
             }
-            Instruction::JumpIfEndOfLine { dst } => format!("{ip}jeol  {np}{dst}{ns}"),
+            Instruction::JumpIfEndOfLine { dst } => format!("{ip}jeol{is}  {np}{dst}{ns}"),
             Instruction::JumpIfMatchCharset { idx, dst } => {
                 format!("{ip}jc{is}    {np}{idx:?}{ns}, {np}{dst}{ns}")
             }
