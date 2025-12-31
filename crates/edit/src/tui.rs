@@ -3294,7 +3294,7 @@ impl<'a> Context<'a, '_> {
                     self.styled_label_add_text(text);
                     self.styled_label_add_text("(");
                     self.styled_label_set_attributes(Attributes::Underlined);
-                    self.styled_label_add_text(unsafe { str_from_raw_parts(&ch, 1) });
+                    self.styled_label_add_text(unsafe { str_from_raw_parts(&raw const ch, 1) });
                     self.styled_label_set_attributes(Attributes::None);
                     self.styled_label_add_text(")");
                 }
