@@ -11,7 +11,7 @@ use std::fs::File;
 use std::mem::{self, ManuallyDrop, MaybeUninit};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
 use std::path::Path;
-use std::ptr::{self, NonNull, null_mut};
+use std::ptr::{NonNull, null_mut};
 use std::{thread, time};
 
 use stdext::arena::{Arena, ArenaString, scratch_arena};
