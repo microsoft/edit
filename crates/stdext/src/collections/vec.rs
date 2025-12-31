@@ -149,7 +149,7 @@ impl<'a, T> BVec<'a, T> {
 
     #[inline]
     fn spare_mut_ptr(&mut self) -> *mut MaybeUninit<T> {
-        unsafe { (self.ptr.as_ptr() as *mut MaybeUninit<T>).add(self.len) }
+        unsafe { self.ptr.as_ptr().cast::<MaybeUninit<T>>().add(self.len) }
     }
 
     /// View as a shared slice.
@@ -342,7 +342,7 @@ impl<'a, T: Copy> BVec<'a, T> {
         unsafe {
             let dst = self.spare_mut_ptr();
             self.len += add;
-            ptr::copy_nonoverlapping(other.as_ptr() as *const _, dst, add);
+            ptr::copy_nonoverlapping(other.as_ptr().cast(), dst, add);
         }
     }
 

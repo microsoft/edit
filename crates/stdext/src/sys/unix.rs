@@ -26,7 +26,7 @@ pub unsafe fn virtual_reserve(size: usize) -> io::Result<NonNull<u8>> {
         if ptr.is_null() || ptr::eq(ptr, libc::MAP_FAILED) {
             Err(io::Error::last_os_error())
         } else {
-            Ok(NonNull::new_unchecked(ptr as *mut u8))
+            Ok(NonNull::new_unchecked(ptr.cast()))
         }
     }
 }
