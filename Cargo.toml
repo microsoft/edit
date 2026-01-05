@@ -30,3 +30,6 @@ lto = "thin"                # Similarly, speed up linking by a ton
 edit = { path = "./crates/edit" }
 stdext = { path = "./crates/stdext" }
 unicode-gen = { path = "./crates/unicode-gen" }
+
+[workspace.lints.clippy]
+borrow_as_ptr = "warn"
