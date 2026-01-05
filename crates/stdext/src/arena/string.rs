@@ -95,6 +95,13 @@ impl<'a> ArenaString<'a> {
         }
     }
 
+    #[must_use]
+    pub fn from_iter<T: IntoIterator<Item = char>>(arena: &'a Arena, iter: T) -> Self {
+        let mut s = Self::new_in(arena);
+        s.extend(iter);
+        s
+    }
+
     /// It's empty.
     pub fn is_empty(&self) -> bool {
         self.vec.is_empty()
@@ -282,6 +289,18 @@ impl fmt::Write for ArenaString<'_> {
         self.push(c);
         Ok(())
     }
+}
+
+impl Extend<char> for ArenaString<'_> {
+    fn extend<I: IntoIterator<Item = char>>(&mut self, iter: I) {
+        let iterator = iter.into_iter();
+        let (lower_bound, _) = iterator.size_hint();
+        self.reserve(lower_bound);
+        iterator.for_each(move |c| self.push(c));
+    }
+
+    // TODO: This is where I'd put `extend_one` and `extend_reserve` impls, *but as always*,
+    // essential stdlib functions are unstable and that means we can't have them.
 }
 
 #[macro_export]
