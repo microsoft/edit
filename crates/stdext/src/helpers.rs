@@ -142,13 +142,13 @@ fn vec_replace_impl<T: Copy, A: Allocator>(dst: &mut Vec<T, A>, range: Range<usi
 /// Turns a [`&[u8]`] into a [`&[MaybeUninit<T>]`].
 #[inline(always)]
 pub const fn slice_as_uninit_ref<T>(slice: &[T]) -> &[MaybeUninit<T>] {
-    unsafe { slice::from_raw_parts(slice.as_ptr() as *const MaybeUninit<T>, slice.len()) }
+    unsafe { slice::from_raw_parts(slice.as_ptr().cast(), slice.len()) }
 }
 
 /// Turns a [`&mut [T]`] into a [`&mut [MaybeUninit<T>]`].
 #[inline(always)]
 pub const fn slice_as_uninit_mut<T>(slice: &mut [T]) -> &mut [MaybeUninit<T>] {
-    unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut MaybeUninit<T>, slice.len()) }
+    unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr().cast(), slice.len()) }
 }
 
 /// Helpers for ASCII string comparisons.

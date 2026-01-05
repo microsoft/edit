@@ -65,7 +65,7 @@ pub fn get_available_encodings() -> &'static Encodings {
                     let mut status = icu_ffi::U_ZERO_ERROR;
                     let mime = (f.ucnv_getStandardName)(
                         name.as_ptr(),
-                        c"MIME".as_ptr() as *const _,
+                        c"MIME".as_ptr().cast(),
                         &mut status,
                     );
                     if !mime.is_null() && status.is_success() {
@@ -169,7 +169,7 @@ impl<'pivot> Converter<'pivot> {
             return Err(status.as_error());
         }
 
-        let pivot_source = pivot_buffer.as_mut_ptr() as *mut u16;
+        let pivot_source = pivot_buffer.as_mut_ptr().cast::<u16>();
         let pivot_target = unsafe { pivot_source.add(pivot_buffer.len()) };
 
         Ok(Self { source, target, pivot_buffer, pivot_source, pivot_target, reset: true })
@@ -204,11 +204,11 @@ impl<'pivot> Converter<'pivot> {
         let input_end = unsafe { input_beg.add(input.len()) };
         let mut input_ptr = input_beg;
 
-        let output_beg = output.as_mut_ptr() as *mut u8;
+        let output_beg = output.as_mut_ptr().cast::<u8>();
         let output_end = unsafe { output_beg.add(output.len()) };
         let mut output_ptr = output_beg;
 
-        let pivot_beg = self.pivot_buffer.as_mut_ptr() as *mut u16;
+        let pivot_beg = self.pivot_buffer.as_mut_ptr().cast::<u16>();
         let pivot_end = unsafe { pivot_beg.add(self.pivot_buffer.len()) };
 
         let flush = input.is_empty();
@@ -346,7 +346,7 @@ fn text_buffer_from_utext<'a>(ut: &icu_ffi::UText) -> &'a TextBuffer {
 }
 
 fn double_cache_from_utext<'a>(ut: &icu_ffi::UText) -> &'a mut DoubleCache {
-    unsafe { &mut *(ut.p_extra as *mut DoubleCache) }
+    unsafe { &mut *ut.p_extra.cast() }
 }
 
 extern "C" fn utext_clone(
@@ -844,9 +844,9 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
             output_len = unsafe {
                 (f.ucasemap_utf8FoldCase)(
                     casemap,
-                    output.as_mut_ptr() as *mut _,
+                    output.as_mut_ptr().cast(),
                     output.len() as i32,
-                    input.as_ptr() as *const _,
+                    input.as_ptr().cast(),
                     input.len() as i32,
                     &mut status,
                 )
@@ -860,9 +860,9 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
             output_len = unsafe {
                 (f.ucasemap_utf8FoldCase)(
                     casemap,
-                    output.as_mut_ptr() as *mut _,
+                    output.as_mut_ptr().cast(),
                     output.len() as i32,
-                    input.as_ptr() as *const _,
+                    input.as_ptr().cast(),
                     input.len() as i32,
                     &mut status,
                 )
@@ -927,7 +927,8 @@ struct LibraryFunctions {
 macro_rules! proc_name {
     ($s:literal) => {
         concat!(env!("EDIT_CFG_ICU_EXPORT_PREFIX"), $s, env!("EDIT_CFG_ICU_EXPORT_SUFFIX"), "\0")
-            .as_ptr() as *const c_char
+            .as_ptr()
+            .cast()
     };
 }
 
@@ -1002,7 +1003,7 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
             );
 
             let mut funcs = MaybeUninit::<LibraryFunctions>::uninit();
-            let mut ptr = funcs.as_mut_ptr() as *mut TransparentFunction;
+            let mut ptr = funcs.as_mut_ptr().cast::<TransparentFunction>();
 
             #[cfg(edit_icu_renaming_auto_detect)]
             let scratch_outer = scratch_arena(None);

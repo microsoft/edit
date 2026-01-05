@@ -51,19 +51,19 @@ pub fn memset<T: MemsetSafe>(dst: &mut [T], val: T) {
                 let beg = dst.as_mut_ptr();
                 let end = beg.add(dst.len());
                 let val = mem::transmute_copy::<_, u16>(&val);
-                memset_raw(beg as *mut u8, end as *mut u8, val as u64 * 0x0001000100010001);
+                memset_raw(beg.cast(), end.cast(), val as u64 * 0x0001000100010001);
             }
             4 => {
                 let beg = dst.as_mut_ptr();
                 let end = beg.add(dst.len());
                 let val = mem::transmute_copy::<_, u32>(&val);
-                memset_raw(beg as *mut u8, end as *mut u8, val as u64 * 0x0000000100000001);
+                memset_raw(beg.cast(), end.cast(), val as u64 * 0x0000000100000001);
             }
             8 => {
                 let beg = dst.as_mut_ptr();
                 let end = beg.add(dst.len());
                 let val = mem::transmute_copy::<_, u64>(&val);
-                memset_raw(beg as *mut u8, end as *mut u8, val);
+                memset_raw(beg.cast(), end.cast(), val);
             }
             _ => unreachable!(),
         }
@@ -88,19 +88,19 @@ unsafe fn memset_fallback(mut beg: *mut u8, end: *mut u8, val: u64) {
         let mut remaining = end.offset_from_unsigned(beg);
 
         while remaining >= 8 {
-            (beg as *mut u64).write_unaligned(val);
+            beg.cast::<u64>().write_unaligned(val);
             beg = beg.add(8);
             remaining -= 8;
         }
 
         if remaining >= 4 {
             // 4-7 bytes remaining
-            (beg as *mut u32).write_unaligned(val as u32);
-            (end.sub(4) as *mut u32).write_unaligned(val as u32);
+            beg.cast::<u32>().write_unaligned(val as u32);
+            end.sub(4).cast::<u32>().write_unaligned(val as u32);
         } else if remaining >= 2 {
             // 2-3 bytes remaining
-            (beg as *mut u16).write_unaligned(val as u16);
-            (end.sub(2) as *mut u16).write_unaligned(val as u16);
+            beg.cast::<u16>().write_unaligned(val as u16);
+            end.sub(2).cast::<u16>().write_unaligned(val as u16);
         } else if remaining >= 1 {
             // 1 byte remaining
             beg.write(val as u8);
@@ -368,8 +368,8 @@ unsafe fn memset_neon(mut beg: *mut u8, end: *mut u8, val: u64) {
 
             loop {
                 // Compiles to a single `stp` instruction.
-                vst1q_u64(beg as *mut _, fill);
-                vst1q_u64(beg.add(16) as *mut _, fill);
+                vst1q_u64(beg.cast(), fill);
+                vst1q_u64(beg.add(16).cast(), fill);
 
                 beg = beg.add(32);
                 remaining -= 32;
@@ -382,20 +382,20 @@ unsafe fn memset_neon(mut beg: *mut u8, end: *mut u8, val: u64) {
         if remaining >= 16 {
             // 16-31 bytes remaining
             let fill = vdupq_n_u64(val);
-            vst1q_u64(beg as *mut _, fill);
-            vst1q_u64(end.sub(16) as *mut _, fill);
+            vst1q_u64(beg.cast(), fill);
+            vst1q_u64(end.sub(16).cast(), fill);
         } else if remaining >= 8 {
             // 8-15 bytes remaining
-            (beg as *mut u64).write_unaligned(val);
-            (end.sub(8) as *mut u64).write_unaligned(val);
+            beg.cast::<u64>().write_unaligned(val);
+            end.sub(8).cast::<u64>().write_unaligned(val);
         } else if remaining >= 4 {
             // 4-7 bytes remaining
-            (beg as *mut u32).write_unaligned(val as u32);
-            (end.sub(4) as *mut u32).write_unaligned(val as u32);
+            beg.cast::<u32>().write_unaligned(val as u32);
+            end.sub(4).cast::<u32>().write_unaligned(val as u32);
         } else if remaining >= 2 {
             // 2-3 bytes remaining
-            (beg as *mut u16).write_unaligned(val as u16);
-            (end.sub(2) as *mut u16).write_unaligned(val as u16);
+            beg.cast::<u16>().write_unaligned(val as u16);
+            end.sub(2).cast::<u16>().write_unaligned(val as u16);
         } else if remaining >= 1 {
             // 1 byte remaining
             beg.write(val as u8);

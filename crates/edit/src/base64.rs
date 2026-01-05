@@ -35,7 +35,7 @@ pub fn encode(dst: &mut ArenaString, src: &[u8]) {
                 // SAFETY: Thanks to `remaining > 3`, reading 4 bytes at once is safe.
                 // This improves performance massively over a byte-by-byte approach,
                 // because it allows us to byte-swap the read and use simple bit-shifts below.
-                let val = u32::from_be((inp as *const u32).read_unaligned());
+                let val = u32::from_be(inp.cast::<u32>().read_unaligned());
                 inp = inp.add(3);
                 remaining -= 3;
 

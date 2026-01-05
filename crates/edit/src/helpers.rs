@@ -258,7 +258,7 @@ pub fn file_read_uninit<T: Read>(
     buf: &mut [MaybeUninit<u8>],
 ) -> apperr::Result<usize> {
     unsafe {
-        let buf_slice = slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len());
+        let buf_slice = slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<u8>(), buf.len());
         let n = file.read(buf_slice)?;
         Ok(n)
     }
@@ -267,13 +267,13 @@ pub fn file_read_uninit<T: Read>(
 /// Turns a [`&[u8]`] into a [`&[MaybeUninit<T>]`].
 #[inline(always)]
 pub const fn slice_as_uninit_ref<T>(slice: &[T]) -> &[MaybeUninit<T>] {
-    unsafe { slice::from_raw_parts(slice.as_ptr() as *const MaybeUninit<T>, slice.len()) }
+    unsafe { slice::from_raw_parts(slice.as_ptr().cast(), slice.len()) }
 }
 
 /// Turns a [`&mut [T]`] into a [`&mut [MaybeUninit<T>]`].
 #[inline(always)]
 pub const fn slice_as_uninit_mut<T>(slice: &mut [T]) -> &mut [MaybeUninit<T>] {
-    unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut MaybeUninit<T>, slice.len()) }
+    unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr().cast(), slice.len()) }
 }
 
 /// Helpers for ASCII string comparisons.
