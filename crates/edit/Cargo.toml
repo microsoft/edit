@@ -15,6 +15,7 @@ name = "lib"
 harness = false
 
 [features]
+# Display editor latency in the top-right corner
 debug-latency = []
 
 [dependencies]
