@@ -100,6 +100,8 @@ pub struct Framebuffer {
     /// of the palette as [dark, light], unless the palette is recognized
     /// as a light them, in which case it swaps them.
     auto_colors: [StraightRgba; 2],
+    /// Above this lightness value, we consider a color to be "light".
+    auto_color_threshold: f32,
     /// A cache table for previously contrasted colors.
     /// See: <https://fgiesen.wordpress.com/2019/02/11/cache-tables/>
     contrast_colors: [Cell<(StraightRgba, StraightRgba)>; CACHE_TABLE_SIZE],
@@ -120,6 +122,7 @@ impl Framebuffer {
                 DEFAULT_THEME[IndexedColor::Black as usize],
                 DEFAULT_THEME[IndexedColor::BrightWhite as usize],
             ],
+            auto_color_threshold: 0.5,
             contrast_colors: [const { Cell::new((StraightRgba::zero(), StraightRgba::zero())) };
                 CACHE_TABLE_SIZE],
             background_fill: DEFAULT_THEME[IndexedColor::Background as usize],
@@ -141,7 +144,21 @@ impl Framebuffer {
             self.indexed_colors[IndexedColor::Black as usize],
             self.indexed_colors[IndexedColor::BrightWhite as usize],
         ];
-        if !Self::is_dark(self.auto_colors[0]) {
+        // It's not guaranteed that Black is actually dark and BrightWhite
+        // light (vice versa for a light theme).
+        // Such is the case with macOS 26's "Clear Dark" theme (and probably
+        // a lot other themes).
+        // Its black is #35424C (l=0.3716; oof!) and bright white is #E5EFF5
+        // (l=0.9464).
+        // If we have a color such as #43698A (l=0.5065), which is l>0.5
+        // ("light") and need a contrasting color,
+        // we need that to be #E5EFF5, even though that's also l>0.5. With a
+        // midpoint of 0.659, we get that right.
+        let lightness = self.auto_colors.map(|c| c.as_oklab().lightness());
+        self.auto_color_threshold = (lightness[0] + lightness[1]) * 0.5;
+
+        // Ensure [0] is dark and [1] is light.
+        if lightness[0] > lightness[1] {
             self.auto_colors.swap(0, 1);
         }
     }
@@ -357,13 +374,10 @@ impl Framebuffer {
     #[cold]
     fn contrasted_slow(&self, color: StraightRgba) -> StraightRgba {
         let idx = (color.to_ne() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
-        let contrast = self.auto_colors[Self::is_dark(color) as usize];
+        let is_dark = color.as_oklab().lightness() < self.auto_color_threshold;
+        let contrast = self.auto_colors[is_dark as usize];
         self.contrast_colors[idx].set((color, contrast));
         contrast
-    }
-
-    fn is_dark(color: StraightRgba) -> bool {
-        color.as_oklab().lightness() < 0.5
     }
 
     /// Blends the given sRGB color onto the background bitmap.
