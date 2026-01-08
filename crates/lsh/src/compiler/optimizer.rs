@@ -92,9 +92,9 @@ fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
         a.split('.').cmp(b.split('.'))
     });
 
-    mapping.resize(compiler.highlight_kinds.len(), i32::MAX);
+    mapping.resize(compiler.highlight_kinds.len(), u32::MAX);
     for (idx, hk) in compiler.highlight_kinds.iter_mut().enumerate() {
-        let idx = idx as i32;
+        let idx = idx as u32;
         mapping[hk.value as usize] = idx;
         hk.value = idx;
     }

@@ -258,7 +258,12 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         first.borrow_mut().set_next(loop_start);
         loop_good.borrow_mut().set_next(block.first);
-        block.last.borrow_mut().set_next(fast_skip);
+
+        if let mut block_last = block.last.borrow_mut()
+            && block_last.wants_next()
+        {
+            block_last.set_next(fast_skip);
+        }
 
         Ok(IRSpan { first, last: loop_exit })
     }
@@ -355,7 +360,11 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 let bl = self.parse_block()?;
                 dst_bad.borrow_mut().set_next(bl.first);
                 // Connect the end of the {} to the end of the if/else chain.
-                bl.last.borrow_mut().set_next(last);
+                if let mut bl_last = bl.last.borrow_mut()
+                    && bl_last.wants_next()
+                {
+                    bl_last.set_next(last);
+                }
                 break;
             }
 
@@ -374,7 +383,6 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             _ => raise!(self, "expected variable name"),
         };
         let lhs_vreg = self.get_variable(lhs_name)?;
-        eprintln!("DEBUG: lhs_name = {}, lhs_vreg = {:?}", lhs_name, lhs_vreg);
         self.advance();
 
         let op = match self.current_token {
@@ -393,7 +401,6 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             _ => raise!(self, "expected variable name"),
         };
         let rhs_vreg = self.get_variable(rhs_name)?;
-        eprintln!("DEBUG: rhs_name = {}, rhs_vreg = {:?}", rhs_name, rhs_vreg);
         self.advance();
 
         let dst_good = self.compiler.alloc_noop();

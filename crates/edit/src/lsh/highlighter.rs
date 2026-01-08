@@ -218,45 +218,59 @@ impl<'doc> Highlighter<'doc> {
 
         loop {
             unsafe {
-                let pc = self.registers.pc;
-                let op = *ASSEMBLY.get_unchecked(pc as usize);
-
+                let pc = self.registers.pc as usize;
+                let op = ASSEMBLY[pc];
                 self.registers.pc += 1;
 
-                match op & 0xf {
+                match op {
                     0 => {
-                        // Add
-                        let dst = ((op >> 4) & 0xf) as usize;
-                        let src = ((op >> 8) & 0xf) as usize;
-                        let imm = op >> 12;
-                        self.registers.set(dst, self.registers.get(src) + imm);
+                        // Mov { dst: Register, src: Register }
+                        let (dst, src) = self.read_dst_src();
+                        let s = self.registers.get(src);
+                        self.registers.set(dst, s);
                     }
                     1 => {
-                        // Push
-                        let mut regs = op >> 16;
-                        while regs != 0 {
-                            let idx = regs.trailing_zeros() as usize;
-                            self.stack.push(self.registers.get(idx));
-                            regs &= !(1 << idx);
-                        }
+                        // Add { dst: Register, src: Register }
+                        let (dst, src) = self.read_dst_src();
+                        let d = self.registers.get(dst);
+                        let s = self.registers.get(src);
+                        self.registers.set(dst, d.saturating_add(s));
                     }
                     2 => {
-                        // Pop
-                        let mut regs = op >> 16;
-                        while regs != 0 {
-                            debug_assert!(!self.stack.is_empty());
-                            let idx = regs.trailing_zeros() as usize;
-                            self.registers.set(idx, self.stack.pop().unwrap_or_default());
-                            regs &= !(1 << idx);
-                        }
+                        // Sub { dst: Register, src: Register }
+                        let (dst, src) = self.read_dst_src();
+                        let d = self.registers.get(dst);
+                        let s = self.registers.get(src);
+                        self.registers.set(dst, d.saturating_sub(s));
                     }
                     3 => {
-                        // Call
-                        let dst = op >> 12;
-                        self.stack.push(self.registers.pc);
-                        self.registers.pc = dst;
+                        // MovImm { dst: Register, imm: u32 }
+                        let (dst, _) = self.read_dst_src();
+                        let imm = self.read::<u32>();
+                        self.registers.set(dst, imm);
                     }
                     4 => {
+                        // AddImm { dst: Register, imm: u32 }
+                        let (dst, _) = self.read_dst_src();
+                        let imm = self.read::<u32>();
+                        let d = self.registers.get(dst);
+                        self.registers.set(dst, d.saturating_add(imm));
+                    }
+                    5 => {
+                        // SubImm { dst: Register, imm: u32 }
+                        let (dst, _) = self.read_dst_src();
+                        let imm = self.read::<u32>();
+                        let d = self.registers.get(dst);
+                        self.registers.set(dst, d.saturating_sub(imm));
+                    }
+
+                    6 => {
+                        // Call { tgt: u32 }
+                        let tgt = self.read::<u32>();
+                        self.stack.push(self.registers.pc);
+                        self.registers.pc = tgt;
+                    }
+                    7 => {
                         // Return
                         if let Some(pc) = self.stack.pop() {
                             self.registers.pc = pc;
@@ -265,61 +279,102 @@ impl<'doc> Highlighter<'doc> {
                             break;
                         }
                     }
-                    5 => {
-                        // JumpIfEq
-                        let dst = op >> 12;
-                        let rhs = ((op >> 8) & 0xf) as usize;
-                        let lhs = ((op >> 4) & 0xf) as usize;
-                        if self.registers.get(lhs) == self.registers.get(rhs) {
-                            self.registers.pc = dst;
-                        }
-                    }
-                    6 => {
-                        // JumpIfEndOfLine
-                        let dst = op >> 12;
-                        let off = self.registers.off as usize;
 
-                        if off >= line.len() {
-                            self.registers.pc = dst;
-                        }
-                    }
-                    7 => {
-                        // JumpIfMatchCharset
-                        let idx = ((op >> 4) & 0xff) as usize;
-                        let dst = op >> 12;
-                        let off = self.registers.off as usize;
-                        let cs = CHARSETS.get_unchecked(idx);
-
-                        if let Some(off) = Self::charset_gobble(line, off, cs) {
-                            self.registers.off = off as u32;
-                            self.registers.pc = dst;
-                        }
-                    }
                     8 => {
-                        // JumpIfMatchPrefix
-                        let idx = ((op >> 4) & 0xff) as usize;
-                        let dst = op >> 12;
-                        let off = self.registers.off as usize;
-                        let str = STRINGS.get_unchecked(idx).as_bytes();
-
-                        if Self::inlined_memcmp(line, off, str) {
-                            self.registers.off = (off + str.len()) as u32;
-                            self.registers.pc = dst;
+                        // JumpEQ { lhs: Register, rhs: Register, tgt: u32 }
+                        let (dst, src) = self.read_dst_src();
+                        let tgt = self.read::<u32>();
+                        if self.registers.get(dst) == self.registers.get(src) {
+                            self.registers.pc = tgt;
                         }
                     }
                     9 => {
-                        // JumpIfMatchPrefixInsensitive
-                        let idx = ((op >> 4) & 0xff) as usize;
-                        let dst = op >> 12;
-                        let off = self.registers.off as usize;
-                        let str = STRINGS.get_unchecked(idx).as_bytes();
-
-                        if Self::inlined_memicmp(line, off, str) {
-                            self.registers.off = (off + str.len()) as u32;
-                            self.registers.pc = dst;
+                        // JumpNE { lhs: Register, rhs: Register, tgt: u32 }
+                        let (dst, src) = self.read_dst_src();
+                        let tgt = self.read::<u32>();
+                        if self.registers.get(dst) != self.registers.get(src) {
+                            self.registers.pc = tgt;
                         }
                     }
                     10 => {
+                        // JumpLT { lhs: Register, rhs: Register, tgt: u32 }
+                        let (dst, src) = self.read_dst_src();
+                        let tgt = self.read::<u32>();
+                        if self.registers.get(dst) < self.registers.get(src) {
+                            self.registers.pc = tgt;
+                        }
+                    }
+                    11 => {
+                        // JumpLE { lhs: Register, rhs: Register, tgt: u32 }
+                        let (dst, src) = self.read_dst_src();
+                        let tgt = self.read::<u32>();
+                        if self.registers.get(dst) <= self.registers.get(src) {
+                            self.registers.pc = tgt;
+                        }
+                    }
+                    12 => {
+                        // JumpGT { lhs: Register, rhs: Register, tgt: u32 }
+                        let (dst, src) = self.read_dst_src();
+                        let tgt = self.read::<u32>();
+                        if self.registers.get(dst) > self.registers.get(src) {
+                            self.registers.pc = tgt;
+                        }
+                    }
+                    13 => {
+                        // JumpGE { lhs: Register, rhs: Register, tgt: u32 }
+                        let (dst, src) = self.read_dst_src();
+                        let tgt = self.read::<u32>();
+                        if self.registers.get(dst) >= self.registers.get(src) {
+                            self.registers.pc = tgt;
+                        }
+                    }
+
+                    14 => {
+                        // JumpIfEndOfLine { tgt: u32 }
+                        let tgt = self.read::<u32>();
+                        if (self.registers.off as usize) >= line.len() {
+                            self.registers.pc = tgt;
+                        }
+                    }
+
+                    15 => {
+                        // JumpIfMatchCharset { idx: u32, tgt: u32 }
+                        let idx = self.read::<u32>();
+                        let tgt = self.read::<u32>();
+                        let off = self.registers.off as usize;
+                        let cs = CHARSETS.get_unchecked(idx as usize);
+
+                        if let Some(off) = Self::charset_gobble(line, off, cs) {
+                            self.registers.off = off as u32;
+                            self.registers.pc = tgt;
+                        }
+                    }
+                    16 => {
+                        // JumpIfMatchPrefix { idx: u32, tgt: u32 }
+                        let idx = self.read::<u32>();
+                        let tgt = self.read::<u32>();
+                        let off = self.registers.off as usize;
+                        let str = STRINGS.get_unchecked(idx as usize).as_bytes();
+
+                        if Self::inlined_memcmp(line, off, str) {
+                            self.registers.off = (off + str.len()) as u32;
+                            self.registers.pc = tgt;
+                        }
+                    }
+                    17 => {
+                        // JumpIfMatchPrefixInsensitive { idx: u32, tgt: u32 }
+                        let idx = self.read::<u32>();
+                        let tgt = self.read::<u32>();
+                        let off = self.registers.off as usize;
+                        let str = STRINGS.get_unchecked(idx as usize).as_bytes();
+
+                        if Self::inlined_memicmp(line, off, str) {
+                            self.registers.off = (off + str.len()) as u32;
+                            self.registers.pc = tgt;
+                        }
+                    }
+
+                    18 => {
                         // FlushHighlight
                         let start = self.registers.hs as usize;
                         let kind = self.registers.hk as usize;
@@ -335,13 +390,14 @@ impl<'doc> Highlighter<'doc> {
 
                         self.registers.hs = self.registers.off;
                     }
-                    11 => {
+                    19 => {
                         // AwaitInput
                         let off = self.registers.off as usize;
                         if off >= line.len() {
                             break;
                         }
                     }
+
                     _ => std::hint::unreachable_unchecked(),
                 }
             }
@@ -444,5 +500,20 @@ impl<'doc> Highlighter<'doc> {
         let bitmask = 1u16 << hi_nibble;
 
         (bitset & bitmask) != 0
+    }
+
+    #[inline]
+    fn read<T: Copy>(&mut self) -> T {
+        let pc = self.registers.pc as usize;
+        self.registers.pc += mem::size_of::<T>() as u32;
+        unsafe { (ASSEMBLY.as_ptr().add(pc) as *const T).read_unaligned() }
+    }
+
+    #[inline]
+    fn read_dst_src(&mut self) -> (usize, usize) {
+        let dst_src = self.read::<u8>();
+        let dst = (dst_src & 0xf) as usize;
+        let src = (dst_src >> 4) as usize;
+        (dst, src)
     }
 }

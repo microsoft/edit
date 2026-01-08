@@ -205,7 +205,7 @@ fn transform_any_star<'a>(
         instr: IRI::Add {
             dst: compiler.get_reg(Register::InputOffset),
             src: compiler.get_reg(Register::Zero),
-            imm: i32::MAX,
+            imm: u32::MAX,
         },
         offset: usize::MAX,
     }))

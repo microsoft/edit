@@ -2,18 +2,6 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Launch lsh (Windows)",
-            "type": "cppdbg",
-            "request": "launch",
-            "miDebuggerPath": "rust-gdb",
-            "externalConsole": true,
-            "program": "${workspaceFolder}/target/debug/lsh",
-            "cwd": "${workspaceFolder}",
-            "args": [
-                "${workspaceFolder}/crates/lsh/definitions"
-            ],
-        },
-        {
             "name": "Launch edit (Windows)",
             "preLaunchTask": "rust: cargo build",
             "type": "cppvsdbg",
@@ -22,7 +10,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/assets/highlighting-tests/powershell.ps1"
+                "${workspaceFolder}/assets/highlighting-tests/yaml.yml"
             ],
         },
         {
@@ -35,7 +23,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/assets/highlighting-tests/powershell.ps1"
+                "${workspaceFolder}/assets/highlighting-tests/yaml.yml"
             ],
         },
         {
@@ -52,7 +40,18 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/assets/highlighting-tests/powershell.ps1"
+                "${workspaceFolder}/assets/highlighting-tests/yaml.yml"
+            ],
+        },
+        {
+            "name": "Launch lsh (Windows)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "console": "externalTerminal",
+            "program": "${workspaceFolder}/target/debug/lsh",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "${workspaceFolder}/crates/lsh/definitions"
             ],
         },
         {
