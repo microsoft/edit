@@ -92,7 +92,7 @@
 //! use edit::helpers::Size;
 //! use edit::input::Input;
 //! use edit::tui::*;
-//! use stdext::{arena, arena_format};
+//! use edit::{arena, arena_format};
 //!
 //! struct State {
 //!     counter: i32,
@@ -150,8 +150,6 @@ use std::fmt::Write as _;
 use std::{iter, mem, ptr, time};
 
 use stdext::arena::{Arena, ArenaString, scratch_arena};
-use stdext::arena_format;
-
 use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
 use crate::clipboard::Clipboard;
@@ -162,6 +160,7 @@ use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
 use crate::oklab::StraightRgba;
 use crate::{apperr, input, simd, unicode};
+use stdext::arena_format;
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
@@ -987,6 +986,22 @@ impl Tui {
                 if !tc.single_line {
                     // Account for the scrollbar.
                     destination.right -= 1;
+                }
+
+                // If hyperlink styling changed on any line, we may need to
+                // expand the dirty region from that line downwards to ensure
+                // stale underline rows are cleared. We let the framebuffer
+                // know before compositing.
+                if let Some(hyperlink_dirty_from_visual_y) =
+                    tb.take_hyperlink_dirty_from_visual_y()
+                {
+                    let relative_y = hyperlink_dirty_from_visual_y - tc.scroll_offset.y;
+                    if relative_y <= 0 {
+                        self.framebuffer.force_redraw_from(destination.top);
+                    } else if relative_y < destination.height() {
+                        self.framebuffer
+                            .force_redraw_from(destination.top + relative_y);
+                    }
                 }
 
                 if let Some(res) =
@@ -2280,6 +2295,47 @@ impl<'a> Context<'a, '_> {
                         2 => tb.select_word(),
                         _ => match self.tui.mouse_state {
                             InputMouseState::Left => {
+                                // Check if Ctrl is held (or Cmd on macOS) and we clicked on a hyperlink
+                                #[cfg(target_os = "macos")]
+                                let hyperlink_modifier = kbmod::ALT;
+                                #[cfg(not(target_os = "macos"))]
+                                let hyperlink_modifier = kbmod::CTRL;
+                                
+                                if self.input_mouse_modifiers.contains(hyperlink_modifier) {
+                                    // Convert visual position to document offset
+                                    let click_cursor = tb.cursor_move_to_visual_internal(
+                                        tb.cursor_move_to_logical_internal(Default::default(), Point { x: 0, y: 0 }),
+                                        pos
+                                    );
+                                    
+                                    // Check if we clicked on a hyperlink
+                                    if let Some(link) = tb.find_link_at_offset(click_cursor.offset) {
+                                        // Open the URL
+                                        let url = if link.url.starts_with("www.") {
+                                            format!("https://{}", link.url)
+                                        } else {
+                                            link.url.clone()
+                                        };
+                                        
+                                        // Use the system command to open the URL
+                                        #[cfg(target_os = "windows")]
+                                        let _ = std::process::Command::new("cmd")
+                                            .args(&["/C", "start", &url])
+                                            .spawn();
+                                        #[cfg(target_os = "macos")]
+                                        let _ = std::process::Command::new("open")
+                                            .arg(&url)
+                                            .spawn();
+                                        #[cfg(target_os = "linux")]
+                                        let _ = std::process::Command::new("xdg-open")
+                                            .arg(&url)
+                                            .spawn();
+                                        
+                                        self.set_input_consumed();
+                                        return make_cursor_visible;
+                                    }
+                                }
+                                
                                 if self.input_mouse_modifiers.contains(kbmod::SHIFT) {
                                     // TODO: Untested because Windows Terminal surprisingly doesn't support Shift+Click.
                                     tb.selection_update_visual(pos);

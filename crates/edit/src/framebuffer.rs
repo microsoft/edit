@@ -10,7 +10,6 @@ use std::ptr;
 use std::slice::ChunksExact;
 
 use stdext::arena::{Arena, ArenaString};
-
 use crate::helpers::{CoordType, Point, Rect, Size};
 use crate::oklab::StraightRgba;
 use crate::simd::{MemsetSafe, memset};
@@ -52,12 +51,6 @@ pub enum IndexedColor {
 
     Background,
     Foreground,
-}
-
-impl<T: Into<u8>> From<T> for IndexedColor {
-    fn from(value: T) -> Self {
-        unsafe { std::mem::transmute(value.into() & 0xF) }
-    }
 }
 
 /// Number of indices used by [`IndexedColor`].
@@ -107,13 +100,13 @@ pub struct Framebuffer {
     /// of the palette as [dark, light], unless the palette is recognized
     /// as a light them, in which case it swaps them.
     auto_colors: [StraightRgba; 2],
-    /// Above this lightness value, we consider a color to be "light".
-    auto_color_threshold: f32,
     /// A cache table for previously contrasted colors.
     /// See: <https://fgiesen.wordpress.com/2019/02/11/cache-tables/>
     contrast_colors: [Cell<(StraightRgba, StraightRgba)>; CACHE_TABLE_SIZE],
     background_fill: StraightRgba,
     foreground_fill: StraightRgba,
+    /// Optional first row index from which all lines must be forcibly redrawn.
+    force_redraw_from: Option<CoordType>,
 }
 
 impl Framebuffer {
@@ -127,11 +120,11 @@ impl Framebuffer {
                 DEFAULT_THEME[IndexedColor::Black as usize],
                 DEFAULT_THEME[IndexedColor::BrightWhite as usize],
             ],
-            auto_color_threshold: 0.5,
             contrast_colors: [const { Cell::new((StraightRgba::zero(), StraightRgba::zero())) };
                 CACHE_TABLE_SIZE],
             background_fill: DEFAULT_THEME[IndexedColor::Background as usize],
             foreground_fill: DEFAULT_THEME[IndexedColor::Foreground as usize],
+            force_redraw_from: None,
         }
     }
 
@@ -148,17 +141,7 @@ impl Framebuffer {
             self.indexed_colors[IndexedColor::Black as usize],
             self.indexed_colors[IndexedColor::BrightWhite as usize],
         ];
-
-        // It's not guaranteed that Black is actually dark and BrightWhite light (vice versa for a light theme).
-        // Such is the case with macOS 26's "Clear Dark" theme (and probably a lot other themes).
-        // Its black is #35424C (l=0.3716; oof!) and bright white is #E5EFF5 (l=0.9464).
-        // If we have a color such as #43698A (l=0.5065), which is l>0.5 ("light") and need a contrasting color,
-        // we need that to be #E5EFF5, even though that's also l>0.5. With a midpoint of 0.659, we get that right.
-        let lightness = self.auto_colors.map(|c| c.as_oklab().lightness());
-        self.auto_color_threshold = (lightness[0] + lightness[1]) * 0.5;
-
-        // Ensure [0] is dark and [1] is light.
-        if lightness[0] > lightness[1] {
+        if !Self::is_dark(self.auto_colors[0]) {
             self.auto_colors.swap(0, 1);
         }
     }
@@ -182,6 +165,9 @@ impl Framebuffer {
 
         self.frame_counter = self.frame_counter.wrapping_add(1);
 
+        // Reset any forced redraw range at the start of a new frame.
+        self.force_redraw_from = None;
+
         let back = &mut self.buffers[self.frame_counter & 1];
 
         back.text.fill_whitespace();
@@ -190,6 +176,18 @@ impl Framebuffer {
         back.attributes.reset();
         back.cursor = Cursor::new_disabled();
     }
+
+    /// Forces all lines from the given row (inclusive) to be redrawn on the next render.
+    pub fn force_redraw_from(&mut self, y: CoordType) {
+        let y = y.max(0);
+
+        self.force_redraw_from = Some(match self.force_redraw_from {
+            Some(existing) => existing.min(y),
+            None => y,
+        });
+    }
+
+
 
     /// Replaces text contents in a single line of the framebuffer.
     /// All coordinates are in viewport coordinates.
@@ -359,10 +357,13 @@ impl Framebuffer {
     #[cold]
     fn contrasted_slow(&self, color: StraightRgba) -> StraightRgba {
         let idx = (color.to_ne() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
-        let is_dark = color.as_oklab().lightness() < self.auto_color_threshold;
-        let contrast = self.auto_colors[is_dark as usize];
+        let contrast = self.auto_colors[Self::is_dark(color) as usize];
         self.contrast_colors[idx].set((color, contrast));
         contrast
+    }
+
+    fn is_dark(color: StraightRgba) -> bool {
+        color.as_oklab().lightness() < 0.5
     }
 
     /// Blends the given sRGB color onto the background bitmap.
@@ -465,7 +466,12 @@ impl Framebuffer {
 
             // TODO: Ideally, we should properly diff the contents and so if
             // only parts of a line change, we should only update those parts.
-            if front_line == back_line
+            // If a forced redraw is requested from some row, treat all rows
+            // at or below that row as changed regardless of buffer equality.
+            if self
+                .force_redraw_from
+                .map_or(true, |from| y < from)
+                && front_line == back_line
                 && front_bg == back_bg
                 && front_fg == back_fg
                 && front_attr == back_attr
@@ -531,7 +537,28 @@ impl Framebuffer {
 
                 chunk_end < back_bg.len()
             } {}
+            
+            // CRITICAL: Clear to end of line to prevent old content from remaining visible.
+            // This is especially important when styled content (like blue URLs) is removed
+            // or when lines become shorter. Without this, the old frame's content persists.
+            result.push_str("\x1b[K");
         }
+
+        // CRITICAL: Always clear to end of screen after the line-drawing loop.
+        // This removes any content from lines that are no longer being rendered,
+        // which happens when the document shrinks or content is deleted.
+        // ESC[J clears only from the current cursor position downwards, so we must
+        // first move the cursor to the first column of the last viewport row to
+        // avoid leaving stale UI (like ghost hyperlink underlines) behind.
+        let clear_row = front.text.size.height;
+        if result.is_empty() {
+            // No content was drawn this frame; reset attributes and position for clear.
+            _ = write!(result, "\x1b[m\x1b[{};1H", clear_row);
+        } else {
+            // Content was drawn; just reposition before clearing.
+            _ = write!(result, "\x1b[{};1H", clear_row);
+        }
+        result.push_str("\x1b[J");
 
         // If the cursor has changed since the last frame we naturally need to update it,
         // but this also applies if the code above wrote to the screen,
