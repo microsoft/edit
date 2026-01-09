@@ -4,6 +4,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem::transmute;
 
+use stdext::arena::scratch_arena;
+
 use super::*;
 
 #[derive(Debug, Clone, Copy)]
@@ -189,8 +191,6 @@ impl<'a> Backend<'a> {
             }
 
             self.process_relocations();
-
-            self.assembly.instructions[entrypoint_offset].label = function.name;
         }
 
         if !self.relocations.is_empty() {
@@ -232,7 +232,27 @@ impl<'a> Backend<'a> {
     }
 
     fn push_instruction(&mut self, instr: Instruction) {
-        self.assembly.instructions.push(AnnotatedInstruction { instr, label: "" });
+        // If we have a pending relocation for the instruction we're about to write,
+        // we can now calculate the exact byte offset of the immediate value that
+        // needs to be patched and update the relocation accordingly.
+        //
+        // This allows `process_relocations` to simply overwrite the bytes at the
+        // stored offset without having to decode specific instructions.
+        if let Some(reloc) = self.relocations.last_mut() {
+            let offset = match reloc {
+                Relocation::ByName(off, _) => off,
+                Relocation::ByNode(off, _) => off,
+            };
+
+            if *offset == self.assembly.instructions.len()
+                && let Some(delta) = instr.address_offset()
+            {
+                *offset += delta;
+            }
+        }
+
+        let scratch = scratch_arena(None);
+        self.assembly.instructions.extend(instr.encode(&scratch));
     }
 
     /// Prepares a virtual register from IR for write-use in an instruction.
@@ -336,22 +356,11 @@ impl<'a> Backend<'a> {
                 },
             };
 
-            match &mut self.assembly.instructions[off].instr {
-                Instruction::MovImm { dst: Register::ProgramCounter, imm: off }
-                | Instruction::Call { tgt: off }
-                | Instruction::JumpEQ { tgt: off, .. }
-                | Instruction::JumpNE { tgt: off, .. }
-                | Instruction::JumpLT { tgt: off, .. }
-                | Instruction::JumpLE { tgt: off, .. }
-                | Instruction::JumpGT { tgt: off, .. }
-                | Instruction::JumpGE { tgt: off, .. }
-                | Instruction::JumpIfEndOfLine { tgt: off }
-                | Instruction::JumpIfMatchCharset { tgt: off, .. }
-                | Instruction::JumpIfMatchPrefix { tgt: off, .. }
-                | Instruction::JumpIfMatchPrefixInsensitive { tgt: off, .. } => {
-                    *off = resolved as u32;
-                }
-                i => panic!("Unexpected relocation target: {i:?}"),
+            let range = off..off + 4;
+            if let Some(target) = self.assembly.instructions.get_mut(range) {
+                target.copy_from_slice(&(resolved as u32).to_le_bytes());
+            } else {
+                panic!("Unexpected relocation target offset: {off}");
             }
 
             false

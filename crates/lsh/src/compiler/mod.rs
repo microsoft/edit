@@ -637,7 +637,7 @@ impl<'a> Intern<'a, Charset> for Vec<&'a Charset> {
 }
 
 pub struct Assembly<'a> {
-    pub instructions: Vec<AnnotatedInstruction<'a>>,
+    pub instructions: Vec<u8>,
     pub entrypoints: Vec<(&'a str, usize)>,
     pub charsets: Vec<&'a Charset>,
     pub strings: Vec<&'a str>,
@@ -827,6 +827,31 @@ pub enum Instruction {
 }
 
 impl Instruction {
+    pub fn address_offset(&self) -> Option<usize> {
+        match *self {
+            Instruction::Call { .. } => Some(1), // opcode
+
+            Instruction::JumpEQ { .. }
+            | Instruction::JumpNE { .. }
+            | Instruction::JumpLT { .. }
+            | Instruction::JumpLE { .. }
+            | Instruction::JumpGT { .. }
+            | Instruction::JumpGE { .. } => Some(2), // opcode + lhs/rhs pair
+
+            Instruction::JumpIfEndOfLine { .. } => Some(1), // opcode
+
+            Instruction::JumpIfMatchCharset { .. }
+            | Instruction::JumpIfMatchPrefix { .. }
+            | Instruction::JumpIfMatchPrefixInsensitive { .. } => Some(5), // opcode + idx
+
+            Instruction::MovImm { .. }
+            | Instruction::AddImm { .. }
+            | Instruction::SubImm { .. } => Some(2), // opcode + dst
+
+            _ => None,
+        }
+    }
+
     #[allow(clippy::identity_op)]
     pub fn encode<'a>(&self, arena: &'a Arena) -> Vec<u8, &'a Arena> {
         fn enc_dst_src(dst: Register, src: Register) -> u8 {
@@ -862,29 +887,29 @@ impl Instruction {
                 bytes.extend_from_slice(&enc_u32(imm));
             }
 
-            Instruction::Call { tgt: off } => {
-                bytes.extend_from_slice(&enc_u32(off));
+            Instruction::Call { tgt } => {
+                bytes.extend_from_slice(&enc_u32(tgt));
             }
             Instruction::Return => {}
 
-            Instruction::JumpEQ { lhs, rhs, tgt: off }
-            | Instruction::JumpNE { lhs, rhs, tgt: off }
-            | Instruction::JumpLT { lhs, rhs, tgt: off }
-            | Instruction::JumpLE { lhs, rhs, tgt: off }
-            | Instruction::JumpGT { lhs, rhs, tgt: off }
-            | Instruction::JumpGE { lhs, rhs, tgt: off } => {
+            Instruction::JumpEQ { lhs, rhs, tgt }
+            | Instruction::JumpNE { lhs, rhs, tgt }
+            | Instruction::JumpLT { lhs, rhs, tgt }
+            | Instruction::JumpLE { lhs, rhs, tgt }
+            | Instruction::JumpGT { lhs, rhs, tgt }
+            | Instruction::JumpGE { lhs, rhs, tgt } => {
                 bytes.push(enc_dst_src(lhs, rhs));
-                bytes.extend_from_slice(&enc_u32(off));
+                bytes.extend_from_slice(&enc_u32(tgt));
             }
 
-            Instruction::JumpIfEndOfLine { tgt: off } => {
-                bytes.extend_from_slice(&enc_u32(off));
+            Instruction::JumpIfEndOfLine { tgt } => {
+                bytes.extend_from_slice(&enc_u32(tgt));
             }
-            Instruction::JumpIfMatchCharset { idx, tgt: off }
-            | Instruction::JumpIfMatchPrefix { idx, tgt: off }
-            | Instruction::JumpIfMatchPrefixInsensitive { idx, tgt: off } => {
+            Instruction::JumpIfMatchCharset { idx, tgt }
+            | Instruction::JumpIfMatchPrefix { idx, tgt }
+            | Instruction::JumpIfMatchPrefixInsensitive { idx, tgt } => {
                 bytes.extend_from_slice(&enc_u32(idx));
-                bytes.extend_from_slice(&enc_u32(off));
+                bytes.extend_from_slice(&enc_u32(tgt));
             }
 
             Instruction::FlushHighlight => {}
@@ -892,6 +917,104 @@ impl Instruction {
         }
 
         bytes
+    }
+
+    pub fn decode(bytes: &[u8]) -> (Self, usize) {
+        fn dec_dst_src(b: u8) -> (Register, Register) {
+            let src = Register::from_usize((b >> 4) as usize);
+            let dst = Register::from_usize((b & 0xF) as usize);
+            (dst, src)
+        }
+
+        fn dec_dst(b: u8) -> Register {
+            Register::from_usize(b as usize)
+        }
+
+        fn dec_u32(bytes: &[u8]) -> u32 {
+            u32::from_le_bytes(bytes[..4].try_into().unwrap())
+        }
+
+        let opcode = bytes[0];
+        match opcode {
+            0 => {
+                let (dst, src) = dec_dst_src(bytes[1]);
+                (Instruction::Mov { dst, src }, 2)
+            }
+            1 => {
+                let (dst, src) = dec_dst_src(bytes[1]);
+                (Instruction::Add { dst, src }, 2)
+            }
+            2 => {
+                let (dst, src) = dec_dst_src(bytes[1]);
+                (Instruction::Sub { dst, src }, 2)
+            }
+            3 => {
+                let dst = dec_dst(bytes[1]);
+                let imm = dec_u32(&bytes[2..]);
+                (Instruction::MovImm { dst, imm }, 6)
+            }
+            4 => {
+                let dst = dec_dst(bytes[1]);
+                let imm = dec_u32(&bytes[2..]);
+                (Instruction::AddImm { dst, imm }, 6)
+            }
+            5 => {
+                let dst = dec_dst(bytes[1]);
+                let imm = dec_u32(&bytes[2..]);
+                (Instruction::SubImm { dst, imm }, 6)
+            }
+            6 => (Instruction::Call { tgt: dec_u32(&bytes[1..]) }, 5),
+            7 => (Instruction::Return, 1),
+            8 => {
+                let (lhs, rhs) = dec_dst_src(bytes[1]);
+                let tgt = dec_u32(&bytes[2..]);
+                (Instruction::JumpEQ { lhs, rhs, tgt }, 6)
+            }
+            9 => {
+                let (lhs, rhs) = dec_dst_src(bytes[1]);
+                let tgt = dec_u32(&bytes[2..]);
+                (Instruction::JumpNE { lhs, rhs, tgt }, 6)
+            }
+            10 => {
+                let (lhs, rhs) = dec_dst_src(bytes[1]);
+                let tgt = dec_u32(&bytes[2..]);
+                (Instruction::JumpLT { lhs, rhs, tgt }, 6)
+            }
+            11 => {
+                let (lhs, rhs) = dec_dst_src(bytes[1]);
+                let tgt = dec_u32(&bytes[2..]);
+                (Instruction::JumpLE { lhs, rhs, tgt }, 6)
+            }
+            12 => {
+                let (lhs, rhs) = dec_dst_src(bytes[1]);
+                let tgt = dec_u32(&bytes[2..]);
+                (Instruction::JumpGT { lhs, rhs, tgt }, 6)
+            }
+            13 => {
+                let (lhs, rhs) = dec_dst_src(bytes[1]);
+                let tgt = dec_u32(&bytes[2..]);
+                (Instruction::JumpGE { lhs, rhs, tgt }, 6)
+            }
+            14 => (Instruction::JumpIfEndOfLine { tgt: dec_u32(&bytes[1..]) }, 5),
+            15 => {
+                let idx = dec_u32(&bytes[1..]);
+                let tgt = dec_u32(&bytes[5..]);
+                (Instruction::JumpIfMatchCharset { idx, tgt }, 9)
+            }
+            16 => {
+                let idx = dec_u32(&bytes[1..]);
+                let tgt = dec_u32(&bytes[5..]);
+                (Instruction::JumpIfMatchPrefix { idx, tgt }, 9)
+            }
+            17 => {
+                let idx = dec_u32(&bytes[1..]);
+                let tgt = dec_u32(&bytes[5..]);
+                (Instruction::JumpIfMatchPrefixInsensitive { idx, tgt }, 9)
+            }
+            18 => (Instruction::FlushHighlight, 1),
+            19 => (Instruction::AwaitInput, 1),
+            _ => panic!("unknown opcode {opcode}"),
+        }
     }
 
     pub fn mnemonic<'a>(

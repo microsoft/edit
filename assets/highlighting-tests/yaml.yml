@@ -4,9 +4,11 @@ string: "Hello, world!"
 plain: plainValue
 multiline: |
   This is a
+  true
   multiline string.
 folded: >
   This is a
+  true
   folded string.
 number_int: 42
 number_float: 3.1415

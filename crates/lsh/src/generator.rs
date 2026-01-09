@@ -88,18 +88,25 @@ impl<'a> Generator<'a> {
         let comment_prefix = if vt { "\x1b[32m" } else { "" }; // green
         let comment_suffix = if vt { "\x1b[39m" } else { "" };
 
-        for (i, ai) in assembly.instructions.iter().enumerate() {
-            if !ai.label.is_empty() {
-                if i != 0 {
+        let mut labels = std::collections::HashMap::new();
+        for (name, offset) in &assembly.entrypoints {
+            labels.insert(*offset, *name);
+        }
+
+        let mut off = 0;
+        while off < assembly.instructions.len() {
+            if let Some(label) = labels.get(&off) {
+                if off != 0 {
                     output.push('\n');
                 }
-                _ = writeln!(output, "{label_prefix}{}:{label_suffix}", ai.label);
+                _ = writeln!(output, "{label_prefix}{}:{label_suffix}", label);
             }
 
-            let mnemonic_width = match ai.instr {
-                Instruction::JumpIfMatchCharset { idx, .. }
-                | Instruction::JumpIfMatchPrefix { idx, .. }
-                | Instruction::JumpIfMatchPrefixInsensitive { idx, .. } => {
+            let (instr, len) = Instruction::decode(&assembly.instructions[off..]);
+            let mnemonic_width = match instr {
+                Instruction::JumpIfMatchCharset { .. }
+                | Instruction::JumpIfMatchPrefix { .. }
+                | Instruction::JumpIfMatchPrefixInsensitive { .. } => {
                     if vt {
                         60
                     } else {
@@ -112,11 +119,11 @@ impl<'a> Generator<'a> {
             let scratch = scratch_arena(None);
             _ = write!(
                 output,
-                "{line_prefix}{i:>line_num_width$}:  {mnemonic:mnemonic_width$}",
-                mnemonic = ai.instr.mnemonic(&scratch, &mnemonic_config)
+                "{line_prefix}{off:>line_num_width$}:  {mnemonic:mnemonic_width$}",
+                mnemonic = instr.mnemonic(&scratch, &mnemonic_config)
             );
 
-            match ai.instr {
+            match instr {
                 Instruction::JumpIfMatchCharset { idx, .. } => {
                     _ = write!(
                         output,
@@ -136,6 +143,7 @@ impl<'a> Generator<'a> {
             }
 
             output.push('\n');
+            off += len;
         }
 
         Ok(output)
@@ -232,25 +240,38 @@ impl Registers {
 
         output.push_str("\n#[rustfmt::skip] pub const ASSEMBLY: &[u8] = &[\n");
         let line_num_width = assembly.instructions.len().checked_ilog10().unwrap_or(0) as usize + 1;
-        for (i, ai) in assembly.instructions.iter().enumerate() {
-            if !ai.label.is_empty() {
-                if i != 0 {
+
+        let mut labels = std::collections::HashMap::new();
+        for (name, offset) in &assembly.entrypoints {
+            labels.insert(*offset, *name);
+        }
+
+        let mut off = 0;
+        while off < assembly.instructions.len() {
+            if let Some(label) = labels.get(&off) {
+                if off != 0 {
                     output.push('\n');
                 }
-                _ = writeln!(output, "        // {}:", ai.label);
+                _ = writeln!(output, "        // {}:", label);
             }
 
             output.push_str("    ");
 
+            let (instr, len) = Instruction::decode(&assembly.instructions[off..]);
             let scratch = scratch_arena(None);
-            for byte in ai.instr.encode(&scratch) {
-                _ = write!(output, "0x{byte:02x}, ");
+            for i in 0..len {
+                _ = write!(output, "0x{:02x}, ", assembly.instructions[off + i]);
             }
+
             _ = writeln!(
                 output,
-                "// {i:>line_num_width$}:  {mnemonic}",
-                mnemonic = ai.instr.mnemonic(&scratch, &Default::default())
+                "{:<padding_width$}// {off:>line_num_width$}:  {mnemonic}",
+                "",
+                padding_width = 9usize.saturating_sub(len) * 6,
+                mnemonic = instr.mnemonic(&scratch, &Default::default())
             );
+
+            off += len;
         }
         output.push_str("];\n");
 
