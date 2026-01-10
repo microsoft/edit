@@ -3,6 +3,7 @@
 
 use std::hint::black_box;
 use std::io::Cursor;
+use std::ops::Range;
 use std::path::Path;
 use std::{mem, vec};
 
@@ -255,33 +256,42 @@ fn bench_unicode(c: &mut Criterion) {
 fn bench_varint(c: &mut Criterion) {
     const BUFFER_SIZE: usize = MEBI;
 
-    // Knuth's MMIX LCG
-    fn make_rng() -> impl FnMut() -> usize {
-        let mut state = 1442695040888963407u64;
-        move || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            state as usize
-        }
-    }
-
     let mut buffer = Vec::with_capacity(BUFFER_SIZE + 16);
-    let mut rng = make_rng();
+
+    // Knuth's MMIX LCG
+    let mut rng_state = 1442695040888963407u64;
+    let mut rng = || {
+        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rng_state as u32
+    };
+
+    // Bitmask with Rejection (as used by Apple)
+    let mut rng_state = 1442695040888963407u64;
+    let mut rng_range = |range: Range<u32>| {
+        let range_size = range.len() as u32;
+        let mask = range_size.next_power_of_two() - 1;
+        loop {
+            rng_state =
+                rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let value = rng_state as u32 & mask;
+            if value < range_size {
+                return range.start.wrapping_add(value);
+            }
+        }
+    };
 
     loop {
-        let dist = rng() as u32;
-        let value = rng() as u32;
-
         // Generate values according to a non-uniform distribution.
         // The distribution roughly corresponds to what LSH encounters.
-        let value = match dist {
+        let value = match rng() {
             // ~35%: <=7 bits
-            0..1503238553 => value & 0x7F,
+            0..1503238553 => rng_range(0..0x7F),
             // ~40%: <=14 bits
-            1503238553..3221225472 => value & 0x3FFF,
+            1503238553..3221225472 => rng_range(0x80..0x3FFF),
             // ~20%: <=21 bits
-            3221225472..4026531840 => value & 0x1FFFFF,
+            3221225472..4026531840 => rng_range(0x4000..0x1FFFFF),
             // ~5%: u32::MAX
-            _ => u32::MAX,
+            _ => (1 << 28) - 1,
         };
 
         buffer.extend(varint::encode(value));

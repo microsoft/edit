@@ -11,8 +11,7 @@
 //!       128-16383      (14 bits): 10xxxxxx xyyyyyyy
 //!     16384-2097151    (21 bits): 110xxxxx xxyyyyyy yzzzzzzz
 //!   2097152-268435455  (28 bits): 1110xxxx xxxyyyyy yyzzzzzz zwwwwwww
-//! 268435456-4294967294 (32 bits): 11110xxx xxxxyyyy yyzzzzzz zwwwwwww vvvvv...
-//!           4294967295 (32 bits): 11111...
+//!           4294967295 (32 bits): 1111....
 //! ```
 //!
 //! This format differs from LEB128 in that it doesn't use continuation bits,
@@ -24,6 +23,10 @@
 //! for the same reason. It would require branches for decoding.
 //!
 //! For little endian architectures, this encoding is particularly efficient to decode.
+
+use std::hint::black_box;
+
+use crate::cold_path;
 
 pub fn encode(val: u32) -> Vec<u8> {
     let mut result = Vec::with_capacity(5);
@@ -46,16 +49,8 @@ pub fn encode(val: u32) -> Vec<u8> {
         result.push((val >> 16) as u8);
         result.push((val >> 8) as u8);
         result.push(val as u8);
-    } else if val != u32::MAX {
-        // 1111xxxx yyyyyyyy zzzzzzzz wwwwwwww vvvvvvvv (32 bits: 0 + 32)
-        // First byte is just the prefix with no data bits
-        result.push(0xF0 | ((val >> 29) as u8));
-        result.push((val >> 21) as u8);
-        result.push((val >> 13) as u8);
-        result.push((val >> 5) as u8);
-        result.push((val << 3) as u8);
     } else {
-        // Special case for u32::MAX: 11111111
+        // 1111.... (32 bits)
         result.push(0xFF);
     }
 
@@ -68,69 +63,18 @@ pub fn encode(val: u32) -> Vec<u8> {
 /// It doesn't need to be a valid value, but it must be readable.
 #[inline(never)]
 pub unsafe fn decode(data: *const u8) -> (u32, usize) {
-    // SAFETY: Caller guarantees data is valid for reads
     unsafe {
-        let first = *data;
+        let val = u32::from_be((data as *const u32).read_unaligned());
+        let ones = val.leading_ones();
+        let mut len = ones as usize + 1;
+        let mut result = (val >> (32 - 8 * len)) & ((1u32 << (len * 7)) - 1);
 
-        // Count leading ones to determine the byte count
-        // This uses the leading_ones intrinsic which is very fast on most architectures
-        let ones = first.leading_ones() as usize;
-
-        if ones == 0 {
-            // 0xxxxxxx: 1 byte, 7 bits
-            return (first as u32, 1);
+        if ones >= 4 {
+            result = u32::MAX;
+            len = 1;
         }
 
-        if ones >= 5 {
-            // 11111xxx: Special case for u32::MAX
-            return (u32::MAX, 1);
-        }
-
-        // Read bytes individually for correctness
-        match ones {
-            1 => {
-                // 10xxxxxx xyyyyyyy: 2 bytes, 14 bits
-                let b0 = *data;
-                let b1 = *data.add(1);
-                let val = (((b0 & 0x3F) as u32) << 8) | (b1 as u32);
-                (val, 2)
-            }
-            2 => {
-                // 110xxxxx xxyyyyyy yzzzzzzz: 3 bytes, 21 bits
-                let b0 = *data;
-                let b1 = *data.add(1);
-                let b2 = *data.add(2);
-                let val = (((b0 & 0x1F) as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
-                (val, 3)
-            }
-            3 => {
-                // 1110xxxx xxxyyyyy yyzzzzzz zwwwwwww: 4 bytes, 28 bits
-                let b0 = *data;
-                let b1 = *data.add(1);
-                let b2 = *data.add(2);
-                let b3 = *data.add(3);
-                let val = (((b0 & 0x0F) as u32) << 24)
-                    | ((b1 as u32) << 16)
-                    | ((b2 as u32) << 8)
-                    | (b3 as u32);
-                (val, 4)
-            }
-            4 => {
-                // 11110xxx xxxxyyyy yyzzzzzz zwwwwwww vvvvvvvv: 5 bytes, 32 bits
-                let b0 = *data;
-                let b1 = *data.add(1);
-                let b2 = *data.add(2);
-                let b3 = *data.add(3);
-                let b4 = *data.add(4);
-                let val = (((b0 & 0x0F) as u32) << 29)
-                    | ((b1 as u32) << 21)
-                    | ((b2 as u32) << 13)
-                    | ((b3 as u32) << 5)
-                    | ((b4 as u32) >> 3);
-                (val, 5)
-            }
-            _ => unreachable!(),
-        }
+        (result, len)
     }
 }
 
