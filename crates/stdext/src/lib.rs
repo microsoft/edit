@@ -7,6 +7,7 @@
 
 pub mod arena;
 pub mod sys;
+pub mod varint;
 
 mod helpers;
 pub use helpers::*;

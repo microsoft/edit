@@ -238,7 +238,11 @@ impl Registers {
             );
         }
 
-        output.push_str("\n#[rustfmt::skip] pub const ASSEMBLY: &[u8] = &[\n");
+        _ = writeln!(
+            output,
+            "\n#[rustfmt::skip] pub const ASSEMBLY: [u8; {len}] = [",
+            len = assembly.instructions.len(),
+        );
         let line_num_width = assembly.instructions.len().checked_ilog10().unwrap_or(0) as usize + 1;
 
         let mut labels = std::collections::HashMap::new();
@@ -252,7 +256,7 @@ impl Registers {
                 if off != 0 {
                     output.push('\n');
                 }
-                _ = writeln!(output, "        // {}:", label);
+                _ = writeln!(output, "    // {}:", label);
             }
 
             output.push_str("    ");
@@ -275,7 +279,11 @@ impl Registers {
         }
         output.push_str("];\n");
 
-        output.push_str("\n#[rustfmt::skip] pub const CHARSETS: &[[u16; 16]] = &[\n");
+        _ = writeln!(
+            output,
+            "\n#[rustfmt::skip] pub const CHARSETS: [[u16; 16]; {len}] = [",
+            len = assembly.charsets.len(),
+        );
         for cs in assembly.charsets {
             output.push_str("    [");
             for lo in 0..16 {
@@ -292,7 +300,11 @@ impl Registers {
         }
         output.push_str("];\n");
 
-        output.push_str("\n#[rustfmt::skip] pub const STRINGS: &[&str] = &[\n");
+        _ = writeln!(
+            output,
+            "\n#[rustfmt::skip] pub const STRINGS: [&str; {len}] = [",
+            len = assembly.strings.len(),
+        );
         for s in assembly.strings {
             _ = writeln!(output, "    {s:?},");
         }
