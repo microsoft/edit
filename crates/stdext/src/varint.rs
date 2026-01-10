@@ -25,6 +25,7 @@
 //! For little endian architectures, this encoding is particularly efficient to decode.
 
 use std::hint::black_box;
+use std::ops::Shr;
 
 use crate::cold_path;
 
@@ -63,13 +64,35 @@ pub fn encode(val: u32) -> Vec<u8> {
 /// It doesn't need to be a valid value, but it must be readable.
 #[inline(never)]
 pub unsafe fn decode(data: *const u8) -> (u32, usize) {
+    #[cfg(debug_assertions)]
     unsafe {
         let val = u32::from_be((data as *const u32).read_unaligned());
         let ones = val.leading_ones();
         let mut len = ones as usize + 1;
-        let mut result = (val >> (32 - 8 * len)) & ((1u32 << (len * 7)) - 1);
 
-        if ones >= 4 {
+        // The code below runs into undefined behavior for inputs such as
+        //   [0xff, 0xff, 0xff, 0xff]
+        //
+        // The intent is that the `if len > 4` check _afterwards_ fixes this up, and on the specific architectures
+        // we care about this is guaranteed to work. I do it afterward, because it lets the optimizer use CMOVs.
+        //
+        // To be fair, such shifts are only UB, because the behavior is not "defined", not because the CPUs can't do it.
+        // Technically this could result in misoptimizations by LLVM, as it assumes that code cannot result in UB,
+        // but I'm choosing to ignore that. Their stance on that is justified and yet still wrong.
+        //
+        // If anyone critiques this, by god, I swear I'll write it in assembly.
+        #[cfg(debug_assertions)]
+        if len > 4 {
+            return (u32::MAX, 1);
+        }
+
+        // Extract the 7/14/21/28 value bits
+        let shift = 32 - 8 * len;
+        let mask = (1u32 << (7 * len)) - 1;
+        let mut result = (val >> shift) & mask;
+
+        // If the lead byte indicates >28 bits, assume `u32::MAX`.
+        if len > 4 {
             result = u32::MAX;
             len = 1;
         }
