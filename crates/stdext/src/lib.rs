@@ -3,7 +3,7 @@
 
 //! Arena allocators. Small and fast.
 
-#![feature(allocator_api, unchecked_shifts)]
+#![feature(allocator_api)]
 
 pub mod arena;
 pub mod sys;
