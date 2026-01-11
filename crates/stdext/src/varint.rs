@@ -45,8 +45,16 @@ pub fn encode(val: u32) -> Vec<u8> {
 ///
 /// The caller must ensure that `data..data+4` is valid memory.
 /// It doesn't need to be a valid value, but it must be readable.
-#[inline(always)]
 pub unsafe fn decode(data: *const u8) -> (u32, usize) {
+    // For inputs such as:
+    //   [0xff, 0xff, 0xff, 0xff]
+    // the shifts below will shift by more than 31 digits, which Rust considers undefined behavior.
+    // *We explicitly want UB here*.
+    //
+    // If we write an if condition here (like this one), LLVM will turn that into a proper branch. Since our inputs
+    // are relatively random, that branch will mispredict, hurting performance. The if condition at the end
+    // gets turned into conditional moves (good!), but that only works because it comes after the shifts.
+    // Unfortunately, there's no way to ask Rust for "platform-defined behavior" (`unchecked_shl/shr` is not it).
     #[cfg(debug_assertions)]
     unsafe {
         if (*data & 0x0f) == 0x0f {
@@ -61,20 +69,31 @@ pub unsafe fn decode(data: *const u8) -> (u32, usize) {
         let ones = val.trailing_ones();
 
         let mut len = ones as usize + 1;
-        let mut result = val;
-        // Shift out the bytes we read but don't need.
-        result <<= 32 - 8 * len;
-        // Shift back down and remove the trailing 0/10/110/1110/1111 length bits.
-        result >>= 32 - 7 * len;
+        let mut res = 'bextr: {
+            // Give LLVM a helping hand for x86 CPUs with BMI1. It's not smart enough to figure out that `bextr` can
+            // be used here. To be fair, it's not faster, so maybe that's why. It is _a lot_ more compact, however.
+            #[cfg(target_feature = "bmi1")]
+            break 'bextr std::arch::x86_64::_bextr_u32(val, len as u32, (7 * len) as u32);
+
+            // This is where you'd put more architecture-specific optimizations.
+            // In fact this is where I'd put my ARM optimizations, but it doesn't have anything like `bextr`. :(
+
+            let mut res = val;
+            // Shift out the bytes we read but don't need.
+            res <<= 32 - 8 * len;
+            // Shift back down and remove the trailing 0/10/110/1110/1111 length bits.
+            res >>= 32 - 7 * len;
+            break 'bextr res;
+        };
 
         // If the lead byte indicates >28 bits, assume `u32::MAX`.
         // This doubles as a simple form of error correction.
         if len > 4 {
-            result = u32::MAX;
+            res = u32::MAX;
             len = 1;
         }
 
-        (result, len)
+        (res, len)
     }
 }
 
