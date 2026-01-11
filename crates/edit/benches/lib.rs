@@ -311,11 +311,11 @@ fn bench_varint(c: &mut Criterion) {
 
         b.iter(|| {
             let (val, len) = unsafe { varint::decode(buffer.as_ptr().add(off)) };
+            black_box(val);
             off += len;
             if off >= buffer.len() {
                 off = 0;
             }
-            val
         });
     });
 }

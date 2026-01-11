@@ -7,49 +7,37 @@
 //! # Format
 //!
 //! ```text
-//!         0-127        ( 7 bits): 0xxxxxxx
-//!       128-16383      (14 bits): 10xxxxxx xyyyyyyy
-//!     16384-2097151    (21 bits): 110xxxxx xxyyyyyy yzzzzzzz
-//!   2097152-268435455  (28 bits): 1110xxxx xxxyyyyy yyzzzzzz zwwwwwww
-//!           4294967295 (32 bits): 1111....
+//!       0-127        ( 7 bits): xxxxxxx0
+//!     128-16383      (14 bits): xxxxxx01 yyyyyyyx
+//!   16384-2097151    (21 bits): xxxxx011 yyyyyyxx zzzzzzzy
+//! 2097152-268435455  (28 bits): xxxx0111 yyyyyxxx zzzzzzyy wwwwwwwz
+//!         4294967295 (32 bits): ....1111
 //! ```
 //!
-//! This format differs from LEB128 in that it doesn't use continuation bits,
-//! but rather packs the length into the first byte, the way UTF8 does.
-//! This allows for faster decoding using "count trailing ones" instructions.
+//! The least significant bits indicate the length, in a format identical to UTF-8. The remaining bits store
+//! the value, in little-endian order. Little endian was chosen, as most architectures today use that.
 //!
-//! It also differs from Google Varint in that it doesn't store 32-bit values as
-//!   11111111 xxxxxxxx yyyyyyyy zzzzzzzz wwwwwwww
-//! for the same reason. It would require branches for decoding.
-//!
-//! For little endian architectures, this encoding is particularly efficient to decode.
+//! On x86, `tzcnt` (= `trailing_ones()` = what we need) has the benefit that its encoding is identical to `rep bsf`.
+//! Older CPUs without BMI1 will ignore the `rep` prefix and use `bsf`, while modern CPUs will use the faster `tzcnt`.
+//! So not just can we drop the need for `bswap` on x86, but we also speed up the bit count calculation.
+//! This makes this encoding faster than LEB128, Google Varint, and others.
 
 pub fn encode(val: u32) -> Vec<u8> {
     let mut result = Vec::with_capacity(5);
-
-    if val < 128 {
-        // 0xxxxxxx (7 bits)
-        result.push(val as u8);
-    } else if val < 16384 {
-        // 10xxxxxx xyyyyyyy (14 bits: 6 + 8)
-        result.push(0x80 | ((val >> 8) as u8));
-        result.push(val as u8);
-    } else if val < 2097152 {
-        // 110xxxxx xxyyyyyy yzzzzzzz (21 bits: 5 + 8 + 8)
-        result.push(0xC0 | ((val >> 16) as u8));
-        result.push((val >> 8) as u8);
-        result.push(val as u8);
-    } else if val < 268435456 {
-        // 1110xxxx xxxyyyyy yyzzzzzz zwwwwwww (28 bits: 4 + 8 + 8 + 8)
-        result.push(0xE0 | ((val >> 24) as u8));
-        result.push((val >> 16) as u8);
-        result.push((val >> 8) as u8);
-        result.push(val as u8);
-    } else {
-        // 1111.... (32 bits)
-        result.push(0xFF);
-    }
-
+    let shift = match val {
+        0..0x80 => 0,
+        0x80..0x4000 => 1,
+        0x4000..0x200000 => 2,
+        0x200000..0x10000000 => 3,
+        _ => {
+            result.push(0xff);
+            return result;
+        }
+    };
+    let marker = (1u32 << shift) - 1;
+    let encoded = (val << (shift + 1)) | marker;
+    let bytes = encoded.to_le_bytes();
+    result.extend_from_slice(&bytes[..=shift]);
     result
 }
 
@@ -57,77 +45,30 @@ pub fn encode(val: u32) -> Vec<u8> {
 ///
 /// The caller must ensure that `data..data+4` is valid memory.
 /// It doesn't need to be a valid value, but it must be readable.
-#[inline(never)]
+#[inline(always)]
 pub unsafe fn decode(data: *const u8) -> (u32, usize) {
-    // For inputs such as:
-    //   [0xff, 0xff, 0xff, 0xff]
-    // the shifts below will shift by more than 31 digits, which Rust considers undefined behavior.
-    // *We explicitly want UB here*.
-    //
-    // If we write an if condition here (like this one), LLVM will turn that into a proper branch. Since our inputs
-    // are relatively random, that branch will mispredict, killing performance. The if condition at the end
-    // gets turned into conditional moves (good!), but that only works because it comes after the shifts.
-    // Unfortunately, there's no way to ask Rust for "platform-defined behavior" (`unchecked_shl/shr` is not it).
-    //
-    // If anyone critiques this, by god, I swear I'll write it in assembly.
     #[cfg(debug_assertions)]
     unsafe {
-        if *data >= 0xf0 {
+        if (*data & 0x0f) == 0x0f {
             return (u32::MAX, 1);
         }
     }
 
-    // NOTE: The "reference" code is in the next `unsafe` block. This is specific to x86 without lzcnt/BMI1.
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(target_feature = "bmi1")))]
-    unsafe {
-        let val = u32::from_be((data as *const u32).read_unaligned());
-        let ones = val.leading_ones();
-
-        // On x86, `leading_ones()` will yield:
-        //   not edi
-        //   mov eax, 63
-        //   bsr eax, edi
-        //   xor eax, 31
-        //
-        // (Note that `bsr` returns a bit-index where 0 = LSB, 31 = MSB, but `leading_ones` returns the number
-        // of consecutive 1s starting at the MSB. This is why it does, `xor eax, 31` = `eax = 31 - eax`.
-        // This is very elegant, because if the bsr fails (input is all 1s), 63 xor 31 will yield the expected 32.)
-        //
-        // In any case, that's not ideal, because we don't need `eax` to be 32. It can be any indeterminate value.
-        // This `assert_unchecked` will trick LLVM into removing the `mov` which boosts performance by ~10% or so.
-        // This is only necessary on x86. All other architectures have lzcnt instructions.
-        std::hint::assert_unchecked(ones < 16);
-
-        let mut len = ones as usize + 1;
-        let mut result = val;
-        result <<= len;
-        result >>= 32 - 7 * len;
-
-        // Since we used an `assert_unchecked` on x86, we technically can't rely on the `ones` value to be
-        // correct anymore. So for x86, we do what the compiler would do anyway: We check the value itself.
-        if val >= 0xf0000000 {
-            result = u32::MAX;
-            len = 1;
-        }
-
-        return (result, len);
-    }
-
-    #[allow(unreachable_code)]
     unsafe {
         // Read the following 4 bytes in a single u32 load. We need to swap to big-endian to move the lead
         // 0/10/110/1110/1111 bits to the MSB. This then allows us to do a single, quick `leading_ones` call.
-        let val = u32::from_be((data as *const u32).read_unaligned());
-        let ones = val.leading_ones();
+        let val = u32::from_le((data as *const u32).read_unaligned());
+        let ones = val.trailing_ones();
 
         let mut len = ones as usize + 1;
         let mut result = val;
-        // Shift out the leading 0/10/110/1110/1111 length bits.
-        result <<= len;
-        // Shift back down to get the final value.
+        // Shift out the bytes we read but don't need.
+        result <<= 32 - 8 * len;
+        // Shift back down and remove the trailing 0/10/110/1110/1111 length bits.
         result >>= 32 - 7 * len;
 
         // If the lead byte indicates >28 bits, assume `u32::MAX`.
+        // This doubles as a simple form of error correction.
         if len > 4 {
             result = u32::MAX;
             len = 1;
@@ -147,6 +88,7 @@ mod tests {
         let test_values = [
             0u32,
             1,
+            123,
             127, // Max 1 byte
             128, // Min 2 bytes
             1234,
@@ -172,10 +114,10 @@ mod tests {
     fn test_specific_encodings() {
         // Test specific byte patterns
         unsafe {
-            //assert_eq!((0, 1), decode([0, 0xbb, 0xcc, 0xdd].as_ptr()));
-            //assert_eq!((123, 1), decode([0x7b, 0xbb, 0xcc, 0xdd].as_ptr()));
-            assert_eq!((1234, 2), decode([0x84, 0xD2, 0xcc, 0xdd].as_ptr()));
-            //assert_eq!((u32::MAX, 1), decode([0xff, 0xbb, 0xcc, 0xdd].as_ptr()));
+            assert_eq!((0, 1), decode([0, 0xbb, 0xcc, 0xdd].as_ptr()));
+            assert_eq!((123, 1), decode([0xf6, 0xbb, 0xcc, 0xdd].as_ptr()));
+            assert_eq!((1234, 2), decode([0x49, 0x13, 0xcc, 0xdd].as_ptr()));
+            assert_eq!((u32::MAX, 1), decode([0xff, 0xbb, 0xcc, 0xdd].as_ptr()));
         }
     }
 }
