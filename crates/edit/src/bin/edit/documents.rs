@@ -4,6 +4,7 @@
 use std::collections::LinkedList;
 use std::ffi::OsStr;
 use std::fs::File;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
@@ -210,6 +211,12 @@ impl DocumentManager {
     }
 
     pub fn open_for_writing(path: &Path) -> apperr::Result<File> {
+        // Crear directorios padres si no existen
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).map_err(apperr::Error::from)?;
+            }
+        }
         File::create(path).map_err(apperr::Error::from)
     }
 
