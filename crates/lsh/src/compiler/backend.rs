@@ -47,22 +47,8 @@ impl<'a> Backend<'a> {
         use Instruction::*;
 
         for function in &mut compiler.functions.clone() {
-            // First pass: count register usage.
-            // That way we know once a register is no longer needed and can be freed.
+            // NOTE: This depends on the register `read_count` computed in `count_register_uses`.
             self.registers = Default::default();
-            for node in compiler.visit_nodes_from(function.body) {
-                let node = node.borrow();
-                match node.instr {
-                    IRI::Add { dst, src, imm } => {
-                        src.borrow_mut().read_count += 1;
-                    }
-                    IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
-                        lhs.borrow_mut().read_count += 1;
-                        rhs.borrow_mut().read_count += 1;
-                    }
-                    _ => {}
-                }
-            }
 
             let entrypoint_offset = self.assembly.instructions.len();
             self.functions_seen.insert(function.name, entrypoint_offset);

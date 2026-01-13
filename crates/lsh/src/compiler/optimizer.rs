@@ -10,8 +10,38 @@ use stdext::arena::scratch_arena;
 use super::*;
 
 pub fn optimize<'a>(compiler: &mut Compiler<'a>) {
+    // Remove noops first, such that analyzing instruction chains becomes easier for the other passes.
     optimize_noop(compiler);
+
+    optimize_redundant_offset_restore(compiler);
+    count_register_uses(compiler);
+    // NOTE: `optimize_redundant_offset_backups` depends on `count_register_uses`.
+    optimize_unused_assignments(compiler);
+
+    // optimize_unused_assignments depends on optimize_noop to clean up afterwards.
+    optimize_noop(compiler);
+
     optimize_highlight_kind_values(compiler);
+}
+
+// NOTE: This function cannot be called multiple times right now.
+// We'd need to save all allocated virtual registers so that we reset their `read_count`.
+fn count_register_uses<'a>(compiler: &mut Compiler<'a>) {
+    for function in &compiler.functions {
+        for node in compiler.visit_nodes_from(function.body) {
+            let node = node.borrow();
+            match node.instr {
+                IRI::Add { dst, src, imm } => {
+                    src.borrow_mut().read_count += 1;
+                }
+                IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
+                    lhs.borrow_mut().read_count += 1;
+                    rhs.borrow_mut().read_count += 1;
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Removes no-op instructions from the IR.
@@ -26,7 +56,6 @@ fn optimize_noop<'a>(compiler: &mut Compiler<'a>) {
         }
     }
 
-    // Remove noops from the rest of the tree.
     for function in &compiler.functions {
         for current_cell in compiler.visit_nodes_from(function.body) {
             // First, filter down to nodes that are not no-ops.
@@ -54,6 +83,72 @@ fn optimize_noop<'a>(compiler: &mut Compiler<'a>) {
                         *next_ref = skip_next;
                     }
                 }
+            }
+        }
+    }
+}
+
+// Conditions in the VM advance the offset only if they match. The frontend doesn't
+// care about this and emits pointless backup/restore instructions for the offset.
+// This code is responsible for turning this chain of `.next` pointers:
+//   IRI::Add { off -> backup }
+//   IRI::If { .. }
+//   IRI::Add { backup -> off }
+//   IRI::If { .. }
+//   IRI::Add { backup -> off }
+//   IRI::If { .. }
+//   IRI::Add { backup -> off }
+// into this:
+//   IRI::Add { off -> backup }
+//   IRI::If { .. }
+//   IRI::If { .. }
+//   IRI::If { .. }
+fn optimize_redundant_offset_restore<'a>(compiler: &mut Compiler<'a>) {
+    let off_reg = compiler.get_reg(Register::InputOffset);
+
+    for function in &compiler.functions {
+        for current_cell in compiler.visit_nodes_from(function.body) {
+            // First, filter down to nodes that assign the `off` to a virtual register.
+            if let mut save = current_cell.borrow_mut()
+                && let IRI::Add { dst: backup_reg, src, imm: 0 } = save.instr
+                && ptr::eq(src, off_reg)
+                && backup_reg.borrow().physical.is_none()
+            {
+                let mut next_cond = save.next;
+
+                // Next optimize an entire chain of `if` conditions that pointlessly restore `off`.
+                while let Some(cond) = next_cond
+                    && let mut cond = cond.borrow_mut()
+                    && matches!(cond.instr, IRI::If { .. })
+                    && let Some(restore) = cond.next
+                    && let mut restore = restore.borrow_mut()
+                    && matches!(restore.instr, IRI::Add { dst, src, imm: 0 } if ptr::eq(dst, off_reg) && ptr::eq(src, backup_reg))
+                {
+                    cond.next = restore.next;
+                    next_cond = restore.next;
+                }
+            }
+        }
+    }
+}
+
+fn optimize_unused_assignments<'a>(compiler: &mut Compiler<'a>) {
+    for function in &compiler.functions {
+        for current_cell in compiler.visit_nodes_from(function.body) {
+            // First, filter down to nodes that assign the `off` to a virtual register.
+            if let mut cell = current_cell.borrow_mut()
+                && let IRI::Add { dst, src, imm: 0 } = cell.instr
+                && let src = src.borrow()
+                && let dst = dst.borrow()
+                // TODO: Technically we could also optimize vreg --> vreg assignments, but for that we
+                // need to be able to call `count_register_uses` multiple times, so that the count is
+                // accurate after removing an assignment. Physical registers don't care about that.
+                && src.physical.is_some()
+                // We can't optimize physical register --> physical register assignments.
+                && dst.physical.is_none()
+                && dst.read_count == 0
+            {
+                cell.instr = IRI::Noop;
             }
         }
     }
