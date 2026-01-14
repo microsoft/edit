@@ -1,3 +1,6 @@
+#[display_name = "Diff"]
+#[filename = "*.diff"]
+#[filename = "*.patch"]
 pub fn diff() {
     if /(?:diff|---|\+\+\+).*/ {
         yield meta.diff.header;

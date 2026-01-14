@@ -1,10 +1,18 @@
+#[display_name = "Properties"]
+#[filename = "*.conf"]
+#[filename = "*.properties"]
+#[filename = "*.cfg"]
+#[filename = "*.directory"]
+#[filename = "*.gitattributes"]
+#[filename = "*.gitconfig"]
+#[filename = "*.gitmodules"]
+#[filename = "*.editorconfig"]
+#[filename = "*.repo"]
 pub fn properties() {
-    if /\s*#/ {
-        yield comment;
-    }
-
     until /$/ {
-        if /"/ {
+        if /#.*/ {
+            yield comment;
+        } else if /"/ {
             until /$/ {
                 if /\\./ {
                     // Escape sequences
@@ -22,6 +30,8 @@ pub fn properties() {
                     break;
                 }
             }
+        } else {
+            yield other;
         }
     }
 }

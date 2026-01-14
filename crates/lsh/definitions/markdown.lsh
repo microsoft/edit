@@ -1,3 +1,5 @@
+#[display_name = "Markdown"]
+#[filename = "*.md"]
 pub fn markdown() {
     // Gobble any leading whitespace on the line.
     if /\s+/ {

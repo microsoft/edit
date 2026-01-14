@@ -1,3 +1,5 @@
+#[display_name = "Git Rebase Message"]
+#[filename = "git-rebase-todo"]
 pub fn git_rebase_todo() {
     if /#.*/ {
         yield comment;

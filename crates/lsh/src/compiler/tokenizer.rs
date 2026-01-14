@@ -10,6 +10,7 @@ pub enum Token<'a> {
     Identifier(&'a str),
     Integer(u32),
     Regex(&'a str),
+    String(&'a str),
 
     // Keywords
     Pub,
@@ -42,6 +43,10 @@ pub enum Token<'a> {
     LeftParen,
     RightParen,
     Semicolon,
+    LeftBracket,
+    RightBracket,
+    Hash,
+    Comma,
 
     // End of file
     Eof,
@@ -89,7 +94,12 @@ impl<'a> Tokenizer<'a> {
                 '}' => Token::RightBrace,
                 '(' => Token::LeftParen,
                 ')' => Token::RightParen,
+                '[' => Token::LeftBracket,
+                ']' => Token::RightBracket,
+                '#' => Token::Hash,
+                ',' => Token::Comma,
                 ';' => Token::Semicolon,
+                '"' => self.read_string(),
                 '/' => self.read_regex(),
                 '=' => {
                     if self.peek() == Some('=') {
@@ -171,6 +181,20 @@ impl<'a> Tokenizer<'a> {
                 }
             }
         }
+    }
+
+    fn read_string(&mut self) -> Token<'a> {
+        let beg = self.current_pos;
+        let mut last_char = '\0';
+
+        while let Some(ch) = self.advance()
+            && (ch != '"' || last_char == '\\')
+        {
+            last_char = ch;
+        }
+
+        let end = self.current_pos - 1;
+        Token::String(&self.input[beg..end])
     }
 
     fn read_regex(&mut self) -> Token<'a> {

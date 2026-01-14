@@ -1,3 +1,6 @@
+#[display_name = "PowerShell"]
+#[filename = "*.ps1"]
+#[filename = "*.psm1"]
 pub fn powershell() {
     until /$/ {
         yield other;

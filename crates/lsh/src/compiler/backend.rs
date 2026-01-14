@@ -211,7 +211,12 @@ impl<'a> Backend<'a> {
             .functions
             .iter()
             .filter(|f| f.public)
-            .map(|f| (f.name, f.body.borrow().offset))
+            .map(|f| Entrypoint {
+                name: f.name.to_string(),
+                display_name: f.attributes.display_name.unwrap_or(f.name).to_string(),
+                filenames: f.attributes.filenames.iter().map(|s| s.to_string()).collect(),
+                address: f.body.borrow().offset,
+            })
             .collect();
         self.assembly.highlight_kinds = compiler.highlight_kinds.clone();
         Ok(self.assembly)

@@ -1,3 +1,6 @@
+#[display_name = "Git Commit Message"]
+#[filename = "COMMIT_EDITMSG"]
+#[filename = "MERGE_MSG"]
 pub fn git_commit_message() {
     if /#\s*/ {
         yield comment;

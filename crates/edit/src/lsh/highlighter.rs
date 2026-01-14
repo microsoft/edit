@@ -12,37 +12,6 @@ use crate::helpers::*;
 use crate::lsh::definitions::*;
 use crate::{simd, unicode};
 
-pub struct Language {
-    pub name: &'static str,
-    pub filenames: &'static [&'static str],
-    entrypoint: u32,
-}
-
-impl Language {
-    const fn new(name: &'static str, filenames: &'static [&'static str], entrypoint: u32) -> Self {
-        Self { name, filenames, entrypoint }
-    }
-}
-
-impl PartialEq for &Language {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(*self, *other)
-    }
-}
-
-#[rustfmt::skip]
-pub const LANGUAGES: &[Language] = &[
-    Language::new("Properties", &["*.conf", "*.properties", "*.cfg", "*.directory", "*.gitattributes", "*.gitconfig", "*.gitmodules", "*.editorconfig", "*.repo"], ENTRYPOINT_PROPERTIES),
-    Language::new("Diff", &["*.diff", "*.patch"], ENTRYPOINT_DIFF),
-    Language::new("Git Commit Message", &["COMMIT_EDITMSG", "MERGE_MSG"], ENTRYPOINT_GIT_COMMIT_MESSAGE),
-    Language::new("Git Rebase Message", &["git-rebase-todo"], ENTRYPOINT_GIT_REBASE_TODO), // TODO: https://github.com/microsoft/vscode/issues/156954
-    Language::new("JSON", &["*.json", "*.jsonc"], ENTRYPOINT_JSON),
-    Language::new("LSH", &["*.lsh"], ENTRYPOINT_LSH),
-    Language::new("Markdown", &["*.md"], ENTRYPOINT_MARKDOWN),
-    Language::new("PowerShell", &["*.ps1", "*.psm1"], ENTRYPOINT_POWERSHELL),
-    Language::new("YAML", &["*.yaml", "*.yml"], ENTRYPOINT_YAML),
-];
-
 pub fn language_from_path(path: &Path) -> Option<&'static Language> {
     let filename = path.file_name()?.as_encoded_bytes();
 

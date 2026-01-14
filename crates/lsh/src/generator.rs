@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::format;
 use std::fs::read_dir;
@@ -88,10 +89,9 @@ impl<'a> Generator<'a> {
         let comment_prefix = if vt { "\x1b[32m" } else { "" }; // green
         let comment_suffix = if vt { "\x1b[39m" } else { "" };
 
-        let mut labels = std::collections::HashMap::new();
-        for (name, offset) in &assembly.entrypoints {
-            labels.insert(*offset, *name);
-        }
+        // TODO: This is kind of stupid. There should be per-instruction annotations.
+        let labels: HashMap<usize, &str> =
+            assembly.entrypoints.iter().map(|ep| (ep.address, ep.name.as_str())).collect();
 
         let mut off = 0;
         while off < assembly.instructions.len() {
@@ -225,18 +225,44 @@ impl Registers {
 ",
         );
 
+        output.push_str(
+            "
+pub struct Language {
+    pub name: &'static str,
+    pub filenames: &'static [&'static str],
+    pub entrypoint: u32,
+}
+
+impl Language {
+    const fn new(name: &'static str, filenames: &'static [&'static str], entrypoint: u32) -> Self {
+        Self { name, filenames, entrypoint }
+    }
+}
+
+impl PartialEq for &Language {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(*self, *other)
+    }
+}
+",
+        );
+
         output.push_str("/**\n");
         output.push_str(&self.compiler.as_mermaid());
         output.push_str("**/\n");
 
-        for (name, offset) in &assembly.entrypoints {
-            _ = writeln!(
-                output,
-                "pub const ENTRYPOINT_{}: u32 = {};",
-                name.to_ascii_uppercase(),
-                offset
-            );
+        output.push_str("\n#[rustfmt::skip] pub const LANGUAGES: &[Language] = &[\n");
+        for ep in &assembly.entrypoints {
+            _ = writeln!(output, "    Language::new({:?}, &[", ep.display_name);
+            for (idx, f) in ep.filenames.iter().enumerate() {
+                if idx != 0 {
+                    _ = write!(output, ", ");
+                }
+                _ = writeln!(output, "{f:?}");
+            }
+            _ = writeln!(output, "], {}),", ep.address);
         }
+        output.push_str("];\n");
 
         _ = writeln!(
             output,
@@ -245,10 +271,9 @@ impl Registers {
         );
         let line_num_width = assembly.instructions.len().checked_ilog10().unwrap_or(0) as usize + 1;
 
-        let mut labels = std::collections::HashMap::new();
-        for (name, offset) in &assembly.entrypoints {
-            labels.insert(*offset, *name);
-        }
+        // TODO: This is kind of stupid. There should be per-instruction annotations.
+        let labels: HashMap<usize, &str> =
+            assembly.entrypoints.iter().map(|ep| (ep.address, ep.name.as_str())).collect();
 
         let mut off = 0;
         while off < assembly.instructions.len() {

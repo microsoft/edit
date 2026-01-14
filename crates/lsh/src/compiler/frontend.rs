@@ -101,6 +101,39 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         Ok(())
     }
 
+    fn parse_attributes(&mut self) -> CompileResult<FunctionAttributes<'a>> {
+        let mut attributes = FunctionAttributes::default();
+
+        while self.current_token == Token::Hash {
+            self.advance();
+            self.expect_token(Token::LeftBracket)?;
+
+            let key = match self.current_token {
+                Token::Identifier(k) => k,
+                _ => raise!(self, "expected attribute name"),
+            };
+            self.advance();
+
+            self.expect_token(Token::Equals)?;
+
+            let value = match self.current_token {
+                Token::String(s) => arena_clone_str(self.compiler.arena, s),
+                _ => raise!(self, "expected attribute value"),
+            };
+            self.advance();
+
+            self.expect_token(Token::RightBracket)?;
+
+            match key {
+                "display_name" => attributes.display_name = Some(value),
+                "filename" => attributes.filenames.push(value),
+                _ => raise!(self, "unknown attribute '{}'", key),
+            }
+        }
+
+        Ok(attributes)
+    }
+
     fn parse_function(&mut self) -> CompileResult<Function<'a>> {
         // Reset symbol table for new function
         self.variables = HashMap::from_iter([
@@ -108,6 +141,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             ("hs", self.compiler.get_reg(Register::HighlightStart)),
             ("hk", self.compiler.get_reg(Register::HighlightKind)),
         ]);
+
+        let attributes = self.parse_attributes()?;
 
         let public = if matches!(self.current_token, Token::Pub) {
             self.advance();
@@ -135,7 +170,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             last.set_next(self.compiler.alloc_iri(IRI::Return));
         }
 
-        Ok(Function { name, body: span.first, public })
+        Ok(Function { name, attributes, body: span.first, public })
     }
 
     fn parse_block(&mut self) -> CompileResult<IRSpan<'a>> {

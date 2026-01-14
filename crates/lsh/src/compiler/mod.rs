@@ -377,9 +377,16 @@ impl<'a> fmt::Display for HighlightKindCamelcaseFormatter<'a> {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct FunctionAttributes<'a> {
+    display_name: Option<&'a str>,
+    filenames: Vec<&'a str>,
+}
+
 #[derive(Debug, Clone)]
 struct Function<'a> {
     name: &'a str,
+    attributes: FunctionAttributes<'a>,
     body: IRCell<'a>,
     public: bool,
 }
@@ -638,10 +645,17 @@ impl<'a> Intern<'a, Charset> for Vec<&'a Charset> {
 
 pub struct Assembly<'a> {
     pub instructions: Vec<u8>,
-    pub entrypoints: Vec<(&'a str, usize)>,
+    pub entrypoints: Vec<Entrypoint>,
     pub charsets: Vec<&'a Charset>,
     pub strings: Vec<&'a str>,
     pub highlight_kinds: Vec<HighlightKind<'a>>,
+}
+
+pub struct Entrypoint {
+    pub name: String,
+    pub display_name: String,
+    pub filenames: Vec<String>,
+    pub address: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
