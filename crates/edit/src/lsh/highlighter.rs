@@ -32,6 +32,7 @@ impl PartialEq for &Language {
 
 #[rustfmt::skip]
 pub const LANGUAGES: &[Language] = &[
+    Language::new("Properties", &["*.conf", "*.properties", "*.cfg", "*.directory", "*.gitattributes", "*.gitconfig", "*.gitmodules", "*.editorconfig", "*.repo"], ENTRYPOINT_PROPERTIES),
     Language::new("Diff", &["*.diff", "*.patch"], ENTRYPOINT_DIFF),
     Language::new("Git Commit Message", &["COMMIT_EDITMSG", "MERGE_MSG"], ENTRYPOINT_GIT_COMMIT_MESSAGE),
     Language::new("Git Rebase Message", &["git-rebase-todo"], ENTRYPOINT_GIT_REBASE_TODO), // TODO: https://github.com/microsoft/vscode/issues/156954

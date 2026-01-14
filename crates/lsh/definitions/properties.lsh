@@ -1,0 +1,27 @@
+pub fn properties() {
+    if /\s*#/ {
+        yield comment;
+    }
+
+    until /$/ {
+        if /"/ {
+            until /$/ {
+                if /\\./ {
+                    // Escape sequences
+                } else if /"/ {
+                    yield string;
+                    break;
+                }
+            }
+        } else if /'/ {
+            until /$/ {
+                if /\\./ {
+                    // Escape sequences
+                } else if /'/ {
+                    yield string;
+                    break;
+                }
+            }
+        }
+    }
+}
