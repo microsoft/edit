@@ -17,14 +17,7 @@ pub fn json() {
                 }
             }
         } else if /"/ {
-            until /$/ {
-                if /\\./ {
-                    // Escape sequences
-                } else if /"/ {
-                    yield string;
-                    break;
-                }
-            }
+            double_quote_string();
         } else if /true|false|null/ {
             if /\w+/ {
                 // Not a keyword after all.

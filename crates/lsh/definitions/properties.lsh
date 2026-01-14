@@ -10,28 +10,14 @@
 #[filename = "*.repo"]
 pub fn properties() {
     until /$/ {
+        yield other;
+
         if /#.*/ {
             yield comment;
-        } else if /"/ {
-            until /$/ {
-                if /\\./ {
-                    // Escape sequences
-                } else if /"/ {
-                    yield string;
-                    break;
-                }
-            }
         } else if /'/ {
-            until /$/ {
-                if /\\./ {
-                    // Escape sequences
-                } else if /'/ {
-                    yield string;
-                    break;
-                }
-            }
-        } else {
-            yield other;
+            single_quote_string();
+        } else if /"/ {
+            double_quote_string();
         }
     }
 }
