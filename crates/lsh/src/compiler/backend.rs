@@ -46,8 +46,9 @@ impl<'a> Backend<'a> {
     pub fn compile(mut self, compiler: &Compiler<'a>) -> CompileResult<Assembly<'a>> {
         use Instruction::*;
 
+        compiler.count_register_uses();
+
         for function in &mut compiler.functions.clone() {
-            // NOTE: This depends on the register `read_count` computed in `count_register_uses`.
             self.registers = Default::default();
 
             let entrypoint_offset = self.assembly.instructions.len();

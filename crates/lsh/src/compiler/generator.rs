@@ -8,7 +8,8 @@ use std::fs::read_dir;
 use std::io;
 use std::path::PathBuf;
 
-use super::compiler::*;
+use stdext::arena::scratch_arena;
+
 use super::*;
 
 pub struct Generator<'a> {
@@ -171,13 +172,16 @@ impl<'a> Generator<'a> {
             _ = write!(
                 output,
                 "
-impl HighlightKind {{
-    /// # Safety
-    /// Don't pass the wrong thing you dummy.
+impl TryFrom<u32> for HighlightKind {{
+    type Error = ();
+
     #[inline]
-    pub const unsafe fn from_usize(value: usize) -> Self {{
-        debug_assert!(value <= Self::{} as usize);
-        unsafe {{ std::mem::transmute::<u8, Self>(value as u8) }}
+    fn try_from(value: u32) -> Result<Self, Self::Error> {{
+        if value <= Self::{} as u32 {{
+            Ok(unsafe {{ std::mem::transmute::<u8, Self>(value as u8) }})
+        }} else {{
+            Err(())
+        }}
     }}
 }}
 ",

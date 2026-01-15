@@ -30,7 +30,7 @@ pub fn json() {
             } else {
                 yield constant.numeric;
             }
-        } else if /\S+/ {
+        } else if /\w+/ {
             // Invalid token? Skip.
         }
     }

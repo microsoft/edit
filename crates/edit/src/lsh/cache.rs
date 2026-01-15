@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use lsh::engine::Higlight;
 use stdext::arena::{Arena, scratch_arena};
 
 use crate::helpers::CoordType;
-use crate::lsh::Higlight;
-use crate::lsh::highlighter::{Highlighter, HighlighterState};
+use crate::lsh::{HighlightKind, Highlighter, HighlighterState};
 
 #[cfg(debug_assertions)]
 const INTERVAL: CoordType = 16;
@@ -33,7 +33,7 @@ impl HighlighterCache {
         arena: &'a Arena,
         highlighter: &mut Highlighter,
         line: CoordType,
-    ) -> Vec<Higlight, &'a Arena> {
+    ) -> Vec<Higlight<HighlightKind>, &'a Arena> {
         // Do we need to random seek?
         if line != highlighter.logical_pos_y() {
             // If so, restore the nearest, preceeding checkpoint...
@@ -65,7 +65,7 @@ impl HighlighterCache {
         &mut self,
         arena: &'a Arena,
         highlighter: &mut Highlighter,
-    ) -> Vec<Higlight, &'a Arena> {
+    ) -> Vec<Higlight<HighlightKind>, &'a Arena> {
         // If we need to store a checkpoint for the start of the next line, do so now.
         if Self::floor_line_to_offset(highlighter.logical_pos_y()) == self.checkpoints.len() {
             self.checkpoints.push(highlighter.snapshot());

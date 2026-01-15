@@ -20,7 +20,7 @@ fn run() -> CompileResult<()> {
     stdext::arena::init(128 * 1024 * 1024).unwrap();
 
     let scratch = scratch_arena(None);
-    let mut generator = lsh::Generator::new(&scratch);
+    let mut generator = lsh::compiler::Generator::new(&scratch);
     let mut has_path = false;
     let mut assembly = false;
 

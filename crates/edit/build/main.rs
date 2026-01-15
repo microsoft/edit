@@ -36,11 +36,11 @@ fn main() {
 fn compile_lsh() {
     let scratch = scratch_arena(None);
 
-    let lsh_path = lsh::builtin_definitions_path();
+    let lsh_path = lsh::compiler::builtin_definitions_path();
     let out_dir = env_opt("OUT_DIR");
     let out_path = format!("{out_dir}/lsh_definitions.rs");
 
-    let mut generator = lsh::Generator::new(&scratch);
+    let mut generator = lsh::compiler::Generator::new(&scratch);
     match generator.read_directory(lsh_path).and_then(|_| generator.generate_rust()) {
         Ok(c) => std::fs::write(out_path, c).unwrap(),
         Err(err) => {

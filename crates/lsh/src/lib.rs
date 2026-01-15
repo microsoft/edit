@@ -9,8 +9,8 @@
 #![feature(allocator_api)]
 #![allow(irrefutable_let_patterns, unused, clippy::upper_case_acronyms)]
 
-mod compiler;
-mod generator;
+pub mod compiler;
+pub mod engine;
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -23,15 +23,6 @@ use std::str::FromStr;
 use stdext::arena::*;
 
 pub use crate::compiler::CompileResult;
-pub use crate::generator::Generator;
-
-pub fn builtin_definitions_path() -> &'static Path {
-    #[cfg(windows)]
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "\\definitions");
-    #[cfg(not(windows))]
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/definitions");
-    Path::new(path)
-}
 
 fn arena_clone_str<'a>(arena: &'a Arena, s: &str) -> &'a str {
     ArenaString::from_str(arena, s).leak()

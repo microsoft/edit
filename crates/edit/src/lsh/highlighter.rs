@@ -1,16 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::fmt::Debug;
-use std::mem;
 use std::path::Path;
 
+use lsh::engine::*;
 use stdext::arena::{Arena, scratch_arena};
 
 use crate::document::ReadableDocument;
 use crate::helpers::*;
 use crate::lsh::definitions::*;
 use crate::{simd, unicode};
+
+const MAX_LINE_LEN: usize = 32 * KIBI;
 
 pub fn language_from_path(path: &Path) -> Option<&'static Language> {
     let filename = path.file_name()?.as_encoded_bytes();
@@ -31,52 +32,31 @@ pub fn language_from_path(path: &Path) -> Option<&'static Language> {
     None
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct Higlight {
-    pub start: usize,
-    pub kind: HighlightKind,
-}
-
-impl Debug for Higlight {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}, {:?})", self.start, self.kind)
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub struct State {}
 
 #[derive(Clone)]
 pub struct Highlighter<'a> {
     doc: &'a dyn ReadableDocument,
-    language: &'static Language,
     offset: usize,
     logical_pos_y: CoordType,
-    stack: Vec<u32>,
-    registers: Registers,
+    engine: Engine,
 }
 
 #[derive(Clone)]
 pub struct HighlighterState {
     offset: usize,
     logical_pos_y: CoordType,
-    stack: Vec<u32>,
-    registers: Registers,
+    state: EngineState,
 }
 
 impl<'doc> Highlighter<'doc> {
     pub fn new(doc: &'doc dyn ReadableDocument, language: &'static Language) -> Self {
         Self {
             doc,
-            language,
             offset: 0,
             logical_pos_y: 0,
-            stack: Default::default(),
-            registers: Registers {
-                pc: language.entrypoint,
-                hk: HighlightKind::Other as u32,
-                ..Default::default()
-            },
+            engine: Engine::new(&ASSEMBLY, &STRINGS, &CHARSETS, language.entrypoint),
         }
     }
 
@@ -90,8 +70,7 @@ impl<'doc> Highlighter<'doc> {
         HighlighterState {
             offset: self.offset,
             logical_pos_y: self.logical_pos_y,
-            stack: self.stack.clone(),
-            registers: self.registers,
+            state: self.engine.snapshot(),
         }
     }
 
@@ -99,292 +78,26 @@ impl<'doc> Highlighter<'doc> {
     pub fn restore(&mut self, snapshot: &HighlighterState) {
         self.offset = snapshot.offset;
         self.logical_pos_y = snapshot.logical_pos_y;
-        self.stack = snapshot.stack.clone();
-        self.registers = snapshot.registers;
+        self.engine.restore(&snapshot.state);
     }
 
-    pub fn parse_next_line<'a>(&mut self, arena: &'a Arena) -> Vec<Higlight, &'a Arena> {
-        const MAX_LEN: usize = 32 * KIBI;
-
+    pub fn parse_next_line<'a>(
+        &mut self,
+        arena: &'a Arena,
+    ) -> Vec<Higlight<HighlightKind>, &'a Arena> {
         let scratch = scratch_arena(Some(arena));
-        let line_beg = self.offset;
-
-        self.logical_pos_y += 1;
-
-        // Accumulate a line of text into `line_buf`.
-        let line = 'read: {
-            let mut chunk;
-            let mut line_buf;
-
-            // Try to read a chunk and see if it contains a newline.
-            // In that case we can skip concatenating chunks.
-            {
-                chunk = self.doc.read_forward(self.offset);
-                if chunk.is_empty() {
-                    break 'read chunk;
-                }
-
-                let (off, line) = simd::lines_fwd(chunk, 0, 0, 1);
-                self.offset += off;
-
-                if line == 1 {
-                    break 'read &chunk[..off];
-                }
-
-                let next_chunk = self.doc.read_forward(self.offset);
-                if next_chunk.is_empty() {
-                    break 'read &chunk[..off];
-                }
-
-                line_buf = Vec::new_in(&*scratch);
-
-                // Ensure we don't overflow the heap size with a 1GB long line.
-                let end = off.min(MAX_LEN - line_buf.len());
-                let end = end.min(chunk.len());
-                line_buf.extend_from_slice(&chunk[..end]);
-
-                chunk = next_chunk;
-            }
-
-            // Concatenate chunks until we get a full line.
-            while line_buf.len() < MAX_LEN {
-                let (off, line) = simd::lines_fwd(chunk, 0, 0, 1);
-                self.offset += off;
-
-                // Ensure we don't overflow the heap size with a 1GB long line.
-                let end = off.min(MAX_LEN - line_buf.len());
-                let end = end.min(chunk.len());
-                line_buf.extend_from_slice(&chunk[..end]);
-
-                // Start of the next line found.
-                if line == 1 {
-                    break;
-                }
-
-                chunk = self.doc.read_forward(self.offset);
-                if chunk.is_empty() {
-                    break;
-                }
-            }
-
-            line_buf.leak()
-        };
-
-        let mut res = Vec::new_in(arena);
+        let (line_beg, line) = self.read_next_line(&scratch);
 
         // Empty lines can be somewhat common.
         //
         // If the line is too long, we don't highlight it.
         // This is to prevent performance issues with very long lines.
-        if line.is_empty() || line.len() >= MAX_LEN {
-            return res;
+        if line.is_empty() || line.len() >= MAX_LINE_LEN {
+            return Vec::new_in(arena);
         }
 
         let line = unicode::strip_newline(line);
-        let mut reset = false;
-
-        self.registers.off = 0;
-        self.registers.hs = 0;
-
-        loop {
-            unsafe {
-                let pc = self.registers.pc as usize;
-                let op = ASSEMBLY[pc];
-                self.registers.pc += 1;
-
-                match op {
-                    0 => {
-                        // Mov { dst: Register, src: Register }
-                        let (dst, src) = self.read_dst_src();
-                        let s = self.registers.get(src);
-                        self.registers.set(dst, s);
-                    }
-                    1 => {
-                        // Add { dst: Register, src: Register }
-                        let (dst, src) = self.read_dst_src();
-                        let d = self.registers.get(dst);
-                        let s = self.registers.get(src);
-                        self.registers.set(dst, d.saturating_add(s));
-                    }
-                    2 => {
-                        // Sub { dst: Register, src: Register }
-                        let (dst, src) = self.read_dst_src();
-                        let d = self.registers.get(dst);
-                        let s = self.registers.get(src);
-                        self.registers.set(dst, d.saturating_sub(s));
-                    }
-                    3 => {
-                        // MovImm { dst: Register, imm: u32 }
-                        let (dst, _) = self.read_dst_src();
-                        let imm = self.read::<u32>();
-                        self.registers.set(dst, imm);
-                    }
-                    4 => {
-                        // AddImm { dst: Register, imm: u32 }
-                        let (dst, _) = self.read_dst_src();
-                        let imm = self.read::<u32>();
-                        let d = self.registers.get(dst);
-                        self.registers.set(dst, d.saturating_add(imm));
-                    }
-                    5 => {
-                        // SubImm { dst: Register, imm: u32 }
-                        let (dst, _) = self.read_dst_src();
-                        let imm = self.read::<u32>();
-                        let d = self.registers.get(dst);
-                        self.registers.set(dst, d.saturating_sub(imm));
-                    }
-
-                    6 => {
-                        // Call { tgt: u32 }
-                        let tgt = self.read::<u32>();
-                        self.stack.push(self.registers.pc);
-                        self.registers.pc = tgt;
-                    }
-                    7 => {
-                        // Return
-                        if let Some(pc) = self.stack.pop() {
-                            self.registers.pc = pc;
-                        } else {
-                            reset = true;
-                            break;
-                        }
-                    }
-
-                    8 => {
-                        // JumpEQ { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_dst_src();
-                        let tgt = self.read::<u32>();
-                        if self.registers.get(dst) == self.registers.get(src) {
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    9 => {
-                        // JumpNE { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_dst_src();
-                        let tgt = self.read::<u32>();
-                        if self.registers.get(dst) != self.registers.get(src) {
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    10 => {
-                        // JumpLT { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_dst_src();
-                        let tgt = self.read::<u32>();
-                        if self.registers.get(dst) < self.registers.get(src) {
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    11 => {
-                        // JumpLE { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_dst_src();
-                        let tgt = self.read::<u32>();
-                        if self.registers.get(dst) <= self.registers.get(src) {
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    12 => {
-                        // JumpGT { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_dst_src();
-                        let tgt = self.read::<u32>();
-                        if self.registers.get(dst) > self.registers.get(src) {
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    13 => {
-                        // JumpGE { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_dst_src();
-                        let tgt = self.read::<u32>();
-                        if self.registers.get(dst) >= self.registers.get(src) {
-                            self.registers.pc = tgt;
-                        }
-                    }
-
-                    14 => {
-                        // JumpIfEndOfLine { tgt: u32 }
-                        let tgt = self.read::<u32>();
-                        if (self.registers.off as usize) >= line.len() {
-                            self.registers.pc = tgt;
-                        }
-                    }
-
-                    15 => {
-                        // JumpIfMatchCharset { idx: u32, tgt: u32 }
-                        let idx = self.read::<u32>();
-                        let tgt = self.read::<u32>();
-                        let off = self.registers.off as usize;
-                        let cs = CHARSETS.get_unchecked(idx as usize);
-
-                        if let Some(off) = Self::charset_gobble(line, off, cs) {
-                            self.registers.off = off as u32;
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    16 => {
-                        // JumpIfMatchPrefix { idx: u32, tgt: u32 }
-                        let idx = self.read::<u32>();
-                        let tgt = self.read::<u32>();
-                        let off = self.registers.off as usize;
-                        let str = STRINGS.get_unchecked(idx as usize).as_bytes();
-
-                        if Self::inlined_memcmp(line, off, str) {
-                            self.registers.off = (off + str.len()) as u32;
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    17 => {
-                        // JumpIfMatchPrefixInsensitive { idx: u32, tgt: u32 }
-                        let idx = self.read::<u32>();
-                        let tgt = self.read::<u32>();
-                        let off = self.registers.off as usize;
-                        let str = STRINGS.get_unchecked(idx as usize).as_bytes();
-
-                        if Self::inlined_memicmp(line, off, str) {
-                            self.registers.off = (off + str.len()) as u32;
-                            self.registers.pc = tgt;
-                        }
-                    }
-
-                    18 => {
-                        // FlushHighlight
-                        let start = self.registers.hs as usize;
-                        let kind = self.registers.hk as usize;
-                        let kind = HighlightKind::from_usize(kind);
-
-                        if let Some(last) = res.last_mut()
-                            && (last.start == start || last.kind == kind)
-                        {
-                            last.kind = kind;
-                        } else {
-                            res.push(Higlight { start, kind });
-                        }
-
-                        self.registers.hs = self.registers.off;
-                    }
-                    19 => {
-                        // AwaitInput
-                        let off = self.registers.off as usize;
-                        if off >= line.len() {
-                            break;
-                        }
-                    }
-
-                    _ => std::hint::unreachable_unchecked(),
-                }
-            }
-        }
-
-        if res.last().is_none_or(|last| last.start < line.len()) {
-            let start = line.len().min(self.registers.off as usize);
-            res.push(Higlight { start, kind: HighlightKind::Other });
-        }
-        if res.last().is_none_or(|last| last.start < line.len()) {
-            res.push(Higlight { start: line.len(), kind: HighlightKind::Other });
-        }
-
-        if reset {
-            self.registers = unsafe { mem::zeroed() };
-            self.registers.pc = self.language.entrypoint;
-        }
+        let mut res = self.engine.parse_next_line(arena, line);
 
         // Adjust the range to account for the line offset.
         for h in &mut res {
@@ -394,96 +107,67 @@ impl<'doc> Highlighter<'doc> {
         res
     }
 
-    // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
-    #[inline]
-    fn charset_gobble(haystack: &[u8], mut off: usize, cs: &[u16; 16]) -> Option<usize> {
-        if off >= haystack.len() || !Self::in_set(cs, haystack[off]) {
-            return None;
+    fn read_next_line<'a>(&mut self, arena: &'a Arena) -> (usize, &'a [u8])
+    where
+        'doc: 'a,
+    {
+        self.logical_pos_y += 1;
+
+        let line_beg = self.offset;
+        let mut chunk;
+        let mut line_buf;
+
+        // Try to read a chunk and see if it contains a newline.
+        // In that case we can skip concatenating chunks.
+        {
+            chunk = self.doc.read_forward(self.offset);
+            if chunk.is_empty() {
+                return (line_beg, chunk);
+            }
+
+            let (off, line) = simd::lines_fwd(chunk, 0, 0, 1);
+            self.offset += off;
+
+            if line == 1 {
+                return (line_beg, &chunk[..off]);
+            }
+
+            let next_chunk = self.doc.read_forward(self.offset);
+            if next_chunk.is_empty() {
+                return (line_beg, &chunk[..off]);
+            }
+
+            line_buf = Vec::new_in(arena);
+
+            // Ensure we don't overflow the heap size with a 1GB long line.
+            let end = off.min(MAX_LINE_LEN - line_buf.len());
+            let end = end.min(chunk.len());
+            line_buf.extend_from_slice(&chunk[..end]);
+
+            chunk = next_chunk;
         }
 
-        while {
-            off += 1;
-            off < haystack.len() && Self::in_set(cs, haystack[off])
-        } {}
+        // Concatenate chunks until we get a full line.
+        while line_buf.len() < MAX_LINE_LEN {
+            let (off, line) = simd::lines_fwd(chunk, 0, 0, 1);
+            self.offset += off;
 
-        Some(off)
-    }
+            // Ensure we don't overflow the heap size with a 1GB long line.
+            let end = off.min(MAX_LINE_LEN - line_buf.len());
+            let end = end.min(chunk.len());
+            line_buf.extend_from_slice(&chunk[..end]);
 
-    /// A mini-memcmp implementation for short needles.
-    /// Compares the `haystack` at `off` with the `needle`.
-    #[inline]
-    fn inlined_memcmp(haystack: &[u8], off: usize, needle: &[u8]) -> bool {
-        unsafe {
-            if off >= haystack.len() || haystack.len() - off < needle.len() {
-                return false;
+            // Start of the next line found.
+            if line == 1 {
+                break;
             }
 
-            let a = haystack.as_ptr().add(off);
-            let b = needle.as_ptr();
-            let mut i = 0;
-
-            while i < needle.len() {
-                let a = *a.add(i);
-                let b = *b.add(i);
-                i += 1;
-                if a != b {
-                    return false;
-                }
+            chunk = self.doc.read_forward(self.offset);
+            if chunk.is_empty() {
+                break;
             }
-
-            true
         }
-    }
 
-    /// Like `inlined_memcmp`, but case-insensitive.
-    #[inline]
-    fn inlined_memicmp(haystack: &[u8], off: usize, needle: &[u8]) -> bool {
-        unsafe {
-            if off >= haystack.len() || haystack.len() - off < needle.len() {
-                return false;
-            }
-
-            let a = haystack.as_ptr().add(off);
-            let b = needle.as_ptr();
-            let mut i = 0;
-
-            while i < needle.len() {
-                // str in PrefixInsensitive(str) is expected to be lowercase, printable ASCII.
-                let a = a.add(i).read().to_ascii_lowercase();
-                let b = b.add(i).read();
-                i += 1;
-                if a != b {
-                    return false;
-                }
-            }
-
-            true
-        }
-    }
-
-    #[inline]
-    fn in_set(bitmap: &[u16; 16], byte: u8) -> bool {
-        let lo_nibble = byte & 0xf;
-        let hi_nibble = byte >> 4;
-
-        let bitset = bitmap[lo_nibble as usize];
-        let bitmask = 1u16 << hi_nibble;
-
-        (bitset & bitmask) != 0
-    }
-
-    #[inline]
-    fn read<T: Copy>(&mut self) -> T {
-        let pc = self.registers.pc as usize;
-        self.registers.pc += mem::size_of::<T>() as u32;
-        unsafe { (ASSEMBLY.as_ptr().add(pc) as *const T).read_unaligned() }
-    }
-
-    #[inline]
-    fn read_dst_src(&mut self) -> (usize, usize) {
-        let dst_src = self.read::<u8>();
-        let dst = (dst_src & 0xf) as usize;
-        let src = (dst_src >> 4) as usize;
-        (dst, src)
+        (line_beg, line_buf.leak())
     }
 }

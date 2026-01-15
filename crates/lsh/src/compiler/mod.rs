@@ -3,6 +3,7 @@
 
 mod backend;
 mod frontend;
+mod generator;
 mod optimizer;
 mod regex;
 mod tokenizer;
@@ -13,12 +14,22 @@ use std::fmt::Write as _;
 use std::marker::PhantomData;
 use std::mem::{MaybeUninit, transmute, zeroed};
 use std::ops::{Index, IndexMut};
+use std::path::Path;
 use std::{fmt, ptr};
 
 use stdext::arena::{Arena, ArenaString};
 
 use self::frontend::*;
+pub use self::generator::Generator;
 use crate::{Intern, arena_clone_str};
+
+pub fn builtin_definitions_path() -> &'static Path {
+    #[cfg(windows)]
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "\\definitions");
+    #[cfg(not(windows))]
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/definitions");
+    Path::new(path)
+}
 
 pub type CompileResult<T> = Result<T, CompileError>;
 
@@ -136,6 +147,41 @@ impl<'a> Compiler<'a> {
         let mut stack = VecDeque::new();
         stack.push_back(root);
         TreeVisitor { current: None, stack, visited: Default::default() }
+    }
+
+    fn count_register_uses(&self) {
+        for function in &self.functions {
+            for node in self.visit_nodes_from(function.body) {
+                let node = node.borrow();
+                match node.instr {
+                    IRI::Add { dst, src, imm } => {
+                        dst.borrow_mut().read_count = 0;
+                        src.borrow_mut().read_count = 0;
+                    }
+                    IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
+                        lhs.borrow_mut().read_count = 0;
+                        rhs.borrow_mut().read_count = 0;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        for function in &self.functions {
+            for node in self.visit_nodes_from(function.body) {
+                let node = node.borrow();
+                match node.instr {
+                    IRI::Add { dst, src, imm } => {
+                        src.borrow_mut().read_count += 1;
+                    }
+                    IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
+                        lhs.borrow_mut().read_count += 1;
+                        rhs.borrow_mut().read_count += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 
     /// Collect all "interesting" characters from conditions in a loop body.
@@ -718,35 +764,35 @@ impl fmt::Display for Register {
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct Registers {
-    zero: u32, // x0 = Zero
-    pc: u32,   // x1 = ProgramCounter
-    off: u32,  // x2 = InputOffset
-    hs: u32,   // z3 = HighlightStart
-    hk: u32,   // x4 = HighlightKind
-    x5: u32,
-    x6: u32,
-    x7: u32,
-    x8: u32,
-    x9: u32,
-    x10: u32,
-    x11: u32,
-    x12: u32,
-    x13: u32,
-    x14: u32,
-    x15: u32,
+    pub zero: u32, // x0 = Zero
+    pub pc: u32,   // x1 = ProgramCounter
+    pub off: u32,  // x2 = InputOffset
+    pub hs: u32,   // z3 = HighlightStart
+    pub hk: u32,   // x4 = HighlightKind
+    pub x5: u32,
+    pub x6: u32,
+    pub x7: u32,
+    pub x8: u32,
+    pub x9: u32,
+    pub x10: u32,
+    pub x11: u32,
+    pub x12: u32,
+    pub x13: u32,
+    pub x14: u32,
+    pub x15: u32,
 }
 
 impl Registers {
     const COUNT: usize = 16;
 
     #[inline(always)]
-    fn get(&self, reg: usize) -> u32 {
+    pub fn get(&self, reg: usize) -> u32 {
         debug_assert!(reg < Self::COUNT);
         unsafe { (self as *const _ as *const u32).add(reg).read() }
     }
 
     #[inline(always)]
-    fn set(&mut self, reg: usize, val: u32) {
+    pub fn set(&mut self, reg: usize, val: u32) {
         debug_assert!(reg < Self::COUNT);
         unsafe { (self as *mut _ as *mut u32).add(reg).write(val) }
     }

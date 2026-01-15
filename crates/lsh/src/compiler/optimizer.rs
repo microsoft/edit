@@ -12,36 +12,8 @@ use super::*;
 pub fn optimize<'a>(compiler: &mut Compiler<'a>) {
     // Remove noops first, such that analyzing instruction chains becomes easier for the other passes.
     optimize_noop(compiler);
-
-    optimize_redundant_offset_restore(compiler);
-    count_register_uses(compiler);
-    // NOTE: `optimize_redundant_offset_backups` depends on `count_register_uses`.
-    optimize_unused_assignments(compiler);
-
-    // optimize_unused_assignments depends on optimize_noop to clean up afterwards.
-    optimize_noop(compiler);
-
+    optimize_redundant_offset_backup_restore(compiler);
     optimize_highlight_kind_values(compiler);
-}
-
-// NOTE: This function cannot be called multiple times right now.
-// We'd need to save all allocated virtual registers so that we reset their `read_count`.
-fn count_register_uses<'a>(compiler: &mut Compiler<'a>) {
-    for function in &compiler.functions {
-        for node in compiler.visit_nodes_from(function.body) {
-            let node = node.borrow();
-            match node.instr {
-                IRI::Add { dst, src, imm } => {
-                    src.borrow_mut().read_count += 1;
-                }
-                IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
-                    lhs.borrow_mut().read_count += 1;
-                    rhs.borrow_mut().read_count += 1;
-                }
-                _ => {}
-            }
-        }
-    }
 }
 
 /// Removes no-op instructions from the IR.
@@ -103,9 +75,10 @@ fn optimize_noop<'a>(compiler: &mut Compiler<'a>) {
 //   IRI::If { .. }
 //   IRI::If { .. }
 //   IRI::If { .. }
-fn optimize_redundant_offset_restore<'a>(compiler: &mut Compiler<'a>) {
+fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
     let off_reg = compiler.get_reg(Register::InputOffset);
 
+    // Remove pointless offset restore chains.
     for function in &compiler.functions {
         for current_cell in compiler.visit_nodes_from(function.body) {
             // First, filter down to nodes that assign the `off` to a virtual register.
@@ -130,9 +103,9 @@ fn optimize_redundant_offset_restore<'a>(compiler: &mut Compiler<'a>) {
             }
         }
     }
-}
 
-fn optimize_unused_assignments<'a>(compiler: &mut Compiler<'a>) {
+    // Remove pointless offset backups.
+    compiler.count_register_uses();
     for function in &compiler.functions {
         for current_cell in compiler.visit_nodes_from(function.body) {
             // First, filter down to nodes that assign the `off` to a virtual register.
@@ -152,6 +125,7 @@ fn optimize_unused_assignments<'a>(compiler: &mut Compiler<'a>) {
             }
         }
     }
+    optimize_noop(compiler);
 }
 
 /// This isn't an optimization for the VM, it's one for my autistic side.
