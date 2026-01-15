@@ -1,5 +1,6 @@
 #[display_name = "Git Rebase Message"]
-#[filename = "git-rebase-todo"]
+#[path = "**/git-rebase-todo"]
+#[path = "**/rebase-merge/done"]
 pub fn git_rebase_todo() {
     if /#.*/ {
         yield comment;

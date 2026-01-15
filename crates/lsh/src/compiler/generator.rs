@@ -233,14 +233,9 @@ impl Registers {
             "
 pub struct Language {
     pub name: &'static str,
-    pub filenames: &'static [&'static str],
+    pub path_suffixes: &'static [&'static str],
+    pub path_patterns: &'static [&'static str],
     pub entrypoint: u32,
-}
-
-impl Language {
-    const fn new(name: &'static str, filenames: &'static [&'static str], entrypoint: u32) -> Self {
-        Self { name, filenames, entrypoint }
-    }
 }
 
 impl PartialEq for &Language {
@@ -257,14 +252,26 @@ impl PartialEq for &Language {
 
         output.push_str("\n#[rustfmt::skip] pub const LANGUAGES: &[Language] = &[\n");
         for ep in &assembly.entrypoints {
-            _ = writeln!(output, "    Language::new({:?}, &[", ep.display_name);
-            for (idx, f) in ep.filenames.iter().enumerate() {
-                if idx != 0 {
-                    _ = write!(output, ", ");
+            let write_strings = |output: &mut String, strings: &[String]| {
+                _ = write!(output, "&[");
+                for (idx, s) in strings.iter().enumerate() {
+                    if idx != 0 {
+                        output.push_str(", ");
+                    }
+                    _ = write!(output, "{s:?}");
                 }
-                _ = writeln!(output, "{f:?}");
-            }
-            _ = writeln!(output, "], {}),", ep.address);
+                _ = write!(output, "]");
+            };
+
+            _ = write!(
+                output,
+                "    Language {{\n        name: {:?},\n        path_suffixes: ",
+                ep.display_name
+            );
+            write_strings(&mut output, &ep.path_suffixes);
+            _ = write!(output, ",\n        path_patterns: ");
+            write_strings(&mut output, &ep.path_patterns);
+            _ = writeln!(output, ",\n        entrypoint: {}\n    }},", ep.address);
         }
         output.push_str("];\n");
 

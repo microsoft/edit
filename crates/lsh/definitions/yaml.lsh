@@ -1,6 +1,6 @@
 #[display_name = "YAML"]
-#[filename = "*.yaml"]
-#[filename = "*.yml"]
+#[path = "**/*.yaml"]
+#[path = "**/*.yml"]
 pub fn yaml() {
     if /\s+/ {
         // Leading whitespace

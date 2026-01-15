@@ -7,29 +7,53 @@ use lsh::engine::*;
 use stdext::arena::{Arena, scratch_arena};
 
 use crate::document::ReadableDocument;
+use crate::glob::glob_match;
 use crate::helpers::*;
 use crate::lsh::definitions::*;
 use crate::{simd, unicode};
 
 const MAX_LINE_LEN: usize = 32 * KIBI;
 
+#[allow(clippy::transmute_bytes_to_str)]
 pub fn language_from_path(path: &Path) -> Option<&'static Language> {
-    let filename = path.file_name()?.as_encoded_bytes();
+    let path = path.as_os_str().as_encoded_bytes();
 
     for l in LANGUAGES {
-        for f in l.filenames {
-            let f = f.as_bytes();
-            if let Some(suffix) = f.strip_prefix(b"*") {
-                if filename.ends_with(suffix) {
-                    return Some(l);
-                }
-            } else if filename == f {
+        for suffix in l.path_suffixes {
+            if match_path_suffix(suffix.as_bytes(), path) {
+                return Some(l);
+            }
+        }
+        for pattern in l.path_patterns {
+            if glob_match(pattern.as_bytes(), path) {
                 return Some(l);
             }
         }
     }
 
     None
+}
+
+fn match_path_suffix(suffix: &[u8], path: &[u8]) -> bool {
+    if path.len() < suffix.len() {
+        return false;
+    }
+
+    let path_end = &path[path.len() - suffix.len()..];
+
+    #[cfg(windows)]
+    {
+        path_end.iter().zip(suffix.iter()).all(|(a, b)| {
+            let a = if *a == b'\\' { b'/' } else { *a };
+            let b = if *b == b'\\' { b'/' } else { *b };
+            a.eq_ignore_ascii_case(&b)
+        })
+    }
+
+    #[cfg(not(windows))]
+    {
+        path_end.eq_ignore_ascii_case(suffix)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]

@@ -1,6 +1,6 @@
 #[display_name = "JSON"]
-#[filename = "*.json"]
-#[filename = "*.jsonc"]
+#[path = "**/*.json"]
+#[path = "**/*.jsonc"]
 pub fn json() {
     until /$/ {
         yield other;

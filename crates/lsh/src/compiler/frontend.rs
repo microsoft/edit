@@ -126,7 +126,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
             match key {
                 "display_name" => attributes.display_name = Some(value),
-                "filename" => attributes.filenames.push(value),
+                "path" => attributes.paths.push(value),
                 _ => raise!(self, "unknown attribute '{}'", key),
             }
         }

@@ -1,5 +1,5 @@
 #[display_name = "LSH"]
-#[filename = "*.lsh"]
+#[path = "**/*.lsh"]
 pub fn lsh() {
     until /$/ {
         yield other;

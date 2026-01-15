@@ -1,6 +1,7 @@
 #[display_name = "PowerShell"]
-#[filename = "*.ps1"]
-#[filename = "*.psm1"]
+#[path = "**/*.ps1"]
+#[path = "**/*.psd1"]
+#[path = "**/*.psm1"]
 pub fn powershell() {
     until /$/ {
         yield other;

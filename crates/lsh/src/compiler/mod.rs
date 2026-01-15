@@ -426,7 +426,7 @@ impl<'a> fmt::Display for HighlightKindCamelcaseFormatter<'a> {
 #[derive(Debug, Clone, Default)]
 struct FunctionAttributes<'a> {
     display_name: Option<&'a str>,
-    filenames: Vec<&'a str>,
+    paths: Vec<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -700,7 +700,8 @@ pub struct Assembly<'a> {
 pub struct Entrypoint {
     pub name: String,
     pub display_name: String,
-    pub filenames: Vec<String>,
+    pub path_suffixes: Vec<String>,
+    pub path_patterns: Vec<String>,
     pub address: usize,
 }
 

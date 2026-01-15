@@ -150,6 +150,11 @@ fn bench_lsh(c: &mut Criterion) {
             })
         },
     );
+
+    c.benchmark_group("lsh").bench_function("language_from_path", |b| {
+        let path = Path::new("/some/long/path/to/file/foo.bar.foo.bar.foo.bar");
+        b.iter(|| lsh::language_from_path(black_box(path)))
+    });
 }
 
 fn bench_oklab(c: &mut Criterion) {
