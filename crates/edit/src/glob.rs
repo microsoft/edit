@@ -4,17 +4,42 @@
 use std::path::is_separator;
 
 pub fn glob_match(glob: &[u8], path: &[u8]) -> bool {
-    // Fast-pass for the most common patterns:
-    // * Matching files by extension (e.g., **/*.rs)
-    // * Matching files by name (e.g., **/Cargo.toml)
-    if let Some(suffix) = glob.strip_prefix(b"**/*").or(glob.strip_prefix(b"**"))
-        && !suffix.is_empty()
-        && !contains_magic(suffix)
-    {
-        match_path_suffix(path, suffix)
-    } else {
-        slow_path(glob, path)
+    fast_path(glob, path).unwrap_or_else(|| slow_path(glob, path))
+}
+
+// Fast-pass for the most common patterns:
+// * Matching files by extension (e.g., **/*.rs)
+// * Matching files by name (e.g., **/Cargo.toml)
+fn fast_path(glob: &[u8], path: &[u8]) -> Option<bool> {
+    // In either case, the glob must start with "**/".
+    let mut suffix = glob.strip_prefix(b"**/")?;
+    if suffix.is_empty() {
+        return None;
     }
+
+    // Determine whether it's "**/" or "**/*".
+    let mut needs_dir_anchor = true;
+    if let Some(s) = suffix.strip_prefix(b"*") {
+        suffix = s;
+        needs_dir_anchor = false;
+    }
+
+    // Restrict down to anything we can handle with a suffix check.
+    if suffix.is_empty() || contains_magic(suffix) {
+        return None;
+    }
+
+    Some(
+        match_path_suffix(path, suffix)
+            && (
+                // In case of "**/*extension" a simple suffix match is sufficient.
+                !needs_dir_anchor
+                // But for "**/filename" we need to ensure that path is either "filename"...
+                || path.len() == suffix.len()
+                // ...or that it is ".../filename".
+                || is_separator(path[path.len() - suffix.len() - 1] as char)
+            ),
+    )
 }
 
 fn contains_magic(glob: &[u8]) -> bool {

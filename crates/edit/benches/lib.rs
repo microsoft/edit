@@ -10,7 +10,7 @@ use std::{mem, vec};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
 use edit::simd::MemsetSafe;
-use edit::{buffer, hash, lsh, oklab, simd, unicode};
+use edit::{buffer, hash, json, lsh, oklab, simd, unicode};
 use serde::Deserialize;
 use stdext::arena::scratch_arena;
 use stdext::{arena, varint};
@@ -127,6 +127,21 @@ fn bench_hash(c: &mut Criterion) {
             let data = [0u8; 1024];
             b.iter(|| hash::hash(0, black_box(&data)))
         });
+}
+
+fn bench_json(c: &mut Criterion) {
+    let bytes = include_str!("../../../assets/highlighting-tests/json.json");
+
+    c.benchmark_group("json").throughput(Throughput::Bytes(bytes.len() as u64)).bench_function(
+        "parse",
+        |b| {
+            b.iter(|| {
+                let scratch = scratch_arena(None);
+                let obj = json::parse(&scratch, black_box(bytes)).unwrap();
+                black_box(obj);
+            })
+        },
+    );
 }
 
 fn bench_lsh(c: &mut Criterion) {
@@ -330,6 +345,7 @@ fn bench(c: &mut Criterion) {
 
     bench_buffer(c);
     bench_hash(c);
+    bench_json(c);
     bench_lsh(c);
     bench_oklab(c);
     bench_simd_lines_fwd(c);
