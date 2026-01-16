@@ -700,8 +700,7 @@ pub struct Assembly<'a> {
 pub struct Entrypoint {
     pub name: String,
     pub display_name: String,
-    pub path_suffixes: Vec<String>,
-    pub path_patterns: Vec<String>,
+    pub paths: Vec<String>,
     pub address: usize,
 }
 

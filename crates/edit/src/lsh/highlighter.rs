@@ -19,12 +19,7 @@ pub fn language_from_path(path: &Path) -> Option<&'static Language> {
     let path = path.as_os_str().as_encoded_bytes();
 
     for l in LANGUAGES {
-        for suffix in l.path_suffixes {
-            if match_path_suffix(suffix.as_bytes(), path) {
-                return Some(l);
-            }
-        }
-        for pattern in l.path_patterns {
+        for pattern in l.paths {
             if glob_match(pattern.as_bytes(), path) {
                 return Some(l);
             }
@@ -32,28 +27,6 @@ pub fn language_from_path(path: &Path) -> Option<&'static Language> {
     }
 
     None
-}
-
-fn match_path_suffix(suffix: &[u8], path: &[u8]) -> bool {
-    if path.len() < suffix.len() {
-        return false;
-    }
-
-    let path_end = &path[path.len() - suffix.len()..];
-
-    #[cfg(windows)]
-    {
-        path_end.iter().zip(suffix.iter()).all(|(a, b)| {
-            let a = if *a == b'\\' { b'/' } else { *a };
-            let b = if *b == b'\\' { b'/' } else { *b };
-            a.eq_ignore_ascii_case(&b)
-        })
-    }
-
-    #[cfg(not(windows))]
-    {
-        path_end.eq_ignore_ascii_case(suffix)
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]

@@ -212,29 +212,11 @@ impl<'a> Backend<'a> {
             .functions
             .iter()
             .filter(|f| f.public)
-            .map(|f| {
-                let mut path_suffixes = Vec::new();
-                let mut path_patterns = Vec::new();
-
-                for path in &f.attributes.paths {
-                    if let Some(suffix) =
-                        path.strip_prefix("**/*").or_else(|| path.strip_prefix("**"))
-                        && !suffix.is_empty()
-                        && !suffix.contains(['?', '*', '[', ']', '{', '}'])
-                    {
-                        path_suffixes.push(suffix.to_string());
-                    } else {
-                        path_patterns.push(path.to_string());
-                    }
-                }
-
-                Entrypoint {
-                    name: f.name.to_string(),
-                    display_name: f.attributes.display_name.unwrap_or(f.name).to_string(),
-                    path_suffixes,
-                    path_patterns,
-                    address: f.body.borrow().offset,
-                }
+            .map(|f| Entrypoint {
+                name: f.name.to_string(),
+                display_name: f.attributes.display_name.unwrap_or(f.name).to_string(),
+                paths: f.attributes.paths.iter().map(|s| s.to_string()).collect(),
+                address: f.body.borrow().offset,
             })
             .collect();
         self.assembly.highlight_kinds = compiler.highlight_kinds.clone();

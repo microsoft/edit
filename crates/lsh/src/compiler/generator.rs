@@ -233,8 +233,7 @@ impl Registers {
             "
 pub struct Language {
     pub name: &'static str,
-    pub path_suffixes: &'static [&'static str],
-    pub path_patterns: &'static [&'static str],
+    pub paths: &'static [&'static str],
     pub entrypoint: u32,
 }
 
@@ -265,12 +264,10 @@ impl PartialEq for &Language {
 
             _ = write!(
                 output,
-                "    Language {{\n        name: {:?},\n        path_suffixes: ",
+                "    Language {{\n        name: {:?},\n        paths: ",
                 ep.display_name
             );
-            write_strings(&mut output, &ep.path_suffixes);
-            _ = write!(output, ",\n        path_patterns: ");
-            write_strings(&mut output, &ep.path_patterns);
+            write_strings(&mut output, &ep.paths);
             _ = writeln!(output, ",\n        entrypoint: {}\n    }},", ep.address);
         }
         output.push_str("];\n");
