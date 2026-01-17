@@ -10,5 +10,6 @@ pub mod cache;
 mod definitions;
 mod highlighter;
 
-pub use definitions::*;
+pub use definitions::{FILE_ASSOCIATIONS, HighlightKind, LANGUAGES};
 pub use highlighter::*;
+pub use lsh::engine::Language;

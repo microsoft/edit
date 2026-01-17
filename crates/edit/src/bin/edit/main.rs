@@ -9,6 +9,7 @@ mod draw_filepicker;
 mod draw_menubar;
 mod draw_statusbar;
 mod localization;
+mod settings;
 mod state;
 
 use std::borrow::Cow;
@@ -33,6 +34,8 @@ use localization::*;
 use state::*;
 use stdext::arena::{self, Arena, ArenaString, scratch_arena};
 use stdext::arena_format;
+
+use crate::settings::Settings;
 
 #[cfg(target_pointer_width = "32")]
 const SCRATCH_ARENA_CAPACITY: usize = 128 * MEBI;
@@ -70,6 +73,8 @@ fn run() -> apperr::Result<()> {
     if handle_args(&mut state)? {
         return Ok(());
     }
+
+    Settings::reload()?;
 
     // This will reopen stdin if it's redirected (which may fail) and switch
     // the terminal to raw mode which prevents the user from pressing Ctrl+C.

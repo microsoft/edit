@@ -6,6 +6,7 @@ use std::ptr::{self, NonNull};
 use std::slice;
 
 use stdext::sys::{virtual_commit, virtual_release, virtual_reserve};
+use stdext::{ReplaceRange as _, slice_copy_safe};
 
 use crate::apperr;
 use crate::document::{ReadableDocument, WriteableDocument};

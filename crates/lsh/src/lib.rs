@@ -11,6 +11,7 @@
 
 pub mod compiler;
 pub mod engine;
+pub mod glob;
 
 use std::cell::RefCell;
 use std::collections::HashSet;

@@ -11,6 +11,7 @@ use std::ptr::{self, NonNull, null, null_mut};
 use std::{mem, time};
 
 use stdext::arena::{Arena, ArenaString, scratch_arena};
+use stdext::str_from_raw_parts;
 use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
 use windows_sys::Win32::Storage::FileSystem;
 use windows_sys::Win32::System::Diagnostics::Debug;

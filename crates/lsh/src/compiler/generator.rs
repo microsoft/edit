@@ -155,6 +155,7 @@ impl<'a> Generator<'a> {
 
         let mut output = String::new();
         output.push_str("// This file is auto-generated. Do not edit it manually.\n\n");
+        output.push_str("use lsh::engine::Language;\n\n");
 
         output.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum HighlightKind {\n");
         let members: Vec<_> = assembly
@@ -229,46 +230,27 @@ impl Registers {
 ",
         );
 
-        output.push_str(
-            "
-pub struct Language {
-    pub name: &'static str,
-    pub paths: &'static [&'static str],
-    pub entrypoint: u32,
-}
-
-impl PartialEq for &Language {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(*self, *other)
-    }
-}
-",
-        );
-
         output.push_str("/**\n");
         output.push_str(&self.compiler.as_mermaid());
         output.push_str("**/\n");
 
         output.push_str("\n#[rustfmt::skip] pub const LANGUAGES: &[Language] = &[\n");
         for ep in &assembly.entrypoints {
-            let write_strings = |output: &mut String, strings: &[String]| {
-                _ = write!(output, "&[");
-                for (idx, s) in strings.iter().enumerate() {
-                    if idx != 0 {
-                        output.push_str(", ");
-                    }
-                    _ = write!(output, "{s:?}");
-                }
-                _ = write!(output, "]");
-            };
-
-            _ = write!(
+            _ = writeln!(
                 output,
-                "    Language {{\n        name: {:?},\n        paths: ",
-                ep.display_name
+                "    Language {{ id: {:?}, name: {:?}, entrypoint: {} }},",
+                ep.name, ep.display_name, ep.address
             );
-            write_strings(&mut output, &ep.paths);
-            _ = writeln!(output, ",\n        entrypoint: {}\n    }},", ep.address);
+        }
+        output.push_str("];\n");
+
+        output.push_str(
+            "\n#[rustfmt::skip] pub const FILE_ASSOCIATIONS: &[(&str, &Language)] = &[\n",
+        );
+        for (idx, ep) in assembly.entrypoints.iter().enumerate() {
+            for path in &ep.paths {
+                _ = writeln!(output, "    ({path:?}, &LANGUAGES[{idx}]),");
+            }
         }
         output.push_str("];\n");
 

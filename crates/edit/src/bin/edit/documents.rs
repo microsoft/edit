@@ -8,9 +8,11 @@ use std::path::{Path, PathBuf};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
-use edit::lsh::{Language, language_from_path};
+use edit::lsh::{FILE_ASSOCIATIONS, Language};
 use edit::{apperr, path, sys};
+use lsh::engine::process_file_associations;
 
+use crate::settings::Settings;
 use crate::state::DisplayablePathBuf;
 
 pub struct Document {
@@ -83,13 +85,25 @@ impl Document {
     }
 
     fn update_language(&mut self) {
-        self.buffer.borrow_mut().set_language(if let Some(lang) = self.language_override {
-            lang
-        } else if let Some(path) = &self.path {
-            language_from_path(path)
-        } else {
-            None
-        })
+        self.buffer.borrow_mut().set_language(self.get_language());
+    }
+
+    fn get_language(&self) -> Option<&'static Language> {
+        if let Some(lang) = self.language_override {
+            return lang;
+        }
+
+        if let Some(path) = &self.path {
+            let settings = Settings::borrow();
+            if let Some(lang) = process_file_associations(&settings.file_associations, path) {
+                return Some(lang);
+            }
+            if let Some(lang) = process_file_associations(FILE_ASSOCIATIONS, path) {
+                return Some(lang);
+            }
+        }
+
+        None
     }
 }
 

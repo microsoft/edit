@@ -36,6 +36,7 @@ use std::str;
 
 pub use gap_buffer::GapBuffer;
 use stdext::arena::{Arena, ArenaString, scratch_arena};
+use stdext::{ReplaceRange as _, minmax, slice_as_uninit_mut, slice_copy_safe};
 
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;

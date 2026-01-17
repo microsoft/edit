@@ -25,7 +25,6 @@ pub mod clipboard;
 pub mod document;
 pub mod framebuffer;
 pub mod fuzzy;
-pub mod glob;
 pub mod hash;
 pub mod helpers;
 pub mod icu;

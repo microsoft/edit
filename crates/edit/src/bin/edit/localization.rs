@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use edit::helpers::AsciiStringHelpers;
 use edit::sys;
+use stdext::AsciiStringHelpers as _;
 use stdext::arena::scratch_arena;
 
 include!(concat!(env!("OUT_DIR"), "/i18n_edit.rs"));

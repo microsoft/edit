@@ -1,36 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::path::Path;
-
 use lsh::engine::*;
 use stdext::arena::{Arena, scratch_arena};
 
 use crate::document::ReadableDocument;
-use crate::glob::glob_match;
 use crate::helpers::*;
 use crate::lsh::definitions::*;
 use crate::{simd, unicode};
 
 const MAX_LINE_LEN: usize = 32 * KIBI;
-
-#[allow(clippy::transmute_bytes_to_str)]
-pub fn language_from_path(path: &Path) -> Option<&'static Language> {
-    let path = path.as_os_str().as_encoded_bytes();
-
-    for l in LANGUAGES {
-        for pattern in l.paths {
-            if glob_match(pattern.as_bytes(), path) {
-                return Some(l);
-            }
-        }
-    }
-
-    None
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub struct State {}
 
 #[derive(Clone)]
 pub struct Highlighter<'a> {

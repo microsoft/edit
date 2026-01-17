@@ -75,7 +75,7 @@ impl<'a> Value<'a> {
     }
 
     /// Returns the value as an array, if it is one.
-    pub fn as_array(&'a self) -> Option<&'a [Value<'a>]> {
+    pub fn as_array(&self) -> Option<&'a [Value<'a>]> {
         match self {
             Value::Array(arr) => Some(arr),
             _ => None,
@@ -83,7 +83,7 @@ impl<'a> Value<'a> {
     }
 
     /// Returns the value as an object, if it is one.
-    pub fn as_object(&'a self) -> Option<Object<'a>> {
+    pub fn as_object(&self) -> Option<Object<'a>> {
         match self {
             Value::Object(entries) => Some(Object { entries }),
             _ => None,
@@ -150,7 +150,7 @@ impl<'a> Object<'a> {
 }
 
 /// Parses a JSONC string into a Value.
-pub fn parse<'a>(arena: &'a Arena, input: &'a str) -> Result<Value<'a>, ParseError> {
+pub fn parse<'a>(arena: &'a Arena, input: &str) -> Result<Value<'a>, ParseError> {
     let mut parser = Parser::new(arena, input);
     let value = parser.parse_value(0)?;
     parser.skip_whitespace_and_comments()?;
@@ -160,14 +160,14 @@ pub fn parse<'a>(arena: &'a Arena, input: &'a str) -> Result<Value<'a>, ParseErr
     Ok(value)
 }
 
-struct Parser<'a> {
+struct Parser<'a, 'i> {
     arena: &'a Arena,
-    input: &'a str,
+    input: &'i str,
     pos: usize,
 }
 
-impl<'a> Parser<'a> {
-    fn new(arena: &'a Arena, input: &'a str) -> Self {
+impl<'a, 'i> Parser<'a, 'i> {
+    fn new(arena: &'a Arena, input: &'i str) -> Self {
         Self { arena, input, pos: 0 }
     }
 
@@ -310,17 +310,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     if !has_escapes {
-                        // Fast path: if we haven't seen any escapes yet, we might be able
-                        // to just return a slice of the input
                         let start = self.pos - ch.len_utf8();
-                        let end = self.find_string_end()?;
-                        if end.is_some() {
-                            // find_string_end leaves pos at the closing quote
-                            let slice = &self.input[start..self.pos];
-                            self.expect('"')?;
-                            return Ok(Value::String(slice));
-                        }
-                        // If we hit an escape or the end, fall back to the slow path
                         result.push_str(&self.input[start..self.pos]);
                     } else {
                         result.push(ch);
@@ -331,22 +321,6 @@ impl<'a> Parser<'a> {
 
         // Copy the string data to arena to ensure proper lifetime
         Ok(Value::String(result.leak()))
-    }
-
-    // Fast path helper: scan ahead to see if the rest of the string has no escapes
-    fn find_string_end(&mut self) -> Result<Option<()>, ParseError> {
-        let start = self.pos;
-        while let Some(ch) = self.peek() {
-            match ch {
-                '"' => return Ok(Some(())),
-                '\\' | '\x00'..='\x1F' => {
-                    self.pos = start;
-                    return Ok(None);
-                }
-                _ => self.advance(),
-            }
-        }
-        Err(ParseError::new("Unterminated string", self.pos))
     }
 
     fn parse_unicode_escape(&mut self) -> Result<char, ParseError> {
