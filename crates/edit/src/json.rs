@@ -1,16 +1,19 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! A simple JSONC parser. It's designed for parsing our small settings files.
+//! A simple JSONC parser with trailing comma support.
+//!
+//! It's designed for parsing our small settings files,
+//! but its performance is rather competitive in general.
 
 use std::fmt;
+use std::hint::unreachable_unchecked;
 
 use stdext::arena::{Arena, ArenaString};
 
 /// Maximum nesting depth to prevent stack overflow.
 const MAX_DEPTH: usize = 64;
 
-/// A JSON value.
 #[derive(Debug, Clone)]
 pub enum Value<'a> {
     Null,
@@ -21,14 +24,12 @@ pub enum Value<'a> {
     Object(&'a [ObjectEntry<'a>]),
 }
 
-/// An entry in a JSON object.
 #[derive(Debug, Clone)]
 pub struct ObjectEntry<'a> {
     pub key: &'a str,
     pub value: Value<'a>,
 }
 
-/// A parse error.
 #[derive(Debug, Clone)]
 pub struct ParseError {
     message: String,
@@ -44,13 +45,13 @@ impl fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 impl ParseError {
+    #[cold]
     fn new(message: impl Into<String>, position: usize) -> Self {
         Self { message: message.into(), position }
     }
 }
 
 impl<'a> Value<'a> {
-    /// Returns the value as a boolean, if it is one.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(b) => Some(*b),
@@ -58,7 +59,6 @@ impl<'a> Value<'a> {
         }
     }
 
-    /// Returns the value as a number, if it is one.
     pub fn as_number(&self) -> Option<f64> {
         match self {
             Value::Number(n) => Some(*n),
@@ -66,7 +66,6 @@ impl<'a> Value<'a> {
         }
     }
 
-    /// Returns the value as a string, if it is one.
     pub fn as_str(&self) -> Option<&'a str> {
         match self {
             Value::String(s) => Some(s),
@@ -74,7 +73,6 @@ impl<'a> Value<'a> {
         }
     }
 
-    /// Returns the value as an array, if it is one.
     pub fn as_array(&self) -> Option<&'a [Value<'a>]> {
         match self {
             Value::Array(arr) => Some(arr),
@@ -82,7 +80,6 @@ impl<'a> Value<'a> {
         }
     }
 
-    /// Returns the value as an object, if it is one.
     pub fn as_object(&self) -> Option<Object<'a>> {
         match self {
             Value::Object(entries) => Some(Object { entries }),
@@ -90,66 +87,54 @@ impl<'a> Value<'a> {
         }
     }
 
-    /// Returns true if the value is null.
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
 }
 
-/// A JSON object with convenient lookup methods.
 #[derive(Debug, Clone, Copy)]
 pub struct Object<'a> {
     entries: &'a [ObjectEntry<'a>],
 }
 
 impl<'a> Object<'a> {
-    /// Gets the value associated with a key.
     pub fn get(&self, key: &str) -> Option<&'a Value<'a>> {
         self.entries.iter().find(|e| e.key == key).map(|e| &e.value)
     }
 
-    /// Gets a boolean value.
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         self.get(key).and_then(Value::as_bool)
     }
 
-    /// Gets a number value.
     pub fn get_number(&self, key: &str) -> Option<f64> {
         self.get(key).and_then(Value::as_number)
     }
 
-    /// Gets a string value.
     pub fn get_str(&self, key: &str) -> Option<&'a str> {
         self.get(key).and_then(Value::as_str)
     }
 
-    /// Gets an array value.
     pub fn get_array(&self, key: &str) -> Option<&'a [Value<'a>]> {
         self.get(key).and_then(Value::as_array)
     }
 
-    /// Gets an object value.
     pub fn get_object(&self, key: &str) -> Option<Object<'a>> {
         self.get(key).and_then(Value::as_object)
     }
 
-    /// Returns an iterator over the entries.
     pub fn iter(&self) -> impl Iterator<Item = &'a ObjectEntry<'a>> {
         self.entries.iter()
     }
 
-    /// Returns the number of entries.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Returns true if the object is empty.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 }
 
-/// Parses a JSONC string into a Value.
 pub fn parse<'a>(arena: &'a Arena, input: &str) -> Result<Value<'a>, ParseError> {
     let mut parser = Parser::new(arena, input);
     let value = parser.parse_value(0)?;
@@ -163,12 +148,13 @@ pub fn parse<'a>(arena: &'a Arena, input: &str) -> Result<Value<'a>, ParseError>
 struct Parser<'a, 'i> {
     arena: &'a Arena,
     input: &'i str,
+    bytes: &'i [u8],
     pos: usize,
 }
 
 impl<'a, 'i> Parser<'a, 'i> {
     fn new(arena: &'a Arena, input: &'i str) -> Self {
-        Self { arena, input, pos: 0 }
+        Self { arena, input, bytes: input.as_bytes(), pos: 0 }
     }
 
     fn parse_value(&mut self, depth: usize) -> Result<Value<'a>, ParseError> {
@@ -179,15 +165,19 @@ impl<'a, 'i> Parser<'a, 'i> {
 
         self.skip_whitespace_and_comments()?;
 
-        let ch = self.peek().ok_or_else(|| ParseError::new("Unexpected end of input", self.pos))?;
+        let ch = match self.peek() {
+            Some(ch) => ch,
+            None => return Err(ParseError::new("Unexpected end of input", self.pos)),
+        };
 
         match ch {
             'n' => self.parse_null(),
-            't' | 'f' => self.parse_bool(),
+            't' => self.parse_true(),
+            'f' => self.parse_false(),
+            '-' | '0'..='9' => self.parse_number(),
             '"' => self.parse_string(),
             '[' => self.parse_array(depth),
             '{' => self.parse_object(depth),
-            '-' | '0'..='9' => self.parse_number(),
             _ => Err(ParseError::new(format!("Unexpected character '{}'", ch), self.pos)),
         }
     }
@@ -197,364 +187,297 @@ impl<'a, 'i> Parser<'a, 'i> {
         Ok(Value::Null)
     }
 
-    fn parse_bool(&mut self) -> Result<Value<'a>, ParseError> {
-        if self.peek() == Some('t') {
-            self.expect_str("true")?;
-            Ok(Value::Bool(true))
-        } else {
-            self.expect_str("false")?;
-            Ok(Value::Bool(false))
-        }
+    fn parse_true(&mut self) -> Result<Value<'a>, ParseError> {
+        self.expect_str("true")?;
+        Ok(Value::Bool(true))
+    }
+
+    fn parse_false(&mut self) -> Result<Value<'a>, ParseError> {
+        self.expect_str("false")?;
+        Ok(Value::Bool(false))
     }
 
     fn parse_number(&mut self) -> Result<Value<'a>, ParseError> {
         let start = self.pos;
 
-        // Optional minus
-        if self.peek() == Some('-') {
-            self.advance();
+        while self.pos < self.bytes.len()
+            && matches!(self.bytes[self.pos], b'0'..=b'9' | b'.' | b'-' | b'+' | b'e' | b'E')
+        {
+            self.pos += 1;
         }
 
-        // Integer part
-        if self.peek() == Some('0') {
-            self.advance();
-        } else if matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                self.advance();
-            }
+        if let Ok(num) = self.input[start..self.pos].parse::<f64>()
+            && num.is_finite()
+        {
+            Ok(Value::Number(num))
         } else {
-            return Err(ParseError::new("Invalid number", self.pos));
+            Err(ParseError::new("Invalid number", start))
         }
-
-        // Fractional part
-        if self.peek() == Some('.') {
-            self.advance();
-            if !matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                return Err(ParseError::new("Invalid number: expected digit after '.'", self.pos));
-            }
-            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                self.advance();
-            }
-        }
-
-        // Exponent part
-        if matches!(self.peek(), Some('e') | Some('E')) {
-            self.advance();
-            if matches!(self.peek(), Some('+') | Some('-')) {
-                self.advance();
-            }
-            if !matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                return Err(ParseError::new(
-                    "Invalid number: expected digit in exponent",
-                    self.pos,
-                ));
-            }
-            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                self.advance();
-            }
-        }
-
-        let num_str = &self.input[start..self.pos];
-        let num = num_str.parse::<f64>().map_err(|_| ParseError::new("Invalid number", start))?;
-
-        // Check for infinity/NaN which could be problematic
-        if !num.is_finite() {
-            return Err(ParseError::new("Number overflow", start));
-        }
-
-        Ok(Value::Number(num))
     }
 
     fn parse_string(&mut self) -> Result<Value<'a>, ParseError> {
-        self.expect('"')?;
+        self.expect(b'"')?;
 
         let mut result = ArenaString::new_in(self.arena);
-        let mut has_escapes = false;
 
         loop {
-            let ch = self.next().ok_or_else(|| ParseError::new("Unterminated string", self.pos))?;
+            if self.pos >= self.bytes.len() {
+                return Err(ParseError::new("Unterminated string", self.pos));
+            }
 
-            match ch {
-                '"' => break,
-                '\\' => {
-                    has_escapes = true;
-                    let escaped = self
-                        .next()
-                        .ok_or_else(|| ParseError::new("Unterminated string escape", self.pos))?;
-                    match escaped {
-                        '"' => result.push('"'),
-                        '\\' => result.push('\\'),
-                        '/' => result.push('/'),
-                        'b' => result.push('\x08'),
-                        'f' => result.push('\x0C'),
-                        'n' => result.push('\n'),
-                        'r' => result.push('\r'),
-                        't' => result.push('\t'),
-                        'u' => {
-                            let code = self.parse_unicode_escape()?;
-                            result.push(code);
-                        }
-                        _ => {
-                            return Err(ParseError::new(
-                                format!("Invalid escape sequence '\\{}'", escaped),
-                                self.pos - 2,
-                            ));
-                        }
-                    }
-                }
-                '\x00'..='\x1F' => {
-                    return Err(ParseError::new(
-                        "Unescaped control character in string",
-                        self.pos - 1,
-                    ));
+            let b = self.bytes[self.pos];
+            self.pos += 1;
+
+            match b {
+                b'"' => break,
+                b'\\' => self.parse_escape(&mut result)?,
+                ..=0x1f => {
+                    return Err(ParseError::new("Unexpected control character", self.pos - 1));
                 }
                 _ => {
-                    if !has_escapes {
-                        let start = self.pos - ch.len_utf8();
-                        result.push_str(&self.input[start..self.pos]);
-                    } else {
-                        result.push(ch);
+                    let beg = self.pos - 1;
+
+                    while self.pos < self.bytes.len()
+                        && !matches!(self.bytes[self.pos], b'"' | b'\\' | ..=0x1f)
+                    {
+                        self.pos += 1;
                     }
+
+                    result.push_str(&self.input[beg..self.pos]);
                 }
             }
         }
 
-        // Copy the string data to arena to ensure proper lifetime
         Ok(Value::String(result.leak()))
     }
 
-    fn parse_unicode_escape(&mut self) -> Result<char, ParseError> {
-        let mut code = 0u32;
-        for _ in 0..4 {
-            let ch = self
-                .next()
-                .ok_or_else(|| ParseError::new("Incomplete unicode escape", self.pos))?;
-            let digit = ch
-                .to_digit(16)
-                .ok_or_else(|| ParseError::new("Invalid unicode escape", self.pos - 1))?;
-            code = code * 16 + digit;
+    #[cold]
+    fn parse_escape(&mut self, result: &mut ArenaString) -> Result<(), ParseError> {
+        if self.pos >= self.bytes.len() {
+            return Err(ParseError::new("Unterminated string escape", self.pos));
         }
 
-        // Handle UTF-16 surrogate pairs
-        if (0xD800..=0xDBFF).contains(&code) {
-            // High surrogate
-            if self.peek() == Some('\\') {
-                let pos = self.pos;
-                self.advance();
-                if self.peek() == Some('u') {
-                    self.advance();
-                    let mut low = 0u32;
-                    for _ in 0..4 {
-                        let ch = self.next().ok_or_else(|| {
-                            ParseError::new("Incomplete unicode escape", self.pos)
-                        })?;
-                        let digit = ch.to_digit(16).ok_or_else(|| {
-                            ParseError::new("Invalid unicode escape", self.pos - 1)
-                        })?;
-                        low = low * 16 + digit;
-                    }
+        let b = self.bytes[self.pos];
+        self.pos += 1;
 
-                    if (0xDC00..=0xDFFF).contains(&low) {
-                        // Valid surrogate pair
-                        code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
-                    } else {
-                        return Err(ParseError::new("Invalid surrogate pair", pos));
-                    }
-                } else {
-                    self.pos = pos;
-                }
+        let ch = match b {
+            b'"' => b'"',
+            b'\\' => b'\\',
+            b'/' => b'/',
+            b'b' => b'\x08',
+            b'f' => b'\x0C',
+            b'n' => b'\n',
+            b'r' => b'\r',
+            b't' => b'\t',
+            b'u' => return self.parse_unicode_escape(result),
+            _ => {
+                return Err(ParseError::new(
+                    format!("Invalid escape sequence '\\{}'", b as char),
+                    self.pos - 2,
+                ));
             }
-        } else if (0xDC00..=0xDFFF).contains(&code) {
-            // Low surrogate without high surrogate
-            return Err(ParseError::new("Invalid surrogate pair", self.pos - 6));
+        };
+
+        result.push(ch as char);
+        Ok(())
+    }
+
+    #[cold]
+    fn parse_unicode_escape(&mut self, result: &mut ArenaString) -> Result<(), ParseError> {
+        let start = self.pos - 2; // parse_escape() already advanced past "\u"
+        let mut code = self.parse_hex4()?;
+
+        if (0xd800..=0xdbff).contains(&code) {
+            if self.is_str("\\u")
+                && let _ = self.advance(2)
+                && let Ok(low) = self.parse_hex4()
+                && (0xdc00..=0xdfff).contains(&low)
+            {
+                code = 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
+            } else {
+                code = u32::MAX;
+            };
         }
 
-        char::from_u32(code).ok_or_else(|| ParseError::new("Invalid unicode code point", self.pos))
+        match char::from_u32(code) {
+            Some(c) => {
+                result.push(c);
+                Ok(())
+            }
+            None => Err(ParseError::new("Invalid unicode code point", start)),
+        }
+    }
+
+    fn parse_hex4(&mut self) -> Result<u32, ParseError> {
+        let start = self.pos - 2; // parse_unicode_escape() already advanced past "\u"
+
+        self.bytes
+            .get(self.pos..self.pos + 4)
+            .and_then(|b| {
+                self.pos += 4;
+                b.iter().try_fold(0u32, |acc, &b| {
+                    let d = (b as char).to_digit(16)?;
+                    Some((acc << 4) | d)
+                })
+            })
+            .ok_or_else(|| ParseError::new("Invalid unicode escape", start))
     }
 
     fn parse_array(&mut self, depth: usize) -> Result<Value<'a>, ParseError> {
-        self.expect('[')?;
-        self.skip_whitespace_and_comments()?;
-
-        if self.peek() == Some(']') {
-            self.advance();
-            return Ok(Value::Array(&[]));
-        }
-
         let mut values = Vec::new_in(self.arena);
+        let mut expects_comma = false;
+
+        self.expect(b'[')?;
 
         loop {
-            let value = self.parse_value(depth + 1)?;
-            values.push(value);
-
             self.skip_whitespace_and_comments()?;
 
             match self.peek() {
-                Some(',') => {
-                    self.advance();
-                    self.skip_whitespace_and_comments()?;
-                    // Allow trailing comma before ]
-                    if self.peek() == Some(']') {
-                        break;
-                    }
-                }
-                Some(']') => break,
-                Some(ch) => {
-                    return Err(ParseError::new(
-                        format!("Expected ',' or ']', found '{}'", ch),
-                        self.pos,
-                    ));
-                }
                 None => return Err(ParseError::new("Unterminated array", self.pos)),
+                Some(']') => break,
+                Some(',') => {
+                    if !expects_comma {
+                        return Err(ParseError::new("Unexpected comma", self.pos));
+                    }
+
+                    self.advance(1);
+                    self.skip_whitespace_and_comments()?;
+                    expects_comma = false;
+                }
+                Some(_) => {
+                    if expects_comma {
+                        return Err(ParseError::new("Expected comma or closing bracket", self.pos));
+                    }
+
+                    values.push(self.parse_value(depth + 1)?);
+                    expects_comma = true;
+                }
             }
         }
 
-        self.expect(']')?;
+        self.expect(b']')?;
         Ok(Value::Array(values.leak()))
     }
 
     fn parse_object(&mut self, depth: usize) -> Result<Value<'a>, ParseError> {
-        self.expect('{')?;
-        self.skip_whitespace_and_comments()?;
-
-        if self.peek() == Some('}') {
-            self.advance();
-            return Ok(Value::Object(&[]));
-        }
-
         let mut entries = Vec::new_in(self.arena);
+        let mut expects_comma = false;
+
+        self.expect(b'{')?;
 
         loop {
             self.skip_whitespace_and_comments()?;
 
-            // Parse key
-            if self.peek() != Some('"') {
-                return Err(ParseError::new("Expected string key", self.pos));
-            }
-            let key = match self.parse_string()? {
-                Value::String(s) => s,
-                _ => unreachable!(),
-            };
-
-            self.skip_whitespace_and_comments()?;
-            self.expect(':')?;
-
-            let value = self.parse_value(depth + 1)?;
-            entries.push(ObjectEntry { key, value });
-
-            self.skip_whitespace_and_comments()?;
-
             match self.peek() {
+                None => return Err(ParseError::new("Unterminated object", self.pos)),
                 Some(',') => {
-                    self.advance();
-                    self.skip_whitespace_and_comments()?;
-                    // Allow trailing comma before }
-                    if self.peek() == Some('}') {
-                        break;
+                    if !expects_comma {
+                        return Err(ParseError::new("Unexpected comma", self.pos));
                     }
+
+                    self.advance(1);
+                    self.skip_whitespace_and_comments()?;
+                    expects_comma = false;
                 }
                 Some('}') => break,
-                Some(ch) => {
-                    return Err(ParseError::new(
-                        format!("Expected ',' or '}}', found '{}'", ch),
-                        self.pos,
-                    ));
+                Some(_) => {
+                    if expects_comma {
+                        return Err(ParseError::new("Expected comma or closing brace", self.pos));
+                    }
+
+                    let key = match self.parse_string()? {
+                        Value::String(s) => s,
+                        // The entire point of parse_string is to return a string.
+                        // If that fails, we all should start farming potatoes.
+                        // This is essentially an unwrap_unchecked().
+                        _ => unsafe { unreachable_unchecked() },
+                    };
+                    self.skip_whitespace_and_comments()?;
+                    self.expect(b':')?;
+
+                    let value = self.parse_value(depth + 1)?;
+                    entries.push(ObjectEntry { key, value });
+                    expects_comma = true;
                 }
-                None => return Err(ParseError::new("Unterminated object", self.pos)),
             }
         }
 
-        self.expect('}')?;
+        self.expect(b'}')?;
         Ok(Value::Object(entries.leak()))
     }
 
     fn skip_whitespace_and_comments(&mut self) -> Result<(), ParseError> {
         loop {
-            match self.peek() {
-                Some(' ') | Some('\t') | Some('\n') | Some('\r') => {
-                    self.advance();
+            loop {
+                if self.pos >= self.bytes.len() {
+                    return Ok(());
                 }
-                Some('/') => {
-                    let pos = self.pos;
-                    self.advance();
-                    match self.peek() {
-                        Some('/') => {
-                            // Line comment
-                            self.advance();
-                            while matches!(self.peek(), Some(c) if c != '\n') {
-                                self.advance();
-                            }
-                        }
-                        Some('*') => {
-                            // Block comment
-                            self.advance();
-                            let mut closed = false;
-                            while let Some(ch) = self.next() {
-                                if ch == '*' && self.peek() == Some('/') {
-                                    self.advance();
-                                    closed = true;
-                                    break;
-                                }
-                            }
-                            if !closed {
-                                return Err(ParseError::new("Unterminated block comment", pos));
-                            }
-                        }
-                        _ => {
-                            // Not a comment, backtrack
-                            self.pos = pos;
-                            break;
-                        }
+                match self.bytes[self.pos] {
+                    b' ' | b'\t' | b'\n' | b'\r' => self.pos += 1,
+                    _ => break,
+                }
+            }
+
+            if self.is_str("//") {
+                self.pos += 2;
+                while self.pos < self.bytes.len() && self.bytes[self.pos] != b'\n' {
+                    self.pos += 1;
+                }
+            } else if self.is_str("/*") {
+                let start = self.pos;
+                self.pos += 2;
+                loop {
+                    while self.pos < self.bytes.len() && self.bytes[self.pos] != b'*' {
+                        self.pos += 1;
                     }
+                    if self.pos >= self.bytes.len() {
+                        return Err(ParseError::new("Unterminated block comment", start));
+                    }
+                    if self.is_str("*/") {
+                        self.pos += 2;
+                        break;
+                    }
+                    self.pos += 1;
                 }
-                _ => break,
+            } else {
+                return Ok(());
             }
         }
-        Ok(())
     }
 
-    fn expect(&mut self, expected: char) -> Result<(), ParseError> {
-        match self.next() {
-            Some(ch) if ch == expected => Ok(()),
-            Some(ch) => Err(ParseError::new(
-                format!("Expected '{}', found '{}'", expected, ch),
-                self.pos - 1,
-            )),
-            None => Err(ParseError::new(
-                format!("Expected '{}', found end of input", expected),
-                self.pos,
-            )),
+    fn expect(&mut self, expected: u8) -> Result<(), ParseError> {
+        if self.bytes.get(self.pos) == Some(&expected) {
+            self.pos += 1;
+            Ok(())
+        } else {
+            Err(ParseError::new(format!("Expected '{}'", expected as char), self.pos))
         }
     }
 
     fn expect_str(&mut self, expected: &str) -> Result<(), ParseError> {
-        let start = self.pos;
-        for expected_ch in expected.chars() {
-            match self.next() {
-                Some(ch) if ch == expected_ch => {}
-                _ => return Err(ParseError::new(format!("Expected '{}'", expected), start)),
-            }
+        if self.is_str(expected) {
+            self.pos += expected.len();
+            Ok(())
+        } else {
+            Err(ParseError::new(format!("Expected '{}'", expected), self.pos))
         }
-        Ok(())
+    }
+
+    fn is_str(&self, expected: &str) -> bool {
+        self.bytes.get(self.pos..self.pos + expected.len()) == Some(expected.as_bytes())
     }
 
     fn peek(&self) -> Option<char> {
-        self.input[self.pos..].chars().next()
+        if self.pos < self.bytes.len() { Some(self.bytes[self.pos] as char) } else { None }
     }
 
-    fn next(&mut self) -> Option<char> {
-        let ch = self.peek()?;
-        self.pos += ch.len_utf8();
-        Some(ch)
-    }
-
-    fn advance(&mut self) {
-        if let Some(ch) = self.peek() {
-            self.pos += ch.len_utf8();
-        }
+    fn advance(&mut self, num: usize) {
+        self.pos += num;
     }
 }
 
+#[allow(non_snake_case)]
+#[allow(clippy::invisible_characters)]
 #[cfg(test)]
 mod tests {
     use stdext::arena::scratch_arena;

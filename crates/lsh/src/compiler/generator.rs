@@ -190,49 +190,9 @@ impl TryFrom<u32> for HighlightKind {{
             );
         }
 
-        output.push_str(
-            "
-#[repr(C)]
-#[derive(Default, Clone, Copy)]
-pub struct Registers {
-    pub zero: u32, // x0 = Zero
-    pub pc: u32,   // x1 = ProgramCounter
-    pub off: u32,  // x2 = InputOffset
-    pub hs: u32,   // z3 = HighlightStart
-    pub hk: u32,   // x4 = HighlightKind
-    pub x5: u32,
-    pub x6: u32,
-    pub x7: u32,
-    pub x8: u32,
-    pub x9: u32,
-    pub x10: u32,
-    pub x11: u32,
-    pub x12: u32,
-    pub x13: u32,
-    pub x14: u32,
-    pub x15: u32,
-}
-
-impl Registers {
-    #[inline(always)]
-    pub fn get(&self, reg: usize) -> u32 {
-        debug_assert!(reg < 16);
-        unsafe { (self as *const _ as *const u32).add(reg).read() }
-    }
-
-    #[inline(always)]
-    pub fn set(&mut self, reg: usize, val: u32) {
-        debug_assert!(reg < 16);
-        unsafe { (self as *mut _ as *mut u32).add(reg).write(val) }
-    }
-}
-
-",
-        );
-
-        output.push_str("/**\n");
+        output.push_str("/*\n");
         output.push_str(&self.compiler.as_mermaid());
-        output.push_str("**/\n");
+        output.push_str("*/\n");
 
         output.push_str("\n#[rustfmt::skip] pub const LANGUAGES: &[Language] = &[\n");
         for ep in &assembly.entrypoints {

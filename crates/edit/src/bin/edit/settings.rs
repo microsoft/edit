@@ -1,8 +1,7 @@
-use std::cell::Ref;
 use std::fs::read_to_string;
 use std::path::PathBuf;
 
-use edit::cell::SemiRefCell;
+use edit::cell::{Ref, SemiRefCell};
 use edit::lsh::{LANGUAGES, Language};
 use edit::{apperr, json};
 use stdext::arena::scratch_arena;
@@ -28,7 +27,7 @@ impl Settings {
 
     pub fn reload() -> apperr::Result<()> {
         let s = Self::load()?;
-        SETTINGS.0.replace(s);
+        *SETTINGS.0.borrow_mut() = s;
         Ok(())
     }
 
