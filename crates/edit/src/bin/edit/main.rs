@@ -42,6 +42,9 @@ const SCRATCH_ARENA_CAPACITY: usize = 128 * MEBI;
 #[cfg(target_pointer_width = "64")]
 const SCRATCH_ARENA_CAPACITY: usize = 512 * MEBI;
 
+// NOTE: Before our main() gets called, Rust initializes its stdlib. This pulls in the entire
+// std::io::{stdin, stdout, stderr} machinery, and probably some more, which amounts to about 20KB.
+// It can technically be avoided nowadays with `#![no_main]`. Maybe a fun project for later? :)
 fn main() -> process::ExitCode {
     if cfg!(debug_assertions) {
         let hook = std::panic::take_hook();
