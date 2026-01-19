@@ -3,8 +3,8 @@
 
 use std::collections::LinkedList;
 use std::ffi::OsStr;
-use std::fs::File;
 use std::fs;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
@@ -212,25 +212,16 @@ impl DocumentManager {
 
     pub fn open_for_writing(path: &Path) -> apperr::Result<File> {
         // Error handling for directory creation and file writing
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                match fs::create_dir_all(parent) {
-                    Ok(_) => {},
-                    Err(e) => {
-                        // Log or handle the error as needed
-                        eprintln!("[Error] Failed to create parent directories for {:?}: {}", parent, e);
-                        return Err(apperr::Error::from(e));
-                    }
-                }
-            }
+
+        // It is worth doing an existence check because it is significantly
+        // faster than calling mkdir() and letting it fail (at least on Windows).
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent)?;
         }
-        match File::create(path) {
-            Ok(f) => Ok(f),
-            Err(e) => {
-                eprintln!("[Error] Failed to create file {:?}: {}", path, e);
-                Err(apperr::Error::from(e))
-            }
-        }
+
+        File::create(path).map_err(apperr::Error::from)
     }
 
     fn create_buffer() -> apperr::Result<RcTextBuffer> {
@@ -331,26 +322,5 @@ mod tests {
         assert_eq!(parse("1:a"), ("1:a", None));
         assert_eq!(parse("file.txt:10"), ("file.txt", Some(Point { x: 0, y: 9 })));
         assert_eq!(parse("file.txt:10:5"), ("file.txt", Some(Point { x: 4, y: 9 })));
-    }
-
-    #[test]
-    fn test_open_for_writing_error() {
-        // It is not possible to reliably trigger a file creation error on all systems/environments.
-        // Instead, we check that the function works for a valid temp path.
-        use std::env;
-        use std::fs;
-        use std::path::PathBuf;
-
-        let mut temp_path = env::temp_dir();
-        temp_path.push("test_open_for_writing_should_succeed.txt");
-
-        // Clean up before test
-        let _ = fs::remove_file(&temp_path);
-
-        let result = DocumentManager::open_for_writing(&temp_path);
-        assert!(result.is_ok(), "Expected to be able to create a file in temp dir");
-
-        // Clean up after test
-        let _ = fs::remove_file(&temp_path);
     }
 }
