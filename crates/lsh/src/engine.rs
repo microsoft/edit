@@ -8,7 +8,6 @@ use std::path::Path;
 use stdext::arena::{Arena, scratch_arena};
 
 use crate::compiler::Registers;
-use crate::glob::glob_match;
 
 pub struct Language {
     pub id: &'static str,
@@ -20,24 +19,6 @@ impl PartialEq for &'static Language {
     fn eq(&self, other: &Self) -> bool {
         std::ptr::eq(*self, *other)
     }
-}
-
-pub fn process_file_associations<T>(
-    associations: &[(T, &'static Language)],
-    path: &Path,
-) -> Option<&'static Language>
-where
-    T: AsRef<[u8]>,
-{
-    let path = path.as_os_str().as_encoded_bytes();
-
-    for a in associations {
-        if glob_match(a.0.as_ref(), path) {
-            return Some(a.1);
-        }
-    }
-
-    None
 }
 
 #[derive(Clone, PartialEq, Eq)]

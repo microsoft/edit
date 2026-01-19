@@ -9,12 +9,10 @@ use std::ops::Range;
 use std::path::Path;
 use std::{mem, vec};
 
-use ::lsh::engine::process_file_associations;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
-use edit::lsh::{FILE_ASSOCIATIONS, Highlighter, LANGUAGES};
 use edit::simd::MemsetSafe;
-use edit::{buffer, hash, json, oklab, simd, unicode};
+use edit::{buffer, hash, json, lsh, oklab, simd, unicode};
 use stdext::arena::{Arena, scratch_arena};
 use stdext::{arena, varint};
 
@@ -177,8 +175,8 @@ fn bench_json(c: &mut Criterion) {
 fn bench_lsh(c: &mut Criterion) {
     let bytes = include_bytes!("../../../assets/highlighting-tests/markdown.md");
     let bytes = &bytes[..];
-    let lang = LANGUAGES.iter().find(|lang| lang.id == "markdown").unwrap();
-    let highlighter = Highlighter::new(black_box(&bytes), lang);
+    let lang = lsh::LANGUAGES.iter().find(|lang| lang.id == "markdown").unwrap();
+    let highlighter = lsh::Highlighter::new(black_box(&bytes), lang);
 
     c.benchmark_group("lsh").throughput(Throughput::Bytes(bytes.len() as u64)).bench_function(
         "markdown",
@@ -198,7 +196,7 @@ fn bench_lsh(c: &mut Criterion) {
 
     c.benchmark_group("lsh").bench_function("process_file_associations", |b| {
         let path = Path::new("/some/long/path/to/file/foo.bar.foo.bar.foo.bar");
-        b.iter(|| process_file_associations(FILE_ASSOCIATIONS, black_box(path)))
+        b.iter(|| lsh::process_file_associations(lsh::FILE_ASSOCIATIONS, black_box(path)))
     });
 }
 

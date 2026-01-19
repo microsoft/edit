@@ -8,9 +8,8 @@ use std::path::{Path, PathBuf};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
-use edit::lsh::{FILE_ASSOCIATIONS, Language};
+use edit::lsh::{FILE_ASSOCIATIONS, Language, process_file_associations};
 use edit::{apperr, path, sys};
-use lsh::engine::process_file_associations;
 
 use crate::settings::Settings;
 use crate::state::DisplayablePathBuf;
