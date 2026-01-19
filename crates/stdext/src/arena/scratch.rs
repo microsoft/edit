@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::alloc::AllocError;
+use std::io;
 use std::ops::Deref;
 
 #[cfg(debug_assertions)]
@@ -74,7 +74,7 @@ mod single_threaded {
     /// Initialize the scratch arenas with a given capacity.
     /// Call this before using [`scratch_arena`].
     #[allow(dead_code)]
-    pub fn init(capacity: usize) -> Result<(), AllocError> {
+    pub fn init(capacity: usize) -> io::Result<()> {
         unsafe {
             for s in &mut S_SCRATCH[..] {
                 *s = release::Arena::new(capacity)?;
@@ -132,7 +132,7 @@ mod multi_threaded {
     static INIT_SIZE: AtomicUsize = AtomicUsize::new(128 * MEBI);
 
     /// Sets the default scratch arena size.
-    pub fn init(capacity: usize) -> Result<(), AllocError> {
+    pub fn init(capacity: usize) -> io::Result<()> {
         if capacity != 0 {
             INIT_SIZE.store(capacity, Ordering::Relaxed);
         }

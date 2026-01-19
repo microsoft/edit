@@ -7,7 +7,7 @@ use std::alloc::{AllocError, Allocator, Layout};
 use std::cell::Cell;
 use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
-use std::{mem, slice};
+use std::{io, mem, slice};
 
 use crate::{cold_path, sys};
 
@@ -65,7 +65,7 @@ impl Arena {
         }
     }
 
-    pub fn new(capacity: usize) -> Result<Self, AllocError> {
+    pub fn new(capacity: usize) -> io::Result<Self> {
         let capacity = (capacity.max(1) + ALLOC_CHUNK_SIZE - 1) & !(ALLOC_CHUNK_SIZE - 1);
         let base = unsafe { sys::virtual_reserve(capacity)? };
 

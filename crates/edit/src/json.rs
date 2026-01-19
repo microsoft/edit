@@ -11,8 +11,37 @@ use std::hint::unreachable_unchecked;
 
 use stdext::arena::{Arena, ArenaString};
 
+use crate::unicode::MeasurementConfig;
+
 /// Maximum nesting depth to prevent stack overflow.
 const MAX_DEPTH: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseErrorKind {
+    /// Invalid JSON syntax
+    Syntax,
+    /// Maximum nesting depth exceeded
+    MaxDepth,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParseError {
+    kind: ParseErrorKind,
+    line: usize,
+    column: usize,
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self.kind {
+            ParseErrorKind::Syntax => "Invalid JSON",
+            ParseErrorKind::MaxDepth => "JSON too deeply nested",
+        };
+        write!(f, "{}:{}: {}", self.line, self.column, message)
+    }
+}
+
+impl std::error::Error for ParseError {}
 
 #[derive(Debug, Clone)]
 pub enum Value<'a> {
@@ -21,37 +50,14 @@ pub enum Value<'a> {
     Number(f64),
     String(&'a str),
     Array(&'a [Value<'a>]),
-    Object(&'a [ObjectEntry<'a>]),
-}
-
-#[derive(Debug, Clone)]
-pub struct ObjectEntry<'a> {
-    pub key: &'a str,
-    pub value: Value<'a>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ParseError {
-    message: String,
-    position: usize,
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "JSON parse error at position {}: {}", self.position, self.message)
-    }
-}
-
-impl std::error::Error for ParseError {}
-
-impl ParseError {
-    #[cold]
-    fn new(message: impl Into<String>, position: usize) -> Self {
-        Self { message: message.into(), position }
-    }
+    Object(&'a [(&'a str, Value<'a>)]),
 }
 
 impl<'a> Value<'a> {
+    pub fn is_null(&self) -> bool {
+        matches!(self, Value::Null)
+    }
+
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(b) => Some(*b),
@@ -86,20 +92,16 @@ impl<'a> Value<'a> {
             _ => None,
         }
     }
-
-    pub fn is_null(&self) -> bool {
-        matches!(self, Value::Null)
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Object<'a> {
-    entries: &'a [ObjectEntry<'a>],
+    entries: &'a [(&'a str, Value<'a>)],
 }
 
 impl<'a> Object<'a> {
     pub fn get(&self, key: &str) -> Option<&'a Value<'a>> {
-        self.entries.iter().find(|e| e.key == key).map(|e| &e.value)
+        self.entries.iter().find(|e| e.0 == key).map(|e| &e.1)
     }
 
     pub fn get_bool(&self, key: &str) -> Option<bool> {
@@ -122,7 +124,7 @@ impl<'a> Object<'a> {
         self.get(key).and_then(Value::as_object)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &'a ObjectEntry<'a>> {
+    pub fn iter(&self) -> impl Iterator<Item = &'a (&'a str, Value<'a>)> {
         self.entries.iter()
     }
 
@@ -137,12 +139,15 @@ impl<'a> Object<'a> {
 
 pub fn parse<'a>(arena: &'a Arena, input: &str) -> Result<Value<'a>, ParseError> {
     let mut parser = Parser::new(arena, input);
+    parser.skip_bom();
     let value = parser.parse_value(0)?;
     parser.skip_whitespace_and_comments()?;
-    if parser.pos < parser.input.len() {
-        return Err(ParseError::new("Unexpected data after JSON value", parser.pos));
+    if parser.pos == parser.input.len() {
+        Ok(value)
+    } else {
+        // Unexpected data after JSON value
+        Err(parser.fail(parser.pos, ParseErrorKind::Syntax))
     }
-    Ok(value)
 }
 
 struct Parser<'a, 'i> {
@@ -160,14 +165,15 @@ impl<'a, 'i> Parser<'a, 'i> {
     fn parse_value(&mut self, depth: usize) -> Result<Value<'a>, ParseError> {
         // Prevent stack overflow from deeply nested structures
         if depth >= MAX_DEPTH {
-            return Err(ParseError::new("Maximum nesting depth exceeded", self.pos));
+            return Err(self.fail(self.pos, ParseErrorKind::MaxDepth));
         }
 
         self.skip_whitespace_and_comments()?;
 
         let ch = match self.peek() {
             Some(ch) => ch,
-            None => return Err(ParseError::new("Unexpected end of input", self.pos)),
+            // Unexpected end of input
+            None => return Err(self.fail(self.pos, ParseErrorKind::Syntax)),
         };
 
         match ch {
@@ -178,7 +184,7 @@ impl<'a, 'i> Parser<'a, 'i> {
             '"' => self.parse_string(),
             '[' => self.parse_array(depth),
             '{' => self.parse_object(depth),
-            _ => Err(ParseError::new(format!("Unexpected character '{}'", ch), self.pos)),
+            _ => Err(self.fail(self.pos, ParseErrorKind::Syntax)),
         }
     }
 
@@ -211,7 +217,7 @@ impl<'a, 'i> Parser<'a, 'i> {
         {
             Ok(Value::Number(num))
         } else {
-            Err(ParseError::new("Invalid number", start))
+            Err(self.fail(self.pos, ParseErrorKind::Syntax))
         }
     }
 
@@ -222,7 +228,8 @@ impl<'a, 'i> Parser<'a, 'i> {
 
         loop {
             if self.pos >= self.bytes.len() {
-                return Err(ParseError::new("Unterminated string", self.pos));
+                // Unterminated string
+                return Err(self.fail(self.pos, ParseErrorKind::Syntax));
             }
 
             let b = self.bytes[self.pos];
@@ -232,7 +239,8 @@ impl<'a, 'i> Parser<'a, 'i> {
                 b'"' => break,
                 b'\\' => self.parse_escape(&mut result)?,
                 ..=0x1f => {
-                    return Err(ParseError::new("Unexpected control character", self.pos - 1));
+                    // Control characters must be escaped
+                    return Err(self.fail(self.pos - 1, ParseErrorKind::Syntax));
                 }
                 _ => {
                     let beg = self.pos - 1;
@@ -254,7 +262,8 @@ impl<'a, 'i> Parser<'a, 'i> {
     #[cold]
     fn parse_escape(&mut self, result: &mut ArenaString) -> Result<(), ParseError> {
         if self.pos >= self.bytes.len() {
-            return Err(ParseError::new("Unterminated string escape", self.pos));
+            // Unterminated escape sequence
+            return Err(self.fail(self.pos, ParseErrorKind::Syntax));
         }
 
         let b = self.bytes[self.pos];
@@ -271,10 +280,8 @@ impl<'a, 'i> Parser<'a, 'i> {
             b't' => b'\t',
             b'u' => return self.parse_unicode_escape(result),
             _ => {
-                return Err(ParseError::new(
-                    format!("Invalid escape sequence '\\{}'", b as char),
-                    self.pos - 2,
-                ));
+                // Invalid escape sequence
+                return Err(self.fail(self.pos - 2, ParseErrorKind::Syntax));
             }
         };
 
@@ -304,7 +311,7 @@ impl<'a, 'i> Parser<'a, 'i> {
                 result.push(c);
                 Ok(())
             }
-            None => Err(ParseError::new("Invalid unicode code point", start)),
+            None => Err(self.fail(start, ParseErrorKind::Syntax)),
         }
     }
 
@@ -320,7 +327,7 @@ impl<'a, 'i> Parser<'a, 'i> {
                     Some((acc << 4) | d)
                 })
             })
-            .ok_or_else(|| ParseError::new("Invalid unicode escape", start))
+            .ok_or_else(|| self.fail(start, ParseErrorKind::Syntax))
     }
 
     fn parse_array(&mut self, depth: usize) -> Result<Value<'a>, ParseError> {
@@ -333,11 +340,13 @@ impl<'a, 'i> Parser<'a, 'i> {
             self.skip_whitespace_and_comments()?;
 
             match self.peek() {
-                None => return Err(ParseError::new("Unterminated array", self.pos)),
+                // Unexpected end of input
+                None => return Err(self.fail(self.pos, ParseErrorKind::Syntax)),
                 Some(']') => break,
                 Some(',') => {
                     if !expects_comma {
-                        return Err(ParseError::new("Unexpected comma", self.pos));
+                        // Unexpected comma
+                        return Err(self.fail(self.pos, ParseErrorKind::Syntax));
                     }
 
                     self.advance(1);
@@ -346,7 +355,8 @@ impl<'a, 'i> Parser<'a, 'i> {
                 }
                 Some(_) => {
                     if expects_comma {
-                        return Err(ParseError::new("Expected comma or closing bracket", self.pos));
+                        // Missing comma
+                        return Err(self.fail(self.pos, ParseErrorKind::Syntax));
                     }
 
                     values.push(self.parse_value(depth + 1)?);
@@ -369,10 +379,12 @@ impl<'a, 'i> Parser<'a, 'i> {
             self.skip_whitespace_and_comments()?;
 
             match self.peek() {
-                None => return Err(ParseError::new("Unterminated object", self.pos)),
+                // Unexpected end of input
+                None => return Err(self.fail(self.pos, ParseErrorKind::Syntax)),
                 Some(',') => {
                     if !expects_comma {
-                        return Err(ParseError::new("Unexpected comma", self.pos));
+                        // Unexpected comma
+                        return Err(self.fail(self.pos, ParseErrorKind::Syntax));
                     }
 
                     self.advance(1);
@@ -382,7 +394,8 @@ impl<'a, 'i> Parser<'a, 'i> {
                 Some('}') => break,
                 Some(_) => {
                     if expects_comma {
-                        return Err(ParseError::new("Expected comma or closing brace", self.pos));
+                        // Missing comma
+                        return Err(self.fail(self.pos, ParseErrorKind::Syntax));
                     }
 
                     let key = match self.parse_string()? {
@@ -396,7 +409,7 @@ impl<'a, 'i> Parser<'a, 'i> {
                     self.expect(b':')?;
 
                     let value = self.parse_value(depth + 1)?;
-                    entries.push(ObjectEntry { key, value });
+                    entries.push((key, value));
                     expects_comma = true;
                 }
             }
@@ -404,6 +417,12 @@ impl<'a, 'i> Parser<'a, 'i> {
 
         self.expect(b'}')?;
         Ok(Value::Object(entries.leak()))
+    }
+
+    fn skip_bom(&mut self) {
+        if self.is_str("\u{feff}") {
+            self.advance(3);
+        }
     }
 
     fn skip_whitespace_and_comments(&mut self) -> Result<(), ParseError> {
@@ -431,7 +450,7 @@ impl<'a, 'i> Parser<'a, 'i> {
                         self.pos += 1;
                     }
                     if self.pos >= self.bytes.len() {
-                        return Err(ParseError::new("Unterminated block comment", start));
+                        return Err(self.fail(start, ParseErrorKind::Syntax));
                     }
                     if self.is_str("*/") {
                         self.pos += 2;
@@ -450,7 +469,7 @@ impl<'a, 'i> Parser<'a, 'i> {
             self.pos += 1;
             Ok(())
         } else {
-            Err(ParseError::new(format!("Expected '{}'", expected as char), self.pos))
+            Err(self.fail(self.pos, ParseErrorKind::Syntax))
         }
     }
 
@@ -459,7 +478,7 @@ impl<'a, 'i> Parser<'a, 'i> {
             self.pos += expected.len();
             Ok(())
         } else {
-            Err(ParseError::new(format!("Expected '{}'", expected), self.pos))
+            Err(self.fail(self.pos, ParseErrorKind::Syntax))
         }
     }
 
@@ -473,6 +492,15 @@ impl<'a, 'i> Parser<'a, 'i> {
 
     fn advance(&mut self, num: usize) {
         self.pos += num;
+    }
+
+    #[cold]
+    fn fail(&self, pos: usize, kind: ParseErrorKind) -> ParseError {
+        let mut cfg = MeasurementConfig::new(&self.bytes);
+        let pos = cfg.goto_offset(pos);
+        let line = pos.logical_pos.y.max(0) as usize + 1;
+        let column = pos.logical_pos.x.max(0) as usize + 1;
+        ParseError { kind, line, column }
     }
 }
 

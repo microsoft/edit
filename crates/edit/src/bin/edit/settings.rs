@@ -1,26 +1,25 @@
-use std::fs::read_to_string;
 use std::path::PathBuf;
 
 use edit::cell::{Ref, SemiRefCell};
 use edit::lsh::{LANGUAGES, Language};
 use edit::{apperr, json};
-use stdext::arena::scratch_arena;
+use stdext::arena::{read_to_string, scratch_arena};
 use stdext::arena_format;
 
-#[derive(Default)]
 pub struct Settings {
+    pub path: PathBuf,
     pub file_associations: Vec<(String, &'static Language)>,
 }
 
-#[derive(Default)]
 struct SettingsCell(SemiRefCell<Settings>);
-
 unsafe impl Sync for SettingsCell {}
-
-static SETTINGS: SettingsCell =
-    SettingsCell(SemiRefCell::new(Settings { file_associations: Vec::new() }));
+static SETTINGS: SettingsCell = SettingsCell(SemiRefCell::new(Settings::new()));
 
 impl Settings {
+    const fn new() -> Self {
+        Settings { path: PathBuf::new(), file_associations: Vec::new() }
+    }
+
     pub fn borrow() -> Ref<'static, Settings> {
         SETTINGS.0.borrow()
     }
@@ -32,40 +31,51 @@ impl Settings {
     }
 
     fn load() -> apperr::Result<Self> {
-        let mut settings = Self { file_associations: Vec::new() };
+        let mut settings = Self::new();
 
-        let Some(mut config_dir) = config_dir() else {
-            return Ok(settings);
+        settings.path = match settings_json_path() {
+            Some(p) => p,
+            None => return Ok(settings),
         };
 
-        config_dir.push("settings.json");
-
-        let str = match read_to_string(config_dir) {
+        let scratch = scratch_arena(None);
+        let str = match read_to_string(&scratch, &settings.path) {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(settings),
             Err(err) => return Err(err.into()),
             Ok(str) => str,
         };
-
-        let scratch = scratch_arena(None);
-        let json: json::Value = json::parse(&scratch, &str).unwrap(); // TODO
-        let root: json::Object = json.as_object().unwrap();
+        let Ok(json) = json::parse(&scratch, &str) else {
+            return Err(apperr::APP_SETTINGS_INVALID_JSON);
+        };
+        let Some(root) = json.as_object() else {
+            return Err(apperr::APP_SETTINGS_INVALID_VALUE);
+        };
 
         if let Some(f) = root.get_object("fileAssociations") {
-            for item in f.iter() {
-                let mut pattern = item.key;
-                if !pattern.contains('/') {
-                    pattern = arena_format!(&scratch, "**/{pattern}").leak();
+            for &(mut key, ref value) in f.iter() {
+                if !key.contains('/') {
+                    key = arena_format!(&scratch, "**/{key}").leak();
                 }
 
-                let id = item.value.as_str().unwrap(); // TODO
-                let language = LANGUAGES.iter().find(|lang| lang.id == id).unwrap(); // TODO
+                let Some(id) = value.as_str() else {
+                    return Err(apperr::APP_SETTINGS_INVALID_VALUE);
+                };
+                let Some(language) = LANGUAGES.iter().find(|lang| lang.id == id) else {
+                    return Err(apperr::APP_SETTINGS_INVALID_VALUE);
+                };
 
-                settings.file_associations.push((pattern.to_string(), language));
+                settings.file_associations.push((key.to_string(), language));
             }
         }
 
         Ok(settings)
     }
+}
+
+fn settings_json_path() -> Option<PathBuf> {
+    let mut config_dir = config_dir()?;
+    config_dir.push("settings.json");
+    Some(config_dir)
 }
 
 fn config_dir() -> Option<PathBuf> {

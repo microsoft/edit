@@ -3,12 +3,13 @@
 
 //! Provides a transparent error type for edit.
 
-use std::alloc::AllocError;
 use std::{io, result};
 
 use crate::sys;
 
 pub const APP_ICU_MISSING: Error = Error::new_app(0);
+pub const APP_SETTINGS_INVALID_JSON: Error = Error::new_app(1);
+pub const APP_SETTINGS_INVALID_VALUE: Error = Error::new_app(2);
 
 /// Edit's transparent `Result` type.
 pub type Result<T> = result::Result<T, Error>;
@@ -39,13 +40,5 @@ impl Error {
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Self {
         sys::io_error_to_apperr(err)
-    }
-}
-
-impl From<AllocError> for Error {
-    fn from(_: AllocError) -> Self {
-        // TODO: Technically this breaks if the AllocError isn't recent. By then, the errno may
-        // have been tained. But the stdlib AllocError is a bad type with no way to carry info.
-        sys::get_last_error()
     }
 }
