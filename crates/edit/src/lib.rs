@@ -17,7 +17,6 @@
 )]
 #![allow(clippy::missing_transmute_annotations, clippy::new_without_default, stable_features)]
 
-pub mod apperr;
 pub mod base64;
 pub mod buffer;
 pub mod cell;

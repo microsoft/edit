@@ -38,7 +38,7 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
 
 fn draw_search(ctx: &mut Context, state: &mut State) {
     if let Err(err) = icu::init() {
-        error_log_add(ctx, state, err);
+        error_log_add(ctx, state, err.into());
         state.wants_search.kind = StateSearchKind::Disabled;
         return;
     }

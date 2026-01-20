@@ -3,6 +3,7 @@
 
 #![feature(allocator_api, linked_list_cursors, string_from_utf8_lossy_owned)]
 
+mod apperr;
 mod documents;
 mod draw_editor;
 mod draw_filepicker;
@@ -29,7 +30,7 @@ use edit::input::{self, kbmod, vk};
 use edit::oklab::StraightRgba;
 use edit::tui::*;
 use edit::vt::{self, Token};
-use edit::{apperr, base64, path, sys, unicode};
+use edit::{base64, path, sys, unicode};
 use localization::*;
 use state::*;
 use stdext::arena::{self, Arena, ArenaString, scratch_arena};

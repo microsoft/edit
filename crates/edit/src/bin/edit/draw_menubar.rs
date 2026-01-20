@@ -56,7 +56,7 @@ fn draw_menu_file(ctx: &mut Context, state: &mut State) {
     #[allow(irrefutable_let_patterns)]
     if let path = Settings::borrow().path.as_path()
         && ctx.menubar_menu_button(loc(LocId::FilePreferences), 'P', vk::NULL)
-        && let Err(err) = state.documents.add_file_path(&path)
+        && let Err(err) = state.documents.add_file_path(path)
     {
         error_log_add(ctx, state, err);
     }

@@ -5,17 +5,54 @@
 
 use std::cmp::Ordering;
 use std::ffi::{CStr, c_char};
-use std::mem;
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::ptr::{null, null_mut};
+use std::{fmt, mem};
 
 use stdext::arena::{Arena, ArenaString, scratch_arena};
 use stdext::arena_format;
 
 use crate::buffer::TextBuffer;
+use crate::sys;
 use crate::unicode::Utf8Chars;
-use crate::{apperr, sys};
+
+pub(crate) const ILLEGAL_ARGUMENT_ERROR: Error = Error(1); // U_ILLEGAL_ARGUMENT_ERROR
+pub const ICU_MISSING_ERROR: Error = Error(0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Error(u32);
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn format(code: u32) -> &'static str {
+            let Ok(f) = init_if_needed() else {
+                return "";
+            };
+
+            let status = icu_ffi::UErrorCode::new(code);
+            let ptr = unsafe { (f.u_errorName)(status) };
+            if ptr.is_null() {
+                return "";
+            }
+
+            let str = unsafe { CStr::from_ptr(ptr) };
+            str.to_str().unwrap_or("")
+        }
+
+        let code = self.0;
+        if code != 0
+            && let msg = format(code)
+            && !msg.is_empty()
+        {
+            write!(f, "ICU Error: {msg}")
+        } else {
+            write!(f, "ICU Error: {code:#08x}")
+        }
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone, Copy)]
 pub struct Encoding {
@@ -93,31 +130,6 @@ pub fn get_available_encodings() -> &'static Encodings {
     }
 }
 
-/// Formats the given ICU error code into a human-readable string.
-pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
-    fn format(code: u32) -> &'static str {
-        let Ok(f) = init_if_needed() else {
-            return "";
-        };
-
-        let status = icu_ffi::UErrorCode::new(code);
-        let ptr = unsafe { (f.u_errorName)(status) };
-        if ptr.is_null() {
-            return "";
-        }
-
-        let str = unsafe { CStr::from_ptr(ptr) };
-        str.to_str().unwrap_or("")
-    }
-
-    let msg = format(code);
-    if !msg.is_empty() {
-        write!(f, "ICU Error: {msg}")
-    } else {
-        write!(f, "ICU Error: {code:#08x}")
-    }
-}
-
 /// Converts between two encodings using ICU.
 pub struct Converter<'pivot> {
     source: *mut icu_ffi::UConverter,
@@ -149,7 +161,7 @@ impl<'pivot> Converter<'pivot> {
         pivot_buffer: &'pivot mut [MaybeUninit<u16>],
         source_encoding: &str,
         target_encoding: &str,
-    ) -> apperr::Result<Self> {
+    ) -> Result<Self> {
         let f = init_if_needed()?;
 
         let arena = scratch_arena(None);
@@ -197,7 +209,7 @@ impl<'pivot> Converter<'pivot> {
         &mut self,
         input: &[u8],
         output: &mut [MaybeUninit<u8>],
-    ) -> apperr::Result<(usize, usize)> {
+    ) -> Result<(usize, usize)> {
         let f = assume_loaded();
 
         let input_beg = input.as_ptr();
@@ -303,7 +315,7 @@ impl Text {
     ///
     /// The caller must ensure that the given [`TextBuffer`]
     /// outlives the returned `Text` instance.
-    pub unsafe fn new(tb: &TextBuffer) -> apperr::Result<Self> {
+    pub unsafe fn new(tb: &TextBuffer) -> Result<Self> {
         let f = init_if_needed()?;
 
         let mut status = icu_ffi::U_ZERO_ERROR;
@@ -623,7 +635,7 @@ impl Regex {
     /// # Safety
     ///
     /// The caller must ensure that the given `Text` outlives the returned `Regex` instance.
-    pub unsafe fn new(pattern: &str, flags: i32, text: &Text) -> apperr::Result<Self> {
+    pub unsafe fn new(pattern: &str, flags: i32, text: &Text) -> Result<Self> {
         let f = init_if_needed()?;
         unsafe {
             let scratch = scratch_arena(None);
@@ -968,13 +980,13 @@ enum LibraryFunctionsState {
 
 static mut LIBRARY_FUNCTIONS: LibraryFunctionsState = LibraryFunctionsState::Uninitialized;
 
-pub fn init() -> apperr::Result<()> {
+pub fn init() -> Result<()> {
     init_if_needed()?;
     Ok(())
 }
 
 #[allow(static_mut_refs)]
-fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
+fn init_if_needed() -> Result<&'static LibraryFunctions> {
     #[cold]
     fn load() {
         unsafe {
@@ -1045,7 +1057,7 @@ fn init_if_needed() -> apperr::Result<&'static LibraryFunctions> {
 
     match unsafe { &LIBRARY_FUNCTIONS } {
         LibraryFunctionsState::Loaded(f) => Ok(f),
-        _ => Err(apperr::APP_ICU_MISSING),
+        _ => Err(ICU_MISSING_ERROR),
     }
 }
 
@@ -1062,7 +1074,7 @@ mod icu_ffi {
 
     use std::ffi::{c_char, c_int, c_void};
 
-    use crate::apperr;
+    use super::Error;
 
     #[derive(Copy, Clone, Eq, PartialEq)]
     #[repr(transparent)]
@@ -1081,9 +1093,9 @@ mod icu_ffi {
             self.0 > 0
         }
 
-        pub fn as_error(&self) -> apperr::Error {
+        pub fn as_error(&self) -> Error {
             debug_assert!(self.0 > 0);
-            apperr::Error::new_icu(self.0 as u32)
+            Error(self.0 as u32)
         }
     }
 

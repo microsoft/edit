@@ -4,11 +4,9 @@
 //! Random assortment of helpers I didn't know where to put.
 
 use std::cmp::Ordering;
-use std::io::Read;
+use std::io::{self, Read};
 use std::mem::MaybeUninit;
 use std::{fmt, slice};
-
-use crate::apperr;
 
 pub const KILO: usize = 1000;
 pub const MEGA: usize = 1000 * 1000;
@@ -149,10 +147,7 @@ impl Rect {
 }
 
 /// [`Read`] but with [`MaybeUninit<u8>`] buffers.
-pub fn file_read_uninit<T: Read>(
-    file: &mut T,
-    buf: &mut [MaybeUninit<u8>],
-) -> apperr::Result<usize> {
+pub fn file_read_uninit<T: Read>(file: &mut T, buf: &mut [MaybeUninit<u8>]) -> io::Result<usize> {
     unsafe {
         let buf_slice = slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len());
         let n = file.read(buf_slice)?;

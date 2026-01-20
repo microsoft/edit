@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
 use edit::cell::{Ref, SemiRefCell};
+use edit::json;
 use edit::lsh::{LANGUAGES, Language};
-use edit::{apperr, json};
 use stdext::arena::{read_to_string, scratch_arena};
 use stdext::arena_format;
+
+use crate::apperr;
 
 pub struct Settings {
     pub path: PathBuf,
@@ -45,10 +47,10 @@ impl Settings {
             Ok(str) => str,
         };
         let Ok(json) = json::parse(&scratch, &str) else {
-            return Err(apperr::APP_SETTINGS_INVALID_JSON);
+            return Err(apperr::Error::SettingsInvalidJson);
         };
         let Some(root) = json.as_object() else {
-            return Err(apperr::APP_SETTINGS_INVALID_VALUE);
+            return Err(apperr::Error::SettingsInvalidValue);
         };
 
         if let Some(f) = root.get_object("fileAssociations") {
@@ -58,10 +60,10 @@ impl Settings {
                 }
 
                 let Some(id) = value.as_str() else {
-                    return Err(apperr::APP_SETTINGS_INVALID_VALUE);
+                    return Err(apperr::Error::SettingsInvalidValue);
                 };
                 let Some(language) = LANGUAGES.iter().find(|lang| lang.id == id) else {
-                    return Err(apperr::APP_SETTINGS_INVALID_VALUE);
+                    return Err(apperr::Error::SettingsInvalidValue);
                 };
 
                 settings.file_associations.push((key.to_string(), language));
