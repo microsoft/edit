@@ -4,6 +4,7 @@
 #![allow(clippy::missing_safety_doc, clippy::mut_from_ref)]
 
 use std::alloc::{AllocError, Allocator, Layout};
+use std::io;
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 
@@ -62,7 +63,7 @@ impl Arena {
         Self::Owned { arena: release::Arena::empty() }
     }
 
-    pub fn new(capacity: usize) -> Result<Self, AllocError> {
+    pub fn new(capacity: usize) -> io::Result<Self> {
         Ok(Self::Owned { arena: release::Arena::new(capacity)? })
     }
 
@@ -113,7 +114,7 @@ impl Arena {
 
 unsafe impl Allocator for Arena {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.delegate_target().alloc_raw(layout.size(), layout.align())
+        Ok(self.delegate_target().alloc_raw(layout.size(), layout.align()))
     }
 
     fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
