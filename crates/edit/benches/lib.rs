@@ -3,6 +3,7 @@
 
 use std::hint::black_box;
 use std::io::Cursor;
+use std::ops::Range;
 use std::{mem, vec};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -10,7 +11,7 @@ use edit::helpers::*;
 use edit::simd::MemsetSafe;
 use edit::{buffer, hash, oklab, simd, unicode};
 use serde::Deserialize;
-use stdext::arena;
+use stdext::{arena, varint};
 
 #[derive(Deserialize)]
 pub struct EditingTracePatch(pub usize, pub usize, pub String);
@@ -227,6 +228,73 @@ fn bench_unicode(c: &mut Criterion) {
         });
 }
 
+fn bench_varint(c: &mut Criterion) {
+    const BUFFER_SIZE: usize = MEBI;
+
+    let mut buffer = Vec::with_capacity(BUFFER_SIZE + 16);
+
+    // Knuth's MMIX LCG
+    let mut rng_state = 1442695040888963407u64;
+    let mut rng = || {
+        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rng_state as u32
+    };
+
+    // Bitmask with Rejection (as used by Apple)
+    let mut rng_state = 1442695040888963407u64;
+    let mut rng_range = |range: Range<u32>| {
+        let range_size = range.len() as u32;
+        let mask = range_size.next_power_of_two() - 1;
+        loop {
+            rng_state =
+                rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let value = rng_state as u32 & mask;
+            if value < range_size {
+                return range.start.wrapping_add(value);
+            }
+        }
+    };
+
+    loop {
+        // Generate values according to a non-uniform distribution.
+        // The distribution roughly corresponds to what LSH encounters.
+        let value = match rng() {
+            // ~35%: <=7 bits
+            0..1503238553 => rng_range(0..0x7F),
+            // ~40%: <=14 bits
+            1503238553..3221225472 => rng_range(0x80..0x3FFF),
+            // ~20%: <=21 bits
+            3221225472..4026531840 => rng_range(0x4000..0x1FFFFF),
+            // ~5%: u32::MAX
+            _ => (1 << 28) - 1,
+        };
+
+        buffer.extend(varint::encode(value));
+
+        if buffer.len() > BUFFER_SIZE {
+            break;
+        }
+    }
+
+    // As per the varint::decode() safety requirements, we need 8 bytes of padding.
+    // We pre-allocated `buffer` with extra capacity, so we technically fulfill that.
+    // _Technically_, however, we also make Rust unhappy, because it's uninitialized memory.
+    // It's just that I really really don't care about any such antics. It's memory.
+
+    c.benchmark_group("varint").bench_function("decode", |b| {
+        let mut off = 0;
+
+        b.iter(|| {
+            let (val, len) = unsafe { varint::decode(buffer.as_ptr().add(off)) };
+            black_box(val);
+            off += len;
+            if off >= buffer.len() {
+                off = 0;
+            }
+        });
+    });
+}
+
 fn bench(c: &mut Criterion) {
     arena::init(128 * MEBI).unwrap();
 
@@ -238,6 +306,7 @@ fn bench(c: &mut Criterion) {
     bench_simd_memset::<u32>(c);
     bench_simd_memset::<u8>(c);
     bench_unicode(c);
+    bench_varint(c);
 }
 
 criterion_group!(benches, bench);
