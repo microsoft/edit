@@ -36,8 +36,9 @@ impl<'a> ArenaString<'a> {
         res
     }
 
-    pub fn from_utf8(arena: &'a Arena, vec: &[u8]) -> Result<Self, Utf8Error> {
-        Ok(Self::from_str(arena, str::from_utf8(vec)?))
+    pub fn from_utf8(vec: Vec<u8, &'a Arena>) -> Result<Self, Utf8Error> {
+        str::from_utf8(&vec)?;
+        Ok(Self { vec })
     }
 
     /// It says right here that you checked if `bytes` is valid UTF-8
@@ -273,7 +274,7 @@ impl DerefMut for ArenaString<'_> {
 
 impl fmt::Display for ArenaString<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        fmt::Display::fmt(&**self, f)
     }
 }
 

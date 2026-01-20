@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::alloc::AllocError;
+use std::io;
 use std::ptr::{NonNull, null_mut};
 
 const MEM_COMMIT: u32 = 0x00001000;
@@ -27,10 +27,14 @@ unsafe extern "system" {
 ///
 /// This function is unsafe because it uses raw pointers.
 /// Don't forget to release the memory when you're done with it or you'll leak it.
-pub unsafe fn virtual_reserve(size: usize) -> Result<NonNull<u8>, AllocError> {
+pub unsafe fn virtual_reserve(size: usize) -> io::Result<NonNull<u8>> {
     unsafe {
         let res = VirtualAlloc(null_mut(), size, MEM_RESERVE, PAGE_READWRITE);
-        if res.is_null() { Err(AllocError) } else { Ok(NonNull::new_unchecked(res)) }
+        if res.is_null() {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(NonNull::new_unchecked(res))
+        }
     }
 }
 
@@ -55,9 +59,9 @@ pub unsafe fn virtual_release(base: NonNull<u8>, _size: usize) {
 /// This function is unsafe because it uses raw pointers.
 /// Make sure to only pass pointers acquired from [`virtual_reserve`]
 /// and to pass a size less than or equal to the size passed to [`virtual_reserve`].
-pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> Result<(), AllocError> {
+pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> io::Result<()> {
     unsafe {
         let res = VirtualAlloc(base.as_ptr() as *mut _, size, MEM_COMMIT, PAGE_READWRITE);
-        if res.is_null() { Err(AllocError) } else { Ok(()) }
+        if res.is_null() { Err(io::Error::last_os_error()) } else { Ok(()) }
     }
 }

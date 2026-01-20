@@ -706,7 +706,9 @@ pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Re
 
 /// Checks if the given error is a "file not found" error.
 pub fn apperr_is_not_found(err: apperr::Error) -> bool {
-    err == gle_to_apperr(Foundation::ERROR_FILE_NOT_FOUND)
+    const FNF: apperr::Error = gle_to_apperr(Foundation::ERROR_FILE_NOT_FOUND);
+    const PNF: apperr::Error = gle_to_apperr(Foundation::ERROR_PATH_NOT_FOUND);
+    err == FNF || err == PNF
 }
 
 fn check_bool_return(ret: BOOL) -> apperr::Result<()> {
