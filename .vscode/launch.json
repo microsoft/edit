@@ -10,7 +10,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/assets/highlighting-tests/yaml.yml"
+                "${workspaceFolder}/crates/edit/src/bin/edit/main.rs"
             ],
         },
         {
@@ -23,7 +23,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/assets/highlighting-tests/yaml.yml"
+                "${workspaceFolder}/crates/edit/src/bin/edit/main.rs"
             ],
         },
         {
@@ -40,18 +40,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/assets/highlighting-tests/yaml.yml"
-            ],
-        },
-        {
-            "name": "Launch lsh (Windows)",
-            "type": "cppvsdbg",
-            "request": "launch",
-            "console": "externalTerminal",
-            "program": "${workspaceFolder}/target/debug/lsh",
-            "cwd": "${workspaceFolder}",
-            "args": [
-                "${workspaceFolder}/crates/lsh/definitions"
+                "${workspaceFolder}/crates/edit/src/bin/edit/main.rs"
             ],
         },
         {

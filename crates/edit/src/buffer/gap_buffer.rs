@@ -8,6 +8,9 @@ use std::{io, slice};
 use stdext::sys::{virtual_commit, virtual_release, virtual_reserve};
 use stdext::{ReplaceRange as _, slice_copy_safe};
 
+use stdext::sys::{virtual_commit, virtual_release, virtual_reserve};
+
+use crate::apperr;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::helpers::*;
 
