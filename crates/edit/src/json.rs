@@ -622,6 +622,7 @@ mod tests {
         assert!(parse(&scratch, "").is_err());
         assert!(parse(&scratch, "{").is_err());
         assert!(parse(&scratch, r#"{"a":}"#).is_err());
+        assert!(parse(&scratch, r#"{5:1}"#).is_err());
         assert!(parse(&scratch, "[1, 2,").is_err());
         assert!(parse(&scratch, r#""unterminated"#).is_err());
     }
