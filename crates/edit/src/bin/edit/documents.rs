@@ -3,6 +3,7 @@
 
 use std::collections::LinkedList;
 use std::ffi::OsStr;
+use std::fs;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -210,6 +211,16 @@ impl DocumentManager {
     }
 
     pub fn open_for_writing(path: &Path) -> apperr::Result<File> {
+        // Error handling for directory creation and file writing
+
+        // It is worth doing an existence check because it is significantly
+        // faster than calling mkdir() and letting it fail (at least on Windows).
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent)?;
+        }
+
         File::create(path).map_err(apperr::Error::from)
     }
 
