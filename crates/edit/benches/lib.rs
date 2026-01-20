@@ -3,6 +3,7 @@
 
 use std::hint::black_box;
 use std::io::Cursor;
+use std::ops::Range;
 use std::{mem, vec};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -10,7 +11,7 @@ use edit::helpers::*;
 use edit::simd::MemsetSafe;
 use edit::{buffer, hash, oklab, simd, unicode};
 use serde::Deserialize;
-use stdext::arena;
+use stdext::{arena, varint};
 
 #[derive(Deserialize)]
 pub struct EditingTracePatch(pub usize, pub usize, pub String);

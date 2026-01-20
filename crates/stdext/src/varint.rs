@@ -63,8 +63,6 @@ pub unsafe fn decode(data: *const u8) -> (u32, usize) {
     }
 
     unsafe {
-        // Read the following 4 bytes in a single u32 load. We need to swap to big-endian to move the lead
-        // 0/10/110/1110/1111 bits to the MSB. This then allows us to do a single, quick `leading_ones` call.
         let val = u32::from_le((data as *const u32).read_unaligned());
         let ones = val.trailing_ones();
 
