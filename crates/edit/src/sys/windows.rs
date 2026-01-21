@@ -8,17 +8,14 @@ use std::mem::MaybeUninit;
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle};
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull, null, null_mut};
-use std::{mem, time};
+use std::{io, mem, time};
 
 use stdext::arena::{Arena, ArenaString, scratch_arena};
-use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
 use windows_sys::Win32::Storage::FileSystem;
-use windows_sys::Win32::System::Diagnostics::Debug;
 use windows_sys::Win32::System::{Console, IO, LibraryLoader, Threading};
 use windows_sys::Win32::{Foundation, Globalization};
 use windows_sys::core::*;
 
-use crate::apperr;
 use crate::helpers::*;
 
 macro_rules! w_env {
@@ -69,11 +66,7 @@ unsafe extern "system" fn read_console_input_ex_placeholder(
 }
 
 const CONSOLE_READ_NOWAIT: u16 = 0x0002;
-
 const INVALID_CONSOLE_MODE: u32 = u32::MAX;
-
-// Locally-defined error codes follow the HRESULT format, but they have bit 29 set to indicate that they are Customer error codes.
-const ERROR_UNSUPPORTED_LEGACY_CONSOLE: u32 = 0xE0010001;
 
 struct State {
     read_console_input_ex: ReadConsoleInputExW,
@@ -122,7 +115,7 @@ pub fn init() -> Deinit {
 }
 
 /// Switches the terminal into raw mode, etc.
-pub fn switch_modes() -> apperr::Result<()> {
+pub fn switch_modes() -> io::Result<()> {
     unsafe {
         // `kernel32.dll` doesn't exist on OneCore variants of Windows.
         // NOTE: `kernelbase.dll` is NOT a stable API to rely on. In our case it's the best option though.
@@ -130,7 +123,7 @@ pub fn switch_modes() -> apperr::Result<()> {
         // This is written as two nested `match` statements so that we can return the error from the first
         // `load_read_func` call if it fails. The kernel32.dll lookup may contain some valid information,
         // while the kernelbase.dll lookup may not, since it's not a stable API.
-        unsafe fn load_read_func(module: *const u16) -> apperr::Result<ReadConsoleInputExW> {
+        unsafe fn load_read_func(module: *const u16) -> io::Result<ReadConsoleInputExW> {
             unsafe {
                 get_module(module)
                     .and_then(|m| get_proc_address(m, c"ReadConsoleInputExW".as_ptr()))
@@ -161,7 +154,7 @@ pub fn switch_modes() -> apperr::Result<()> {
         if ptr::eq(STATE.stdin, Foundation::INVALID_HANDLE_VALUE)
             || ptr::eq(STATE.stdout, Foundation::INVALID_HANDLE_VALUE)
         {
-            return Err(get_last_error());
+            return Err(last_os_error());
         }
 
         check_bool_return(Console::GetConsoleMode(STATE.stdin, &raw mut STATE.stdin_mode_old))?;
@@ -173,8 +166,8 @@ pub fn switch_modes() -> apperr::Result<()> {
                 | Console::ENABLE_EXTENDED_FLAGS
                 | Console::ENABLE_VIRTUAL_TERMINAL_INPUT,
         )) {
-            Err(e) if e == gle_to_apperr(ERROR_INVALID_PARAMETER) => {
-                Err(apperr::Error::Sys(ERROR_UNSUPPORTED_LEGACY_CONSOLE))
+            Err(e) if e.kind() == io::ErrorKind::InvalidInput => {
+                Err(io::Error::other("This application does not support the legacy console."))
             }
             other => other,
         }?;
@@ -475,7 +468,7 @@ impl PartialEq for FileId {
 impl Eq for FileId {}
 
 /// Returns a unique identifier for the given file by handle or path.
-pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
+pub fn file_id(file: Option<&File>, path: &Path) -> io::Result<FileId> {
     let file = match file {
         Some(f) => f,
         None => &File::open(path)?,
@@ -484,7 +477,7 @@ pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
     file_id_from_handle(file).or_else(|_| Ok(FileId::Path(std::fs::canonicalize(path)?)))
 }
 
-fn file_id_from_handle(file: &File) -> apperr::Result<FileId> {
+fn file_id_from_handle(file: &File) -> io::Result<FileId> {
     unsafe {
         let mut info = MaybeUninit::<FileSystem::FILE_ID_INFO>::uninit();
         check_bool_return(FileSystem::GetFileInformationByHandleEx(
@@ -516,11 +509,11 @@ pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-unsafe fn get_module(name: *const u16) -> apperr::Result<NonNull<c_void>> {
+unsafe fn get_module(name: *const u16) -> io::Result<NonNull<c_void>> {
     unsafe { check_ptr_return(LibraryLoader::GetModuleHandleW(name)) }
 }
 
-unsafe fn load_library(name: *const u16) -> apperr::Result<NonNull<c_void>> {
+unsafe fn load_library(name: *const u16) -> io::Result<NonNull<c_void>> {
     unsafe {
         check_ptr_return(LibraryLoader::LoadLibraryExW(
             name,
@@ -538,13 +531,10 @@ unsafe fn load_library(name: *const u16) -> apperr::Result<NonNull<c_void>> {
 /// of the function you're loading. No type checks whatsoever are performed.
 //
 // It'd be nice to constrain T to std::marker::FnPtr, but that's unstable.
-pub unsafe fn get_proc_address<T>(
-    handle: NonNull<c_void>,
-    name: *const c_char,
-) -> apperr::Result<T> {
+pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: *const c_char) -> io::Result<T> {
     unsafe {
         let ptr = LibraryLoader::GetProcAddress(handle.as_ptr(), name as *const u8);
-        if let Some(ptr) = ptr { Ok(mem::transmute_copy(&ptr)) } else { Err(get_last_error()) }
+        if let Some(ptr) = ptr { Ok(mem::transmute_copy(&ptr)) } else { Err(last_os_error()) }
     }
 }
 
@@ -553,7 +543,7 @@ pub struct LibIcu {
     pub libicui18n: NonNull<c_void>,
 }
 
-pub fn load_icu() -> apperr::Result<LibIcu> {
+pub fn load_icu() -> io::Result<LibIcu> {
     const fn const_ptr_u16_eq(a: *const u16, b: *const u16) -> bool {
         unsafe {
             let mut a = a;
@@ -654,67 +644,16 @@ fn wide_to_utf8<'a>(arena: &'a Arena, wide: &[u16]) -> ArenaString<'a> {
     res
 }
 
+#[inline]
 #[cold]
-pub fn get_last_error() -> apperr::Error {
-    unsafe { gle_to_apperr(Foundation::GetLastError()) }
+fn last_os_error() -> io::Error {
+    io::Error::last_os_error()
 }
 
-#[inline]
-const fn gle_to_apperr(gle: u32) -> apperr::Error {
-    apperr::Error::new_sys(if gle == 0 { 0x8000FFFF } else { 0x80070000 | gle })
+fn check_bool_return(ret: BOOL) -> io::Result<()> {
+    if ret == 0 { Err(last_os_error()) } else { Ok(()) }
 }
 
-#[inline]
-pub(crate) fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
-    gle_to_apperr(err.raw_os_error().unwrap_or(0) as u32)
-}
-
-/// Formats a platform error code into a human-readable string.
-pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
-    match code {
-        ERROR_UNSUPPORTED_LEGACY_CONSOLE => {
-            write!(f, "This application does not support the legacy console.")
-        }
-        _ => unsafe {
-            let mut ptr: *mut u8 = null_mut();
-            let len = Debug::FormatMessageA(
-                Debug::FORMAT_MESSAGE_ALLOCATE_BUFFER
-                    | Debug::FORMAT_MESSAGE_FROM_SYSTEM
-                    | Debug::FORMAT_MESSAGE_IGNORE_INSERTS,
-                null(),
-                code,
-                0,
-                &mut ptr as *mut *mut _ as *mut _,
-                0,
-                null_mut(),
-            );
-
-            write!(f, "Error {code:#08x}")?;
-
-            if len > 0 {
-                let msg = str_from_raw_parts(ptr, len as usize);
-                let msg = msg.trim_ascii();
-                let msg = msg.replace(['\r', '\n'], " ");
-                write!(f, ": {msg}")?;
-                Foundation::LocalFree(ptr as *mut _);
-            }
-
-            Ok(())
-        },
-    }
-}
-
-/// Checks if the given error is a "file not found" error.
-pub fn apperr_is_not_found(err: apperr::Error) -> bool {
-    const FNF: apperr::Error = gle_to_apperr(Foundation::ERROR_FILE_NOT_FOUND);
-    const PNF: apperr::Error = gle_to_apperr(Foundation::ERROR_PATH_NOT_FOUND);
-    err == FNF || err == PNF
-}
-
-fn check_bool_return(ret: BOOL) -> apperr::Result<()> {
-    if ret == 0 { Err(get_last_error()) } else { Ok(()) }
-}
-
-fn check_ptr_return<T>(ret: *mut T) -> apperr::Result<NonNull<T>> {
-    NonNull::new(ret).ok_or_else(get_last_error)
+fn check_ptr_return<T>(ret: *mut T) -> io::Result<NonNull<T>> {
+    NonNull::new(ret).ok_or_else(last_os_error)
 }

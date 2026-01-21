@@ -3,14 +3,15 @@
 
 use std::collections::LinkedList;
 use std::ffi::OsStr;
-use std::fs;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
-use edit::{apperr, path, sys};
+use edit::{path, sys};
 
+use crate::apperr;
 use crate::state::DisplayablePathBuf;
 
 pub struct Document {
@@ -144,10 +145,10 @@ impl DocumentManager {
         let (path, goto) = Self::parse_filename_goto(path);
         let path = path::normalize(path);
 
-        let mut file = match Self::open_for_reading(&path) {
+        let mut file = match File::open(&path) {
             Ok(file) => Some(file),
-            Err(err) if sys::apperr_is_not_found(err) => None,
-            Err(err) => return Err(err),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err.into()),
         };
 
         let file_id = if file.is_some() { Some(sys::file_id(file.as_ref(), &path)?) } else { None };

@@ -341,7 +341,7 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     }
 
     for entries in &mut dirs_files[1..] {
-        entries.sort_by(|a, b| {
+        entries.sort_unstable_by(|a, b| {
             let a = a.as_bytes();
             let b = b.as_bytes();
 

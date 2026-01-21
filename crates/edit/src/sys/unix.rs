@@ -6,18 +6,17 @@
 //! Read the `windows` module for reference.
 //! TODO: This reminds me that the sys API should probably be a trait.
 
-use std::ffi::{CStr, c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, c_void};
 use std::fs::File;
 use std::mem::{self, ManuallyDrop, MaybeUninit};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
 use std::path::Path;
 use std::ptr::{NonNull, null_mut};
-use std::{thread, time};
+use std::{io, thread, time};
 
 use stdext::arena::{Arena, ArenaString, scratch_arena};
 use stdext::arena_format;
 
-use crate::apperr;
 use crate::helpers::*;
 
 struct State {
@@ -51,7 +50,7 @@ pub fn init() -> Deinit {
     Deinit
 }
 
-pub fn switch_modes() -> apperr::Result<()> {
+pub fn switch_modes() -> io::Result<()> {
     unsafe {
         // Reopen stdin if it's redirected (= piped input).
         if libc::isatty(STATE.stdin) == 0 {
@@ -352,7 +351,7 @@ pub struct FileId {
 }
 
 /// Returns a unique identifier for the given file by handle or path.
-pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
+pub fn file_id(file: Option<&File>, path: &Path) -> io::Result<FileId> {
     let file = match file {
         Some(f) => f,
         None => &File::open(path)?,
@@ -366,10 +365,10 @@ pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
     }
 }
 
-unsafe fn load_library(name: *const c_char) -> apperr::Result<NonNull<c_void>> {
+unsafe fn load_library(name: *const c_char) -> io::Result<NonNull<c_void>> {
     unsafe {
         NonNull::new(libc::dlopen(name, libc::RTLD_LAZY))
-            .ok_or_else(|| errno_to_apperr(libc::ENOENT))
+            .ok_or_else(|| from_raw_os_error(libc::ENOENT))
     }
 }
 
@@ -381,14 +380,11 @@ unsafe fn load_library(name: *const c_char) -> apperr::Result<NonNull<c_void>> {
 /// of the function you're loading. No type checks whatsoever are performed.
 //
 // It'd be nice to constrain T to std::marker::FnPtr, but that's unstable.
-pub unsafe fn get_proc_address<T>(
-    handle: NonNull<c_void>,
-    name: *const c_char,
-) -> apperr::Result<T> {
+pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: *const c_char) -> io::Result<T> {
     unsafe {
         let sym = libc::dlsym(handle.as_ptr(), name);
         if sym.is_null() {
-            Err(errno_to_apperr(libc::ENOENT))
+            Err(from_raw_os_error(libc::ENOENT))
         } else {
             Ok(mem::transmute_copy(&sym))
         }
@@ -400,7 +396,7 @@ pub struct LibIcu {
     pub libicui18n: NonNull<c_void>,
 }
 
-pub fn load_icu() -> apperr::Result<LibIcu> {
+pub fn load_icu() -> io::Result<LibIcu> {
     const fn const_str_eq(a: &str, b: &str) -> bool {
         let a = a.as_bytes();
         let b = b.as_bytes();
@@ -540,45 +536,29 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
 }
 
 #[inline]
-fn errno() -> i32 {
+#[cold]
+fn errno() -> c_int {
+    // libc unfortunately doesn't export an alias for `errno` (WHY?).
+    // As such we (ab)use the stdlib and use its internal errno implementation.
+    //
     // Under `-O -Copt-level=s` the 1.87 compiler fails to fully inline and
     // remove the raw_os_error() call. This leaves us with the drop() call.
     // ManuallyDrop fixes that and results in a direct `std::sys::os::errno` call.
-    ManuallyDrop::new(std::io::Error::last_os_error()).raw_os_error().unwrap_or(0)
-}
-
-#[cold]
-pub fn get_last_error() -> apperr::Error {
-    errno_to_apperr(errno())
+    ManuallyDrop::new(io::Error::last_os_error()).raw_os_error().unwrap_or(0)
 }
 
 #[inline]
-pub(crate) fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
-    errno_to_apperr(err.raw_os_error().unwrap_or(0))
+#[cold]
+fn last_os_error() -> io::Error {
+    io::Error::last_os_error()
 }
 
-pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
-    write!(f, "Error {code}")?;
-
-    unsafe {
-        let ptr = libc::strerror(code as i32);
-        if !ptr.is_null() {
-            let msg = CStr::from_ptr(ptr).to_string_lossy();
-            write!(f, ": {msg}")?;
-        }
-    }
-
-    Ok(())
+#[inline]
+#[cold]
+fn from_raw_os_error(code: c_int) -> io::Error {
+    io::Error::from_raw_os_error(code)
 }
 
-pub fn apperr_is_not_found(err: apperr::Error) -> bool {
-    err == errno_to_apperr(libc::ENOENT)
-}
-
-const fn errno_to_apperr(no: c_int) -> apperr::Error {
-    apperr::Error::new_sys(if no < 0 { 0 } else { no as u32 })
-}
-
-fn check_int_return(ret: libc::c_int) -> apperr::Result<libc::c_int> {
-    if ret < 0 { Err(get_last_error()) } else { Ok(ret) }
+fn check_int_return(ret: libc::c_int) -> io::Result<libc::c_int> {
+    if ret < 0 { Err(last_os_error()) } else { Ok(ret) }
 }

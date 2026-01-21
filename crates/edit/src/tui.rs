@@ -147,10 +147,10 @@ use std::arch::breakpoint;
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 use std::fmt::Write as _;
-use std::{iter, mem, ptr, time};
+use std::{io, iter, mem, ptr, time};
 
 use stdext::arena::{Arena, ArenaString, scratch_arena};
-use stdext::arena_format;
+use stdext::{arena_format, opt_ptr_eq, str_from_raw_parts};
 
 use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
@@ -161,12 +161,12 @@ use crate::hash::*;
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
 use crate::oklab::StraightRgba;
-use crate::{apperr, input, simd, unicode};
+use crate::{input, simd, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
 const KBMOD_FOR_WORD_NAV: InputKeyMod =
-    if cfg!(target_os = "macos") { kbmod::ALT } else { kbmod::CTRL };
+    if cfg!(any(target_os = "macos", target_os = "ios")) { kbmod::ALT } else { kbmod::CTRL };
 
 type Input<'input> = input::Input<'input>;
 type InputKey = input::InputKey;
@@ -375,7 +375,7 @@ pub struct Tui {
 
 impl Tui {
     /// Creates a new [`Tui`] instance for storing state across frames.
-    pub fn new() -> apperr::Result<Self> {
+    pub fn new() -> io::Result<Self> {
         let arena_prev = Arena::new(128 * MEBI)?;
         let arena_next = Arena::new(128 * MEBI)?;
         // SAFETY: Since `prev_tree` refers to `arena_prev`/`arena_next`, from its POV the lifetime
@@ -2652,7 +2652,7 @@ impl<'a> Context<'a, '_> {
                     _ => return false,
                 },
                 vk::B => match modifiers {
-                    kbmod::ALT if cfg!(target_os = "macos") => {
+                    kbmod::ALT if cfg!(any(target_os = "macos", target_os = "ios")) => {
                         // On macOS, terminals commonly emit the Emacs style
                         // Alt+B (ESC b) sequence for Alt+Left.
                         tb.cursor_move_delta(CursorMovement::Word, -1);
@@ -2660,7 +2660,7 @@ impl<'a> Context<'a, '_> {
                     _ => return false,
                 },
                 vk::F => match modifiers {
-                    kbmod::ALT if cfg!(target_os = "macos") => {
+                    kbmod::ALT if cfg!(any(target_os = "macos", target_os = "ios")) => {
                         // On macOS, terminals commonly emit the Emacs style
                         // Alt+F (ESC f) sequence for Alt+Right.
                         tb.cursor_move_delta(CursorMovement::Word, 1);
@@ -3120,7 +3120,8 @@ impl<'a> Context<'a, '_> {
     ///
     /// Returns true if the menu is open. Continue appending items to it in that case.
     pub fn menubar_menu_begin(&mut self, text: &str, accelerator: char) -> bool {
-        let accelerator = if cfg!(target_os = "macos") { '\0' } else { accelerator };
+        let accelerator =
+            if cfg!(any(target_os = "macos", target_os = "ios")) { '\0' } else { accelerator };
         let mixin = self.tree.current_node.borrow().child_count as u64;
         self.next_block_id_mixin(mixin);
 
