@@ -1,18 +1,30 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Simple glob matching.
+//!
+//! Supported patterns:
+//! - `*` matches any characters except for path separators, including an empty string.
+//! - `**` matches any characters, including an empty string.
+//!   For convenience, `/**/` also matches `/`.
+
 use std::path::is_separator;
 
-pub fn glob_match(glob: &[u8], path: &[u8]) -> bool {
-    fast_path(glob, path).unwrap_or_else(|| slow_path(glob, path))
+#[inline]
+pub fn glob_match<P: AsRef<[u8]>, N: AsRef<[u8]>>(pattern: P, needle: N) -> bool {
+    glob(pattern.as_ref(), needle.as_ref())
+}
+
+fn glob(pattern: &[u8], needle: &[u8]) -> bool {
+    fast_path(pattern, needle).unwrap_or_else(|| slow_path(pattern, needle))
 }
 
 // Fast-pass for the most common patterns:
 // * Matching files by extension (e.g., **/*.rs)
 // * Matching files by name (e.g., **/Cargo.toml)
-fn fast_path(glob: &[u8], path: &[u8]) -> Option<bool> {
+fn fast_path(pattern: &[u8], needle: &[u8]) -> Option<bool> {
     // In either case, the glob must start with "**/".
-    let mut suffix = glob.strip_prefix(b"**/")?;
+    let mut suffix = pattern.strip_prefix(b"**/")?;
     if suffix.is_empty() {
         return None;
     }
@@ -30,20 +42,20 @@ fn fast_path(glob: &[u8], path: &[u8]) -> Option<bool> {
     }
 
     Some(
-        match_path_suffix(path, suffix)
+        match_path_suffix(needle, suffix)
             && (
                 // In case of "**/*extension" a simple suffix match is sufficient.
                 !needs_dir_anchor
                 // But for "**/filename" we need to ensure that path is either "filename"...
-                || path.len() == suffix.len()
+                || needle.len() == suffix.len()
                 // ...or that it is ".../filename".
-                || is_separator(path[path.len() - suffix.len() - 1] as char)
+                || is_separator(needle[needle.len() - suffix.len() - 1] as char)
             ),
     )
 }
 
-fn contains_magic(glob: &[u8]) -> bool {
-    glob.iter().any(|&b| b == b'*' || b == b'?')
+fn contains_magic(pattern: &[u8]) -> bool {
+    pattern.contains(&b'*')
 }
 
 fn match_path_suffix(path: &[u8], suffix: &[u8]) -> bool {
@@ -69,7 +81,7 @@ fn match_path_suffix(path: &[u8], suffix: &[u8]) -> bool {
 // This code is based on https://research.swtch.com/glob.go
 // It's not particularly fast, but it doesn't need to be. It doesn't run often.
 #[cold]
-fn slow_path(glob: &[u8], path: &[u8]) -> bool {
+fn slow_path(pattern: &[u8], needle: &[u8]) -> bool {
     let mut px = 0;
     let mut nx = 0;
     let mut next_px = 0;
@@ -77,27 +89,24 @@ fn slow_path(glob: &[u8], path: &[u8]) -> bool {
     let mut next_double_px = 0;
     let mut next_double_nx = 0;
 
-    while px < glob.len() || nx < path.len() {
-        if px < glob.len() {
-            match glob[px] {
-                b'?' => {
-                    // single-character wildcard
-                    if nx < path.len() && !is_separator(path[nx] as char) {
-                        px += 1;
-                        nx += 1;
-                        continue;
-                    }
-                }
+    while px < pattern.len() || nx < needle.len() {
+        if px < pattern.len() {
+            match pattern[px] {
                 b'*' => {
-                    // Check for doublestar
-                    if px + 1 < glob.len() && glob[px + 1] == b'*' {
-                        // doublestar - matches across path separators
-                        // Handle trailing slash after ** (e.g., **/ should skip the slash)
-                        let skip = if px + 2 < glob.len() && glob[px + 2] == b'/' { 3 } else { 2 };
-                        // Try to match at nx first (zero-length match). If that doesn't work, restart at nx+1.
+                    if pattern.get(px + 1) == Some(&b'*') {
+                        // doublestar - matches any characters including /
                         next_double_px = px;
                         next_double_nx = nx + 1;
-                        px += skip;
+                        px += 2;
+
+                        // For convenience, /**/  also matches /.
+                        if px >= 3
+                            && px < pattern.len()
+                            && pattern[px] == b'/'
+                            && pattern[px - 3] == b'/'
+                        {
+                            px += 1;
+                        }
                     } else {
                         // single star - does not match path separators
                         // Try to match at nx. If that doesn't work out, restart at nx+1 next.
@@ -109,7 +118,7 @@ fn slow_path(glob: &[u8], path: &[u8]) -> bool {
                 }
                 c => {
                     // ordinary character
-                    if nx < path.len() && path[nx].eq_ignore_ascii_case(&c) {
+                    if nx < needle.len() && needle[nx].eq_ignore_ascii_case(&c) {
                         px += 1;
                         nx += 1;
                         continue;
@@ -119,15 +128,15 @@ fn slow_path(glob: &[u8], path: &[u8]) -> bool {
         }
 
         // Mismatch. Maybe restart.
-        // Try single-star backtracking first, but only if we don't cross a separator
-        if 0 < next_nx && next_nx <= path.len() && !is_separator(path[next_nx - 1] as char) {
+        // Try single-star backtracking first, but only if we don't cross a separator.
+        if next_nx > 0 && next_nx <= needle.len() && !is_separator(needle[next_nx - 1] as char) {
             px = next_px;
             nx = next_nx;
             continue;
         }
 
         // Try doublestar backtracking
-        if 0 < next_double_nx && next_double_nx <= path.len() {
+        if next_double_nx > 0 && next_double_nx <= needle.len() {
             px = next_double_px;
             nx = next_double_nx;
             continue;
@@ -136,7 +145,6 @@ fn slow_path(glob: &[u8], path: &[u8]) -> bool {
         return false;
     }
 
-    // Matched all of pattern to all of name. Success.
     true
 }
 
@@ -161,54 +169,58 @@ mod tests {
             ("*a", "a", true),
             ("a*b*c*d*e*", "axbxcxdxe", true),
             ("a*b*c*d*e*", "axbxcxdxexxx", true),
-            ("a*b?c*x", "abxbbxdbxebxczzx", true),
-            ("a*b?c*x", "abxbbxdbxebxczzy", false),
             ("*x", "xxx", true),
             // Test cases from https://github.com/golang/go/blob/master/src/path/filepath/match_test.go
-            ("abc", "abc", true),
-            ("*", "abc", true),
-            ("*c", "abc", true),
-            ("a*", "a", true),
-            ("a*", "abc", true),
             ("a*", "ab/c", false),
+            ("a*b", "a/b", false),
             ("a*/b", "abc/b", true),
             ("a*/b", "a/c/b", false),
             ("a*b*c*d*e*/f", "axbxcxdxe/f", true),
             ("a*b*c*d*e*/f", "axbxcxdxexxx/f", true),
             ("a*b*c*d*e*/f", "axbxcxdxe/xxx/f", false),
             ("a*b*c*d*e*/f", "axbxcxdxexxx/fff", false),
-            ("a*b?c*x", "abxbbxdbxebxczzx", true),
-            ("a*b?c*x", "abxbbxdbxebxczzy", false),
-            ("a?b", "a/b", false),
-            ("a*b", "a/b", false),
-            ("*x", "xxx", true),
-            // Basic doublestar tests
+            // Single star (*)
+            ("*", "", true),
+            ("foo/*/bar", "foo/bar", false),
+            ("foo/*/bar", "foo/baz/bar", true),
+            ("foo/*/bar", "foo/baz/qux/bar", false),
+            // Double star (**)
+            ("**", "", true),
             ("**", "foo", true),
             ("**", "foo/bar", true),
             ("**", "foo/bar/baz", true),
             ("**/foo", "foo", true),
             ("**/foo", "bar/foo", true),
             ("**/foo", "bar/baz/foo", true),
+            ("**/foo", "bar", false),
             ("foo/**", "foo/bar", true),
             ("foo/**", "foo/bar/baz", true),
+            ("foo/**", "bar/baz", false),
             ("foo/**/baz", "foo/baz", true),
             ("foo/**/baz", "foo/bar/baz", true),
             ("foo/**/baz", "foo/bar/qux/baz", true),
-            // Doublestar should not match if literal parts don't match
-            ("**/foo", "bar", false),
-            ("foo/**", "bar/baz", false),
             ("foo/**/baz", "foo/bar/qux", false),
-            // Single star should NOT match separators
-            ("foo/*/bar", "foo/bar", false),
-            ("foo/*/bar", "foo/baz/bar", true),
-            ("foo/*/bar", "foo/baz/qux/bar", false),
-            // Mix of single and double star
+            ("**/**", "foo/bar", true),
+            ("foo**bar", "foobar", true),
+            ("foo**bar", "fooxbar", true),
+            ("foo**bar", "foo/bar", true),
+            ("foo**/bar", "foobar", false),
+            ("foo/**bar", "foobar", false),
+            ("**/", "foo/", true),
+            ("/**", "/", true),
+            ("/**", "/foo", true),
+            ("foo/**", "foo/", true),
+            ("a/**/b/**/c", "a/b/c", true),
+            ("a/**/b/**/c", "a/x/b/y/c", true),
+            ("a/**/b/**/c", "a/x/y/b/z/w/c", true),
+            // Mix of * and **
             ("foo/*/baz/**", "foo/bar/baz/qux", true),
             ("foo/*/baz/**", "foo/bar/qux/baz/test", false),
-            // Edge cases
-            ("**/**", "foo/bar", true),
             ("**/*/foo", "bar/baz/foo", true),
             ("**/*/foo", "bar/foo", true),
+            // Case insensitivity
+            ("*.txt", "file.TXT", true),
+            ("**/*.rs", "dir/file.RS", true),
             // Optimized patterns: **/*.ext and **/name
             ("**/*.rs", "foo.rs", true),
             ("**/*.rs", "dir/foo.rs", true),
@@ -223,10 +235,10 @@ mod tests {
         ];
 
         for (pattern, name, expected) in tests {
-            let result = glob_match(pattern.as_bytes(), name.as_bytes());
+            let result = glob_match(pattern, name);
             assert_eq!(
                 result, expected,
-                "glob_match({:?}, {:?}) = {}, want {}",
+                "glob_match({:?}, {:?}), got {}, expected {}",
                 pattern, name, result, expected
             );
         }
