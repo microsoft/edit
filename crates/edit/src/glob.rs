@@ -11,18 +11,18 @@
 use std::path::is_separator;
 
 #[inline]
-pub fn glob_match<P: AsRef<[u8]>, N: AsRef<[u8]>>(pattern: P, needle: N) -> bool {
-    glob(pattern.as_ref(), needle.as_ref())
+pub fn glob_match<P: AsRef<[u8]>, N: AsRef<[u8]>>(pattern: P, name: N) -> bool {
+    glob(pattern.as_ref(), name.as_ref())
 }
 
-fn glob(pattern: &[u8], needle: &[u8]) -> bool {
-    fast_path(pattern, needle).unwrap_or_else(|| slow_path(pattern, needle))
+fn glob(pattern: &[u8], name: &[u8]) -> bool {
+    fast_path(pattern, name).unwrap_or_else(|| slow_path(pattern, name))
 }
 
 // Fast-pass for the most common patterns:
 // * Matching files by extension (e.g., **/*.rs)
 // * Matching files by name (e.g., **/Cargo.toml)
-fn fast_path(pattern: &[u8], needle: &[u8]) -> Option<bool> {
+fn fast_path(pattern: &[u8], name: &[u8]) -> Option<bool> {
     // In either case, the glob must start with "**/".
     let mut suffix = pattern.strip_prefix(b"**/")?;
     if suffix.is_empty() {
@@ -42,14 +42,14 @@ fn fast_path(pattern: &[u8], needle: &[u8]) -> Option<bool> {
     }
 
     Some(
-        match_path_suffix(needle, suffix)
+        match_path_suffix(name, suffix)
             && (
                 // In case of "**/*extension" a simple suffix match is sufficient.
                 !needs_dir_anchor
                 // But for "**/filename" we need to ensure that path is either "filename"...
-                || needle.len() == suffix.len()
+                || name.len() == suffix.len()
                 // ...or that it is ".../filename".
-                || is_separator(needle[needle.len() - suffix.len() - 1] as char)
+                || is_separator(name[name.len() - suffix.len() - 1] as char)
             ),
     )
 }
@@ -81,7 +81,7 @@ fn match_path_suffix(path: &[u8], suffix: &[u8]) -> bool {
 // This code is based on https://research.swtch.com/glob.go
 // It's not particularly fast, but it doesn't need to be. It doesn't run often.
 #[cold]
-fn slow_path(pattern: &[u8], needle: &[u8]) -> bool {
+fn slow_path(pattern: &[u8], name: &[u8]) -> bool {
     let mut px = 0;
     let mut nx = 0;
     let mut next_px = 0;
@@ -89,7 +89,7 @@ fn slow_path(pattern: &[u8], needle: &[u8]) -> bool {
     let mut next_double_px = 0;
     let mut next_double_nx = 0;
 
-    while px < pattern.len() || nx < needle.len() {
+    while px < pattern.len() || nx < name.len() {
         if px < pattern.len() {
             match pattern[px] {
                 b'*' => {
@@ -118,7 +118,7 @@ fn slow_path(pattern: &[u8], needle: &[u8]) -> bool {
                 }
                 c => {
                     // ordinary character
-                    if nx < needle.len() && needle[nx].eq_ignore_ascii_case(&c) {
+                    if nx < name.len() && name[nx].eq_ignore_ascii_case(&c) {
                         px += 1;
                         nx += 1;
                         continue;
@@ -129,14 +129,14 @@ fn slow_path(pattern: &[u8], needle: &[u8]) -> bool {
 
         // Mismatch. Maybe restart.
         // Try single-star backtracking first, but only if we don't cross a separator.
-        if next_nx > 0 && next_nx <= needle.len() && !is_separator(needle[next_nx - 1] as char) {
+        if next_nx > 0 && next_nx <= name.len() && !is_separator(name[next_nx - 1] as char) {
             px = next_px;
             nx = next_nx;
             continue;
         }
 
         // Try doublestar backtracking
-        if next_double_nx > 0 && next_double_nx <= needle.len() {
+        if next_double_nx > 0 && next_double_nx <= name.len() {
             px = next_double_px;
             nx = next_double_nx;
             continue;
