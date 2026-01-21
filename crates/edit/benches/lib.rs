@@ -8,7 +8,7 @@ use std::{mem, vec};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
 use edit::simd::MemsetSafe;
-use edit::{buffer, hash, oklab, simd, unicode};
+use edit::{buffer, glob, hash, oklab, simd, unicode};
 use serde::Deserialize;
 use stdext::arena;
 
@@ -105,6 +105,15 @@ fn bench_buffer(c: &mut Criterion) {
         .bench_function(BenchmarkId::new("TextBuffer", "rustcode"), |b| {
             b.iter(bench_text_buffer);
         });
+}
+
+fn bench_glob(c: &mut Criterion) {
+    // Same benchmark as in glob-match
+    const PATH: &str = "foo/bar/foo/bar/foo/bar/foo/bar/foo/bar.txt";
+    const GLOB: &str = "foo/**/bar.txt";
+
+    c.benchmark_group("glob")
+        .bench_function("glob_match", |b| b.iter(|| assert!(glob::glob_match(GLOB, PATH))));
 }
 
 fn bench_hash(c: &mut Criterion) {
@@ -231,6 +240,7 @@ fn bench(c: &mut Criterion) {
     arena::init(128 * MEBI).unwrap();
 
     bench_buffer(c);
+    bench_glob(c);
     bench_hash(c);
     bench_oklab(c);
     bench_simd_lines_fwd(c);

@@ -86,8 +86,7 @@ fn slow_path(pattern: &[u8], name: &[u8]) -> bool {
     let mut nx = 0;
     let mut next_px = 0;
     let mut next_nx = 0;
-    let mut next_double_px = 0;
-    let mut next_double_nx = 0;
+    let mut is_double_star = false;
 
     while px < pattern.len() || nx < name.len() {
         if px < pattern.len() {
@@ -95,8 +94,9 @@ fn slow_path(pattern: &[u8], name: &[u8]) -> bool {
                 b'*' => {
                     if pattern.get(px + 1) == Some(&b'*') {
                         // doublestar - matches any characters including /
-                        next_double_px = px;
-                        next_double_nx = nx + 1;
+                        next_px = px;
+                        next_nx = nx + 1;
+                        is_double_star = true;
                         px += 2;
 
                         // For convenience, /**/  also matches /.
@@ -128,17 +128,12 @@ fn slow_path(pattern: &[u8], name: &[u8]) -> bool {
         }
 
         // Mismatch. Maybe restart.
-        // Try single-star backtracking first, but only if we don't cross a separator.
-        if next_nx > 0 && next_nx <= name.len() && !is_separator(name[next_nx - 1] as char) {
+        if next_nx > 0
+            && next_nx <= name.len()
+            && (is_double_star || !is_separator(name[next_nx - 1] as char))
+        {
             px = next_px;
             nx = next_nx;
-            continue;
-        }
-
-        // Try doublestar backtracking
-        if next_double_nx > 0 && next_double_nx <= name.len() {
-            px = next_double_px;
-            nx = next_double_nx;
             continue;
         }
 
