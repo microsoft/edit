@@ -2039,7 +2039,7 @@ impl TextBuffer {
                                     HighlightKind::MarkupLink => break 'block,
                                     HighlightKind::MarkupList => IndexedColor::BrightBlue,
                                     HighlightKind::MarkupStrikethrough => break 'block,
-                                    HighlightKind::MetaDiffHeader => IndexedColor::BrightBlue,
+                                    HighlightKind::MetaHeader => IndexedColor::BrightBlue,
                                 };
                                 fb.blend_fg(target, fb.indexed(color));
                             }

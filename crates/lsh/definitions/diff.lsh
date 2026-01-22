@@ -3,7 +3,7 @@
 #[path = "**/*.patch"]
 pub fn diff() {
     if /(?:diff|---|\+\+\+).*/ {
-        yield meta.diff.header;
+        yield meta.header;
     } else if /-.*/ {
         yield markup.deleted;
     } else if /\+.*/ {

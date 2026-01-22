@@ -13,7 +13,7 @@ pub fn git_commit_message() {
         } else if /.*/ {
         }
     } else if /diff --git.*/ {
-        yield meta.diff.header;
+        yield meta.header;
         loop {
             await input;
             diff();
