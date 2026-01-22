@@ -1,0 +1,26 @@
+{
+    // Object with various value types
+    "string": "Hello, world!", // string literal
+    "numberInt": 42, // integer number
+    "numberFloat": -3.14e+2, // floating point with exponent
+    "booleanTrue": true, // boolean true
+    "booleanFalse": false, // boolean false
+    "nullValue": null, // null literal
+    "array": [
+        "item1", // string in array
+        2, // number in array
+        false, // boolean in array
+        null, // null in array
+        {
+            "nested": "object"
+        } // object in array
+    ],
+    "emptyObject": {}, // empty object
+    "emptyArray": [], // empty array
+    /* Multi-line comment:
+         This is a block comment
+         inside JSONC.
+    */
+    "unicodeString": "Emoji: \uD83D\uDE03", // Unicode escape
+    "escapedChars": "Line1\nLine2\tTabbed\\Backslash\"Quote" // Escaped characters
+}

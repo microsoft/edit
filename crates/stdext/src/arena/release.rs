@@ -7,10 +7,13 @@ use std::alloc::{AllocError, Allocator, Layout};
 use std::cell::Cell;
 use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
-use std::{mem, slice};
+use std::{io, mem, slice};
 
 use crate::{cold_path, sys};
 
+#[cfg(target_pointer_width = "32")]
+const ALLOC_CHUNK_SIZE: usize = 32 * 1024;
+#[cfg(target_pointer_width = "64")]
 const ALLOC_CHUNK_SIZE: usize = 64 * 1024;
 
 /// An arena allocator.
@@ -62,7 +65,7 @@ impl Arena {
         }
     }
 
-    pub fn new(capacity: usize) -> Result<Self, AllocError> {
+    pub fn new(capacity: usize) -> io::Result<Self> {
         let capacity = (capacity.max(1) + ALLOC_CHUNK_SIZE - 1) & !(ALLOC_CHUNK_SIZE - 1);
         let base = unsafe { sys::virtual_reserve(capacity)? };
 
@@ -103,11 +106,7 @@ impl Arena {
     }
 
     #[inline]
-    pub(super) fn alloc_raw(
-        &self,
-        bytes: usize,
-        alignment: usize,
-    ) -> Result<NonNull<[u8]>, AllocError> {
+    pub(super) fn alloc_raw(&self, bytes: usize, alignment: usize) -> NonNull<[u8]> {
         let commit = self.commit.get();
         let offset = self.offset.get();
 
@@ -125,12 +124,12 @@ impl Arena {
         }
 
         self.offset.replace(end);
-        Ok(unsafe { NonNull::slice_from_raw_parts(self.base.add(beg), bytes) })
+        unsafe { NonNull::slice_from_raw_parts(self.base.add(beg), bytes) }
     }
 
     // With the code in `alloc_raw_bump()` out of the way, `alloc_raw()` compiles down to some super tight assembly.
     #[cold]
-    fn alloc_raw_bump(&self, beg: usize, end: usize) -> Result<NonNull<[u8]>, AllocError> {
+    fn alloc_raw_bump(&self, beg: usize, end: usize) -> NonNull<[u8]> {
         let offset = self.offset.get();
         let commit_old = self.commit.get();
         let commit_new = (end + ALLOC_CHUNK_SIZE - 1) & !(ALLOC_CHUNK_SIZE - 1);
@@ -140,7 +139,10 @@ impl Arena {
                 sys::virtual_commit(self.base.add(commit_old), commit_new - commit_old).is_err()
             }
         {
-            return Err(AllocError);
+            // Panicking inside this [cold] function has the benefit of removing duplicated panic code from any
+            // inlined alloc() function. If we ever add fallible allocations, we should probably duplicate alloc_raw()
+            // and alloc_raw_bump() instead of returning a Result here and calling unwrap() in the common path.
+            panic!("out of memory");
         }
 
         if cfg!(debug_assertions) {
@@ -151,22 +153,24 @@ impl Arena {
 
         self.commit.replace(commit_new);
         self.offset.replace(end);
-        Ok(unsafe { NonNull::slice_from_raw_parts(self.base.add(beg), end - beg) })
+        unsafe { NonNull::slice_from_raw_parts(self.base.add(beg), end - beg) }
     }
 
+    #[inline]
     #[allow(clippy::mut_from_ref)]
     pub fn alloc_uninit<T>(&self) -> &mut MaybeUninit<T> {
         let bytes = mem::size_of::<T>();
         let alignment = mem::align_of::<T>();
-        let ptr = self.alloc_raw(bytes, alignment).unwrap();
+        let ptr = self.alloc_raw(bytes, alignment);
         unsafe { ptr.cast().as_mut() }
     }
 
+    #[inline]
     #[allow(clippy::mut_from_ref)]
     pub fn alloc_uninit_slice<T>(&self, count: usize) -> &mut [MaybeUninit<T>] {
         let bytes = mem::size_of::<T>() * count;
         let alignment = mem::align_of::<T>();
-        let ptr = self.alloc_raw(bytes, alignment).unwrap();
+        let ptr = self.alloc_raw(bytes, alignment);
         unsafe { slice::from_raw_parts_mut(ptr.cast().as_ptr(), count) }
     }
 }
@@ -187,11 +191,11 @@ impl Default for Arena {
 
 unsafe impl Allocator for Arena {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.alloc_raw(layout.size(), layout.align())
+        Ok(self.alloc_raw(layout.size(), layout.align()))
     }
 
     fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let p = self.alloc_raw(layout.size(), layout.align())?;
+        let p = self.alloc_raw(layout.size(), layout.align());
         unsafe { p.cast::<u8>().as_ptr().write_bytes(0, p.len()) }
         Ok(p)
     }
@@ -217,7 +221,7 @@ unsafe impl Allocator for Arena {
             let delta = new_layout.size() - old_layout.size();
             // Assuming that the given ptr/length area is at the end of the arena,
             // we can just push more memory to the end of the arena to grow it.
-            self.alloc_raw(delta, 1)?;
+            self.alloc_raw(delta, 1);
         } else {
             cold_path();
 
