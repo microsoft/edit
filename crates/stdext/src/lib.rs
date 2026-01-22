@@ -6,6 +6,7 @@
 #![feature(allocator_api)]
 
 pub mod arena;
+pub mod hash;
 pub mod sys;
 
 mod helpers;

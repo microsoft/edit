@@ -221,10 +221,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
+name = "css"
+version = "0.0.0"
+dependencies = [
+ "stdext",
+]
+
+[[package]]
 name = "edit"
 version = "1.2.1"
 dependencies = [
  "criterion",
+ "css",
  "libc",
  "stdext",
  "toml-span",

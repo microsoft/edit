@@ -20,10 +20,9 @@ use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
 use draw_statusbar::*;
-use edit::framebuffer::{self, IndexedColor};
+use edit::framebuffer::{self, IndexedColor, StraightRgba};
 use edit::helpers::*;
 use edit::input::{self, kbmod, vk};
-use edit::oklab::StraightRgba;
 use edit::tui::*;
 use edit::vt::{self, Token};
 use edit::{apperr, base64, path, sys, unicode};
@@ -31,6 +30,48 @@ use localization::*;
 use state::*;
 use stdext::arena::{self, Arena, ArenaString, scratch_arena};
 use stdext::arena_format;
+
+const CSS_DEFAULT_STYLESHEET: &str = r#"
+.menubar {
+    background-color: var(--bright-blue);
+    color: var(--background);
+}
+
+.floater {
+    background-color: var(--background);
+    color: var(--foreground);
+}
+
+.flyout {
+    background-color: var(--background);
+    color: var(--foreground);
+}
+
+.modal {
+    background-color: var(--background);
+    color: var(--foreground);
+}
+
+.error {
+    background-color: var(--red);
+    color: var(--bright-white);
+}
+
+.statusbar {
+    background-color: var(--background);
+    color: var(--foreground);
+}
+
+.editor {
+    background-color: var(--background);
+    color: var(--foreground);
+}
+
+.unsaved-changes {
+    background-color: var(--red);
+    color: var(--bright-white);
+}
+"#;
 
 #[cfg(target_pointer_width = "32")]
 const SCRATCH_ARENA_CAPACITY: usize = 128 * MEBI;
@@ -69,6 +110,23 @@ fn run() -> apperr::Result<()> {
         return Ok(());
     }
 
+    // Parse and install the CSS stylesheet
+    let stylesheet = {
+        let arena = Arena::new(MEBI)?;
+        // SAFETY: The arena is leaked and never deallocated, so the 'static lifetime is valid.
+        let arena_static = unsafe { std::mem::transmute::<&Arena, &'static Arena>(&arena) };
+        match css::parse(arena_static, CSS_DEFAULT_STYLESHEET) {
+            Ok(stylesheet) => {
+                std::mem::forget(arena); // Leak the arena to maintain 'static lifetime
+                stylesheet
+            }
+            Err(e) => {
+                sys::write_stdout(&format!("Warning: Failed to parse CSS stylesheet: {:?}\r\n", e));
+                return Ok(());
+            }
+        }
+    };
+
     // This will reopen stdin if it's redirected (which may fail) and switch
     // the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // `handle_args` may want to print a help message (must not fail),
@@ -82,25 +140,12 @@ fn run() -> apperr::Result<()> {
 
     let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
 
-    state.menubar_color_bg = tui.indexed(IndexedColor::Background).oklab_blend(tui.indexed_alpha(
-        IndexedColor::BrightBlue,
-        1,
-        2,
-    ));
-    state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
-    let floater_bg = tui
-        .indexed_alpha(IndexedColor::Background, 2, 3)
-        .oklab_blend(tui.indexed_alpha(IndexedColor::Foreground, 1, 3));
-    let floater_fg = tui.contrasted(floater_bg);
+    tui.set_stylesheet(stylesheet);
     tui.setup_modifier_translations(ModifierTranslations {
         ctrl: loc(LocId::Ctrl),
         alt: loc(LocId::Alt),
         shift: loc(LocId::Shift),
     });
-    tui.set_floater_default_bg(floater_bg);
-    tui.set_floater_default_fg(floater_fg);
-    tui.set_modal_default_bg(floater_bg);
-    tui.set_modal_default_fg(floater_fg);
 
     sys::inject_window_size_into_stdin();
 

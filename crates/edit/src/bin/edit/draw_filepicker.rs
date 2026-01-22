@@ -196,8 +196,9 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         let mut save;
 
         ctx.modal_begin("overwrite", loc(LocId::FileOverwriteWarning));
-        ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
-        ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+        // TODO: Migrate to .error CSS class
+        // ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+        // ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
         {
             let contains_focus = ctx.contains_focus();
 

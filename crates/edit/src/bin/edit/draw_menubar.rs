@@ -11,8 +11,9 @@ use crate::state::*;
 
 pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
     ctx.menubar_begin();
-    ctx.attr_background_rgba(state.menubar_color_bg);
-    ctx.attr_foreground_rgba(state.menubar_color_fg);
+    // TODO: Migrate to .menubar CSS class
+    // ctx.attr_background_rgba(state.menubar_color_bg);
+    // ctx.attr_foreground_rgba(state.menubar_color_fg);
     {
         let contains_focus = ctx.contains_focus();
 

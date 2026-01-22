@@ -6,9 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::{Path, PathBuf};
 
-use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
-use edit::oklab::StraightRgba;
 use edit::tui::*;
 use edit::{apperr, buffer, icu, sys};
 
@@ -128,9 +126,6 @@ pub struct OscTitleFileStatus {
 }
 
 pub struct State {
-    pub menubar_color_bg: StraightRgba,
-    pub menubar_color_fg: StraightRgba,
-
     pub documents: DocumentManager,
 
     // A ring buffer of the last 10 errors.
@@ -177,9 +172,6 @@ pub struct State {
 impl State {
     pub fn new() -> apperr::Result<Self> {
         Ok(Self {
-            menubar_color_bg: StraightRgba::zero(),
-            menubar_color_fg: StraightRgba::zero(),
-
             documents: Default::default(),
 
             error_log: [const { String::new() }; 10],
@@ -242,8 +234,9 @@ pub fn error_log_add(ctx: &mut Context, state: &mut State, err: apperr::Error) {
 
 pub fn draw_error_log(ctx: &mut Context, state: &mut State) {
     ctx.modal_begin("error", loc(LocId::ErrorDialogTitle));
-    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
-    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+    // TODO: Migrate to .error CSS class
+    // ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+    // ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
     {
         ctx.block_begin("content");
         ctx.attr_padding(Rect::three(0, 2, 1));

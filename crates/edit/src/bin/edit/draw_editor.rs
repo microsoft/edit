@@ -83,8 +83,9 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                     action = Some(SearchAction::Search);
                 }
                 if !state.search_success {
-                    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
-                    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+                    // TODO: Migrate to .error CSS class
+                    // ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+                    // ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
                 }
                 ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
                 if focus == StateSearchKind::Search {
@@ -233,8 +234,9 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     let mut action = Action::None;
 
     ctx.modal_begin("unsaved-changes", loc(LocId::UnsavedChangesDialogTitle));
-    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
-    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+    // TODO: Migrate to .error CSS class
+    // ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+    // ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
     {
         let contains_focus = ctx.contains_focus();
 
@@ -312,8 +314,9 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
                 state.goto_invalid = false;
             }
             if state.goto_invalid {
-                ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
-                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+                // TODO: Migrate to .error CSS class
+                // ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
+                // ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
             }
 
             ctx.attr_intrinsic_size(Size { width: 24, height: 1 });

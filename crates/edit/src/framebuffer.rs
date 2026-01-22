@@ -5,14 +5,14 @@
 
 use std::cell::Cell;
 use std::fmt::Write;
-use std::ops::{BitOr, BitXor};
 use std::ptr;
 use std::slice::ChunksExact;
 
+// Re-export types from css crate for convenience
+pub use css::{Attributes, IndexedColor, StraightRgba};
 use stdext::arena::{Arena, ArenaString};
 
 use crate::helpers::{CoordType, Point, Rect, Size};
-use crate::oklab::StraightRgba;
 use crate::simd::{MemsetSafe, memset};
 use crate::unicode::MeasurementConfig;
 
@@ -29,36 +29,6 @@ const CACHE_TABLE_SIZE: usize = 1 << CACHE_TABLE_LOG2_SIZE;
 /// Since the multiplication "shifts" the bits up, we don't just mask the lowest
 /// 8 bits out, but rather shift 56 bits down to get the best bits from the top.
 const CACHE_TABLE_SHIFT: usize = usize::BITS as usize - CACHE_TABLE_LOG2_SIZE;
-
-/// Standard 16 VT & default foreground/background colors.
-#[derive(Clone, Copy)]
-pub enum IndexedColor {
-    Black,
-    Red,
-    Green,
-    Yellow,
-    Blue,
-    Magenta,
-    Cyan,
-    White,
-    BrightBlack,
-    BrightRed,
-    BrightGreen,
-    BrightYellow,
-    BrightBlue,
-    BrightMagenta,
-    BrightCyan,
-    BrightWhite,
-
-    Background,
-    Foreground,
-}
-
-impl<T: Into<u8>> From<T> for IndexedColor {
-    fn from(value: T) -> Self {
-        unsafe { std::mem::transmute(value.into() & 0xF) }
-    }
-}
 
 /// Number of indices used by [`IndexedColor`].
 pub const INDEXED_COLORS_COUNT: usize = 18;
@@ -85,6 +55,10 @@ pub const DEFAULT_THEME: [StraightRgba; INDEXED_COLORS_COUNT] = [
     StraightRgba::from_be(0x000000ff), // Background
     StraightRgba::from_be(0xbebebeff), // Foreground
 ];
+
+// Such that we can use memset on these types
+unsafe impl MemsetSafe for css::StraightRgba {}
+unsafe impl MemsetSafe for css::Attributes {}
 
 /// A shoddy framebuffer for terminal applications.
 ///
@@ -817,43 +791,6 @@ impl Bitmap {
     /// Iterates over each row in the bitmap.
     fn iter(&self) -> ChunksExact<'_, StraightRgba> {
         self.data.chunks_exact(self.size.width as usize)
-    }
-}
-
-/// A bitfield for VT text attributes.
-///
-/// It being a bitfield allows for simple diffing.
-#[repr(transparent)]
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
-pub struct Attributes(u8);
-
-#[allow(non_upper_case_globals)]
-impl Attributes {
-    pub const None: Self = Self(0);
-    pub const Italic: Self = Self(0b1);
-    pub const Underlined: Self = Self(0b10);
-    pub const All: Self = Self(0b11);
-
-    pub const fn is(self, attr: Self) -> bool {
-        (self.0 & attr.0) == attr.0
-    }
-}
-
-unsafe impl MemsetSafe for Attributes {}
-
-impl BitOr for Attributes {
-    type Output = Self;
-
-    fn bitor(self, rhs: Self) -> Self::Output {
-        Self(self.0 | rhs.0)
-    }
-}
-
-impl BitXor for Attributes {
-    type Output = Self;
-
-    fn bitxor(self, rhs: Self) -> Self::Output {
-        Self(self.0 ^ rhs.0)
     }
 }
 

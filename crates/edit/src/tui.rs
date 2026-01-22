@@ -149,18 +149,18 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::{iter, mem, ptr, time};
 
+use css::{ColorValue, StraightRgba, StyleContext, Stylesheet};
 use stdext::arena::{Arena, ArenaString, scratch_arena};
 use stdext::arena_format;
+use stdext::hash::*;
 
 use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
 use crate::clipboard::Clipboard;
 use crate::document::WriteableDocument;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
-use crate::hash::*;
 use crate::helpers::*;
 use crate::input::{InputKeyMod, kbmod, vk};
-use crate::oklab::StraightRgba;
 use crate::{apperr, input, simd, unicode};
 
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
@@ -318,10 +318,9 @@ pub struct Tui {
     framebuffer: Framebuffer,
 
     modifier_translations: ModifierTranslations,
-    floater_default_bg: StraightRgba,
-    floater_default_fg: StraightRgba,
-    modal_default_bg: StraightRgba,
-    modal_default_fg: StraightRgba,
+    /// The CSS stylesheet used for styling UI elements.
+    /// This refers to memory in an external arena (typically scratch_arena).
+    stylesheet: Option<Stylesheet<'static>>,
 
     /// Last known terminal size.
     ///
@@ -394,10 +393,7 @@ impl Tui {
                 alt: "Alt",
                 shift: "Shift",
             },
-            floater_default_bg: StraightRgba::zero(),
-            floater_default_fg: StraightRgba::zero(),
-            modal_default_bg: StraightRgba::zero(),
-            modal_default_fg: StraightRgba::zero(),
+            stylesheet: None,
 
             size: Size { width: 0, height: 0 },
             mouse_position: Point::MIN,
@@ -437,24 +433,10 @@ impl Tui {
         self.modifier_translations = translations;
     }
 
-    /// Set the default background color for floaters (dropdowns, etc.).
-    pub fn set_floater_default_bg(&mut self, color: StraightRgba) {
-        self.floater_default_bg = color;
-    }
-
-    /// Set the default foreground color for floaters (dropdowns, etc.).
-    pub fn set_floater_default_fg(&mut self, color: StraightRgba) {
-        self.floater_default_fg = color;
-    }
-
-    /// Set the default background color for modals.
-    pub fn set_modal_default_bg(&mut self, color: StraightRgba) {
-        self.modal_default_bg = color;
-    }
-
-    /// Set the default foreground color for modals.
-    pub fn set_modal_default_fg(&mut self, color: StraightRgba) {
-        self.modal_default_fg = color;
+    /// Sets the CSS stylesheet for styling UI elements.
+    /// The stylesheet must be allocated in an arena with 'static lifetime.
+    pub fn set_stylesheet(&mut self, stylesheet: Stylesheet<'static>) {
+        self.stylesheet = Some(stylesheet);
     }
 
     /// If the TUI is currently running animations, etc.,
@@ -710,6 +692,8 @@ impl Tui {
             focused_node: None,
             next_block_id_mixin: 0,
             needs_settling: false,
+
+            style_ctx: StyleContext::new(),
 
             #[cfg(debug_assertions)]
             seen_ids: HashSet::new(),
@@ -1340,6 +1324,8 @@ pub struct Context<'a, 'input> {
     next_block_id_mixin: u64,
     needs_settling: bool,
 
+    style_ctx: StyleContext,
+
     #[cfg(debug_assertions)]
     seen_ids: HashSet<u64>,
 }
@@ -1435,10 +1421,15 @@ impl<'a> Context<'a, '_> {
         }
 
         self.tree.push_child(node);
+
+        // Apply CSS styling to the newly created node
+        self.style_ctx.push(hash_str(0, classname));
+        self.apply_css_to_current_node();
     }
 
     /// Ends the current UI block, returning to its parent container.
     pub fn block_end(&mut self) {
+        self.style_ctx.pop();
         self.tree.pop_stack();
         self.block_end_move_focus();
     }
@@ -1626,8 +1617,6 @@ impl<'a> Context<'a, '_> {
             offset_x: spec.offset_x,
             offset_y: spec.offset_y,
         });
-        ln.attributes.bg = self.tui.floater_default_bg;
-        ln.attributes.fg = self.tui.floater_default_fg;
     }
 
     /// Gives the current node a border.
@@ -1654,6 +1643,31 @@ impl<'a> Context<'a, '_> {
             top: rect.top.max(0),
             right: rect.right.max(0),
             bottom: rect.bottom.max(0),
+        }
+    }
+
+    /// Applies CSS styling to the current node based on the active stylesheet.
+    fn apply_css_to_current_node(&mut self) {
+        let Some(ref stylesheet) = self.tui.stylesheet else {
+            return;
+        };
+
+        let style = self.style_ctx.lookup(stylesheet);
+
+        if let Some(bg) = style.background_color {
+            let rgba = match bg {
+                ColorValue::Direct(c) => c,
+                ColorValue::Indexed(idx) => self.indexed(idx),
+            };
+            self.attr_background_rgba(rgba);
+        }
+
+        if let Some(fg) = style.color {
+            let rgba = match fg {
+                ColorValue::Direct(c) => c,
+                ColorValue::Indexed(idx) => self.indexed(idx),
+            };
+            self.attr_foreground_rgba(rgba);
         }
     }
 
@@ -1739,8 +1753,6 @@ impl<'a> Context<'a, '_> {
             offset_y: self.tui.size.height as f32 * 0.5,
         });
         self.attr_border();
-        self.attr_background_rgba(self.tui.modal_default_bg);
-        self.attr_foreground_rgba(self.tui.modal_default_fg);
         self.attr_focus_well();
         self.focus_on_first_present();
 
@@ -3138,9 +3150,6 @@ impl<'a> Context<'a, '_> {
             && self.consume_shortcut(kbmod::ALT | InputKey::new(accelerator as u32));
 
         if contains_focus || keyboard_focus {
-            self.attr_background_rgba(self.tui.floater_default_bg);
-            self.attr_foreground_rgba(self.tui.floater_default_fg);
-
             if self.is_focused() {
                 self.attr_background_rgba(self.indexed(IndexedColor::Green));
                 self.attr_foreground_rgba(self.contrasted(self.indexed(IndexedColor::Green)));

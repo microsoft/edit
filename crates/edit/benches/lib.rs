@@ -8,11 +8,12 @@ use std::io::Cursor;
 use std::{mem, vec};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use css::oklab;
 use edit::helpers::*;
 use edit::simd::MemsetSafe;
-use edit::{buffer, hash, json, oklab, simd, unicode};
-use stdext::arena;
+use edit::{buffer, json, simd, unicode};
 use stdext::arena::{Arena, scratch_arena};
+use stdext::{arena, hash};
 
 struct EditingTracePatch<'a>(usize, usize, &'a str);
 

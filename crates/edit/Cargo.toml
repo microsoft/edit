@@ -19,6 +19,7 @@ harness = false
 debug-latency = []
 
 [dependencies]
+css.workspace = true
 stdext.workspace = true
 
 [target.'cfg(unix)'.dependencies]

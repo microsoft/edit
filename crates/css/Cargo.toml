@@ -1,0 +1,11 @@
+[package]
+name = "css"
+version = "0.0.0"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+stdext = { workspace = true }
