@@ -92,14 +92,17 @@ fn slow_path(pattern: &[u8], name: &[u8]) -> bool {
         if px < pattern.len() {
             match pattern[px] {
                 b'*' => {
-                    if pattern.get(px + 1) == Some(&b'*') {
-                        // doublestar - matches any characters including /
-                        next_px = px;
-                        next_nx = nx + 1;
-                        is_double_star = true;
-                        px += 2;
+                    // Try to match at nx. If that doesn't work out, restart at nx+1 next.
+                    next_px = px;
+                    next_nx = nx + 1;
+                    px += 1;
+                    is_double_star = false;
 
-                        // For convenience, /**/  also matches /.
+                    if px < pattern.len() && pattern[px] == b'*' {
+                        px += 1;
+                        is_double_star = true;
+
+                        // For convenience, /**/ also matches /
                         if px >= 3
                             && px < pattern.len()
                             && pattern[px] == b'/'
@@ -107,17 +110,10 @@ fn slow_path(pattern: &[u8], name: &[u8]) -> bool {
                         {
                             px += 1;
                         }
-                    } else {
-                        // single star - does not match path separators
-                        // Try to match at nx. If that doesn't work out, restart at nx+1 next.
-                        next_px = px;
-                        next_nx = nx + 1;
-                        px += 1;
                     }
                     continue;
                 }
                 c => {
-                    // ordinary character
                     if nx < name.len() && name[nx].eq_ignore_ascii_case(&c) {
                         px += 1;
                         nx += 1;
@@ -175,44 +171,80 @@ mod tests {
             ("a*b*c*d*e*/f", "axbxcxdxe/xxx/f", false),
             ("a*b*c*d*e*/f", "axbxcxdxexxx/fff", false),
             // Single star (*)
+            // - Empty string
             ("*", "", true),
-            ("foo/*/bar", "foo/bar", false),
-            ("foo/*/bar", "foo/baz/bar", true),
-            ("foo/*/bar", "foo/baz/qux/bar", false),
+            // - Anything else is covered above
             // Double star (**)
+            // - Empty string
             ("**", "", true),
-            ("**", "foo", true),
-            ("**", "foo/bar", true),
-            ("**", "foo/bar/baz", true),
-            ("**/foo", "foo", true),
-            ("**/foo", "bar/foo", true),
-            ("**/foo", "bar/baz/foo", true),
-            ("**/foo", "bar", false),
-            ("foo/**", "foo/bar", true),
-            ("foo/**", "foo/bar/baz", true),
-            ("foo/**", "bar/baz", false),
-            ("foo/**/baz", "foo/baz", true),
-            ("foo/**/baz", "foo/bar/baz", true),
-            ("foo/**/baz", "foo/bar/qux/baz", true),
-            ("foo/**/baz", "foo/bar/qux", false),
-            ("**/**", "foo/bar", true),
-            ("foo**bar", "foobar", true),
-            ("foo**bar", "fooxbar", true),
-            ("foo**bar", "foo/bar", true),
-            ("foo**/bar", "foobar", false),
-            ("foo/**bar", "foobar", false),
-            ("**/", "foo/", true),
-            ("/**", "/", true),
-            ("/**", "/foo", true),
-            ("foo/**", "foo/", true),
-            ("a/**/b/**/c", "a/b/c", true),
-            ("a/**/b/**/c", "a/x/b/y/c", true),
-            ("a/**/b/**/c", "a/x/y/b/z/w/c", true),
-            // Mix of * and **
-            ("foo/*/baz/**", "foo/bar/baz/qux", true),
-            ("foo/*/baz/**", "foo/bar/qux/baz/test", false),
-            ("**/*/foo", "bar/baz/foo", true),
-            ("**/*/foo", "bar/foo", true),
+            ("a**", "a", true),
+            ("**a", "a", true),
+            // - Prefix
+            ("**", "abc", true),
+            ("**", "foo/baz/bar", true),
+            ("**c", "abc", true),
+            ("**b", "abc", false),
+            // - Infix
+            ("a**c", "ac", true),
+            ("a**c", "abc", true),
+            ("a**c", "abd", false),
+            ("a**d", "abc", false),
+            ("a**c", "a/bc", true),
+            ("a**c", "ab/c", true),
+            ("a**c", "a/b/c", true),
+            // -- Infix with left separator
+            ("a/**c", "ac", false),
+            ("a/**c", "a/c", true),
+            ("a/**c", "b/c", false),
+            ("a/**c", "a/d", false),
+            ("a/**c", "a/b/c", true),
+            ("a/**c", "a/b/d", false),
+            ("a/**c", "d/b/c", false),
+            // -- Infix with right separator
+            ("a**/c", "ac", false),
+            ("a**/c", "a/c", true),
+            ("a**/c", "b/c", false),
+            ("a**/c", "a/d", false),
+            ("a**/c", "a/b/c", true),
+            ("a**/c", "a/b/d", false),
+            ("a**/c", "d/b/c", false),
+            // - Infix with two separators
+            ("a/**/c", "ac", false),
+            ("a/**/c", "a/c", true),
+            ("a/**/c", "b/c", false),
+            ("a/**/c", "a/d", false),
+            ("a/**/c", "a/b/c", true),
+            ("a/**/c", "a/b/d", false),
+            ("a/**/c", "d/b/c", false),
+            // - * + * is covered above
+            // - * + **
+            ("a*b**c", "abc", true),
+            ("a*b**c", "aXbYc", true),
+            ("a*b**c", "aXb/Yc", true),
+            ("a*b**c", "aXbY/Yc", true),
+            ("a*b**c", "aXb/Y/c", true),
+            ("a*b**c", "a/XbYc", false),
+            ("a*b**c", "aX/XbYc", false),
+            ("a*b**c", "a/X/bYc", false),
+            // - ** + *
+            ("a**b*c", "abc", true),
+            ("a**b*c", "aXbYc", true),
+            ("a**b*c", "aXb/Yc", false),
+            ("a**b*c", "aXbY/Yc", false),
+            ("a**b*c", "aXb/Y/c", false),
+            ("a**b*c", "a/XbYc", true),
+            ("a**b*c", "aX/XbYc", true),
+            ("a**b*c", "a/X/bYc", true),
+            // - ** + **
+            ("a**b**c", "abc", true),
+            ("a**b**c", "aXbYc", true),
+            ("a**b**c", "aXb/Yc", true),
+            ("a**b**c", "aXbY/Yc", true),
+            ("a**b**c", "aXb/Y/c", true),
+            ("a**b**c", "aXbYc", true),
+            ("a**b**c", "a/XbYc", true),
+            ("a**b**c", "aX/XbYc", true),
+            ("a**b**c", "a/X/bYc", true),
             // Case insensitivity
             ("*.txt", "file.TXT", true),
             ("**/*.rs", "dir/file.RS", true),
@@ -233,8 +265,8 @@ mod tests {
             let result = glob_match(pattern, name);
             assert_eq!(
                 result, expected,
-                "glob_match({:?}, {:?}), got {}, expected {}",
-                pattern, name, result, expected
+                "test case ({:?}, {:?}, {}) failed, got {}",
+                pattern, name, expected, result
             );
         }
     }
