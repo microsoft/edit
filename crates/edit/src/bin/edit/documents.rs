@@ -3,10 +3,9 @@
 
 use std::collections::LinkedList;
 use std::ffi::OsStr;
-use std::fs;
 use std::fs::File;
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
