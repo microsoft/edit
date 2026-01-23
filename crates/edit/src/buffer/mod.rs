@@ -35,12 +35,12 @@ use std::rc::Rc;
 use std::str;
 
 pub use gap_buffer::GapBuffer;
-use stdext::arena::{Arena, ArenaString, scratch_arena};
 
+use stdext::arena::{Arena, ArenaString, scratch_arena};
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
-use crate::framebuffer::{Framebuffer, IndexedColor};
+use crate::framebuffer::{self, Framebuffer, IndexedColor};
 use crate::helpers::*;
 use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
@@ -196,6 +196,47 @@ pub struct RenderResult {
     pub visual_pos_x_max: CoordType,
 }
 
+/// A detected hyperlink range within a line.
+#[derive(Clone, Debug)]
+pub(crate) struct LinkRange {
+    /// Start column (visual position in line).
+    pub(crate) start_col: CoordType,
+    /// End column (visual position in line).
+    pub(crate) end_col: CoordType,
+    /// Start offset in the document.
+    pub(crate) start_offset: usize,
+    /// End offset in the document.
+    pub(crate) end_offset: usize,
+    /// The URL text.
+    pub(crate) url: String,
+}
+
+/// Stores detected hyperlinks per logical line.
+struct HyperlinkCache {
+    /// Map from logical line number to list of links on that line.
+    /// Using a Vec since most lines will have 0-1 links.
+    links_by_line: std::collections::HashMap<CoordType, Vec<LinkRange>>,
+    /// Generation counter from the buffer; used to detect when cache is stale.
+    buffer_generation: u32,
+}
+
+impl HyperlinkCache {
+    fn new() -> Self {
+        Self {
+            links_by_line: std::collections::HashMap::new(),
+            buffer_generation: 0,
+        }
+    }
+
+    fn invalidate_line(&mut self, line: CoordType) {
+        self.links_by_line.remove(&line);
+    }
+
+    fn clear(&mut self) {
+        self.links_by_line.clear();
+    }
+}
+
 /// A [`TextBuffer`] with inner mutability.
 pub type TextBufferCell = SemiRefCell<TextBuffer>;
 
@@ -245,6 +286,10 @@ pub struct TextBuffer {
     overtype: bool,
 
     wants_cursor_visibility: bool,
+
+    hyperlink_cache: HyperlinkCache,
+    /// First visual row where hyperlink styling became stale and must be redrawn.
+    hyperlink_dirty_from_visual_y: Option<CoordType>,
 }
 
 impl TextBuffer {
@@ -293,6 +338,9 @@ impl TextBuffer {
             overtype: false,
 
             wants_cursor_visibility: false,
+
+            hyperlink_cache: HyperlinkCache::new(),
+            hyperlink_dirty_from_visual_y: None,
         })
     }
 
@@ -589,6 +637,10 @@ impl TextBuffer {
 
     fn recalc_after_content_changed(&mut self) {
         self.reflow_internal(false);
+        
+        // Scan the current line for URLs after any edit
+        let current_line = self.cursor.logical_pos.y;
+        self.scan_line_for_urls(current_line);
     }
 
     fn reflow_internal(&mut self, force: bool) {
@@ -1496,7 +1548,7 @@ impl TextBuffer {
         result
     }
 
-    fn cursor_move_to_offset_internal(&self, mut cursor: Cursor, offset: usize) -> Cursor {
+    pub(crate) fn cursor_move_to_offset_internal(&self, mut cursor: Cursor, offset: usize) -> Cursor {
         if offset == cursor.offset {
             return cursor;
         }
@@ -1526,7 +1578,7 @@ impl TextBuffer {
         self.measurement_config().with_cursor(cursor).goto_offset(offset)
     }
 
-    fn cursor_move_to_logical_internal(&self, mut cursor: Cursor, pos: Point) -> Cursor {
+    pub(crate) fn cursor_move_to_logical_internal(&self, mut cursor: Cursor, pos: Point) -> Cursor {
         let pos = Point { x: pos.x.max(0), y: pos.y.max(0) };
 
         if pos == cursor.logical_pos {
@@ -1543,7 +1595,7 @@ impl TextBuffer {
         self.measurement_config().with_cursor(cursor).goto_logical(pos)
     }
 
-    fn cursor_move_to_visual_internal(&self, mut cursor: Cursor, pos: Point) -> Cursor {
+    pub(crate) fn cursor_move_to_visual_internal(&self, mut cursor: Cursor, pos: Point) -> Cursor {
         let pos = Point { x: pos.x.max(0), y: pos.y.max(0) };
 
         if pos == cursor.visual_pos {
@@ -1722,6 +1774,10 @@ impl TextBuffer {
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut line = ArenaString::new_in(&scratch);
         let mut visual_pos_x_max = 0;
+        // Track the last framebuffer row that actually rendered document content.
+        // Rows below this are cleared explicitly to avoid leaving stale styled pixels
+        // (such as hyperlink underlines) behind when the layout shrinks.
+        let mut last_rendered_row = destination.top - 1;
 
         // Pick the cursor closer to the `origin.y`.
         let mut cursor = {
@@ -1963,9 +2019,77 @@ impl TextBuffer {
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
 
+            if visual_line < self.stats.visual_lines {
+                last_rendered_row = destination.top + y;
+            }
+
             fb.replace_text(destination.top + y, destination.left, destination.right, &line);
 
+            // Apply hyperlink styling for this line
+            let logical_line = cursor_beg.logical_pos.y;
+            if let Some(links) = self.hyperlink_cache.links_by_line.get(&logical_line) {
+                for link in links {
+                    // Calculate the screen position of this link
+                    let link_visual_start = link.start_col.max(origin.x);
+                    let link_visual_end = link.end_col.min(origin.x + text_width);
+                    
+                    if link_visual_start < link_visual_end {
+                        let left = destination.left + self.margin_width + link_visual_start - origin.x;
+                        let right = destination.left + self.margin_width + link_visual_end - origin.x;
+                        let top = destination.top + y;
+                        
+                        let link_rect = Rect {
+                            left: left.max(destination.left + self.margin_width),
+                            top,
+                            right: right.min(destination.right),
+                            bottom: top + 1,
+                        };
+                        
+                        // Style links as light blue and underlined
+                        fb.blend_fg(link_rect, fb.indexed(IndexedColor::BrightCyan));
+                        fb.replace_attr(link_rect, framebuffer::Attributes::Underlined, framebuffer::Attributes::Underlined);
+                    }
+                }
+            }
+
             cursor = cursor_end;
+        }
+
+        // After rendering all visible lines, clear any remaining rows in the
+        // back buffer within this textarea viewport from the last document
+        // line down to the bottom. This guarantees that rows that used to
+        // contain styled content (e.g. hyperlinks) no longer keep stale
+        // foreground colors or underline attributes once the document or
+        // layout shrinks.
+        let clear_start = (last_rendered_row + 1).max(destination.top);
+        if clear_start < destination.bottom {
+            let clear_rect = Rect {
+                left: destination.left,
+                top: clear_start,
+                right: destination.right,
+                bottom: destination.bottom,
+            };
+
+            // Clear text by overwriting with spaces across the full width.
+            let mut spaces = String::new();
+            spaces.reserve(width as usize);
+            for _ in 0..width {
+                spaces.push(' ');
+            }
+            for y in clear_start..destination.bottom {
+                fb.replace_text(y, destination.left, destination.right, &spaces);
+            }
+
+            // Reset colors and attributes to a neutral state so the diffing
+            // framebuffer will see these rows as changed relative to any
+            // previously styled content.
+            fb.blend_bg(clear_rect, fb.indexed(IndexedColor::Background));
+            fb.blend_fg(clear_rect, fb.indexed(IndexedColor::Foreground));
+            fb.replace_attr(
+                clear_rect,
+                framebuffer::Attributes::All,
+                framebuffer::Attributes::None,
+            );
         }
 
         // Colorize the margin that we wrote above.
@@ -2843,6 +2967,158 @@ impl TextBuffer {
     /// For interfacing with ICU.
     pub fn read_forward(&self, off: usize) -> &[u8] {
         self.buffer.read_forward(off)
+    }
+
+    /// Detects URLs in a given line of text and returns a list of LinkRanges.
+    fn detect_urls_in_line(
+        &self,
+        line_text: &str,
+        line_offset: usize,
+        _line_visual_y: CoordType,
+    ) -> Vec<LinkRange> {
+        let mut links = Vec::new();
+        let bytes = line_text.as_bytes();
+        let mut i = 0;
+
+        while i < bytes.len() {
+            // Try to match URL patterns
+            let remaining = &bytes[i..];
+            
+            // Check for http:// or https://
+            let url_start = if remaining.starts_with(b"http://") || remaining.starts_with(b"https://") {
+                Some(i)
+            } else if remaining.starts_with(b"www.") {
+                Some(i)
+            } else {
+                None
+            };
+
+            if let Some(start) = url_start {
+                // Find the end of the URL
+                let mut end = start;
+                while end < bytes.len() {
+                    let ch = bytes[end];
+                    // Stop at whitespace or common URL terminators
+                    if ch <= b' ' || ch == b'"' || ch == b'\'' || ch == b'<' || ch == b'>' {
+                        break;
+                    }
+                    end += 1;
+                }
+
+                // Trim trailing punctuation
+                while end > start {
+                    let ch = bytes[end - 1];
+                    if ch == b'.' || ch == b',' || ch == b')' || ch == b']' || ch == b';' || ch == b':' {
+                        end -= 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if end > start {
+                    let url_text = &line_text[start..end];
+                    
+                    // Calculate visual positions using the actual line text
+                    let start_visual_x = {
+                        let mut count = 0;
+                        for ch in line_text[..start].chars() {
+                            count += if ch == '\t' { self.tab_size } else { 1 };
+                        }
+                        count
+                    };
+                    let end_visual_x = {
+                        let mut count = 0;
+                        for ch in line_text[..end].chars() {
+                            count += if ch == '\t' { self.tab_size } else { 1 };
+                        }
+                        count
+                    };
+
+                    links.push(LinkRange {
+                        start_col: start_visual_x,
+                        end_col: end_visual_x,
+                        start_offset: line_offset + start,
+                        end_offset: line_offset + end,
+                        url: url_text.to_string(),
+                    });
+                }
+
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+
+        links
+    }
+
+    /// Scans a logical line for URLs and updates the hyperlink cache.
+    fn scan_line_for_urls(&mut self, logical_line: CoordType) {
+        // Get the line content
+        let cursor_start = self.cursor_move_to_logical_internal(
+            self.cursor,
+            Point { x: 0, y: logical_line },
+        );
+        let cursor_end = self.cursor_move_to_logical_internal(
+            cursor_start,
+            Point { x: CoordType::MAX, y: logical_line },
+        );
+
+        let mut line_text = String::new();
+        let mut offset = cursor_start.offset;
+        
+        while offset < cursor_end.offset {
+            let chunk = self.read_forward(offset);
+            let chunk_len = chunk.len().min(cursor_end.offset - offset);
+            if chunk_len == 0 {
+                break;
+            }
+            
+            if let Ok(s) = std::str::from_utf8(&chunk[..chunk_len]) {
+                line_text.push_str(s);
+            }
+            offset += chunk_len;
+        }
+
+        // Detect URLs in this line
+        let links = self.detect_urls_in_line(&line_text, cursor_start.offset, logical_line);
+
+        // Mark hyperlink styling as dirty from the visual row where this line starts.
+        // We over-approximate: any scan marks the line as dirty, even if links didn't change.
+        let visual_y = cursor_start.visual_pos.y;
+        self.hyperlink_dirty_from_visual_y = Some(
+            match self.hyperlink_dirty_from_visual_y {
+                Some(existing) => existing.min(visual_y),
+                None => visual_y,
+            },
+        );
+        
+        if links.is_empty() {
+            self.hyperlink_cache.links_by_line.remove(&logical_line);
+        } else {
+            self.hyperlink_cache.links_by_line.insert(logical_line, links);
+        }
+    }
+
+    /// Returns and clears the first visual row whose hyperlink styling is stale.
+    pub(crate) fn take_hyperlink_dirty_from_visual_y(&mut self) -> Option<CoordType> {
+        self.hyperlink_dirty_from_visual_y.take()
+    }
+
+    /// Finds the link at a given document offset, if any.
+    pub(crate) fn find_link_at_offset(&self, offset: usize) -> Option<&LinkRange> {
+        // Convert offset to logical position to find the line
+        let cursor = self.cursor_move_to_offset_internal(self.cursor, offset);
+        let logical_line = cursor.logical_pos.y;
+        
+        if let Some(links) = self.hyperlink_cache.links_by_line.get(&logical_line) {
+            for link in links {
+                if offset >= link.start_offset && offset < link.end_offset {
+                    return Some(link);
+                }
+            }
+        }
+        None
     }
 }
 
