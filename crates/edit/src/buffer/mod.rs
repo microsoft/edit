@@ -28,7 +28,7 @@ use std::cell::UnsafeCell;
 use std::collections::LinkedList;
 use std::fmt::Write as _;
 use std::fs::File;
-use std::io::{Read as _, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::mem::{self, MaybeUninit};
 use std::ops::Range;
 use std::rc::Rc;
@@ -36,6 +36,7 @@ use std::str;
 
 pub use gap_buffer::GapBuffer;
 use stdext::arena::{Arena, ArenaString, scratch_arena};
+use stdext::{ReplaceRange as _, minmax, slice_as_uninit_mut, slice_copy_safe};
 
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;
@@ -45,7 +46,7 @@ use crate::helpers::*;
 use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
 use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
-use crate::{apperr, icu, simd};
+use crate::{icu, simd};
 
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,
@@ -58,6 +59,25 @@ const VISUAL_SPACE: &str = "･";
 const VISUAL_SPACE_PREFIX_ADD: usize = '･'.len_utf8() - 1;
 const VISUAL_TAB: &str = "￫       ";
 const VISUAL_TAB_PREFIX_ADD: usize = '￫'.len_utf8() - 1;
+
+pub enum IoError {
+    Io(io::Error),
+    Icu(icu::Error),
+}
+
+pub type IoResult<T> = std::result::Result<T, IoError>;
+
+impl From<io::Error> for IoError {
+    fn from(err: io::Error) -> Self {
+        Self::Io(err)
+    }
+}
+
+impl From<icu::Error> for IoError {
+    fn from(err: icu::Error) -> Self {
+        Self::Icu(err)
+    }
+}
 
 /// Stores statistics about the whole document.
 #[derive(Copy, Clone)]
@@ -250,14 +270,14 @@ pub struct TextBuffer {
 impl TextBuffer {
     /// Creates a new text buffer inside an [`Rc`].
     /// See [`TextBuffer::new()`].
-    pub fn new_rc(small: bool) -> apperr::Result<RcTextBuffer> {
+    pub fn new_rc(small: bool) -> io::Result<RcTextBuffer> {
         let buffer = Self::new(small)?;
         Ok(Rc::new(SemiRefCell::new(buffer)))
     }
 
     /// Creates a new text buffer. With `small` you can control
     /// if the buffer is optimized for <1MiB contents.
-    pub fn new(small: bool) -> apperr::Result<Self> {
+    pub fn new(small: bool) -> io::Result<Self> {
         Ok(Self {
             buffer: GapBuffer::new(small)?,
 
@@ -665,11 +685,7 @@ impl TextBuffer {
     }
 
     /// Reads a file from disk into the text buffer, detecting encoding and BOM.
-    pub fn read_file(
-        &mut self,
-        file: &mut File,
-        encoding: Option<&'static str>,
-    ) -> apperr::Result<()> {
+    pub fn read_file(&mut self, file: &mut File, encoding: Option<&'static str>) -> IoResult<()> {
         let scratch = scratch_arena(None);
         let mut buf = scratch.alloc_uninit().transpose();
         let mut first_chunk_len = 0;
@@ -818,7 +834,7 @@ impl TextBuffer {
         buf: &mut [MaybeUninit<u8>; 4 * KIBI],
         first_chunk_len: usize,
         done: bool,
-    ) -> apperr::Result<()> {
+    ) -> io::Result<()> {
         {
             let mut first_chunk = unsafe { buf[..first_chunk_len].assume_init_ref() };
             if first_chunk.starts_with(b"\xEF\xBB\xBF") {
@@ -872,7 +888,7 @@ impl TextBuffer {
         buf: &mut [MaybeUninit<u8>; 4 * KIBI],
         first_chunk_len: usize,
         mut done: bool,
-    ) -> apperr::Result<()> {
+    ) -> IoResult<()> {
         let scratch = scratch_arena(None);
         let pivot_buffer = scratch.alloc_uninit_slice(4 * KIBI);
         let mut c = icu::Converter::new(pivot_buffer, self.encoding, "UTF-8")?;
@@ -931,7 +947,7 @@ impl TextBuffer {
     }
 
     /// Writes the text buffer contents to a file, handling BOM and encoding.
-    pub fn write_file(&mut self, file: &mut File) -> apperr::Result<()> {
+    pub fn write_file(&mut self, file: &mut File) -> IoResult<()> {
         let mut offset = 0;
 
         if self.encoding.starts_with("UTF-8") {
@@ -954,7 +970,7 @@ impl TextBuffer {
         Ok(())
     }
 
-    fn write_file_with_icu(&mut self, file: &mut File) -> apperr::Result<()> {
+    fn write_file_with_icu(&mut self, file: &mut File) -> IoResult<()> {
         let scratch = scratch_arena(None);
         let pivot_buffer = scratch.alloc_uninit_slice(4 * KIBI);
         let buf = scratch.alloc_uninit_slice(4 * KIBI);
@@ -1080,7 +1096,7 @@ impl TextBuffer {
     }
 
     /// Find the next occurrence of the given `pattern` and select it.
-    pub fn find_and_select(&mut self, pattern: &str, options: SearchOptions) -> apperr::Result<()> {
+    pub fn find_and_select(&mut self, pattern: &str, options: SearchOptions) -> icu::Result<()> {
         if let Some(search) = &mut self.search {
             let search = search.get_mut();
             // When the search input changes we must reset the search.
@@ -1138,7 +1154,7 @@ impl TextBuffer {
         pattern: &str,
         options: SearchOptions,
         replacement: &[u8],
-    ) -> apperr::Result<()> {
+    ) -> icu::Result<()> {
         // Editors traditionally replace the previous search hit, not the next possible one.
         if let (Some(search), Some(..)) = (&self.search, &self.selection) {
             let search = unsafe { &mut *search.get() };
@@ -1161,7 +1177,7 @@ impl TextBuffer {
         pattern: &str,
         options: SearchOptions,
         replacement: &[u8],
-    ) -> apperr::Result<()> {
+    ) -> icu::Result<()> {
         let scratch = scratch_arena(None);
         let mut search = self.find_construct_search(pattern, options)?;
         let mut offset = 0;
@@ -1186,9 +1202,9 @@ impl TextBuffer {
         &self,
         pattern: &str,
         options: SearchOptions,
-    ) -> apperr::Result<ActiveSearch> {
+    ) -> icu::Result<ActiveSearch> {
         if pattern.is_empty() {
-            return Err(apperr::Error::Icu(1)); // U_ILLEGAL_ARGUMENT_ERROR
+            return Err(icu::ILLEGAL_ARGUMENT_ERROR);
         }
 
         let sanitized_pattern = if options.whole_word && options.use_regex {
@@ -1714,13 +1730,11 @@ impl TextBuffer {
             return None;
         }
 
-        let scratch = scratch_arena(None);
         let width = destination.width();
         let height = destination.height();
         let line_number_width = self.margin_width.max(3) as usize - 3;
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
-        let mut line = ArenaString::new_in(&scratch);
         let mut visual_pos_x_max = 0;
 
         // Pick the cursor closer to the `origin.y`.
@@ -1737,10 +1751,10 @@ impl TextBuffer {
             Some(TextBufferSelection { beg, end }) => minmax(beg, end),
         };
 
-        line.reserve(width as usize * 2);
-
         for y in 0..height {
-            line.clear();
+            let scratch = scratch_arena(None);
+            let mut line = ArenaString::new_in(&scratch);
+            line.reserve(width as usize * 2);
 
             let visual_line = origin.y + y;
             let mut cursor_beg =
@@ -2717,6 +2731,7 @@ impl TextBuffer {
     fn undo_redo(&mut self, undo: bool) {
         let buffer_generation = self.buffer.generation();
         let mut entry_buffer_generation = None;
+        let mut damage_start = CoordType::MAX;
 
         loop {
             // Transfer the last entry from the undo stack to the redo stack or vice versa.
@@ -2760,6 +2775,8 @@ impl TextBuffer {
             } else {
                 cursor
             };
+
+            damage_start = damage_start.min(cursor.logical_pos.y);
 
             {
                 let mut change = change.borrow_mut();
@@ -2828,6 +2845,11 @@ impl TextBuffer {
                     self.last_history_type = HistoryType::Other;
                 }
             }
+        }
+
+        if damage_start == CoordType::MAX {
+            // There weren't any undo/redo entries.
+            return;
         }
 
         if entry_buffer_generation.is_some() {

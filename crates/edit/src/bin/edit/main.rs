@@ -3,6 +3,7 @@
 
 #![feature(allocator_api, linked_list_cursors, string_from_utf8_lossy_owned)]
 
+mod apperr;
 mod documents;
 mod draw_editor;
 mod draw_filepicker;
@@ -26,7 +27,7 @@ use edit::input::{self, kbmod, vk};
 use edit::oklab::StraightRgba;
 use edit::tui::*;
 use edit::vt::{self, Token};
-use edit::{apperr, base64, path, sys, unicode};
+use edit::{base64, path, sys, unicode};
 use localization::*;
 use state::*;
 use stdext::arena::{self, Arena, ArenaString, scratch_arena};
@@ -37,6 +38,9 @@ const SCRATCH_ARENA_CAPACITY: usize = 128 * MEBI;
 #[cfg(target_pointer_width = "64")]
 const SCRATCH_ARENA_CAPACITY: usize = 512 * MEBI;
 
+// NOTE: Before our main() gets called, Rust initializes its stdlib. This pulls in the entire
+// std::io::{stdin, stdout, stderr} machinery, and probably some more, which amounts to about 20KB.
+// It can technically be avoided nowadays with `#![no_main]`. Maybe a fun project for later? :)
 fn main() -> process::ExitCode {
     if cfg!(debug_assertions) {
         let hook = std::panic::take_hook();

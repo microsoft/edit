@@ -10,8 +10,9 @@ use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::oklab::StraightRgba;
 use edit::tui::*;
-use edit::{apperr, buffer, icu, sys};
+use edit::{buffer, icu};
 
+use crate::apperr;
 use crate::documents::DocumentManager;
 use crate::localization::*;
 
@@ -27,10 +28,9 @@ impl From<apperr::Error> for FormatApperr {
 impl std::fmt::Display for FormatApperr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
-            apperr::APP_ICU_MISSING => f.write_str(loc(LocId::ErrorIcuMissing)),
-            apperr::Error::App(code) => write!(f, "Unknown app error code: {code}"),
-            apperr::Error::Icu(code) => icu::apperr_format(f, code),
-            apperr::Error::Sys(code) => sys::apperr_format(f, code),
+            apperr::Error::Icu(icu::ICU_MISSING_ERROR) => f.write_str(loc(LocId::ErrorIcuMissing)),
+            apperr::Error::Icu(ref err) => err.fmt(f),
+            apperr::Error::Io(ref err) => err.fmt(f),
         }
     }
 }

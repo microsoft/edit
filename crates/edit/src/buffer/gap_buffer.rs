@@ -3,11 +3,11 @@
 
 use std::ops::Range;
 use std::ptr::{self, NonNull};
-use std::slice;
+use std::{io, slice};
 
 use stdext::sys::{virtual_commit, virtual_release, virtual_reserve};
+use stdext::{ReplaceRange as _, slice_copy_safe};
 
-use crate::apperr;
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::helpers::*;
 
@@ -64,7 +64,7 @@ pub struct GapBuffer {
 }
 
 impl GapBuffer {
-    pub fn new(small: bool) -> apperr::Result<Self> {
+    pub fn new(small: bool) -> io::Result<Self> {
         let reserve;
         let buffer;
         let text;
