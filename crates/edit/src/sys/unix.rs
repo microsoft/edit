@@ -225,7 +225,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
 
             // Read from stdin.
             let spare = buf.spare_capacity_mut();
-            let ret = libc::read(STATE.stdin, spare.as_mut_ptr() as *mut _, spare.len());
+            let ret = libc::read(STATE.stdin, spare.as_mut_ptr().cast(), spare.len());
             if ret > 0 {
                 buf.set_len(buf.len() + ret as usize);
                 break;
@@ -306,7 +306,7 @@ pub fn write_stdout(text: &str) {
     while written < buf.len() {
         let w = &buf[written..];
         let w = &buf[..w.len().min(GIBI)];
-        let n = unsafe { libc::write(STATE.stdout, w.as_ptr() as *const _, w.len()) };
+        let n = unsafe { libc::write(STATE.stdout, w.as_ptr().cast(), w.len()) };
 
         if n >= 0 {
             written += n as usize;
@@ -421,11 +421,11 @@ pub fn load_icu() -> apperr::Result<LibIcu> {
     const LIBICUI18N: &str = concat!(env!("EDIT_CFG_ICUI18N_SONAME"), "\0");
 
     if const { const_str_eq(LIBICUUC, LIBICUI18N) } {
-        let icu = unsafe { load_library(LIBICUUC.as_ptr() as *const _)? };
+        let icu = unsafe { load_library(LIBICUUC.as_ptr().cast())? };
         Ok(LibIcu { libicuuc: icu, libicui18n: icu })
     } else {
-        let libicuuc = unsafe { load_library(LIBICUUC.as_ptr() as *const _)? };
-        let libicui18n = unsafe { load_library(LIBICUI18N.as_ptr() as *const _)? };
+        let libicuuc = unsafe { load_library(LIBICUUC.as_ptr().cast())? };
+        let libicui18n = unsafe { load_library(LIBICUI18N.as_ptr().cast())? };
         Ok(LibIcu { libicuuc, libicui18n })
     }
 }
