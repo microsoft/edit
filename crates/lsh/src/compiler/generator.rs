@@ -63,6 +63,10 @@ impl<'a> Generator<'a> {
         Ok(paths)
     }
 
+    pub fn assemble(mut self) -> CompileResult<Assembly<'a>> {
+        self.compiler.assemble()
+    }
+
     pub fn generate_assembly(mut self, vt: bool) -> CompileResult<String> {
         let mut output = String::new();
         let assembly = self.compiler.assemble()?;

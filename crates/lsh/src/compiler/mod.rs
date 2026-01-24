@@ -41,6 +41,8 @@ pub struct CompileError {
     pub message: String,
 }
 
+impl std::error::Error for CompileError {}
+
 impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "error at {}:{}:{}: {}", self.path, self.line, self.column, self.message)

@@ -16,7 +16,7 @@ pub struct Highlighter<'a> {
     doc: &'a dyn ReadableDocument,
     offset: usize,
     logical_pos_y: CoordType,
-    engine: Engine,
+    engine: Engine<'static, 'static, 'static>,
 }
 
 #[derive(Clone)]

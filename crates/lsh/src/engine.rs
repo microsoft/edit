@@ -34,10 +34,10 @@ impl<T: Debug> Debug for Higlight<T> {
 }
 
 #[derive(Clone)]
-pub struct Engine {
-    assembly: &'static [u8],
-    strings: &'static [&'static str],
-    charsets: &'static [[u16; 16]],
+pub struct Engine<'pa, 'ps, 'pc> {
+    assembly: &'pa [u8],
+    strings: &'ps [&'ps str],
+    charsets: &'pc [[u16; 16]],
     entrypoint: u32,
     stack: Vec<u32>,
     registers: Registers,
@@ -49,11 +49,11 @@ pub struct EngineState {
     registers: Registers,
 }
 
-impl Engine {
+impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
     pub fn new(
-        assembly: &'static [u8],
-        strings: &'static [&'static str],
-        charsets: &'static [[u16; 16]],
+        assembly: &'pa [u8],
+        strings: &'ps [&'ps str],
+        charsets: &'pc [[u16; 16]],
         entrypoint: u32,
     ) -> Self {
         Engine {
@@ -85,6 +85,10 @@ impl Engine {
 
         self.registers.off = 0;
         self.registers.hs = 0;
+
+        // By default, any line starts with HighlightKind::Other.
+        // If the DSL yields anything, this will be overwritten.
+        res.push(Higlight { start: 0, kind: unsafe { mem::zeroed() } });
 
         loop {
             unsafe {
@@ -247,6 +251,7 @@ impl Engine {
                     18 => {
                         // FlushHighlight
                         let start = self.registers.hs as usize;
+                        let start = start.min(line.len());
                         let kind = self.registers.hk.try_into().unwrap_unchecked();
 
                         if let Some(last) = res.last_mut()
@@ -272,10 +277,7 @@ impl Engine {
             }
         }
 
-        if res.last().is_none_or(|last| last.start < line.len()) {
-            let start = line.len().min(self.registers.off as usize);
-            res.push(Higlight { start, kind: unsafe { mem::zeroed() } });
-        }
+        // Ensure that there's a past-the-end highlight.
         if res.last().is_none_or(|last| last.start < line.len()) {
             res.push(Higlight { start: line.len(), kind: unsafe { mem::zeroed() } });
         }

@@ -29,5 +29,6 @@ lto = "thin"                # Similarly, speed up linking by a ton
 [workspace.dependencies]
 edit = { path = "./crates/edit" }
 lsh = { path = "./crates/lsh" }
+lsh-bin = { path = "./crates/lsh-bin" }
 stdext = { path = "./crates/stdext" }
 unicode-gen = { path = "./crates/unicode-gen" }

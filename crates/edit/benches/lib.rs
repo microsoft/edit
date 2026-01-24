@@ -12,9 +12,9 @@ use std::{mem, vec};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
 use edit::simd::MemsetSafe;
-use edit::{buffer, glob, hash, json, lsh, oklab, simd, unicode};
+use edit::{buffer, hash, json, lsh, oklab, simd, unicode};
 use stdext::arena::{Arena, scratch_arena};
-use stdext::{arena, varint};
+use stdext::{arena, glob, varint};
 
 struct EditingTracePatch<'a>(usize, usize, &'a str);
 
