@@ -6,7 +6,7 @@
 //! Read the `windows` module for reference.
 //! TODO: This reminds me that the sys API should probably be a trait.
 
-use std::ffi::{CStr, c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, c_void};
 use std::fs::File;
 use std::mem::{self, ManuallyDrop, MaybeUninit};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
@@ -425,6 +425,7 @@ pub fn load_icu() -> io::Result<LibIcu> {
         Ok(LibIcu { libicuuc, libicui18n })
     }
 }
+
 /// ICU, by default, adds the major version as a suffix to each exported symbol.
 /// They also recommend to disable this for system-level installations (`runConfigureICU Linux --disable-renaming`),
 /// but I found that many (most?) Linux distributions don't do this for some reason.
@@ -459,7 +460,7 @@ pub fn icu_detect_renaming_suffix(arena: &Arena, handle: NonNull<c_void>) -> Are
         }
 
         // The library path is in `info.dli_fname`.
-        let path = match CStr::from_ptr(info.dli_fname).to_str() {
+        let path = match std::ffi::CStr::from_ptr(info.dli_fname).to_str() {
             Ok(name) => name,
             Err(_) => return res,
         };
@@ -502,7 +503,7 @@ where
     } else {
         // SAFETY: In this particular case we know that the string
         // is valid UTF-8, because it comes from icu.rs.
-        let name = unsafe { CStr::from_ptr(name) };
+        let name = unsafe { std::ffi::CStr::from_ptr(name) };
         let name = unsafe { name.to_str().unwrap_unchecked() };
 
         let mut res = ManuallyDrop::new(ArenaString::new_in(arena));
