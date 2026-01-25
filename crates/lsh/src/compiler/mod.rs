@@ -1118,43 +1118,43 @@ impl Instruction {
                 _ = write!(str, "{_i}subi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
             }
 
-            Instruction::Call { tgt: off } => {
-                _ = write!(str, "{_i}call{i_}   {_a}{off}{a_}");
+            Instruction::Call { tgt } => {
+                _ = write!(str, "{_i}call{i_}   {_a}{tgt}{a_}");
             }
             Instruction::Return => {
                 _ = write!(str, "{_i}ret{i_}");
             }
 
-            Instruction::JumpEQ { lhs, rhs, tgt: off } => {
-                _ = write!(str, "{_i}jeq{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{off}{a_}");
+            Instruction::JumpEQ { lhs, rhs, tgt } => {
+                _ = write!(str, "{_i}jeq{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
             }
-            Instruction::JumpNE { lhs, rhs, tgt: off } => {
-                _ = write!(str, "{_i}jne{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{off}{a_}");
+            Instruction::JumpNE { lhs, rhs, tgt } => {
+                _ = write!(str, "{_i}jne{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
             }
-            Instruction::JumpLT { lhs, rhs, tgt: off } => {
-                _ = write!(str, "{_i}jlt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{off}{a_}");
+            Instruction::JumpLT { lhs, rhs, tgt } => {
+                _ = write!(str, "{_i}jlt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
             }
-            Instruction::JumpLE { lhs, rhs, tgt: off } => {
-                _ = write!(str, "{_i}jle{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{off}{a_}");
+            Instruction::JumpLE { lhs, rhs, tgt } => {
+                _ = write!(str, "{_i}jle{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
             }
-            Instruction::JumpGT { lhs, rhs, tgt: off } => {
-                _ = write!(str, "{_i}jgt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{off}{a_}");
+            Instruction::JumpGT { lhs, rhs, tgt } => {
+                _ = write!(str, "{_i}jgt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
             }
-            Instruction::JumpGE { lhs, rhs, tgt: off } => {
-                _ = write!(str, "{_i}jge{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{off}{a_}");
+            Instruction::JumpGE { lhs, rhs, tgt } => {
+                _ = write!(str, "{_i}jge{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
             }
 
-            Instruction::JumpIfEndOfLine { tgt: off } => {
-                _ = write!(str, "{_i}jeol{i_}   {_a}{off}{a_}");
+            Instruction::JumpIfEndOfLine { tgt } => {
+                _ = write!(str, "{_i}jeol{i_}   {_a}{tgt}{a_}");
             }
-            Instruction::JumpIfMatchCharset { idx, tgt: off } => {
-                _ = write!(str, "{_i}jc{i_}     {_n}{idx}{n_}, {_a}{off}{a_}");
+            Instruction::JumpIfMatchCharset { idx, tgt } => {
+                _ = write!(str, "{_i}jc{i_}     {_n}{idx}{n_}, {_a}{tgt}{a_}");
             }
-            Instruction::JumpIfMatchPrefix { idx, tgt: off } => {
-                _ = write!(str, "{_i}jp{i_}     {_n}{idx}{n_}, {_a}{off}{a_}");
+            Instruction::JumpIfMatchPrefix { idx, tgt } => {
+                _ = write!(str, "{_i}jp{i_}     {_n}{idx}{n_}, {_a}{tgt}{a_}");
             }
-            Instruction::JumpIfMatchPrefixInsensitive { idx, tgt: off } => {
-                _ = write!(str, "{_i}jpi{i_}    {_n}{idx}{n_}, {_a}{off}{a_}");
+            Instruction::JumpIfMatchPrefixInsensitive { idx, tgt } => {
+                _ = write!(str, "{_i}jpi{i_}    {_n}{idx}{n_}, {_a}{tgt}{a_}");
             }
 
             Instruction::FlushHighlight => {

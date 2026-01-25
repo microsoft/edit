@@ -92,55 +92,55 @@ impl<'a> Backend<'a> {
                                 Condition::Cmp { lhs, rhs, op } => {
                                     let lhs = self.read_reg(lhs)?;
                                     let rhs = self.read_reg(rhs)?;
-                                    let off = self.dst_by_node(then) as u32;
+                                    let tgt = self.dst_by_node(then) as u32;
 
                                     match op {
                                         ComparisonOp::Eq => {
-                                            self.push_instruction(JumpEQ { lhs, rhs, tgt: off });
+                                            self.push_instruction(JumpEQ { lhs, rhs, tgt });
                                         }
                                         ComparisonOp::Ne => {
-                                            self.push_instruction(JumpNE { lhs, rhs, tgt: off });
+                                            self.push_instruction(JumpNE { lhs, rhs, tgt });
                                         }
                                         ComparisonOp::Lt => {
-                                            self.push_instruction(JumpLT { lhs, rhs, tgt: off });
+                                            self.push_instruction(JumpLT { lhs, rhs, tgt });
                                         }
                                         ComparisonOp::Gt => {
-                                            self.push_instruction(JumpGT { lhs, rhs, tgt: off });
+                                            self.push_instruction(JumpGT { lhs, rhs, tgt });
                                         }
                                         ComparisonOp::Le => {
-                                            self.push_instruction(JumpLE { lhs, rhs, tgt: off });
+                                            self.push_instruction(JumpLE { lhs, rhs, tgt });
                                         }
                                         ComparisonOp::Ge => {
-                                            self.push_instruction(JumpGE { lhs, rhs, tgt: off });
+                                            self.push_instruction(JumpGE { lhs, rhs, tgt });
                                         }
                                     }
                                 }
                                 Condition::EndOfLine => {
-                                    let off = self.dst_by_node(then) as u32;
-                                    self.push_instruction(JumpIfEndOfLine { tgt: off });
+                                    let tgt = self.dst_by_node(then) as u32;
+                                    self.push_instruction(JumpIfEndOfLine { tgt });
                                 }
                                 Condition::Charset(h) => {
                                     let idx = self.visit_charset(h) as u32;
-                                    let off = self.dst_by_node(then) as u32;
-                                    self.push_instruction(JumpIfMatchCharset { idx, tgt: off });
+                                    let tgt = self.dst_by_node(then) as u32;
+                                    self.push_instruction(JumpIfMatchCharset { idx, tgt });
                                 }
                                 Condition::Prefix(s) => {
                                     let idx = self.visit_string(s) as u32;
-                                    let off = self.dst_by_node(then) as u32;
-                                    self.push_instruction(JumpIfMatchPrefix { idx, tgt: off });
+                                    let tgt = self.dst_by_node(then) as u32;
+                                    self.push_instruction(JumpIfMatchPrefix { idx, tgt });
                                 }
                                 Condition::PrefixInsensitive(s) => {
                                     let idx = self.visit_string(s) as u32;
-                                    let off = self.dst_by_node(then) as u32;
+                                    let tgt = self.dst_by_node(then) as u32;
                                     self.push_instruction(
-                                        Instruction::JumpIfMatchPrefixInsensitive { idx, tgt: off },
+                                        Instruction::JumpIfMatchPrefixInsensitive { idx, tgt },
                                     );
                                 }
                             }
                         }
                         IRI::Call { name } => {
-                            let off = self.dst_by_name(name) as u32;
-                            self.push_instruction(Call { tgt: off });
+                            let tgt = self.dst_by_name(name) as u32;
+                            self.push_instruction(Call { tgt });
                         }
                         IRI::Return => {
                             self.push_instruction(Return);
