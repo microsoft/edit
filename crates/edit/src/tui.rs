@@ -3314,8 +3314,46 @@ impl<'a> Context<'a, '_> {
     }
 
     fn menubar_shortcut(&mut self, shortcut: InputKey) {
-        let shortcut_letter = shortcut.value() as u8 as char;
-        if shortcut_letter.is_ascii_uppercase() {
+        let shortcut_key = shortcut.key().value();
+        let shortcut_letter = shortcut_key as u8 as char;
+
+        // Check if it's a displayable shortcut (letter, function key, or special key)
+        let key_name: Option<&str> = if shortcut_letter.is_ascii_uppercase() {
+            None // Will use the letter directly
+        } else {
+            match shortcut_key {
+                // Arrow keys
+                0x25 => Some("←"),
+                0x26 => Some("↑"),
+                0x27 => Some("→"),
+                0x28 => Some("↓"),
+                // Function keys
+                0x70 => Some("F1"),
+                0x71 => Some("F2"),
+                0x72 => Some("F3"),
+                0x73 => Some("F4"),
+                0x74 => Some("F5"),
+                0x75 => Some("F6"),
+                0x76 => Some("F7"),
+                0x77 => Some("F8"),
+                0x78 => Some("F9"),
+                0x79 => Some("F10"),
+                0x7A => Some("F11"),
+                0x7B => Some("F12"),
+                // Other special keys
+                0x21 => Some("PgUp"),
+                0x22 => Some("PgDn"),
+                0x23 => Some("End"),
+                0x24 => Some("Home"),
+                0x2D => Some("Ins"),
+                0x2E => Some("Del"),
+                0x1B => Some("Esc"),
+                0x5C => Some("\\"), // Backslash
+                _ => None,
+            }
+        };
+
+        if shortcut_letter.is_ascii_uppercase() || key_name.is_some() {
             let mut shortcut_text = ArenaString::new_in(self.arena());
             if shortcut.modifiers_contains(kbmod::CTRL) {
                 shortcut_text.push_str(self.tui.modifier_translations.ctrl);
@@ -3329,7 +3367,11 @@ impl<'a> Context<'a, '_> {
                 shortcut_text.push_str(self.tui.modifier_translations.shift);
                 shortcut_text.push('+');
             }
-            shortcut_text.push(shortcut_letter);
+            if let Some(name) = key_name {
+                shortcut_text.push_str(name);
+            } else {
+                shortcut_text.push(shortcut_letter);
+            }
 
             self.label("shortcut", &shortcut_text);
         } else {

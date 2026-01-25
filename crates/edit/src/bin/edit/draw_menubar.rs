@@ -126,17 +126,17 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
         drop(tb);
 
         // Split view menu items
-        if ctx.menubar_menu_button(loc(LocId::ViewSplitHorizontal), 'H', kbmod::CTRL_ALT | vk::RIGHT)
+        if ctx.menubar_menu_button(loc(LocId::ViewSplitHorizontal), 'H', kbmod::CTRL | vk::BACKSLASH)
         {
             state.wants_split_horizontal = true;
             ctx.needs_rerender();
         }
-        if ctx.menubar_menu_button(loc(LocId::ViewSplitVertical), 'V', kbmod::CTRL_ALT | vk::DOWN) {
+        if ctx.menubar_menu_button(loc(LocId::ViewSplitVertical), 'V', kbmod::CTRL_SHIFT | vk::BACKSLASH) {
             state.wants_split_vertical = true;
             ctx.needs_rerender();
         }
         if state.split_layout.pane_count() > 1 {
-            if ctx.menubar_menu_button(loc(LocId::ViewClosePane), 'C', kbmod::CTRL_ALT | vk::LEFT) {
+            if ctx.menubar_menu_button(loc(LocId::ViewClosePane), 'C', kbmod::CTRL_SHIFT | vk::W) {
                 state.wants_close_pane = true;
                 ctx.needs_rerender();
             }
