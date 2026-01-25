@@ -96,11 +96,15 @@ fn run() -> apperr::Result<()> {
         .indexed_alpha(IndexedColor::Background, 2, 3)
         .oklab_blend(tui.indexed_alpha(IndexedColor::Foreground, 1, 3));
     let floater_fg = tui.contrasted(floater_bg);
-    tui.setup_modifier_translations(ModifierTranslations {
-        ctrl: loc(LocId::Ctrl),
-        alt: loc(LocId::Alt),
-        shift: loc(LocId::Shift),
-    });
+
+    // Use Mac-style modifier symbols on macOS, otherwise use localized text
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let modifier_translations = ModifierTranslations { ctrl: "⌘", alt: "⌥", shift: "⇧" };
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let modifier_translations =
+        ModifierTranslations { ctrl: loc(LocId::Ctrl), alt: loc(LocId::Alt), shift: loc(LocId::Shift) };
+
+    tui.setup_modifier_translations(modifier_translations);
     tui.set_floater_default_bg(floater_bg);
     tui.set_floater_default_fg(floater_fg);
     tui.set_modal_default_bg(floater_bg);
@@ -370,17 +374,15 @@ fn draw(ctx: &mut Context, state: &mut State) {
             state.wants_search.focus = true;
         } else if key == vk::F3 {
             search_execute(ctx, state, SearchAction::Search);
-        } else if key == kbmod::CTRL_ALT | vk::RIGHT {
+        } else if key == kbmod::CTRL | vk::BACKSLASH {
             // Split editor horizontally (side by side)
             state.wants_split_horizontal = true;
-        } else if key == kbmod::CTRL_ALT | vk::DOWN {
+        } else if key == kbmod::CTRL_SHIFT | vk::BACKSLASH {
             // Split editor vertically (stacked)
             state.wants_split_vertical = true;
-        } else if key == kbmod::CTRL_ALT | vk::LEFT || key == kbmod::CTRL_ALT | vk::UP {
+        } else if key == kbmod::CTRL_SHIFT | vk::W && state.split_layout.pane_count() > 1 {
             // Close current pane (if split)
-            if state.split_layout.pane_count() > 1 {
-                state.wants_close_pane = true;
-            }
+            state.wants_close_pane = true;
         } else if key == vk::F6 {
             // Focus next pane
             state.wants_focus_next_pane = true;
