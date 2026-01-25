@@ -370,6 +370,23 @@ fn draw(ctx: &mut Context, state: &mut State) {
             state.wants_search.focus = true;
         } else if key == vk::F3 {
             search_execute(ctx, state, SearchAction::Search);
+        } else if key == kbmod::CTRL_ALT | vk::RIGHT {
+            // Split editor horizontally (side by side)
+            state.wants_split_horizontal = true;
+        } else if key == kbmod::CTRL_ALT | vk::DOWN {
+            // Split editor vertically (stacked)
+            state.wants_split_vertical = true;
+        } else if key == kbmod::CTRL_ALT | vk::LEFT || key == kbmod::CTRL_ALT | vk::UP {
+            // Close current pane (if split)
+            if state.split_layout.pane_count() > 1 {
+                state.wants_close_pane = true;
+            }
+        } else if key == vk::F6 {
+            // Focus next pane
+            state.wants_focus_next_pane = true;
+        } else if key == kbmod::SHIFT | vk::F6 {
+            // Focus previous pane
+            state.wants_focus_prev_pane = true;
         } else {
             return;
         }
