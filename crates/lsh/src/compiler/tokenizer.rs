@@ -47,6 +47,7 @@ pub enum Token<'a> {
     RightBracket,
     Hash,
     Comma,
+    Dollar,
 
     // End of file
     Eof,
@@ -98,6 +99,7 @@ impl<'a> Tokenizer<'a> {
                 ']' => Token::RightBracket,
                 '#' => Token::Hash,
                 ',' => Token::Comma,
+                '$' => Token::Dollar,
                 ';' => Token::Semicolon,
                 '"' => self.read_string(),
                 '/' => self.read_regex(),

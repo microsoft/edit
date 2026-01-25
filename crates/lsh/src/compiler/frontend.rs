@@ -35,6 +35,7 @@ struct RegexSpan<'a> {
     pub src: IRCell<'a>,
     pub dst_good: IRCell<'a>,
     pub dst_bad: IRCell<'a>,
+    pub capture_groups: Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
 }
 
 enum LoopFlowControlKind {
@@ -52,6 +53,9 @@ struct LoopFlowControl<'a> {
 struct Context<'a> {
     loop_start: Option<IRCell<'a>>,
     loop_exit: Option<IRCell<'a>>,
+    // Capture groups from the last regex match
+    // Each capture is a pair of (start_offset, end_offset) virtual registers
+    capture_groups: Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
 }
 
 impl<'a> Context<'a> {
@@ -217,7 +221,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         let loop_start = self.compiler.alloc_noop();
         let loop_exit = self.compiler.alloc_noop();
-        self.parse_until_impl(loop_start, loop_start, loop_exit)
+        self.parse_until_impl(loop_start, loop_start, loop_exit, Vec::new_in(self.compiler.arena))
     }
 
     fn parse_until(&mut self) -> CompileResult<IRSpan<'a>> {
@@ -227,7 +231,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         let loop_exit = self.compiler.alloc_noop();
         re.dst_good.borrow_mut().set_next(loop_exit);
-        self.parse_until_impl(re.src, re.dst_bad, loop_exit)
+        self.parse_until_impl(re.src, re.dst_bad, loop_exit, re.capture_groups)
     }
 
     fn parse_until_impl(
@@ -235,6 +239,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         loop_start: IRCell<'a>,
         loop_good: IRCell<'a>,
         loop_exit: IRCell<'a>,
+        capture_groups: Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
     ) -> CompileResult<IRSpan<'a>> {
         // First, save the current input offset.
         // This is used to detect if the loop made any progress.
@@ -245,7 +250,11 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             imm: 0,
         });
 
-        self.context.push(Context { loop_start: Some(loop_start), loop_exit: Some(loop_exit) });
+        self.context.push(Context {
+            loop_start: Some(loop_start),
+            loop_exit: Some(loop_exit),
+            capture_groups,
+        });
         let block = self.parse_block()?;
         self.context.pop();
 
@@ -357,7 +366,15 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         loop {
             let re = self.parse_if_regex()?;
+
+            // Push context with capture groups for the block
+            self.context.push(Context {
+                loop_start: None,
+                loop_exit: None,
+                capture_groups: re.capture_groups,
+            });
             let bl = self.parse_block()?;
+            self.context.pop();
 
             // Connect the previous else branch to form an "else if".
             // If there's no previous one, we're in the first iteration,
@@ -506,14 +523,16 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         };
         let dst_good = self.compiler.alloc_noop();
         let dst_bad = self.compiler.alloc_noop();
-        let src = match regex::parse(self.compiler, pattern, dst_good, dst_bad) {
+        let mut capture_groups = Vec::new_in(self.compiler.arena);
+        let src = match regex::parse(self.compiler, pattern, dst_good, dst_bad, &mut capture_groups)
+        {
             Ok(s) => s,
             Err(e) => raise!(self, "{}", e),
         };
 
         self.advance();
 
-        Ok(RegexSpan { src, dst_good, dst_bad })
+        Ok(RegexSpan { src, dst_good, dst_bad, capture_groups })
     }
 
     fn parse_await(&mut self) -> CompileResult<IRSpan<'a>> {
@@ -533,22 +552,96 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     fn parse_yield(&mut self) -> CompileResult<IRSpan<'a>> {
         self.expect_token(Token::Yield)?;
 
-        let color = match self.current_token {
-            Token::Identifier(c) => c,
-            _ => raise!(self, "expected color name after yield"),
-        };
-        let kind = self.compiler.intern_highlight_kind(color).value;
+        // Check if this is a capture group reference: yield $n as color
+        if matches!(self.current_token, Token::Dollar) {
+            self.advance();
 
-        self.advance();
-        self.expect_token(Token::Semicolon)?;
+            let capture_index = match self.current_token {
+                Token::Integer(n) => {
+                    if n == 0 {
+                        raise!(self, "capture group index must be >= 1");
+                    }
+                    (n - 1) as usize // Convert to 0-based index
+                }
+                _ => raise!(self, "expected capture group number after $"),
+            };
+            self.advance();
 
-        let set = self.compiler.alloc_iri(IRI::Add {
-            dst: self.compiler.get_reg(Register::HighlightKind),
-            src: self.compiler.get_reg(Register::Zero),
-            imm: kind,
-        });
-        let flush = self.compiler.chain_iri(set, IRI::Flush);
-        Ok(IRSpan { first: set, last: flush })
+            // Expect "as"
+            match self.current_token {
+                Token::Identifier("as") => self.advance(),
+                _ => raise!(self, "expected 'as' after capture group reference"),
+            }
+
+            let color = match self.current_token {
+                Token::Identifier(c) => c,
+                _ => raise!(self, "expected color name after 'as'"),
+            };
+            let kind = self.compiler.intern_highlight_kind(color).value;
+            self.advance();
+            self.expect_token(Token::Semicolon)?;
+
+            // Get the capture group from the context
+            let (start_vreg, end_vreg) = match self.context.last() {
+                Some(ctx) if capture_index < ctx.capture_groups.len() => {
+                    ctx.capture_groups[capture_index]
+                }
+                Some(_) => raise!(
+                    self,
+                    "capture group ${} not found in current context",
+                    capture_index + 1
+                ),
+                None => raise!(self, "no regex context available for capture group reference"),
+            };
+
+            // Set HighlightStart to the start of the capture group
+            let set_start = self.compiler.alloc_iri(IRI::Add {
+                dst: self.compiler.get_reg(Register::HighlightStart),
+                src: start_vreg,
+                imm: 0,
+            });
+
+            // Set HighlightKind to the color
+            let set_kind = self.compiler.chain_iri(
+                set_start,
+                IRI::Add {
+                    dst: self.compiler.get_reg(Register::HighlightKind),
+                    src: self.compiler.get_reg(Register::Zero),
+                    imm: kind,
+                },
+            );
+
+            // Set InputOffset to the end of the capture group and flush
+            let set_offset = self.compiler.chain_iri(
+                set_kind,
+                IRI::Add {
+                    dst: self.compiler.get_reg(Register::InputOffset),
+                    src: end_vreg,
+                    imm: 0,
+                },
+            );
+
+            let flush = self.compiler.chain_iri(set_offset, IRI::Flush);
+            Ok(IRSpan { first: set_start, last: flush })
+        } else {
+            // Normal yield: yield color;
+            let color = match self.current_token {
+                Token::Identifier(c) => c,
+                _ => raise!(self, "expected color name after yield"),
+            };
+            let kind = self.compiler.intern_highlight_kind(color).value;
+
+            self.advance();
+            self.expect_token(Token::Semicolon)?;
+
+            let set = self.compiler.alloc_iri(IRI::Add {
+                dst: self.compiler.get_reg(Register::HighlightKind),
+                src: self.compiler.get_reg(Register::Zero),
+                imm: kind,
+            });
+            let flush = self.compiler.chain_iri(set, IRI::Flush);
+            Ok(IRSpan { first: set, last: flush })
+        }
     }
 
     fn parse_var_declaration(&mut self) -> CompileResult<IRSpan<'a>> {

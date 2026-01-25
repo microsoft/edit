@@ -13,6 +13,7 @@ pub fn parse<'a>(
     pattern: &str,
     dst_good: IRCell<'a>,
     dst_bad: IRCell<'a>,
+    capture_groups: &mut Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
 ) -> Result<IRCell<'a>, String> {
     let hir = match regex_syntax::ParserBuilder::new()
         .utf8(false)
@@ -25,7 +26,7 @@ pub fn parse<'a>(
         Err(e) => return Err(format!("{e}")),
     };
 
-    let src = transform(compiler, dst_good, &hir)?;
+    let src = transform(compiler, dst_good, &hir, capture_groups)?;
 
     // Connect all unset .next pointers to dst_bad.
     for node in compiler.visit_nodes_from(src) {
@@ -45,6 +46,7 @@ fn transform<'a>(
     compiler: &mut Compiler<'a>,
     dst: IRCell<'a>,
     hir: &Hir,
+    capture_groups: &mut Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
 ) -> Result<IRCell<'a>, String> {
     fn is_any_class(class: &ClassBytes) -> bool {
         class.ranges() == [ClassBytesRange::new(0, 255)]
@@ -83,7 +85,7 @@ fn transform<'a>(
                 }
             }
             (0, Some(1), true, _) => {
-                let src = transform(compiler, dst, &rep.sub)?;
+                let src = transform(compiler, dst, &rep.sub, capture_groups)?;
                 transform_option(src, dst)
             }
             (1, None, true, HirKind::Literal(lit)) => transform_literal_plus(compiler, dst, lit),
@@ -92,8 +94,48 @@ fn transform<'a>(
             }
             _ => panic!("Unsupported HIR: {hir:?}"),
         },
-        HirKind::Concat(hirs) => transform_concat(compiler, dst, hirs),
-        HirKind::Alternation(hirs) => transform_alt(compiler, dst, hirs),
+        HirKind::Concat(hirs) => transform_concat(compiler, dst, hirs, capture_groups),
+        HirKind::Alternation(hirs) => transform_alt(compiler, dst, hirs, capture_groups),
+        HirKind::Capture(capture) => {
+            // Save the current input offset before matching the capture group
+            let start_vreg = compiler.alloc_vreg();
+            let save_start = compiler.alloc_iri(IRI::Add {
+                dst: start_vreg,
+                src: compiler.get_reg(Register::InputOffset),
+                imm: 0,
+            });
+
+            // Transform the sub-expression
+            let end_marker = compiler.alloc_noop();
+            save_start.borrow_mut().set_next(transform(
+                compiler,
+                end_marker,
+                &capture.sub,
+                capture_groups,
+            )?);
+
+            // Save the end offset after matching
+            let end_vreg = compiler.alloc_vreg();
+            let save_end = compiler.alloc_iri(IRI::Add {
+                dst: end_vreg,
+                src: compiler.get_reg(Register::InputOffset),
+                imm: 0,
+            });
+            end_marker.borrow_mut().set_next(save_end);
+            save_end.borrow_mut().set_next(dst);
+
+            // Store the capture group (index is 1-based in regex, 0-based in our vec)
+            let vec_index = (capture.index as usize).saturating_sub(1);
+            // Ensure the vector is large enough
+            while capture_groups.len() <= vec_index {
+                let dummy_start = compiler.alloc_vreg();
+                let dummy_end = compiler.alloc_vreg();
+                capture_groups.push((dummy_start, dummy_end));
+            }
+            capture_groups[vec_index] = (start_vreg, end_vreg);
+
+            Ok(save_start)
+        }
         _ => panic!("Unsupported HIR: {hir:?}"),
     }
 }
@@ -229,6 +271,7 @@ fn transform_concat<'a>(
     compiler: &mut Compiler<'a>,
     dst: IRCell<'a>,
     hirs: &[Hir],
+    capture_groups: &mut Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
 ) -> Result<IRCell<'a>, String> {
     fn is_lowercase_literal(hir: &Hir) -> Option<u8> {
         if let HirKind::Class(Class::Bytes(class)) = hir.kind()
@@ -274,7 +317,7 @@ fn transform_concat<'a>(
             let str = compiler.intern_string(&str);
             compiler.alloc_iri(IRI::If { condition: Condition::PrefixInsensitive(str), then: dst })
         } else {
-            transform(compiler, dst, hir)?
+            transform(compiler, dst, hir, capture_groups)?
         };
         if first.is_none() {
             first = Some(src);
@@ -297,12 +340,13 @@ fn transform_alt<'a>(
     compiler: &mut Compiler<'a>,
     dst: IRCell<'a>,
     hirs: &[Hir],
+    capture_groups: &mut Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
 ) -> Result<IRCell<'a>, String> {
     let mut first: Option<IRCell<'a>> = None;
     let mut last: Option<IRCell<'a>> = None;
 
     for hir in hirs {
-        let node = transform(compiler, dst, hir)?;
+        let node = transform(compiler, dst, hir, capture_groups)?;
         if first.is_none() {
             first = Some(node);
         }
