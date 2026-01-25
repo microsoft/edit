@@ -25,15 +25,279 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         _ => 2,
     };
 
-    if let Some(doc) = state.documents.active() {
-        ctx.textarea("textarea", doc.buffer.clone());
-        ctx.inherit_focus();
-    } else {
-        ctx.block_begin("empty");
-        ctx.block_end();
+    let editor_height = size.height - height_reduction;
+
+    // Synchronize split layout with current document state
+    sync_split_layout(state);
+
+    // Handle split view requests
+    handle_split_requests(state);
+
+    // Draw the editor area (single or split)
+    draw_editor_panes(ctx, state, editor_height);
+}
+
+/// Synchronize the split layout with the current document state.
+/// Ensures panes reference valid documents.
+fn sync_split_layout(state: &mut State) {
+    // If no panes exist, create one for the active document
+    if state.split_layout.panes.is_empty() {
+        if let Some(doc) = state.documents.active() {
+            state.split_layout.panes.push(Pane {
+                document_index: 0,
+                buffer: doc.buffer.clone(),
+                filename: doc.filename.clone(),
+            });
+            state.split_layout.active_pane = 0;
+        }
+    } else if state.split_layout.split_direction == SplitDirection::None {
+        // In single-pane mode, always sync with the active document
+        if let Some(doc) = state.documents.active() {
+            if let Some(pane) = state.split_layout.panes.get_mut(0) {
+                pane.buffer = doc.buffer.clone();
+                pane.filename = doc.filename.clone();
+                pane.document_index = 0;
+            }
+        }
+    }
+}
+
+/// Handle split view requests (split, close pane, focus navigation).
+fn handle_split_requests(state: &mut State) {
+    if std::mem::take(&mut state.wants_split_horizontal) {
+        do_split(state, SplitDirection::Horizontal);
+    }
+    if std::mem::take(&mut state.wants_split_vertical) {
+        do_split(state, SplitDirection::Vertical);
+    }
+    if std::mem::take(&mut state.wants_close_pane) {
+        close_active_pane(state);
     }
 
-    ctx.attr_intrinsic_size(Size { width: 0, height: size.height - height_reduction });
+    let count = state.split_layout.pane_count();
+    if count > 1 {
+        if std::mem::take(&mut state.wants_focus_next_pane) {
+            state.split_layout.active_pane = (state.split_layout.active_pane + 1) % count;
+        }
+        if std::mem::take(&mut state.wants_focus_prev_pane) {
+            state.split_layout.active_pane = (state.split_layout.active_pane + count - 1) % count;
+        }
+    }
+}
+
+/// Perform a split operation.
+fn do_split(state: &mut State, direction: SplitDirection) {
+    // Need at least one document to split
+    let Some(doc) = state.documents.active() else {
+        return;
+    };
+
+    if state.split_layout.split_direction == SplitDirection::None {
+        // First split: change direction and add a second pane
+        state.split_layout.split_direction = direction;
+
+        // Clone the current document's buffer into the new pane
+        // (same document shown in both panes)
+        state.split_layout.panes.push(Pane {
+            document_index: 0,
+            buffer: doc.buffer.clone(),
+            filename: doc.filename.clone(),
+        });
+
+        // Focus the new pane
+        state.split_layout.active_pane = state.split_layout.panes.len() - 1;
+    } else {
+        // Already split - just change direction (we only support 2 panes for now)
+        state.split_layout.split_direction = direction;
+    }
+}
+
+/// Close the active pane.
+fn close_active_pane(state: &mut State) {
+    if state.split_layout.panes.len() <= 1 {
+        // Can't close the last pane, close the document instead
+        return;
+    }
+
+    state.split_layout.panes.remove(state.split_layout.active_pane);
+
+    // Adjust active pane index
+    if state.split_layout.active_pane >= state.split_layout.panes.len() {
+        state.split_layout.active_pane = state.split_layout.panes.len() - 1;
+    }
+
+    // If only one pane remains, go back to single-pane mode
+    if state.split_layout.panes.len() == 1 {
+        state.split_layout.split_direction = SplitDirection::None;
+    }
+}
+
+/// Draw the editor panes based on split layout.
+fn draw_editor_panes(ctx: &mut Context, state: &mut State, editor_height: CoordType) {
+    let pane_count = state.split_layout.pane_count();
+
+    if pane_count == 0 {
+        // No documents open
+        ctx.block_begin("empty");
+        ctx.block_end();
+        ctx.attr_intrinsic_size(Size { width: 0, height: editor_height });
+        return;
+    }
+
+    if pane_count == 1 || state.split_layout.split_direction == SplitDirection::None {
+        // Single pane mode
+        if let Some(pane) = state.split_layout.panes.first() {
+            ctx.textarea("textarea", pane.buffer.clone());
+            ctx.inherit_focus();
+        } else {
+            ctx.block_begin("empty");
+            ctx.block_end();
+        }
+        ctx.attr_intrinsic_size(Size { width: 0, height: editor_height });
+    } else {
+        // Split mode - draw panes in a table layout
+        draw_split_panes(ctx, state, editor_height);
+    }
+}
+
+/// Draw split panes using table layout.
+fn draw_split_panes(ctx: &mut Context, state: &mut State, editor_height: CoordType) {
+    let direction = state.split_layout.split_direction;
+    let active_pane = state.split_layout.active_pane;
+    let pane_count = state.split_layout.panes.len();
+
+    // For now, only support 2 panes to keep it simple
+    if pane_count != 2 {
+        // Fall back to single pane
+        if let Some(pane) = state.split_layout.panes.first() {
+            ctx.textarea("textarea", pane.buffer.clone());
+            ctx.inherit_focus();
+        }
+        ctx.attr_intrinsic_size(Size { width: 0, height: editor_height });
+        return;
+    }
+
+    let screen_width = ctx.size().width;
+    let half_width = (screen_width - 1) / 2; // -1 for the gap/separator
+
+    if direction == SplitDirection::Horizontal {
+        draw_horizontal_split(ctx, state, editor_height, half_width, active_pane);
+    } else {
+        draw_vertical_split(ctx, state, editor_height, active_pane);
+    }
+}
+
+/// Draw horizontal split layout (side by side panes).
+fn draw_horizontal_split(
+    ctx: &mut Context,
+    state: &State,
+    editor_height: CoordType,
+    half_width: CoordType,
+    active_pane: usize,
+) {
+    ctx.table_begin("split-h");
+    ctx.table_set_columns(&[half_width, half_width]);
+    ctx.table_set_cell_gap(Size { width: 1, height: 0 });
+    ctx.table_next_row();
+
+    for (idx, (pane, name)) in state.split_layout.panes.iter()
+        .zip(["left-pane", "right-pane"])
+        .enumerate()
+    {
+        let is_active = active_pane == idx;
+        ctx.block_begin(name);
+        {
+            draw_pane_header(ctx, pane, is_active);
+            let textarea_name = if idx == 0 { "textarea-left" } else { "textarea-right" };
+            ctx.textarea(textarea_name, pane.buffer.clone());
+            if is_active {
+                ctx.inherit_focus();
+            }
+            ctx.attr_intrinsic_size(Size { width: 0, height: editor_height - 1 });
+        }
+        ctx.block_end();
+        ctx.attr_intrinsic_size(Size { width: 0, height: editor_height });
+    }
+
+    ctx.table_end();
+    ctx.attr_intrinsic_size(Size { width: 0, height: editor_height });
+}
+
+/// Draw vertical split layout (stacked panes).
+fn draw_vertical_split(
+    ctx: &mut Context,
+    state: &State,
+    editor_height: CoordType,
+    active_pane: usize,
+) {
+    let pane_height = (editor_height - 1) / 2; // -1 for separator
+
+    ctx.block_begin("split-v");
+    {
+        // Top pane
+        draw_pane_block(ctx, &state.split_layout.panes[0], "top", "textarea-top", active_pane == 0, pane_height);
+
+        // Separator
+        ctx.block_begin("separator");
+        ctx.attr_background_rgba(ctx.indexed(IndexedColor::BrightBlack));
+        ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
+        ctx.block_end();
+
+        // Bottom pane
+        draw_pane_block(ctx, &state.split_layout.panes[1], "bottom", "textarea-bottom", active_pane == 1, pane_height);
+    }
+    ctx.block_end();
+    ctx.attr_intrinsic_size(Size { width: 0, height: editor_height });
+}
+
+/// Draw a single pane block with header and textarea.
+fn draw_pane_block(
+    ctx: &mut Context,
+    pane: &Pane,
+    block_name: &'static str,
+    textarea_name: &'static str,
+    is_active: bool,
+    height: CoordType,
+) {
+    ctx.block_begin(block_name);
+    {
+        draw_pane_header(ctx, pane, is_active);
+        ctx.textarea(textarea_name, pane.buffer.clone());
+        if is_active {
+            ctx.inherit_focus();
+        }
+        ctx.attr_intrinsic_size(Size { width: 0, height: height - 1 });
+    }
+    ctx.block_end();
+    ctx.attr_intrinsic_size(Size { width: 0, height: height });
+}
+
+/// Draw a pane header showing the filename.
+fn draw_pane_header(ctx: &mut Context, pane: &Pane, is_active: bool) {
+    use std::borrow::Cow;
+
+    let (bg, fg) = if is_active {
+        (ctx.indexed(IndexedColor::Blue), ctx.indexed(IndexedColor::BrightWhite))
+    } else {
+        (ctx.indexed(IndexedColor::BrightBlack), ctx.indexed(IndexedColor::White))
+    };
+
+    ctx.block_begin("pane-header");
+    {
+        let label: Cow<'_, str> = if pane.buffer.borrow().is_dirty() {
+            format!("● {}", pane.filename).into()
+        } else {
+            Cow::Borrowed(&pane.filename)
+        };
+
+        ctx.label("filename", &label);
+        ctx.attr_overflow(Overflow::TruncateMiddle);
+        ctx.attr_background_rgba(bg);
+        ctx.attr_foreground_rgba(fg);
+    }
+    ctx.block_end();
+    ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
+    ctx.attr_background_rgba(bg);
 }
 
 fn draw_search(ctx: &mut Context, state: &mut State) {
@@ -219,6 +483,8 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
 
     if !doc.buffer.borrow().is_dirty() {
         state.documents.remove_active();
+        // Reset split layout when document is removed (will be re-synced)
+        state.split_layout.reset();
         state.wants_close = false;
         ctx.needs_rerender();
         return;
@@ -291,6 +557,8 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
         }
         Action::Discard => {
             state.documents.remove_active();
+            // Reset split layout when document is removed (will be re-synced)
+            state.split_layout.reset();
             state.wants_close = false;
         }
         Action::Cancel => {
