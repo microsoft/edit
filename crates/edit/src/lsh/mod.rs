@@ -1,10 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Welcome to Leonard's Syntax Highlighter,
-//! otherwise known as Leonard's Shitty Highlighter.
-//!
-//! This module provides the VM that runs the bytecode produced by the lsh crate.
+//! Microsoft Edit's adapter to LSH.
 
 pub mod cache;
 mod definitions;

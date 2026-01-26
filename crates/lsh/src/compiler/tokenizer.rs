@@ -3,25 +3,14 @@
 
 //! Lexer for the LSH DSL.
 //!
-//! ## Token types
-//!
-//! - `Regex(&str)` - content between `/` delimiters, backslash-escaped `/` allowed
-//! - `String(&str)` - content between `"` delimiters, backslash-escaped `"` allowed
-//! - `Submatch(u32)` - `$1`, `$2`, etc. for capture group references
-//! - `Identifier(&str)` - allows dots for hierarchical highlight kinds like `string.quoted`
-//!
 //! ## Quirks
 //!
 //! - Regex and string tokens include escape sequences verbatim. The frontend/regex compiler
 //!   handles unescaping. This means `/\/foo/` tokenizes as `Regex("\\/foo")`.
-//!
-//! - `position()` computes line/column by scanning from the start. Fine for error reporting,
-//!   but don't call it in hot paths.
-//!
-//! - Identifiers can contain dots (e.g., `string.quoted`), which is unusual. This is for
-//!   hierarchical highlight kind names. Affects `is_ident_continuation`.
-//!
-//! - `//` comments are stripped in `skip_whitespace`, not as a separate token.
+//! - `position()` computes line/column by scanning from the start.
+//!   Fine for error reporting, but don't call it in hot paths.
+//! - Identifiers can contain dots (e.g., `string.quoted`), which is unusual.
+//!   This is for hierarchical highlight kind names. Affects `is_ident_continuation`.
 
 use std::iter::Peekable;
 use std::str::Chars;

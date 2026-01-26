@@ -10,15 +10,7 @@
 //! flowchart where each node is one instruction. The `offset` field is set during
 //! codegen to the final bytecode address.
 //!
-//! The only IR instruction that does real work is `Add { dst, src, imm }` which computes
-//! `dst = src + imm`. Everything else is control flow (`If`, `Call`, `Return`) or
-//! side effects (`Flush`, `AwaitInput`).
-//!
 //! ## Register architecture
-//!
-//! - 5 physical registers with fixed semantics (`zero`, `pc`, `off`, `hs`, `hk`)
-//! - 11 user registers (`x5`-`x15`) for general use
-//! - Virtual registers (vreg IDs >= 16) get allocated to physical ones by the backend
 //!
 //! The `IRReg.physical` field starts as `None` for vregs and gets filled in by regalloc.
 //! For physical registers, it's set during `Compiler::new()`.
@@ -36,16 +28,13 @@
 //!
 //! ## Quirks
 //!
-//! - `IRI::Add` with `src=zero` is "load immediate". `imm=u32::MAX` is special-cased in
-//!   the DSL to mean "end of line" offset.
-//! - `TreeVisitor` does BFS, which is fine for iteration but **not** for linearization.
+//! - `TreeVisitor` does BFS, which is fine for iteration but *not* for linearization.
 //!   The backend has its own DFS traversal for liveness analysis.
-//! - `Charset::covers_all()` returning true means the charset matches every byte, which
-//!   is used to skip the "fast forward" optimization in loops.
 
 mod backend;
 mod frontend;
 mod generator;
+mod helpers;
 mod optimizer;
 mod regex;
 mod tokenizer;
@@ -63,7 +52,7 @@ use stdext::arena::{Arena, ArenaString};
 
 use self::frontend::*;
 pub use self::generator::Generator;
-use crate::{Intern, arena_clone_str};
+use crate::compiler::helpers::{Intern, arena_clone_str};
 
 pub fn builtin_definitions_path() -> &'static Path {
     #[cfg(windows)]
@@ -202,10 +191,7 @@ impl<'a> Compiler<'a> {
             if let IRI::If { condition, .. } = node.borrow().instr {
                 match condition {
                     Condition::Cmp { .. } => {}
-                    Condition::EndOfLine => {
-                        // EOL is interesting
-                        charset.set(b'\n', true);
-                    }
+                    Condition::EndOfLine => {}
                     Condition::Charset(cs) => {
                         // Merge this charset
                         charset.merge(cs);
@@ -754,7 +740,7 @@ pub enum Register {
 }
 
 impl Register {
-    const FIRST_USER_REG: usize = 5; // aka x5
+    const FIRST_USER_REG: usize = 3; // aka x3
     const COUNT: usize = 16;
 
     fn from_usize(value: usize) -> Self {
@@ -864,19 +850,6 @@ pub struct AnnotatedInstruction<'a> {
     pub label: &'a str,
 }
 
-// Standard instruction encoding:
-//
-// 0               8       12      16                              32
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |    opcode     |  dst  |  src  |            offset             |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
-// Immediate value coding (follows instructions that use an immediate):
-//
-// 0                                                               32
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                              imm                              |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 #[allow(dead_code)]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
@@ -916,6 +889,9 @@ pub enum Instruction {
 }
 
 impl Instruction {
+    // JumpIfMatchCharset, etc., are 1 byte opcode + two u32 parameters.
+    pub const MAX_ENCODED_SIZE: usize = 9;
+
     pub fn address_offset(&self) -> Option<usize> {
         match *self {
             Instruction::MovImm { .. }
@@ -1010,7 +986,7 @@ impl Instruction {
         bytes
     }
 
-    pub fn decode(bytes: &[u8]) -> (Self, usize) {
+    pub fn decode(bytes: &[u8]) -> (Option<Self>, usize) {
         fn dec_reg_pair(b: u8) -> (Register, Register) {
             let hi = Register::from_usize((b >> 4) as usize);
             let lo = Register::from_usize((b & 0xF) as usize);
@@ -1029,85 +1005,85 @@ impl Instruction {
         match opcode {
             0 => {
                 let (dst, src) = dec_reg_pair(bytes[1]);
-                (Instruction::Mov { dst, src }, 2)
+                (Some(Instruction::Mov { dst, src }), 2)
             }
             1 => {
                 let (dst, src) = dec_reg_pair(bytes[1]);
-                (Instruction::Add { dst, src }, 2)
+                (Some(Instruction::Add { dst, src }), 2)
             }
             2 => {
                 let (dst, src) = dec_reg_pair(bytes[1]);
-                (Instruction::Sub { dst, src }, 2)
+                (Some(Instruction::Sub { dst, src }), 2)
             }
             3 => {
                 let dst = dec_reg_single(bytes[1]);
                 let imm = dec_u32(&bytes[2..]);
-                (Instruction::MovImm { dst, imm }, 6)
+                (Some(Instruction::MovImm { dst, imm }), 6)
             }
             4 => {
                 let dst = dec_reg_single(bytes[1]);
                 let imm = dec_u32(&bytes[2..]);
-                (Instruction::AddImm { dst, imm }, 6)
+                (Some(Instruction::AddImm { dst, imm }), 6)
             }
             5 => {
                 let dst = dec_reg_single(bytes[1]);
                 let imm = dec_u32(&bytes[2..]);
-                (Instruction::SubImm { dst, imm }, 6)
+                (Some(Instruction::SubImm { dst, imm }), 6)
             }
-            6 => (Instruction::Call { tgt: dec_u32(&bytes[1..]) }, 5),
-            7 => (Instruction::Return, 1),
+            6 => (Some(Instruction::Call { tgt: dec_u32(&bytes[1..]) }), 5),
+            7 => (Some(Instruction::Return), 1),
             8 => {
                 let (lhs, rhs) = dec_reg_pair(bytes[1]);
                 let tgt = dec_u32(&bytes[2..]);
-                (Instruction::JumpEQ { lhs, rhs, tgt }, 6)
+                (Some(Instruction::JumpEQ { lhs, rhs, tgt }), 6)
             }
             9 => {
                 let (lhs, rhs) = dec_reg_pair(bytes[1]);
                 let tgt = dec_u32(&bytes[2..]);
-                (Instruction::JumpNE { lhs, rhs, tgt }, 6)
+                (Some(Instruction::JumpNE { lhs, rhs, tgt }), 6)
             }
             10 => {
                 let (lhs, rhs) = dec_reg_pair(bytes[1]);
                 let tgt = dec_u32(&bytes[2..]);
-                (Instruction::JumpLT { lhs, rhs, tgt }, 6)
+                (Some(Instruction::JumpLT { lhs, rhs, tgt }), 6)
             }
             11 => {
                 let (lhs, rhs) = dec_reg_pair(bytes[1]);
                 let tgt = dec_u32(&bytes[2..]);
-                (Instruction::JumpLE { lhs, rhs, tgt }, 6)
+                (Some(Instruction::JumpLE { lhs, rhs, tgt }), 6)
             }
             12 => {
                 let (lhs, rhs) = dec_reg_pair(bytes[1]);
                 let tgt = dec_u32(&bytes[2..]);
-                (Instruction::JumpGT { lhs, rhs, tgt }, 6)
+                (Some(Instruction::JumpGT { lhs, rhs, tgt }), 6)
             }
             13 => {
                 let (lhs, rhs) = dec_reg_pair(bytes[1]);
                 let tgt = dec_u32(&bytes[2..]);
-                (Instruction::JumpGE { lhs, rhs, tgt }, 6)
+                (Some(Instruction::JumpGE { lhs, rhs, tgt }), 6)
             }
-            14 => (Instruction::JumpIfEndOfLine { tgt: dec_u32(&bytes[1..]) }, 5),
+            14 => (Some(Instruction::JumpIfEndOfLine { tgt: dec_u32(&bytes[1..]) }), 5),
             15 => {
                 let idx = dec_u32(&bytes[1..]);
                 let tgt = dec_u32(&bytes[5..]);
-                (Instruction::JumpIfMatchCharset { idx, tgt }, 9)
+                (Some(Instruction::JumpIfMatchCharset { idx, tgt }), 9)
             }
             16 => {
                 let idx = dec_u32(&bytes[1..]);
                 let tgt = dec_u32(&bytes[5..]);
-                (Instruction::JumpIfMatchPrefix { idx, tgt }, 9)
+                (Some(Instruction::JumpIfMatchPrefix { idx, tgt }), 9)
             }
             17 => {
                 let idx = dec_u32(&bytes[1..]);
                 let tgt = dec_u32(&bytes[5..]);
-                (Instruction::JumpIfMatchPrefixInsensitive { idx, tgt }, 9)
+                (Some(Instruction::JumpIfMatchPrefixInsensitive { idx, tgt }), 9)
             }
             18 => {
                 let kind = dec_reg_single(bytes[1]);
-                (Instruction::FlushHighlight { kind }, 2)
+                (Some(Instruction::FlushHighlight { kind }), 2)
             }
-            19 => (Instruction::AwaitInput, 1),
-            _ => panic!("unknown opcode {opcode}"),
+            19 => (Some(Instruction::AwaitInput), 1),
+            _ => (None, 1),
         }
     }
 

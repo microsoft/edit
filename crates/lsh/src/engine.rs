@@ -1,31 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! VM bytecode interpreter.
-//!
-//! ## Register semantics
-//!
-//! - `off` advances only on successful matches (charset/prefix). Failed matches leave it alone.
-//!   This is why the frontend emits backup/restore pairs around regex chains.
-//! - `hs` (highlight start) is updated by user code, not automatically. `flush` emits `[hs, off)`.
-//! - `hk` (highlight kind) is just a u32 index into the highlight kind table.
-//!
-//! ## Charset encoding
-//!
-//! Charsets are 256-bit bitmaps stored as `[u16; 16]`. The encoding is transposed for SIMD:
-//! `bitmap[lo_nibble] & (1 << hi_nibble)` tests if byte `(hi_nibble << 4) | lo_nibble` is set.
-//! See `in_set()`. This layout allows parallel lookup of multiple bytes using pshufb.
+//! LSH bytecode interpreter.
 //!
 //! ## Performance notes
 //!
-//! - The main loop is `unsafe` with `get_unchecked` everywhere. Profile before "cleaning" it up.
-//! - `charset_gobble` is the hot path. The TODO references a SIMD approach that could help.
-//! - `inlined_memcmp` exists because `slice::starts_with` didn't inline well. Re-check occasionally.
+//! - The main loop is "unsafe". Profile before "cleaning" it up.
+//! - `charset_gobble`, `inlined_mem(i)cmp` are hot paths.
 //!
 //! ## Gotchas
 //!
-//! - `Return` with empty stack resets the VM to entrypoint and clears registers. This is how
-//!   the DSL returns to the "idle" state between tokens.
+//! - `Return` with empty stack resets the VM to entrypoint and clears registers.
+//!   This is how the DSL returns to the "idle" state between tokens.
 //! - `AwaitInput` only breaks the loop if `off >= line.len()`. If not at EOL, it's a no-op.
 //!   This allows the DSL to say "wait for more input OR continue if there is some".
 //! - The result always has a sentinel span at `line.len()`. Consumers can rely on this.
@@ -72,22 +58,13 @@ impl<T: Debug> Debug for Higlight<T> {
 }
 
 /// The bytecode interpreter for syntax highlighting.
-///
-/// Maintains execution state (registers, call stack) across lines. Use [`Engine::snapshot`]
-/// and [`Engine::restore`] to save/restore state for incremental re-highlighting.
 #[derive(Clone)]
 pub struct Engine<'pa, 'ps, 'pc> {
-    /// Compiled bytecode.
     assembly: &'pa [u8],
-    /// String table for prefix matching instructions.
     strings: &'ps [&'ps str],
-    /// Charset bitmaps for character class matching (16 u16s = 256 bits).
     charsets: &'pc [[u16; 16]],
-    /// Bytecode address to jump to on reset (after `Return` with empty stack).
     entrypoint: u32,
-    /// Call stack for `Call`/`Return` instructions.
     stack: Vec<u32>,
-    /// VM registers (pc, off, hs, hk, and general purpose).
     registers: Registers,
 }
 
@@ -155,190 +132,188 @@ impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
         res.push(Higlight { start: 0, kind: unsafe { mem::zeroed() } });
 
         loop {
-            unsafe {
-                let pc = self.registers.pc as usize;
-                let op = self.assembly[pc];
-                self.registers.pc += 1;
+            let pc = self.registers.pc as usize;
+            let op = self.assembly[pc];
+            self.registers.pc += 1;
 
-                match op {
-                    0 => {
-                        // Mov { dst: Register, src: Register }
-                        let (dst, src) = self.read_reg_pair();
-                        let s = self.registers.get(src);
-                        self.registers.set(dst, s);
-                    }
-                    1 => {
-                        // Add { dst: Register, src: Register }
-                        let (dst, src) = self.read_reg_pair();
-                        let d = self.registers.get(dst);
-                        let s = self.registers.get(src);
-                        self.registers.set(dst, d.saturating_add(s));
-                    }
-                    2 => {
-                        // Sub { dst: Register, src: Register }
-                        let (dst, src) = self.read_reg_pair();
-                        let d = self.registers.get(dst);
-                        let s = self.registers.get(src);
-                        self.registers.set(dst, d.saturating_sub(s));
-                    }
-                    3 => {
-                        // MovImm { dst: Register, imm: u32 }
-                        let (dst, _) = self.read_reg_pair();
-                        let imm = self.read::<u32>();
-                        self.registers.set(dst, imm);
-                    }
-                    4 => {
-                        // AddImm { dst: Register, imm: u32 }
-                        let (dst, _) = self.read_reg_pair();
-                        let imm = self.read::<u32>();
-                        let d = self.registers.get(dst);
-                        self.registers.set(dst, d.saturating_add(imm));
-                    }
-                    5 => {
-                        // SubImm { dst: Register, imm: u32 }
-                        let (dst, _) = self.read_reg_pair();
-                        let imm = self.read::<u32>();
-                        let d = self.registers.get(dst);
-                        self.registers.set(dst, d.saturating_sub(imm));
-                    }
+            match op {
+                0 => {
+                    // Mov { dst: Register, src: Register }
+                    let (dst, src) = self.read_reg_pair();
+                    let s = self.registers.get(src);
+                    self.registers.set(dst, s);
+                }
+                1 => {
+                    // Add { dst: Register, src: Register }
+                    let (dst, src) = self.read_reg_pair();
+                    let d = self.registers.get(dst);
+                    let s = self.registers.get(src);
+                    self.registers.set(dst, d.saturating_add(s));
+                }
+                2 => {
+                    // Sub { dst: Register, src: Register }
+                    let (dst, src) = self.read_reg_pair();
+                    let d = self.registers.get(dst);
+                    let s = self.registers.get(src);
+                    self.registers.set(dst, d.saturating_sub(s));
+                }
+                3 => {
+                    // MovImm { dst: Register, imm: u32 }
+                    let (dst, _) = self.read_reg_pair();
+                    let imm = self.read::<u32>();
+                    self.registers.set(dst, imm);
+                }
+                4 => {
+                    // AddImm { dst: Register, imm: u32 }
+                    let (dst, _) = self.read_reg_pair();
+                    let imm = self.read::<u32>();
+                    let d = self.registers.get(dst);
+                    self.registers.set(dst, d.saturating_add(imm));
+                }
+                5 => {
+                    // SubImm { dst: Register, imm: u32 }
+                    let (dst, _) = self.read_reg_pair();
+                    let imm = self.read::<u32>();
+                    let d = self.registers.get(dst);
+                    self.registers.set(dst, d.saturating_sub(imm));
+                }
 
-                    6 => {
-                        // Call { tgt: u32 }
-                        let tgt = self.read::<u32>();
-                        self.stack.push(self.registers.pc);
+                6 => {
+                    // Call { tgt: u32 }
+                    let tgt = self.read::<u32>();
+                    self.stack.push(self.registers.pc);
+                    self.registers.pc = tgt;
+                }
+                7 => {
+                    // Return
+                    if let Some(pc) = self.stack.pop() {
+                        self.registers.pc = pc;
+                    } else {
+                        reset = true;
+                        break;
+                    }
+                }
+
+                8 => {
+                    // JumpEQ { lhs: Register, rhs: Register, tgt: u32 }
+                    let (dst, src) = self.read_reg_pair();
+                    let tgt = self.read::<u32>();
+                    if self.registers.get(dst) == self.registers.get(src) {
                         self.registers.pc = tgt;
                     }
-                    7 => {
-                        // Return
-                        if let Some(pc) = self.stack.pop() {
-                            self.registers.pc = pc;
-                        } else {
-                            reset = true;
-                            break;
-                        }
-                    }
-
-                    8 => {
-                        // JumpEQ { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_reg_pair();
-                        let tgt = self.read::<u32>();
-                        if self.registers.get(dst) == self.registers.get(src) {
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    9 => {
-                        // JumpNE { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_reg_pair();
-                        let tgt = self.read::<u32>();
-                        if self.registers.get(dst) != self.registers.get(src) {
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    10 => {
-                        // JumpLT { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_reg_pair();
-                        let tgt = self.read::<u32>();
-                        if self.registers.get(dst) < self.registers.get(src) {
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    11 => {
-                        // JumpLE { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_reg_pair();
-                        let tgt = self.read::<u32>();
-                        if self.registers.get(dst) <= self.registers.get(src) {
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    12 => {
-                        // JumpGT { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_reg_pair();
-                        let tgt = self.read::<u32>();
-                        if self.registers.get(dst) > self.registers.get(src) {
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    13 => {
-                        // JumpGE { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_reg_pair();
-                        let tgt = self.read::<u32>();
-                        if self.registers.get(dst) >= self.registers.get(src) {
-                            self.registers.pc = tgt;
-                        }
-                    }
-
-                    14 => {
-                        // JumpIfEndOfLine { tgt: u32 }
-                        let tgt = self.read::<u32>();
-                        if (self.registers.off as usize) >= line.len() {
-                            self.registers.pc = tgt;
-                        }
-                    }
-
-                    15 => {
-                        // JumpIfMatchCharset { idx: u32, tgt: u32 }
-                        let idx = self.read::<u32>();
-                        let tgt = self.read::<u32>();
-                        let off = self.registers.off as usize;
-                        let cs = self.charsets.get_unchecked(idx as usize);
-
-                        if let Some(off) = Self::charset_gobble(line, off, cs) {
-                            self.registers.off = off as u32;
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    16 => {
-                        // JumpIfMatchPrefix { idx: u32, tgt: u32 }
-                        let idx = self.read::<u32>();
-                        let tgt = self.read::<u32>();
-                        let off = self.registers.off as usize;
-                        let str = self.strings.get_unchecked(idx as usize).as_bytes();
-
-                        if Self::inlined_memcmp(line, off, str) {
-                            self.registers.off = (off + str.len()) as u32;
-                            self.registers.pc = tgt;
-                        }
-                    }
-                    17 => {
-                        // JumpIfMatchPrefixInsensitive { idx: u32, tgt: u32 }
-                        let idx = self.read::<u32>();
-                        let tgt = self.read::<u32>();
-                        let off = self.registers.off as usize;
-                        let str = self.strings.get_unchecked(idx as usize).as_bytes();
-
-                        if Self::inlined_memicmp(line, off, str) {
-                            self.registers.off = (off + str.len()) as u32;
-                            self.registers.pc = tgt;
-                        }
-                    }
-
-                    18 => {
-                        // FlushHighlight
-                        let (kind, _) = self.read_reg_pair();
-                        let kind = self.registers.get(kind);
-                        let kind = kind.try_into().unwrap_unchecked();
-                        let start = (self.registers.hs as usize).min(line.len());
-
-                        if let Some(last) = res.last_mut()
-                            && (last.start == start || last.kind == kind)
-                        {
-                            last.kind = kind;
-                        } else {
-                            res.push(Higlight { start, kind });
-                        }
-
-                        self.registers.hs = self.registers.off;
-                    }
-                    19 => {
-                        // AwaitInput
-                        let off = self.registers.off as usize;
-                        if off >= line.len() {
-                            break;
-                        }
-                    }
-
-                    _ => std::hint::unreachable_unchecked(),
                 }
+                9 => {
+                    // JumpNE { lhs: Register, rhs: Register, tgt: u32 }
+                    let (dst, src) = self.read_reg_pair();
+                    let tgt = self.read::<u32>();
+                    if self.registers.get(dst) != self.registers.get(src) {
+                        self.registers.pc = tgt;
+                    }
+                }
+                10 => {
+                    // JumpLT { lhs: Register, rhs: Register, tgt: u32 }
+                    let (dst, src) = self.read_reg_pair();
+                    let tgt = self.read::<u32>();
+                    if self.registers.get(dst) < self.registers.get(src) {
+                        self.registers.pc = tgt;
+                    }
+                }
+                11 => {
+                    // JumpLE { lhs: Register, rhs: Register, tgt: u32 }
+                    let (dst, src) = self.read_reg_pair();
+                    let tgt = self.read::<u32>();
+                    if self.registers.get(dst) <= self.registers.get(src) {
+                        self.registers.pc = tgt;
+                    }
+                }
+                12 => {
+                    // JumpGT { lhs: Register, rhs: Register, tgt: u32 }
+                    let (dst, src) = self.read_reg_pair();
+                    let tgt = self.read::<u32>();
+                    if self.registers.get(dst) > self.registers.get(src) {
+                        self.registers.pc = tgt;
+                    }
+                }
+                13 => {
+                    // JumpGE { lhs: Register, rhs: Register, tgt: u32 }
+                    let (dst, src) = self.read_reg_pair();
+                    let tgt = self.read::<u32>();
+                    if self.registers.get(dst) >= self.registers.get(src) {
+                        self.registers.pc = tgt;
+                    }
+                }
+
+                14 => {
+                    // JumpIfEndOfLine { tgt: u32 }
+                    let tgt = self.read::<u32>();
+                    if (self.registers.off as usize) >= line.len() {
+                        self.registers.pc = tgt;
+                    }
+                }
+
+                15 => {
+                    // JumpIfMatchCharset { idx: u32, tgt: u32 }
+                    let idx = self.read::<u32>();
+                    let tgt = self.read::<u32>();
+                    let off = self.registers.off as usize;
+                    let cs = &self.charsets[idx as usize];
+
+                    if let Some(off) = Self::charset_gobble(line, off, cs) {
+                        self.registers.off = off as u32;
+                        self.registers.pc = tgt;
+                    }
+                }
+                16 => {
+                    // JumpIfMatchPrefix { idx: u32, tgt: u32 }
+                    let idx = self.read::<u32>();
+                    let tgt = self.read::<u32>();
+                    let off = self.registers.off as usize;
+                    let str = self.strings[idx as usize].as_bytes();
+
+                    if Self::inlined_memcmp(line, off, str) {
+                        self.registers.off = (off + str.len()) as u32;
+                        self.registers.pc = tgt;
+                    }
+                }
+                17 => {
+                    // JumpIfMatchPrefixInsensitive { idx: u32, tgt: u32 }
+                    let idx = self.read::<u32>();
+                    let tgt = self.read::<u32>();
+                    let off = self.registers.off as usize;
+                    let str = self.strings[idx as usize].as_bytes();
+
+                    if Self::inlined_memicmp(line, off, str) {
+                        self.registers.off = (off + str.len()) as u32;
+                        self.registers.pc = tgt;
+                    }
+                }
+
+                18 => {
+                    // FlushHighlight
+                    let (kind, _) = self.read_reg_pair();
+                    let kind = self.registers.get(kind);
+                    let kind = unsafe { kind.try_into().unwrap_unchecked() };
+                    let start = (self.registers.hs as usize).min(line.len());
+
+                    if let Some(last) = res.last_mut()
+                        && (last.start == start || last.kind == kind)
+                    {
+                        last.kind = kind;
+                    } else {
+                        res.push(Higlight { start, kind });
+                    }
+
+                    self.registers.hs = self.registers.off;
+                }
+                19 => {
+                    // AwaitInput
+                    let off = self.registers.off as usize;
+                    if off >= line.len() {
+                        break;
+                    }
+                }
+
+                _ => unreachable!(),
             }
         }
 
@@ -437,6 +412,8 @@ impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
     fn read<T: Copy>(&mut self) -> T {
         let pc = self.registers.pc as usize;
         self.registers.pc += mem::size_of::<T>() as u32;
+        // The LSH backend emits extra 0xff instructions at the end, to allow
+        // us to blindly read any instruction and only later check if it was valid.
         unsafe { (self.assembly.as_ptr().add(pc) as *const T).read_unaligned() }
     }
 
