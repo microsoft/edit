@@ -41,16 +41,9 @@ pub fn properties() {
 
         if /[;#].*/ {
             yield comment;
-        } else if /[\w.-]+/ {
-            var key_end = off;
-
-            if /\s*=\s*/ {
-                yield variable;
-                // TODO: The compiler doesn't understand that off is immediately tainted
-                // so it gives key_end the same vreg as the physical off register.
-                hs = key_end;
-                yield other;
-            }
+        } else if /([\w.-]+)\s*(=)\s*/ {
+            yield $1 as variable;
+            yield $2 as comment;
         } else if /'/ {
             single_quote_string();
         } else if /"/ {

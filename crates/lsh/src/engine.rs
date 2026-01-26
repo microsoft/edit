@@ -1,6 +1,27 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Virtual machine for executing LSH (Leonard's Syntax Highlighter) bytecode.
+//!
+//! The VM is a simple register machine with 16 registers:
+//! - `zero` (x0): Always zero
+//! - `pc` (x1): Program counter
+//! - `off` (x2): Current input offset (position in the line being highlighted)
+//! - `hs` (x3): Highlight start position
+//! - `hk` (x4): Highlight kind (the token type to emit)
+//! - `x5`-`x15`: General purpose registers for backup/restore of positions
+//!
+//! ## Execution model
+//!
+//! The VM processes input one line at a time. For each line:
+//! 1. `off` is reset to 0 (start of line)
+//! 2. Instructions execute until `Return` with empty stack, or `AwaitInput` at EOL
+//! 3. `FlushHighlight` emits a highlight span from `hs` to `off` with kind `hk`
+//!
+//! Regex-like conditions (charset, prefix match) advance `off` only on success.
+//! The DSL uses backup/restore of `off` to implement backtracking for patterns
+//! like `/a+b/` where `a+` might consume too much.
+
 use std::fmt::Debug;
 use std::mem;
 use std::path::Path;
@@ -9,9 +30,13 @@ use stdext::arena::{Arena, scratch_arena};
 
 use crate::compiler::Registers;
 
+/// A compiled language definition with its bytecode entrypoint.
 pub struct Language {
+    /// Unique identifier (e.g., "rust", "markdown").
     pub id: &'static str,
+    /// Human-readable display name.
     pub name: &'static str,
+    /// Bytecode address where execution begins for this language.
     pub entrypoint: u32,
 }
 
@@ -21,9 +46,14 @@ impl PartialEq for &'static Language {
     }
 }
 
+/// A highlight span indicating that text from `start` to the next span has the given `kind`.
+///
+/// Spans are half-open: `[start, next.start)`. The final span in a line extends to EOL.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Higlight<T> {
+    /// Byte offset where this highlight begins.
     pub start: usize,
+    /// The token/highlight type (e.g., keyword, string, comment).
     pub kind: T,
 }
 
@@ -33,16 +63,30 @@ impl<T: Debug> Debug for Higlight<T> {
     }
 }
 
+/// The bytecode interpreter for syntax highlighting.
+///
+/// Maintains execution state (registers, call stack) across lines. Use [`Engine::snapshot`]
+/// and [`Engine::restore`] to save/restore state for incremental re-highlighting.
 #[derive(Clone)]
 pub struct Engine<'pa, 'ps, 'pc> {
+    /// Compiled bytecode.
     assembly: &'pa [u8],
+    /// String table for prefix matching instructions.
     strings: &'ps [&'ps str],
+    /// Charset bitmaps for character class matching (16 u16s = 256 bits).
     charsets: &'pc [[u16; 16]],
+    /// Bytecode address to jump to on reset (after `Return` with empty stack).
     entrypoint: u32,
+    /// Call stack for `Call`/`Return` instructions.
     stack: Vec<u32>,
+    /// VM registers (pc, off, hs, hk, and general purpose).
     registers: Registers,
 }
 
+/// Snapshot of engine state for incremental re-highlighting.
+///
+/// Save with [`Engine::snapshot`], restore with [`Engine::restore`].
+/// This allows re-highlighting from a known state when only part of a file changes.
 #[derive(Clone)]
 pub struct EngineState {
     stack: Vec<u32>,
@@ -75,6 +119,18 @@ impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
         self.registers = state.registers;
     }
 
+    /// Parse a single line and return highlight spans.
+    ///
+    /// Executes bytecode until the line is fully consumed or a `Return` resets the VM.
+    /// The returned spans partition the line into highlighted regions.
+    ///
+    /// # Arguments
+    /// * `arena` - Allocator for the result vector
+    /// * `line` - The line bytes to highlight (without trailing newline)
+    ///
+    /// # Returns
+    /// A vector of [`Higlight`] spans. Always contains at least two spans:
+    /// one at offset 0 and one at `line.len()` as a sentinel.
     pub fn parse_next_line<'a, T: PartialEq + TryFrom<u32>>(
         &mut self,
         arena: &'a Arena,

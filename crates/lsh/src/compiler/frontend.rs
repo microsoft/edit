@@ -553,18 +553,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.expect_token(Token::Yield)?;
 
         // Check if this is a capture group reference: yield $n as color
-        if matches!(self.current_token, Token::Dollar) {
-            self.advance();
-
-            let capture_index = match self.current_token {
-                Token::Integer(n) => {
-                    if n == 0 {
-                        raise!(self, "capture group index must be >= 1");
-                    }
-                    (n - 1) as usize // Convert to 0-based index
-                }
-                _ => raise!(self, "expected capture group number after $"),
-            };
+        if let Token::Submatch(capture_index) = self.current_token {
+            let capture_index = capture_index as usize - 1;
             self.advance();
 
             // Expect "as"

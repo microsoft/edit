@@ -151,41 +151,6 @@ impl<'a> Compiler<'a> {
         TreeVisitor { current: None, stack, visited: Default::default() }
     }
 
-    fn count_register_uses(&self) {
-        for function in &self.functions {
-            for node in self.visit_nodes_from(function.body) {
-                let node = node.borrow();
-                match node.instr {
-                    IRI::Add { dst, src, imm } => {
-                        dst.borrow_mut().read_count = 0;
-                        src.borrow_mut().read_count = 0;
-                    }
-                    IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
-                        lhs.borrow_mut().read_count = 0;
-                        rhs.borrow_mut().read_count = 0;
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        for function in &self.functions {
-            for node in self.visit_nodes_from(function.body) {
-                let node = node.borrow();
-                match node.instr {
-                    IRI::Add { dst, src, imm } => {
-                        src.borrow_mut().read_count += 1;
-                    }
-                    IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
-                        lhs.borrow_mut().read_count += 1;
-                        rhs.borrow_mut().read_count += 1;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
     /// Collect all "interesting" characters from conditions in a loop body.
     /// Returns a charset where true = interesting character that should be checked.
     fn collect_interesting_charset(&self, loop_body: IRCell<'a>) -> Charset {
@@ -471,7 +436,6 @@ enum IRI<'a> {
 #[derive(Default)]
 pub struct IRReg {
     id: u32,
-    read_count: i32,
     physical: Option<Register>,
 }
 
@@ -479,7 +443,7 @@ pub type IRRegCell<'a> = &'a RefCell<IRReg>;
 
 impl IRReg {
     fn new(id: u32) -> Self {
-        IRReg { id, read_count: 0, physical: None }
+        IRReg { id, physical: None }
     }
 }
 

@@ -105,8 +105,26 @@ fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
     }
 
     // Remove pointless offset backups.
-    compiler.count_register_uses();
+    // A backup is pointless if the destination vreg is never read.
     for function in &compiler.functions {
+        // First, collect all vregs that are read anywhere in the function.
+        let mut used_vregs = HashSet::new();
+        for current_cell in compiler.visit_nodes_from(function.body) {
+            let current = current_cell.borrow();
+            match current.instr {
+                IRI::Add { src, .. } => {
+                    let id = src.borrow().id;
+                    used_vregs.insert(id);
+                }
+                IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
+                    used_vregs.insert(lhs.borrow().id);
+                    used_vregs.insert(rhs.borrow().id);
+                }
+                _ => {}
+            }
+        }
+
+        // Now remove dead stores (assignments to vregs that are never read).
         for current_cell in compiler.visit_nodes_from(function.body) {
             // First, filter down to nodes that assign the `off` to a virtual register.
             if let mut cell = current_cell.borrow_mut()
@@ -119,7 +137,7 @@ fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
                 && src.physical.is_some()
                 // We can't optimize physical register --> physical register assignments.
                 && dst.physical.is_none()
-                && dst.read_count == 0
+                && !used_vregs.contains(&dst.id)
             {
                 cell.instr = IRI::Noop;
             }

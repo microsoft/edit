@@ -9,8 +9,9 @@ pub enum Token<'a> {
     // Literals
     Identifier(&'a str),
     Integer(u32),
-    Regex(&'a str),
     String(&'a str),
+    Regex(&'a str),
+    Submatch(u32),
 
     // Keywords
     Pub,
@@ -47,7 +48,6 @@ pub enum Token<'a> {
     RightBracket,
     Hash,
     Comma,
-    Dollar,
 
     // End of file
     Eof,
@@ -99,7 +99,13 @@ impl<'a> Tokenizer<'a> {
                 ']' => Token::RightBracket,
                 '#' => Token::Hash,
                 ',' => Token::Comma,
-                '$' => Token::Dollar,
+                '$' => {
+                    self.start_pos += 1; // Skip the '$'
+                    match self.read_integer(ch) {
+                        Token::Integer(idx) => Token::Submatch(idx),
+                        other => other,
+                    }
+                }
                 ';' => Token::Semicolon,
                 '"' => self.read_string(),
                 '/' => self.read_regex(),
