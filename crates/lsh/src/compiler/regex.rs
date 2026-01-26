@@ -151,10 +151,9 @@ fn transform<'a>(
         HirKind::Capture(capture) => {
             // Save the current input offset before matching the capture group
             let start_vreg = compiler.alloc_vreg();
-            let save_start = compiler.alloc_iri(IRI::Add {
+            let save_start = compiler.alloc_iri(IRI::Mov {
                 dst: start_vreg,
                 src: compiler.get_reg(Register::InputOffset),
-                imm: 0,
             });
 
             // Transform the sub-expression
@@ -168,10 +167,9 @@ fn transform<'a>(
 
             // Save the end offset after matching
             let end_vreg = compiler.alloc_vreg();
-            let save_end = compiler.alloc_iri(IRI::Add {
+            let save_end = compiler.alloc_iri(IRI::Mov {
                 dst: end_vreg,
                 src: compiler.get_reg(Register::InputOffset),
-                imm: 0,
             });
             end_marker.borrow_mut().set_next(save_end);
             save_end.borrow_mut().set_next(dst);
@@ -296,11 +294,7 @@ fn transform_any_star<'a>(
 ) -> Result<IRCell<'a>, String> {
     Ok(compiler.alloc_ir(IR {
         next: Some(dst),
-        instr: IRI::Add {
-            dst: compiler.get_reg(Register::InputOffset),
-            src: compiler.get_reg(Register::Zero),
-            imm: u32::MAX,
-        },
+        instr: IRI::MovImm { dst: compiler.get_reg(Register::InputOffset), imm: u32::MAX },
         offset: usize::MAX,
     }))
 }
@@ -309,11 +303,7 @@ fn transform_any_star<'a>(
 fn transform_any<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>) -> Result<IRCell<'a>, String> {
     Ok(compiler.alloc_ir(IR {
         next: Some(dst),
-        instr: IRI::Add {
-            dst: compiler.get_reg(Register::InputOffset),
-            src: compiler.get_reg(Register::InputOffset),
-            imm: 1,
-        },
+        instr: IRI::AddImm { dst: compiler.get_reg(Register::InputOffset), imm: 1 },
         offset: usize::MAX,
     }))
 }

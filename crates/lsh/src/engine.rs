@@ -163,40 +163,40 @@ impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
                 match op {
                     0 => {
                         // Mov { dst: Register, src: Register }
-                        let (dst, src) = self.read_dst_src();
+                        let (dst, src) = self.read_reg_pair();
                         let s = self.registers.get(src);
                         self.registers.set(dst, s);
                     }
                     1 => {
                         // Add { dst: Register, src: Register }
-                        let (dst, src) = self.read_dst_src();
+                        let (dst, src) = self.read_reg_pair();
                         let d = self.registers.get(dst);
                         let s = self.registers.get(src);
                         self.registers.set(dst, d.saturating_add(s));
                     }
                     2 => {
                         // Sub { dst: Register, src: Register }
-                        let (dst, src) = self.read_dst_src();
+                        let (dst, src) = self.read_reg_pair();
                         let d = self.registers.get(dst);
                         let s = self.registers.get(src);
                         self.registers.set(dst, d.saturating_sub(s));
                     }
                     3 => {
                         // MovImm { dst: Register, imm: u32 }
-                        let (dst, _) = self.read_dst_src();
+                        let (dst, _) = self.read_reg_pair();
                         let imm = self.read::<u32>();
                         self.registers.set(dst, imm);
                     }
                     4 => {
                         // AddImm { dst: Register, imm: u32 }
-                        let (dst, _) = self.read_dst_src();
+                        let (dst, _) = self.read_reg_pair();
                         let imm = self.read::<u32>();
                         let d = self.registers.get(dst);
                         self.registers.set(dst, d.saturating_add(imm));
                     }
                     5 => {
                         // SubImm { dst: Register, imm: u32 }
-                        let (dst, _) = self.read_dst_src();
+                        let (dst, _) = self.read_reg_pair();
                         let imm = self.read::<u32>();
                         let d = self.registers.get(dst);
                         self.registers.set(dst, d.saturating_sub(imm));
@@ -220,7 +220,7 @@ impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
 
                     8 => {
                         // JumpEQ { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_dst_src();
+                        let (dst, src) = self.read_reg_pair();
                         let tgt = self.read::<u32>();
                         if self.registers.get(dst) == self.registers.get(src) {
                             self.registers.pc = tgt;
@@ -228,7 +228,7 @@ impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
                     }
                     9 => {
                         // JumpNE { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_dst_src();
+                        let (dst, src) = self.read_reg_pair();
                         let tgt = self.read::<u32>();
                         if self.registers.get(dst) != self.registers.get(src) {
                             self.registers.pc = tgt;
@@ -236,7 +236,7 @@ impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
                     }
                     10 => {
                         // JumpLT { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_dst_src();
+                        let (dst, src) = self.read_reg_pair();
                         let tgt = self.read::<u32>();
                         if self.registers.get(dst) < self.registers.get(src) {
                             self.registers.pc = tgt;
@@ -244,7 +244,7 @@ impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
                     }
                     11 => {
                         // JumpLE { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_dst_src();
+                        let (dst, src) = self.read_reg_pair();
                         let tgt = self.read::<u32>();
                         if self.registers.get(dst) <= self.registers.get(src) {
                             self.registers.pc = tgt;
@@ -252,7 +252,7 @@ impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
                     }
                     12 => {
                         // JumpGT { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_dst_src();
+                        let (dst, src) = self.read_reg_pair();
                         let tgt = self.read::<u32>();
                         if self.registers.get(dst) > self.registers.get(src) {
                             self.registers.pc = tgt;
@@ -260,7 +260,7 @@ impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
                     }
                     13 => {
                         // JumpGE { lhs: Register, rhs: Register, tgt: u32 }
-                        let (dst, src) = self.read_dst_src();
+                        let (dst, src) = self.read_reg_pair();
                         let tgt = self.read::<u32>();
                         if self.registers.get(dst) >= self.registers.get(src) {
                             self.registers.pc = tgt;
@@ -314,9 +314,10 @@ impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
 
                     18 => {
                         // FlushHighlight
-                        let start = self.registers.hs as usize;
-                        let start = start.min(line.len());
-                        let kind = self.registers.hk.try_into().unwrap_unchecked();
+                        let (kind, _) = self.read_reg_pair();
+                        let kind = self.registers.get(kind);
+                        let kind = kind.try_into().unwrap_unchecked();
+                        let start = (self.registers.hs as usize).min(line.len());
 
                         if let Some(last) = res.last_mut()
                             && (last.start == start || last.kind == kind)
@@ -440,10 +441,10 @@ impl<'pa, 'ps, 'pc> Engine<'pa, 'ps, 'pc> {
     }
 
     #[inline]
-    fn read_dst_src(&mut self) -> (usize, usize) {
-        let dst_src = self.read::<u8>();
-        let dst = (dst_src & 0xf) as usize;
-        let src = (dst_src >> 4) as usize;
+    fn read_reg_pair(&mut self) -> (usize, usize) {
+        let reg_pair = self.read::<u8>();
+        let dst = (reg_pair & 0xf) as usize;
+        let src = (reg_pair >> 4) as usize;
         (dst, src)
     }
 }

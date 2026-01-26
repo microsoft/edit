@@ -127,7 +127,7 @@ fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
         for current_cell in compiler.visit_nodes_from(function.body) {
             // First, filter down to nodes that assign the `off` to a virtual register.
             if let mut save = current_cell.borrow_mut()
-                && let IRI::Add { dst: backup_reg, src, imm: 0 } = save.instr
+                && let IRI::Mov { dst: backup_reg, src } = save.instr
                 && ptr::eq(src, off_reg)
                 && backup_reg.borrow().physical.is_none()
             {
@@ -139,7 +139,7 @@ fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
                     && matches!(cond.instr, IRI::If { .. })
                     && let Some(restore) = cond.next
                     && let mut restore = restore.borrow_mut()
-                    && matches!(restore.instr, IRI::Add { dst, src, imm: 0 } if ptr::eq(dst, off_reg) && ptr::eq(src, backup_reg))
+                    && matches!(restore.instr, IRI::Mov { dst, src } if ptr::eq(dst, off_reg) && ptr::eq(src, backup_reg))
                 {
                     cond.next = restore.next;
                     next_cond = restore.next;
@@ -156,7 +156,7 @@ fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
         for current_cell in compiler.visit_nodes_from(function.body) {
             let current = current_cell.borrow();
             match current.instr {
-                IRI::Add { src, .. } => {
+                IRI::Mov { src, .. } => {
                     let id = src.borrow().id;
                     used_vregs.insert(id);
                 }
@@ -172,7 +172,7 @@ fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
         for current_cell in compiler.visit_nodes_from(function.body) {
             // First, filter down to nodes that assign the `off` to a virtual register.
             if let mut cell = current_cell.borrow_mut()
-                && let IRI::Add { dst, src, imm: 0 } = cell.instr
+                && let IRI::Mov { dst, src } = cell.instr
                 && let src = src.borrow()
                 && let dst = dst.borrow()
                 // TODO: Technically we could also optimize vreg --> vreg assignments, but for that we
@@ -230,16 +230,12 @@ fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
         hk.value = idx;
     }
 
-    let hk_dst = compiler.get_reg(Register::HighlightKind);
-
     for function in &compiler.functions {
         for current in compiler.visit_nodes_from(function.body) {
             let mut current = current.borrow_mut();
 
-            if let IRI::Add { dst, src, imm } = &mut current.instr
-                && ptr::eq(*dst, hk_dst)
-            {
-                *imm = mapping[*imm as usize];
+            if let IRI::MovKind { dst, kind } = &mut current.instr {
+                *kind = mapping[*kind as usize];
             }
         }
     }

@@ -43,7 +43,6 @@ pub fn properties() {
             yield comment;
         } else if /([\w.-]+)\s*(=)\s*/ {
             yield $1 as variable;
-            yield $2 as comment;
         } else if /'/ {
             single_quote_string();
         } else if /"/ {

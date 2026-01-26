@@ -12,10 +12,10 @@ pub fn markdown() {
         yield comment;
     } else if /```/ {
         // NOTE: These checks are sorted alphabetically.
-        if /diff/ {
+        if /(?i:diff)/ {
             loop {
                 await input;
-                if /\s*```diff/ {
+                if /\s*```/ {
                     return;
                 } else {
                     diff();
@@ -24,23 +24,33 @@ pub fn markdown() {
                     if /.*/ {}
                 }
             }
-        } else if /json/ {
+        } else if /(?i:json)/ {
             loop {
                 await input;
-                if /\s*```json/ {
+                if /\s*```/ {
                     return;
                 } else {
                     json();
                     if /.*/ {}
                 }
             }
-        } else if /yaml/ {
+        } else if /(?i:yaml)/ {
             loop {
                 await input;
-                if /\s*```yaml/ {
+                if /\s*```/ {
                     return;
                 } else {
                     yaml();
+                    if /.*/ {}
+                }
+            }
+        } else if /(?i:pwsh|powershell)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    powershell();
                     if /.*/ {}
                 }
             }

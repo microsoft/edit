@@ -145,12 +145,27 @@ impl<'a> LivenessAnalysis<'a> {
 
         // Collect vregs from this instruction
         match ir.instr {
-            IRI::Add { dst, src, .. } => {
+            IRI::Mov { dst, src } => {
                 if dst.borrow().physical.is_none() {
                     vreg_cells.insert(dst.borrow().id, dst);
                 }
                 if src.borrow().physical.is_none() {
                     vreg_cells.insert(src.borrow().id, src);
+                }
+            }
+            IRI::MovImm { dst, .. } => {
+                if dst.borrow().physical.is_none() {
+                    vreg_cells.insert(dst.borrow().id, dst);
+                }
+            }
+            IRI::MovKind { dst, .. } => {
+                if dst.borrow().physical.is_none() {
+                    vreg_cells.insert(dst.borrow().id, dst);
+                }
+            }
+            IRI::AddImm { dst, .. } => {
+                if dst.borrow().physical.is_none() {
+                    vreg_cells.insert(dst.borrow().id, dst);
                 }
             }
             IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
@@ -159,6 +174,11 @@ impl<'a> LivenessAnalysis<'a> {
                 }
                 if rhs.borrow().physical.is_none() {
                     vreg_cells.insert(rhs.borrow().id, rhs);
+                }
+            }
+            IRI::Flush { kind, .. } => {
+                if kind.borrow().physical.is_none() {
+                    vreg_cells.insert(kind.borrow().id, kind);
                 }
             }
             _ => {}
@@ -263,24 +283,48 @@ impl<'a> LivenessAnalysis<'a> {
         let mut def_set = HashSet::new();
 
         match ir.instr {
-            IRI::Add { dst, src, .. } => {
+            IRI::Mov { dst, src } => {
+                let dst_reg = dst.borrow();
+                if dst_reg.physical.is_none() {
+                    def_set.insert(dst_reg.id);
+                }
                 let src_reg = src.borrow();
-                if src_reg.physical.is_none() || src_reg.id >= Register::COUNT as u32 {
+                if src_reg.physical.is_none() {
                     use_set.insert(src_reg.id);
                 }
+            }
+            IRI::MovImm { dst, .. } => {
                 let dst_reg = dst.borrow();
-                if dst_reg.physical.is_none() || dst_reg.id >= Register::COUNT as u32 {
+                if dst_reg.physical.is_none() {
+                    def_set.insert(dst_reg.id);
+                }
+            }
+            IRI::MovKind { dst, .. } => {
+                let dst_reg = dst.borrow();
+                if dst_reg.physical.is_none() {
+                    def_set.insert(dst_reg.id);
+                }
+            }
+            IRI::AddImm { dst, .. } => {
+                let dst_reg = dst.borrow();
+                if dst_reg.physical.is_none() {
                     def_set.insert(dst_reg.id);
                 }
             }
             IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
                 let lhs_reg = lhs.borrow();
-                if lhs_reg.physical.is_none() || lhs_reg.id >= Register::COUNT as u32 {
+                if lhs_reg.physical.is_none() {
                     use_set.insert(lhs_reg.id);
                 }
                 let rhs_reg = rhs.borrow();
-                if rhs_reg.physical.is_none() || rhs_reg.id >= Register::COUNT as u32 {
+                if rhs_reg.physical.is_none() {
                     use_set.insert(rhs_reg.id);
+                }
+            }
+            IRI::Flush { kind, .. } => {
+                let kind_reg = kind.borrow();
+                if kind_reg.physical.is_none() {
+                    use_set.insert(kind_reg.id);
                 }
             }
             _ => {}
@@ -517,62 +561,35 @@ impl<'a> Backend<'a> {
 
                 match ir.instr {
                     IRI::Noop => {}
-                    IRI::Add { dst, src, imm } => {
-                        let src_reg = src.borrow();
+                    IRI::Mov { dst, src } => {
                         let dst_reg = dst.borrow();
-
-                        let src_phys = src_reg.physical.ok_or_else(|| CompileError {
-                            path: String::new(),
-                            line: 0,
-                            column: 0,
-                            message: format!(
-                                "vreg v{} not allocated a physical register (src)",
-                                src_reg.id
-                            ),
-                        })?;
-
-                        let dst_phys = dst_reg.physical.ok_or_else(|| CompileError {
-                            path: String::new(),
-                            line: 0,
-                            column: 0,
-                            message: format!(
-                                "vreg v{} not allocated a physical register (dst)",
-                                dst_reg.id
-                            ),
-                        })?;
-
-                        match (src_phys, imm) {
-                            (Register::Zero, _) => {
-                                self.push_instruction(MovImm { dst: dst_phys, imm });
-                            }
-                            (_, 0) => {
-                                self.push_instruction(Mov { dst: dst_phys, src: src_phys });
-                            }
-                            _ => {
-                                self.push_instruction(Mov { dst: dst_phys, src: src_phys });
-                                self.push_instruction(AddImm { dst: dst_phys, imm });
-                            }
-                        }
+                        let src_reg = src.borrow();
+                        let dst = dst_reg.physical.unwrap();
+                        let src = src_reg.physical.unwrap();
+                        self.push_instruction(Mov { dst, src });
+                    }
+                    IRI::MovImm { dst, imm } => {
+                        let dst_reg = dst.borrow();
+                        let dst = dst_reg.physical.unwrap();
+                        self.push_instruction(MovImm { dst, imm });
+                    }
+                    IRI::MovKind { dst, kind } => {
+                        let dst_reg = dst.borrow();
+                        let dst = dst_reg.physical.unwrap();
+                        self.push_instruction(MovImm { dst, imm: kind });
+                    }
+                    IRI::AddImm { dst, imm } => {
+                        let dst_reg = dst.borrow();
+                        let dst = dst_reg.physical.unwrap();
+                        self.push_instruction(AddImm { dst, imm });
                     }
                     IRI::If { condition, then } => {
                         stack.push_back(then);
 
                         match condition {
                             Condition::Cmp { lhs, rhs, op } => {
-                                let lhs_phys =
-                                    lhs.borrow().physical.ok_or_else(|| CompileError {
-                                        path: String::new(),
-                                        line: 0,
-                                        column: 0,
-                                        message: "lhs vreg not allocated".to_string(),
-                                    })?;
-                                let rhs_phys =
-                                    rhs.borrow().physical.ok_or_else(|| CompileError {
-                                        path: String::new(),
-                                        line: 0,
-                                        column: 0,
-                                        message: "rhs vreg not allocated".to_string(),
-                                    })?;
+                                let lhs_phys = lhs.borrow().physical.unwrap();
+                                let rhs_phys = rhs.borrow().physical.unwrap();
                                 let tgt = self.dst_by_node(then) as u32;
 
                                 match op {
@@ -636,8 +653,9 @@ impl<'a> Backend<'a> {
                     IRI::Return => {
                         self.push_instruction(Return);
                     }
-                    IRI::Flush => {
-                        self.push_instruction(FlushHighlight);
+                    IRI::Flush { kind } => {
+                        let kind = kind.borrow().physical.unwrap();
+                        self.push_instruction(FlushHighlight { kind });
                     }
                     IRI::AwaitInput => {
                         self.push_instruction(AwaitInput);
