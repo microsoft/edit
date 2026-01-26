@@ -1,6 +1,42 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Parser: transforms DSL source into IR graph.
+//!
+//! ## Grammar highlights
+//!
+//! - `until /regex/ { body }` - loops until regex matches, with auto-advance on stuck
+//! - `if /regex/ { } else if /regex/ { } else { }` - regex chains with automatic backtracking
+//! - `yield color;` or `yield $1 as color;` - emit highlight spans
+//! - `var x = off;` - backup position into vreg
+//!
+//! ## IR generation patterns
+//!
+//! **Regex chains** (`if /a/ {} else if /b/ {}`): The frontend saves `off` before the chain,
+//! then restores it before each alternative. This is technically redundant because conditions
+//! don't advance `off` on failure, but the optimizer cleans it up.
+//!
+//! **Loops** (`until /regex/ {}`): Generated with a "stuck detector" that advances `off` by 1
+//! if the loop body didn't move it. Also generates a "fast skip" charset to skip uninteresting
+//! characters. See `collect_interesting_charset` in mod.rs.
+//!
+//! **Capture groups** (`$1`, `$2`, etc): Each capture stores `(start_vreg, end_vreg)`. The
+//! `yield $1 as color` statement sets `hs = start`, `off = end`, `hk = color`, then flushes.
+//!
+//! ## Context stack
+//!
+//! The `context` vector tracks nested scopes for:
+//! - Loop targets for `break`/`continue`
+//! - Capture groups from the most recent regex (for `yield $n`)
+//!
+//! ## Gotchas
+//!
+//! - Variables are in SSA-ish form: `var x = off; x = x + 1;` creates a new vreg for the
+//!   second `x`. But the variable *name* still maps to the new vreg, so later reads see it.
+//! - Physical registers (off, hs, hk) don't follow SSA. Reading them doesn't create a vreg;
+//!   the `parse_expression` function handles this by copying to a fresh vreg.
+//! - The `raise!` macro captures tokenizer position at call time. Don't advance() before raising.
+
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 

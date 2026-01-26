@@ -1,10 +1,36 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Welcome to Leonard's Syntax Highlighter,
-//! otherwise known as Leonard's Shitty Highlighter.
+//! Leonard's Syntax Highlighter (LSH) - a DSL compiler for syntax highlighting.
 //!
-//! This module provides the compiler that produces the bytecode for edit.
+//! ## Architecture
+//!
+//! DSL source → `frontend` (parse) → IR → `optimizer` → IR → `backend` (regalloc + codegen) → bytecode → `engine` (execute)
+//!
+//! The IR is a graph of `RefCell<IR>` nodes, not a vector. Each node has a `.next` pointer and
+//! `If` nodes have a `.then` pointer. This makes CFG manipulation trivial but means you can't
+//! iterate in program order without linearization (see `backend::LivenessAnalysis`).
+//!
+//! ## Gotchas
+//!
+//! - **Arena lifetime**: All IR nodes and interned strings live in a single `Arena`. The compiler
+//!   holds `&'a Arena` and everything derives lifetime `'a` from it. Don't try to outlive it.
+//!
+//! - **Physical vs virtual registers**: `IRReg.physical` being `Some` means it's pre-colored
+//!   (e.g., `off`, `hs`, `hk`). The backend must preserve these assignments.
+//!
+//! - **Single assignment form (sort of)**: The frontend emits IR where each vreg is written once,
+//!   but physical registers like `off` are mutated repeatedly. The optimizer relies on this.
+//!
+//! ## TODO
+//!
+//! - The regex compiler (`regex.rs`) panics on unsupported patterns instead of returning errors.
+//!   Should bubble up `CompileError` instead.
+//!
+//! - No support for spill code generation. If you run out of 11 user registers, you're dead.
+//!   The current definition files don't hit this, but complex patterns could.
+//!
+//! - Incremental compilation: currently recompiles everything. Would need dependency tracking.
 
 #![feature(allocator_api)]
 #![allow(irrefutable_let_patterns, unused, clippy::upper_case_acronyms)]

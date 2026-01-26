@@ -1,6 +1,58 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Regex-to-IR compiler using `regex_syntax` as the parser.
+//!
+//! ## Supported patterns
+//!
+//! - Literals: `foo`, `bar`
+//! - Character classes: `[a-z]`, `[^0-9]`, `.` (any byte), `\w`, `\d`, etc.
+//! - Quantifiers: `?`, `+`, `*` (greedy only)
+//! - Alternation: `a|b|c`
+//! - Concatenation: `abc`
+//! - Capture groups: `(...)` (for `yield $1 as color`)
+//! - Word boundary: `\b` (ASCII only, via `Look::WordEndHalfAscii`)
+//! - End of line: `$`
+//!
+//! ## NOT supported (will panic)
+//!
+//! - Non-greedy quantifiers: `*?`, `+?`, `??`
+//! - Bounded repetition: `{n,m}`
+//! - Lookahead/lookbehind: `(?=...)`, `(?!...)`, `(?<=...)`, `(?<!...)`
+//! - Backreferences: `\1`
+//! - Unicode categories: `\p{L}`
+//!
+//! ## Charset expansion
+//!
+//! Single-character classes like `[eE]` get expanded into a chain of `Prefix` conditions
+//! rather than using `Charset`. This is because prefix matching advances `off` by exactly
+//! the matched length, while charset matching is greedy (matches as many as possible).
+//!
+//! ## Case-insensitive optimization
+//!
+//! Sequences like `[aA][bB][cC]` get merged into `PrefixInsensitive("abc")`. The merger
+//! looks for consecutive 2-range classes where both ranges are single-char case variants.
+//!
+//! ## Alternation fallback optimization
+//!
+//! For patterns like `[a-z]+|\w+`, the compiler tries to chain alternatives so that if
+//! the more specific pattern fails partway through, it falls back to the more general one.
+//! This is the `try_append_as_fallback` logic - it's complex and may have edge cases.
+//!
+//! ## UTF-8 hack
+//!
+//! If a charset includes `\w` (word characters), the compiler also sets bits for UTF-8
+//! continuation byte starters (0xC2-0xF4). This lets `\w+` consume multibyte characters
+//! even though we operate on bytes. It's not Unicode-correct but works for identifiers.
+//!
+//! ## Gotchas
+//!
+//! - The `parse()` function modifies `dst_good`/`dst_bad` nodes' `.next` pointers. Don't
+//!   pass nodes that are already wired into the IR graph.
+//! - `.` matches any byte including newline (configured via `dot_matches_new_line(true)`).
+//! - Returning `Err(String)` but the caller wraps it in `CompileError`. Should just return
+//!   `CompileError` directly.
+
 use std::ops::RangeInclusive;
 use std::ptr;
 

@@ -1,6 +1,50 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! IR optimization passes, run before register allocation.
+//!
+//! ## Pass order matters
+//!
+//! 1. `optimize_noop` - removes noop nodes by rewiring `.next` pointers
+//! 2. `optimize_redundant_offset_backup_restore` - removes pointless save/restore pairs
+//! 3. `optimize_highlight_kind_values` - renumbers highlight kinds for prettier output
+//!
+//! Noop removal must run first because other passes check for specific instruction sequences.
+//!
+//! ## Offset backup/restore optimization
+//!
+//! The frontend emits patterns like:
+//! ```text
+//! Add { off → backup }      // save position
+//! If { /pattern1/ }         // try pattern 1
+//! Add { backup → off }      // restore position (redundant!)
+//! If { /pattern2/ }         // try pattern 2
+//! Add { backup → off }      // restore position (redundant!)
+//! ```
+//!
+//! This is redundant because `If` conditions don't advance `off` on failure. The optimizer:
+//! 1. Looks for `Add { off → vreg }` (backup)
+//! 2. Follows the chain looking for `Add { vreg → off }` (restore) after `If` nodes
+//! 3. Removes the restore nodes
+//! 4. Then removes the backup if the vreg is never read
+//!
+//! ## Dead store elimination
+//!
+//! After removing restore nodes, some backup nodes become dead stores (vreg never read).
+//! The pass builds a set of all read vregs, then removes `Add` instructions whose dst
+//! vreg isn't in that set.
+//!
+//! ## Highlight kind renumbering
+//!
+//! Purely cosmetic: sorts highlight kinds alphabetically (with "other" first) and assigns
+//! contiguous values. Updates all `Add { dst=hk, imm=... }` instructions to use new values.
+//!
+//! ## TODO
+//!
+//! - Could do copy propagation: if `vreg1 = vreg2`, replace all uses of vreg1 with vreg2.
+//! - Could merge consecutive `Add { off, off, 1 }` instructions.
+//! - Could eliminate unreachable code after `Return`.
+
 use std::cell::RefMut;
 use std::iter::repeat_n;
 use std::ptr;

@@ -1,26 +1,34 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Virtual machine for executing LSH (Leonard's Syntax Highlighter) bytecode.
+//! VM bytecode interpreter.
 //!
-//! The VM is a simple register machine with 16 registers:
-//! - `zero` (x0): Always zero
-//! - `pc` (x1): Program counter
-//! - `off` (x2): Current input offset (position in the line being highlighted)
-//! - `hs` (x3): Highlight start position
-//! - `hk` (x4): Highlight kind (the token type to emit)
-//! - `x5`-`x15`: General purpose registers for backup/restore of positions
+//! ## Register semantics
 //!
-//! ## Execution model
+//! - `off` advances only on successful matches (charset/prefix). Failed matches leave it alone.
+//!   This is why the frontend emits backup/restore pairs around regex chains.
+//! - `hs` (highlight start) is updated by user code, not automatically. `flush` emits `[hs, off)`.
+//! - `hk` (highlight kind) is just a u32 index into the highlight kind table.
 //!
-//! The VM processes input one line at a time. For each line:
-//! 1. `off` is reset to 0 (start of line)
-//! 2. Instructions execute until `Return` with empty stack, or `AwaitInput` at EOL
-//! 3. `FlushHighlight` emits a highlight span from `hs` to `off` with kind `hk`
+//! ## Charset encoding
 //!
-//! Regex-like conditions (charset, prefix match) advance `off` only on success.
-//! The DSL uses backup/restore of `off` to implement backtracking for patterns
-//! like `/a+b/` where `a+` might consume too much.
+//! Charsets are 256-bit bitmaps stored as `[u16; 16]`. The encoding is transposed for SIMD:
+//! `bitmap[lo_nibble] & (1 << hi_nibble)` tests if byte `(hi_nibble << 4) | lo_nibble` is set.
+//! See `in_set()`. This layout allows parallel lookup of multiple bytes using pshufb.
+//!
+//! ## Performance notes
+//!
+//! - The main loop is `unsafe` with `get_unchecked` everywhere. Profile before "cleaning" it up.
+//! - `charset_gobble` is the hot path. The TODO references a SIMD approach that could help.
+//! - `inlined_memcmp` exists because `slice::starts_with` didn't inline well. Re-check occasionally.
+//!
+//! ## Gotchas
+//!
+//! - `Return` with empty stack resets the VM to entrypoint and clears registers. This is how
+//!   the DSL returns to the "idle" state between tokens.
+//! - `AwaitInput` only breaks the loop if `off >= line.len()`. If not at EOL, it's a no-op.
+//!   This allows the DSL to say "wait for more input OR continue if there is some".
+//! - The result always has a sentinel span at `line.len()`. Consumers can rely on this.
 
 use std::fmt::Debug;
 use std::mem;

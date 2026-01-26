@@ -1,6 +1,48 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//! Compiler core: IR definitions, instruction encoding, and shared infrastructure.
+//!
+//! ## IR representation
+//!
+//! The IR is a graph of `RefCell<IR>` nodes linked via `next` and `then` pointers.
+//! This isn't a traditional SSA or basic block representation - it's more like a
+//! flowchart where each node is one instruction. The `offset` field is set during
+//! codegen to the final bytecode address.
+//!
+//! The only IR instruction that does real work is `Add { dst, src, imm }` which computes
+//! `dst = src + imm`. Everything else is control flow (`If`, `Call`, `Return`) or
+//! side effects (`Flush`, `AwaitInput`).
+//!
+//! ## Register architecture
+//!
+//! - 5 physical registers with fixed semantics (`zero`, `pc`, `off`, `hs`, `hk`)
+//! - 11 user registers (`x5`-`x15`) for general use
+//! - Virtual registers (vreg IDs >= 16) get allocated to physical ones by the backend
+//!
+//! The `IRReg.physical` field starts as `None` for vregs and gets filled in by regalloc.
+//! For physical registers, it's set during `Compiler::new()`.
+//!
+//! ## Charset representation
+//!
+//! `Charset` is a 256-bit bitmap (`[bool; 256]`). The engine uses a transposed `[u16; 16]`
+//! layout for SIMD reasons - see `generator.rs` where the conversion happens.
+//!
+//! ## Instruction encoding
+//!
+//! Variable-length encoding, 1-9 bytes per instruction. See `Instruction::encode/decode`.
+//! The `address_offset()` method returns where within an instruction the jump target lives,
+//! used by the backend's relocation system.
+//!
+//! ## Quirks
+//!
+//! - `IRI::Add` with `src=zero` is "load immediate". `imm=u32::MAX` is special-cased in
+//!   the DSL to mean "end of line" offset.
+//! - `TreeVisitor` does BFS, which is fine for iteration but **not** for linearization.
+//!   The backend has its own DFS traversal for liveness analysis.
+//! - `Charset::covers_all()` returning true means the charset matches every byte, which
+//!   is used to skip the "fast forward" optimization in loops.
+
 mod backend;
 mod frontend;
 mod generator;

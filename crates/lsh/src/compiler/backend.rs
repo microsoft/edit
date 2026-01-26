@@ -1,49 +1,332 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Backend: bytecode generation with liveness analysis and linear scan register allocation.
+//! Backend: liveness analysis, register allocation, and bytecode generation.
 //!
-//! The algorithm follows the Cornell CS 4120 lecture notes:
+//! ## Algorithm (Cornell CS 4120)
+//!
 //! 1. Linearize IR nodes using DFS to assign instruction indices
 //! 2. Compute liveness using backward dataflow analysis
 //! 3. Compute live intervals from liveness sets
-//! 4. Run linear scan register allocation
-//! 5. Generate bytecode using pre-allocated registers
+//! 4. Linear scan register allocation
+//! 5. Generate bytecode with physical registers
 //!
 //! ## Why DFS ordering is essential
 //!
-//! The linearization step must use depth-first traversal. Live intervals are computed
-//! as `[min_index, max_index]` across all instructions where a vreg appears in liveness
-//! sets. With BFS, instructions from independent if/else branches get interleaved,
-//! causing vregs local to one branch to appear live across unrelated branches.
+//! Live intervals are `[min_index, max_index]` across all instructions where a vreg
+//! is live. BFS interleaves independent branches, making branch-local vregs appear
+//! to span the whole function.
 //!
-//! For example, with code like:
+//! Example: `if /a/ { x = off } else if /b/ { y = off }` with BFS numbering:
 //! ```text
-//! if /a/ { backup = off; ... restore off from backup }
-//! else if /b/ { backup2 = off; ... restore off from backup2 }
+//! [0: if /a/] [1: if /b/] [2: x=off] [3: y=off] [4: use x] [5: use y]
 //! ```
+//! Here `x` appears live [2,4] and `y` appears live [3,5], overlapping at [3,4].
 //!
-//! BFS might number them: `[0: if /a/] [1: if /b/] [2: backup=off] [3: backup2=off] ...`
-//! This makes `backup` appear live from index 2 through later indices in both branches,
-//! conflicting with `backup2` even though they're in separate branches.
+//! DFS numbers each branch contiguously: `[0: if /a/] [1: x=off] [2: use x] [3: if /b/] ...`
+//! Now `x` is live [1,2] and `y` is live [4,5] - no overlap, can share a register.
 //!
-//! DFS numbers each branch contiguously, so `backup` and `backup2` have non-overlapping
-//! intervals and can share a register.
+//! ## Spilling
+//!
+//! The linear scan allocator has spill logic but **doesn't generate spill code**.
+//! If you truly run out of registers, the vreg just doesn't get allocated and
+//! codegen will fail with "vreg not allocated". The DFS fix made this practically
+//! unreachable for current definition files.
+//!
+//! ## Relocation system
+//!
+//! Jump targets aren't known during code generation (forward references). The backend
+//! emits placeholder zeros and records `Relocation` entries. After each function,
+//! `process_relocations()` patches the bytecode with resolved addresses.
+//!
+//! Two relocation types:
+//! - `ByName` - cross-function calls, resolved when the target function is compiled
+//! - `ByNode` - intra-function jumps to IR nodes not yet serialized
+//!
+//! ## Quirks
+//!
+//! - `IR.offset` starts as `usize::MAX` (unvisited). Codegen sets it to the bytecode
+//!   address. If we encounter a node with `offset != MAX`, it's a backward reference
+//!   (loop) - emit a jump to the already-assigned address.
+//!
+//! - Physical registers have `IRReg.id < 5` and `physical = Some(...)`. Liveness
+//!   analysis ignores them (they're always "live").
+//!
+//! - `Add { src: zero, imm: value }` becomes `MovImm`. `Add { src: _, imm: 0 }` becomes
+//!   `Mov`. Only `Add { src: _, imm: nonzero }` becomes `Mov` + `AddImm`.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use stdext::arena::scratch_arena;
 
 use super::*;
 
+// ============================================================================
+// Liveness Analysis
+// ============================================================================
+
 /// A live interval represents the range of instructions where a vreg is live.
-/// We use instruction indices (not byte offsets).
 #[derive(Debug, Clone, Copy)]
 struct LiveInterval {
     vreg_id: u32,
-    start: usize, // First instruction where this vreg is live
-    end: usize,   // Last instruction where this vreg is live (inclusive)
+    start: usize,
+    end: usize,
 }
+
+/// Encapsulates liveness analysis state for a single function.
+///
+/// Performs DFS linearization, builds the CFG, and computes liveness sets.
+/// The analysis owns all intermediate data structures, exposing only what's
+/// needed for register allocation.
+struct LivenessAnalysis<'a> {
+    /// IR nodes in DFS order (instruction indices correspond to positions here).
+    nodes: Vec<IRCell<'a>>,
+    /// CFG: successors[i] contains indices of nodes that can follow node i.
+    successors: Vec<Vec<usize>>,
+    /// Map from vreg ID to its IRRegCell (for applying allocation results).
+    vreg_cells: HashMap<u32, IRRegCell<'a>>,
+    /// Liveness sets: live_in[i] = vregs live at entry to instruction i.
+    live_in: Vec<HashSet<u32>>,
+    /// Liveness sets: live_out[i] = vregs live at exit from instruction i.
+    live_out: Vec<HashSet<u32>>,
+}
+
+impl<'a> LivenessAnalysis<'a> {
+    /// Create a new liveness analysis for a function.
+    ///
+    /// This linearizes the IR using DFS and builds the CFG. Call `compute_liveness()`
+    /// to fill in the liveness sets, then `compute_intervals()` to get live intervals.
+    fn new(function: &Function<'a>) -> Self {
+        let mut nodes = Vec::new();
+        let mut node_to_idx = HashMap::new();
+        let mut vreg_cells = HashMap::new();
+        let mut visited = HashSet::new();
+
+        // DFS is essential for correctness. See module docs for details.
+        Self::dfs(function.body, &mut nodes, &mut node_to_idx, &mut vreg_cells, &mut visited);
+
+        // Build successor relationships from the node_to_idx map
+        let successors = Self::build_successors(&nodes, &node_to_idx);
+
+        let n = nodes.len();
+        Self {
+            nodes,
+            successors,
+            vreg_cells,
+            live_in: vec![HashSet::new(); n],
+            live_out: vec![HashSet::new(); n],
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// DFS traversal to linearize IR nodes.
+    ///
+    /// Visits "then" branches before "next" (fallthrough) to keep branch
+    /// instructions contiguous in the numbering.
+    fn dfs(
+        cell: IRCell<'a>,
+        nodes: &mut Vec<IRCell<'a>>,
+        node_to_idx: &mut HashMap<*const RefCell<IR<'a>>, usize>,
+        vreg_cells: &mut HashMap<u32, IRRegCell<'a>>,
+        visited: &mut HashSet<*const RefCell<IR<'a>>>,
+    ) {
+        if !visited.insert(cell as *const _) {
+            return;
+        }
+
+        let idx = nodes.len();
+        node_to_idx.insert(cell as *const _, idx);
+        nodes.push(cell);
+
+        let ir = cell.borrow();
+
+        // Collect vregs from this instruction
+        match ir.instr {
+            IRI::Add { dst, src, .. } => {
+                if dst.borrow().physical.is_none() {
+                    vreg_cells.insert(dst.borrow().id, dst);
+                }
+                if src.borrow().physical.is_none() {
+                    vreg_cells.insert(src.borrow().id, src);
+                }
+            }
+            IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
+                if lhs.borrow().physical.is_none() {
+                    vreg_cells.insert(lhs.borrow().id, lhs);
+                }
+                if rhs.borrow().physical.is_none() {
+                    vreg_cells.insert(rhs.borrow().id, rhs);
+                }
+            }
+            _ => {}
+        }
+
+        // Visit "then" branch first (DFS into branches), then "next" (fallthrough).
+        if let IRI::If { then, .. } = ir.instr {
+            drop(ir);
+            Self::dfs(then, nodes, node_to_idx, vreg_cells, visited);
+            let ir = cell.borrow();
+            if let Some(next) = ir.next {
+                drop(ir);
+                Self::dfs(next, nodes, node_to_idx, vreg_cells, visited);
+            }
+        } else if let Some(next) = ir.next {
+            drop(ir);
+            Self::dfs(next, nodes, node_to_idx, vreg_cells, visited);
+        }
+    }
+
+    /// Build CFG successor relationships from the linearized nodes.
+    fn build_successors(
+        nodes: &[IRCell<'a>],
+        node_to_idx: &HashMap<*const RefCell<IR<'a>>, usize>,
+    ) -> Vec<Vec<usize>> {
+        let mut successors = vec![Vec::new(); nodes.len()];
+        for (idx, cell) in nodes.iter().enumerate() {
+            let ir = cell.borrow();
+            if let Some(next) = ir.next
+                && let Some(&next_idx) = node_to_idx.get(&(next as *const _))
+            {
+                successors[idx].push(next_idx);
+            }
+            if let IRI::If { then, .. } = ir.instr
+                && let Some(&then_idx) = node_to_idx.get(&(then as *const _))
+            {
+                successors[idx].push(then_idx);
+            }
+        }
+        successors
+    }
+
+    /// Compute liveness using backward dataflow analysis (worklist algorithm).
+    ///
+    /// Dataflow equations:
+    /// - `in[n] = use[n] ∪ (out[n] - def[n])`
+    /// - `out[n] = ∪_{s ∈ succ(n)} in[s]`
+    fn compute_liveness(&mut self) {
+        let n = self.nodes.len();
+        if n == 0 {
+            return;
+        }
+
+        // Build predecessors from successors (needed for worklist propagation)
+        let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (idx, succs) in self.successors.iter().enumerate() {
+            for &succ in succs {
+                predecessors[succ].push(idx);
+            }
+        }
+
+        // Worklist: start with all nodes
+        let mut worklist: VecDeque<usize> = (0..n).collect();
+        let mut in_worklist = vec![true; n];
+
+        while let Some(idx) = worklist.pop_front() {
+            in_worklist[idx] = false;
+
+            // out[n] = ∪_{s ∈ succ(n)} in[s]
+            let mut new_out = HashSet::new();
+            for &succ in &self.successors[idx] {
+                new_out.extend(self.live_in[succ].iter().copied());
+            }
+
+            // in[n] = use[n] ∪ (out[n] - def[n])
+            let (use_set, def_set) = Self::compute_use_def(&self.nodes[idx].borrow());
+            let mut new_in = use_set;
+            for &vreg in &new_out {
+                if !def_set.contains(&vreg) {
+                    new_in.insert(vreg);
+                }
+            }
+
+            // If in[n] changed, propagate to predecessors
+            if new_in != self.live_in[idx] {
+                self.live_in[idx] = new_in;
+                for &pred in &predecessors[idx] {
+                    if !in_worklist[pred] {
+                        worklist.push_back(pred);
+                        in_worklist[pred] = true;
+                    }
+                }
+            }
+
+            self.live_out[idx] = new_out;
+        }
+    }
+
+    /// Compute use and def sets for a single IR instruction.
+    fn compute_use_def(ir: &IR<'a>) -> (HashSet<u32>, HashSet<u32>) {
+        let mut use_set = HashSet::new();
+        let mut def_set = HashSet::new();
+
+        match ir.instr {
+            IRI::Add { dst, src, .. } => {
+                let src_reg = src.borrow();
+                if src_reg.physical.is_none() || src_reg.id >= Register::COUNT as u32 {
+                    use_set.insert(src_reg.id);
+                }
+                let dst_reg = dst.borrow();
+                if dst_reg.physical.is_none() || dst_reg.id >= Register::COUNT as u32 {
+                    def_set.insert(dst_reg.id);
+                }
+            }
+            IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
+                let lhs_reg = lhs.borrow();
+                if lhs_reg.physical.is_none() || lhs_reg.id >= Register::COUNT as u32 {
+                    use_set.insert(lhs_reg.id);
+                }
+                let rhs_reg = rhs.borrow();
+                if rhs_reg.physical.is_none() || rhs_reg.id >= Register::COUNT as u32 {
+                    use_set.insert(rhs_reg.id);
+                }
+            }
+            _ => {}
+        }
+
+        (use_set, def_set)
+    }
+
+    /// Compute live intervals from liveness sets, sorted by start position.
+    fn compute_intervals(&self) -> Vec<LiveInterval> {
+        let mut vreg_ranges: HashMap<u32, (usize, usize)> = HashMap::new();
+
+        for idx in 0..self.nodes.len() {
+            for &vreg_id in self.live_in[idx].iter().chain(self.live_out[idx].iter()) {
+                vreg_ranges
+                    .entry(vreg_id)
+                    .and_modify(|(start, end)| {
+                        *start = (*start).min(idx);
+                        *end = (*end).max(idx);
+                    })
+                    .or_insert((idx, idx));
+            }
+        }
+
+        let mut intervals: Vec<LiveInterval> = vreg_ranges
+            .into_iter()
+            .map(|(vreg_id, (start, end))| LiveInterval { vreg_id, start, end })
+            .collect();
+
+        intervals.sort_by_key(|i| i.start);
+        intervals
+    }
+
+    /// Apply register allocation results to the IRReg cells.
+    fn apply_allocation(&self, allocation: &HashMap<u32, Register>) {
+        for (&vreg_id, &reg) in allocation {
+            if let Some(cell) = self.vreg_cells.get(&vreg_id) {
+                cell.borrow_mut().physical = Some(reg);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Backend (Code Generation)
+// ============================================================================
 
 #[derive(Debug, Clone, Copy)]
 enum Relocation<'a> {
@@ -78,16 +361,13 @@ impl<'a> Backend<'a> {
 
     pub fn compile(mut self, compiler: &Compiler<'a>) -> CompileResult<Assembly<'a>> {
         for function in &compiler.functions {
-            // Reset physical register assignments for each function
-            self.reset_physical_registers(compiler);
-
             // Step 1-4: Liveness analysis and register allocation
-            self.allocate_registers_for_function(compiler, function)?;
+            self.allocate_registers(function)?;
 
             // Step 5: Code generation
             let entrypoint_offset = self.assembly.instructions.len();
             self.functions_seen.insert(function.name, entrypoint_offset);
-            self.generate_code_for_function(compiler, function)?;
+            self.generate_code(function)?;
 
             self.process_relocations();
         }
@@ -135,367 +415,90 @@ impl<'a> Backend<'a> {
         Ok(self.assembly)
     }
 
-    /// Reset all physical register assignments before processing a function.
-    fn reset_physical_registers(&self, compiler: &Compiler<'a>) {
-        // Physical registers (those with id < Register::COUNT) keep their physical mapping.
-        // Virtual registers get their physical assignment cleared.
-        // Note: we don't need to do anything here because register allocation
-        // will set the physical field for each vreg.
-    }
-
     /// Perform liveness analysis and register allocation for a function.
-    fn allocate_registers_for_function(
-        &mut self,
-        compiler: &Compiler<'a>,
-        function: &Function<'a>,
-    ) -> CompileResult<()> {
-        // Step 1: Linearize IR nodes, build CFG, and collect all vregs
-        let (nodes, node_to_idx, successors, vreg_cells) =
-            self.linearize_and_build_cfg(compiler, function);
-
-        if nodes.is_empty() {
+    fn allocate_registers(&mut self, function: &Function<'a>) -> CompileResult<()> {
+        let mut analysis = LivenessAnalysis::new(function);
+        if analysis.is_empty() {
             return Ok(());
         }
 
-        // Step 2: Compute liveness using backward dataflow analysis
-        let (live_in, live_out) = self.compute_liveness(&nodes, &successors);
-
-        // Step 3: Compute live intervals for each vreg
-        let intervals = self.compute_live_intervals(&nodes, &live_in, &live_out);
-
-        // Step 4: Linear scan register allocation
+        analysis.compute_liveness();
+        let intervals = analysis.compute_intervals();
         let allocation = self.linear_scan_allocation(intervals)?;
-
-        // Step 5: Apply the allocation to the IRReg cells
-        for (vreg_id, reg) in allocation {
-            if let Some(cell) = vreg_cells.get(&vreg_id) {
-                cell.borrow_mut().physical = Some(reg);
-            }
-        }
+        analysis.apply_allocation(&allocation);
 
         Ok(())
     }
 
-    /// Linearize IR nodes into a vector and build the CFG (successor relationships).
-    /// Also collects all unique vreg cells.
-    /// Uses DFS order to keep related instructions close together in numbering.
-    /// Returns: (nodes, node_to_idx mapping, successors for each node, vreg_cells)
-    fn linearize_and_build_cfg(
-        &self,
-        compiler: &Compiler<'a>,
-        function: &Function<'a>,
-    ) -> (
-        Vec<IRCell<'a>>,
-        HashMap<*const RefCell<IR<'a>>, usize>,
-        Vec<Vec<usize>>,
-        HashMap<u32, IRRegCell<'a>>,
-    ) {
-        let mut nodes: Vec<IRCell<'a>> = Vec::new();
-        let mut node_to_idx: HashMap<*const RefCell<IR<'a>>, usize> = HashMap::new();
-        let mut vreg_cells: HashMap<u32, IRRegCell<'a>> = HashMap::new();
-        let mut visited = HashSet::new();
-
-        // DFS is essential here, not just an optimization. See module docs for details.
-        fn dfs<'a>(
-            cell: IRCell<'a>,
-            nodes: &mut Vec<IRCell<'a>>,
-            node_to_idx: &mut HashMap<*const RefCell<IR<'a>>, usize>,
-            vreg_cells: &mut HashMap<u32, IRRegCell<'a>>,
-            visited: &mut HashSet<*const RefCell<IR<'a>>>,
-        ) {
-            if !visited.insert(cell as *const _) {
-                return;
-            }
-
-            let idx = nodes.len();
-            node_to_idx.insert(cell as *const _, idx);
-            nodes.push(cell);
-
-            let ir = cell.borrow();
-
-            // Collect vregs from this instruction
-            match ir.instr {
-                IRI::Add { dst, src, .. } => {
-                    let dst_reg = dst.borrow();
-                    if dst_reg.physical.is_none() {
-                        vreg_cells.insert(dst_reg.id, dst);
-                    }
-                    let src_reg = src.borrow();
-                    if src_reg.physical.is_none() {
-                        vreg_cells.insert(src_reg.id, src);
-                    }
-                }
-                IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, then } => {
-                    let lhs_reg = lhs.borrow();
-                    if lhs_reg.physical.is_none() {
-                        vreg_cells.insert(lhs_reg.id, lhs);
-                    }
-                    let rhs_reg = rhs.borrow();
-                    if rhs_reg.physical.is_none() {
-                        vreg_cells.insert(rhs_reg.id, rhs);
-                    }
-                }
-                _ => {}
-            }
-
-            // For If nodes, visit the "then" branch first (DFS into branches)
-            // before continuing with the "next" (fallthrough) path.
-            // This keeps the inner branch instructions contiguous.
-            if let IRI::If { then, .. } = ir.instr {
-                drop(ir);
-                dfs(then, nodes, node_to_idx, vreg_cells, visited);
-                // Re-borrow to get next
-                let ir = cell.borrow();
-                if let Some(next) = ir.next {
-                    drop(ir);
-                    dfs(next, nodes, node_to_idx, vreg_cells, visited);
-                }
-            } else if let Some(next) = ir.next {
-                drop(ir);
-                dfs(next, nodes, node_to_idx, vreg_cells, visited);
-            }
-        }
-
-        dfs(function.body, &mut nodes, &mut node_to_idx, &mut vreg_cells, &mut visited);
-
-        // Second pass: build successor relationships
-        let mut successors: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
-        for (idx, cell) in nodes.iter().enumerate() {
-            let ir = cell.borrow();
-            if let Some(next) = ir.next {
-                if let Some(&next_idx) = node_to_idx.get(&(next as *const _)) {
-                    successors[idx].push(next_idx);
-                }
-            }
-            if let IRI::If { then, .. } = ir.instr {
-                if let Some(&then_idx) = node_to_idx.get(&(then as *const _)) {
-                    successors[idx].push(then_idx);
-                }
-            }
-        }
-
-        (nodes, node_to_idx, successors, vreg_cells)
-    }
-
-    /// Compute liveness using backward dataflow analysis.
-    /// Returns: (live_in sets, live_out sets) for each instruction index.
-    fn compute_liveness(
-        &self,
-        nodes: &[IRCell<'a>],
-        successors: &[Vec<usize>],
-    ) -> (Vec<HashSet<u32>>, Vec<HashSet<u32>>) {
-        let n = nodes.len();
-
-        // Initialize live_in and live_out sets
-        let mut live_in: Vec<HashSet<u32>> = vec![HashSet::new(); n];
-        let mut live_out: Vec<HashSet<u32>> = vec![HashSet::new(); n];
-
-        // Build predecessor relationships (needed for backward analysis)
-        let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); n];
-        for (idx, succs) in successors.iter().enumerate() {
-            for &succ in succs {
-                predecessors[succ].push(idx);
-            }
-        }
-
-        // Worklist algorithm for backward dataflow analysis
-        // For liveness: in[n] = use[n] ∪ (out[n] - def[n])
-        //               out[n] = ∪_{n'∈succ(n)} in[n']
-        let mut worklist: VecDeque<usize> = (0..n).collect();
-        let mut in_worklist: Vec<bool> = vec![true; n];
-
-        while let Some(idx) = worklist.pop_front() {
-            in_worklist[idx] = false;
-
-            let ir = nodes[idx].borrow();
-
-            // Compute out[n] = ∪_{n'∈succ(n)} in[n']
-            let mut new_out = HashSet::new();
-            for &succ in &successors[idx] {
-                new_out.extend(live_in[succ].iter().cloned());
-            }
-
-            // Compute use[n] and def[n]
-            let (use_set, def_set) = Self::compute_use_def(&ir);
-
-            // Compute in[n] = use[n] ∪ (out[n] - def[n])
-            let mut new_in = use_set;
-            for &vreg in &new_out {
-                if !def_set.contains(&vreg) {
-                    new_in.insert(vreg);
-                }
-            }
-
-            // If in[n] changed, add predecessors to worklist
-            if new_in != live_in[idx] {
-                live_in[idx] = new_in;
-                for &pred in &predecessors[idx] {
-                    if !in_worklist[pred] {
-                        worklist.push_back(pred);
-                        in_worklist[pred] = true;
-                    }
-                }
-            }
-
-            live_out[idx] = new_out;
-        }
-
-        (live_in, live_out)
-    }
-
-    /// Compute use and def sets for an IR instruction.
-    /// Returns: (use_set, def_set) of vreg IDs.
-    fn compute_use_def(ir: &IR<'a>) -> (HashSet<u32>, HashSet<u32>) {
-        let mut use_set = HashSet::new();
-        let mut def_set = HashSet::new();
-
-        match ir.instr {
-            IRI::Noop => {}
-            IRI::Add { dst, src, .. } => {
-                // src is used (read)
-                let src_reg = src.borrow();
-                if src_reg.physical.is_none() || src_reg.id >= Register::COUNT as u32 {
-                    use_set.insert(src_reg.id);
-                }
-                // dst is defined (written)
-                let dst_reg = dst.borrow();
-                if dst_reg.physical.is_none() || dst_reg.id >= Register::COUNT as u32 {
-                    def_set.insert(dst_reg.id);
-                }
-            }
-            IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
-                // lhs and rhs are used
-                let lhs_reg = lhs.borrow();
-                if lhs_reg.physical.is_none() || lhs_reg.id >= Register::COUNT as u32 {
-                    use_set.insert(lhs_reg.id);
-                }
-                let rhs_reg = rhs.borrow();
-                if rhs_reg.physical.is_none() || rhs_reg.id >= Register::COUNT as u32 {
-                    use_set.insert(rhs_reg.id);
-                }
-            }
-            IRI::If { .. } | IRI::Call { .. } | IRI::Return | IRI::Flush | IRI::AwaitInput => {}
-        }
-
-        (use_set, def_set)
-    }
-
-    /// Compute live intervals from liveness sets.
-    /// A live interval is [start, end] where start is the first instruction
-    /// where the vreg is live, and end is the last.
-    fn compute_live_intervals(
-        &self,
-        nodes: &[IRCell<'a>],
-        live_in: &[HashSet<u32>],
-        live_out: &[HashSet<u32>],
-    ) -> Vec<LiveInterval> {
-        // First, collect all vreg IDs and their live ranges
-        let mut vreg_ranges: HashMap<u32, (usize, usize)> = HashMap::new();
-
-        for (idx, _node) in nodes.iter().enumerate() {
-            // A vreg is live at instruction idx if it's in live_in[idx] or live_out[idx]
-            for &vreg_id in live_in[idx].iter().chain(live_out[idx].iter()) {
-                vreg_ranges
-                    .entry(vreg_id)
-                    .and_modify(|(start, end)| {
-                        *start = (*start).min(idx);
-                        *end = (*end).max(idx);
-                    })
-                    .or_insert((idx, idx));
-            }
-        }
-
-        // Convert to LiveInterval structs, sorted by start position
-        let mut intervals: Vec<LiveInterval> = vreg_ranges
-            .into_iter()
-            .map(|(vreg_id, (start, end))| LiveInterval { vreg_id, start, end })
-            .collect();
-
-        intervals.sort_by_key(|i| i.start);
-        intervals
-    }
-
-    /// Linear scan register allocation.
-    /// Assigns physical registers to vregs based on their live intervals.
-    /// Returns a map from vreg_id to allocated physical register.
+    /// Linear scan register allocation (Poletto-Sarkar algorithm).
+    ///
+    /// Processes intervals in order of start position, expiring old intervals
+    /// and allocating registers greedily. When out of registers, spills the
+    /// interval with the furthest end point.
     fn linear_scan_allocation(
         &mut self,
         intervals: Vec<LiveInterval>,
     ) -> CompileResult<HashMap<u32, Register>> {
-        let mut vreg_to_physical: HashMap<u32, Register> = HashMap::new();
+        let mut allocation: HashMap<u32, Register> = HashMap::new();
 
         if intervals.is_empty() {
-            return Ok(vreg_to_physical);
+            return Ok(allocation);
         }
 
-        // Active intervals (currently allocated), sorted by end position
+        // Active intervals sorted by end position
         let mut active: Vec<LiveInterval> = Vec::new();
 
-        // Available registers (user registers only)
+        // Available user registers
         let mut available: Vec<Register> =
-            (Register::FIRST_USER_REG..Register::COUNT).map(|i| Register::from_usize(i)).collect();
+            (Register::FIRST_USER_REG..Register::COUNT).map(Register::from_usize).collect();
 
         for interval in intervals {
-            // Expire old intervals: free registers for intervals that ended before this one starts
+            // Expire intervals that ended before this one starts
             active.retain(|active_interval| {
                 if active_interval.end < interval.start {
-                    // This interval has expired, free its register
-                    if let Some(&reg) = vreg_to_physical.get(&active_interval.vreg_id) {
-                        // Only add back to available if it's a user register
-                        if reg as usize >= Register::FIRST_USER_REG {
-                            available.push(reg);
-                        }
+                    if let Some(&reg) = allocation.get(&active_interval.vreg_id)
+                        && reg as usize >= Register::FIRST_USER_REG
+                    {
+                        available.push(reg);
                     }
-                    false // Remove from active
+                    false
                 } else {
-                    true // Keep in active
+                    true
                 }
             });
 
-            // Try to allocate a register for this interval
+            // Allocate or spill
             if let Some(reg) = available.pop() {
-                vreg_to_physical.insert(interval.vreg_id, reg);
+                allocation.insert(interval.vreg_id, reg);
                 active.push(interval);
-                // Keep active sorted by end position
                 active.sort_by_key(|i| i.end);
-            } else {
-                // Spill: pick the interval with the furthest end point
-                // If it ends after the current interval, spill that one and use its register
-                // Otherwise, spill the current interval (no register for it)
-                if let Some(last_active) = active.last() {
-                    if last_active.end > interval.end {
-                        // Spill the last active interval, use its register for current
-                        let spilled = active.pop().unwrap();
-                        if let Some(&reg) = vreg_to_physical.get(&spilled.vreg_id) {
-                            vreg_to_physical.remove(&spilled.vreg_id);
-                            vreg_to_physical.insert(interval.vreg_id, reg);
-                            active.push(interval);
-                            active.sort_by_key(|i| i.end);
-                            // Note: spilled interval doesn't get a register
-                            // In a real compiler, we'd generate spill code
-                        }
+            } else if let Some(last) = active.last() {
+                if last.end > interval.end {
+                    // Spill the longest-living active interval
+                    let spilled = active.pop().unwrap();
+                    if let Some(&reg) = allocation.get(&spilled.vreg_id) {
+                        allocation.remove(&spilled.vreg_id);
+                        allocation.insert(interval.vreg_id, reg);
+                        active.push(interval);
+                        active.sort_by_key(|i| i.end);
                     }
-                    // else: current interval ends later, it gets spilled (no allocation)
-                } else {
-                    return Err(CompileError {
-                        path: String::new(),
-                        line: 0,
-                        column: 0,
-                        message: "out of physical registers".to_string(),
-                    });
                 }
+                // else: current interval gets spilled (no allocation)
+            } else {
+                return Err(CompileError {
+                    path: String::new(),
+                    line: 0,
+                    column: 0,
+                    message: "out of physical registers".to_string(),
+                });
             }
         }
 
-        Ok(vreg_to_physical)
+        Ok(allocation)
     }
 
-    /// Generate code for a function.
-    fn generate_code_for_function(
-        &mut self,
-        compiler: &Compiler<'a>,
-        function: &Function<'a>,
-    ) -> CompileResult<()> {
+    /// Generate bytecode for a function (assumes registers already allocated).
+    fn generate_code(&mut self, function: &Function<'a>) -> CompileResult<()> {
         use Instruction::*;
 
         let mut stack: VecDeque<IRCell<'a>> = VecDeque::new();
