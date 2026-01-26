@@ -7,6 +7,8 @@ use edit::{buffer, icu};
 
 #[derive(Debug)]
 pub enum Error {
+    SettingsInvalidJson,
+    SettingsInvalidValue,
     Io(io::Error),
     Icu(icu::Error),
 }

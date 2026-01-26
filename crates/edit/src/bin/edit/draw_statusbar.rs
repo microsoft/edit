@@ -6,6 +6,7 @@ use edit::fuzzy::score_fuzzy;
 use edit::helpers::*;
 use edit::icu;
 use edit::input::vk;
+use edit::lsh::LANGUAGES;
 use edit::tui::*;
 use stdext::arena::scratch_arena;
 use stdext::arena_format;
@@ -27,13 +28,19 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 
         ctx.table_next_row();
 
-        if ctx.button("newline", if tb.is_crlf() { "CRLF" } else { "LF" }, ButtonStyle::default()) {
-            let is_crlf = tb.is_crlf();
-            tb.normalize_newlines(!is_crlf);
-        }
+        state.wants_language_picker |= ctx.button(
+            "language",
+            tb.language().map_or("Plain Text", |l| l.name),
+            ButtonStyle::default(),
+        );
         if state.wants_statusbar_focus {
             state.wants_statusbar_focus = false;
             ctx.steal_focus();
+        }
+
+        if ctx.button("newline", if tb.is_crlf() { "CRLF" } else { "LF" }, ButtonStyle::default()) {
+            let is_crlf = tb.is_crlf();
+            tb.normalize_newlines(!is_crlf);
         }
 
         state.wants_encoding_picker |=
@@ -198,6 +205,55 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
     }
 
     ctx.table_end();
+}
+
+pub fn draw_dialog_language_change(ctx: &mut Context, state: &mut State) {
+    let doc = state.documents.active_mut();
+    let mut done = doc.is_none();
+
+    ctx.modal_begin("language", loc(LocId::LanguageSelectMode));
+    if let Some(doc) = doc {
+        let width = (ctx.size().width - 20).max(10);
+        let height = (ctx.size().height - 10).max(10);
+
+        ctx.scrollarea_begin("scrollarea", Size { width, height });
+        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
+        ctx.inherit_focus();
+        {
+            ctx.list_begin("languages");
+            ctx.inherit_focus();
+
+            let auto_detect = doc.language_override.is_none();
+            let selected = if auto_detect { None } else { doc.buffer.borrow().language() };
+
+            if ctx.list_item(auto_detect, loc(LocId::LanguageAutoDetect))
+                == ListSelection::Activated
+            {
+                doc.auto_detect_language();
+                done = true;
+            }
+
+            if ctx.list_item(selected.is_none(), "Plain Text") == ListSelection::Activated {
+                doc.override_language(None);
+                done = true;
+            }
+
+            for lang in LANGUAGES {
+                if ctx.list_item(Some(lang) == selected, lang.name) == ListSelection::Activated {
+                    doc.override_language(Some(lang));
+                    done = true;
+                }
+            }
+            ctx.list_end();
+        }
+        ctx.scrollarea_end();
+    }
+    done |= ctx.modal_end();
+
+    if done {
+        state.wants_language_picker = false;
+        ctx.needs_rerender();
+    }
 }
 
 pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {

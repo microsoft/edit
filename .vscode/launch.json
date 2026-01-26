@@ -10,7 +10,7 @@
             "program": "${workspaceFolder}/target/debug/edit",
             "cwd": "${workspaceFolder}",
             "args": [
-                "${workspaceFolder}/crates/edit/src/bin/edit/main.rs"
+                "${workspaceFolder}/assets/highlighting-tests/json.json"
             ],
         },
         {

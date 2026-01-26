@@ -1,0 +1,27 @@
+#[display_name = "Git Rebase Message"]
+#[path = "**/git-rebase-todo"]
+#[path = "**/rebase-merge/done"]
+pub fn git_rebase_todo() {
+    if /#.*/ {
+        yield comment;
+    } else if /(?:break|exec|b|x)\b{end-half}/ {
+        yield keyword.control;
+        if /.*/ {
+            yield comment;
+        }
+    } else if /(?:drop|edit|fixup|pick|reword|squash|d|e|f|p|r|s)\b{end-half}/ {
+        yield keyword.control;
+
+        if /\s+/ {
+        }
+
+        if /\S+/ {
+            // Hash parameter
+            yield constant.numeric;
+
+            if /.*/ {
+                yield comment;
+            }
+        }
+    }
+}

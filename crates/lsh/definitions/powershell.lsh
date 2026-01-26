@@ -1,0 +1,62 @@
+#[display_name = "PowerShell"]
+#[path = "**/*.ps1"]
+#[path = "**/*.psd1"]
+#[path = "**/*.psm1"]
+pub fn powershell() {
+    until /$/ {
+        yield other;
+
+        if /#.*/ {
+            yield comment;
+        } else if /<#/ {
+            loop {
+                yield comment;
+                if /#>/ { yield comment; break; }
+                await input;
+            }
+        } else if /'/ {
+            loop {
+                yield string;
+                if /\\./ {}
+                else if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /@"/ {
+            loop {
+                yield string;
+                if /\\./ {}
+                else if /"@/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            loop {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /function|param/ {
+            yield keyword.other;
+        } else if /elseif|else|if|for|switch|default|throw|try|catch|finally/ {
+            yield keyword.control;
+        } else if /-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/ {
+            if /[\w\-]+/ {
+                yield method;
+            } else {
+                yield constant.numeric;
+            }
+        } else if /\$false|\$true|\$null/ {
+            if /\w+/ {
+                yield variable;
+            } else {
+                yield constant.language;
+            }
+        } else if /[$@][\w\d?:]+/ {
+            yield variable;
+        } else if /[\w\d?:]+-[\w\d?:-]*/ {
+            yield method;
+        } else if /[\w\d?:]+/ {
+            // Gobble any other tokens that should not be highlighted
+        }
+    }
+}

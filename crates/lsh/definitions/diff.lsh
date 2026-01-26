@@ -1,0 +1,12 @@
+#[display_name = "Diff"]
+#[path = "**/*.diff"]
+#[path = "**/*.patch"]
+pub fn diff() {
+    if /(?:diff|---|\+\+\+).*/ {
+        yield meta.header;
+    } else if /-.*/ {
+        yield markup.deleted;
+    } else if /\+.*/ {
+        yield markup.inserted;
+    }
+}

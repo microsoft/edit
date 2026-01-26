@@ -41,8 +41,10 @@ use stdext::{ReplaceRange as _, minmax, slice_as_uninit_mut, slice_copy_safe};
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
-use crate::framebuffer::{Framebuffer, IndexedColor};
+use crate::framebuffer::{Attributes, Framebuffer, IndexedColor};
 use crate::helpers::*;
+use crate::lsh::cache::HighlighterCache;
+use crate::lsh::{HighlightKind, Highlighter, Language};
 use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
 use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
@@ -249,6 +251,7 @@ pub struct TextBuffer {
     selection: Option<TextBufferSelection>,
     selection_generation: u32,
     search: Option<UnsafeCell<ActiveSearch>>,
+    highlighter_cache: HighlighterCache,
 
     width: CoordType,
     margin_width: CoordType,
@@ -258,6 +261,7 @@ pub struct TextBuffer {
     tab_size: CoordType,
     indent_with_tabs: bool,
     line_highlight_enabled: bool,
+    language: Option<&'static Language>,
     ruler: CoordType,
     encoding: &'static str,
     newlines_are_crlf: bool,
@@ -297,6 +301,7 @@ impl TextBuffer {
             selection: None,
             selection_generation: 0,
             search: None,
+            highlighter_cache: HighlighterCache::new(),
 
             width: 0,
             margin_width: 0,
@@ -306,6 +311,7 @@ impl TextBuffer {
             tab_size: 4,
             indent_with_tabs: false,
             line_highlight_enabled: false,
+            language: None,
             ruler: 0,
             encoding: "UTF-8",
             newlines_are_crlf: cfg!(windows), // Windows users want CRLF
@@ -598,6 +604,15 @@ impl TextBuffer {
         self.line_highlight_enabled = enabled;
     }
 
+    pub fn language(&self) -> Option<&'static Language> {
+        self.language
+    }
+
+    pub fn set_language(&mut self, language: Option<&'static Language>) {
+        self.language = language;
+        self.highlighter_cache.invalidate_from(0);
+    }
+
     /// Sets a ruler column, e.g. 80.
     pub fn set_ruler(&mut self, column: CoordType) {
         self.ruler = column;
@@ -676,6 +691,7 @@ impl TextBuffer {
         self.set_selection(None);
         self.mark_as_clean();
         self.reflow();
+        self.highlighter_cache.invalidate_from(0);
     }
 
     /// Copies the contents of the buffer into a string.
@@ -1736,6 +1752,7 @@ impl TextBuffer {
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut visual_pos_x_max = 0;
+        let mut highlighter = self.language.map(|l| Highlighter::new(&self.buffer, l));
 
         // Pick the cursor closer to the `origin.y`.
         let mut cursor = {
@@ -1972,6 +1989,75 @@ impl TextBuffer {
                     }
 
                     global_off += chunk.len();
+                }
+
+                if let Some(highlighter) = &mut highlighter {
+                    let highlights = self.highlighter_cache.parse_line(
+                        &scratch,
+                        highlighter,
+                        cursor_beg.logical_pos.y,
+                    );
+                    let mut highlights = highlights.iter();
+
+                    if let Some(first) = highlights.next() {
+                        let mut highlight_kind = first.kind;
+                        let mut highlight_beg =
+                            self.cursor_move_to_offset_internal(cursor_beg, first.start);
+
+                        for next in highlights {
+                            let kind = highlight_kind;
+                            highlight_kind = next.kind;
+
+                            let beg = highlight_beg.visual_pos;
+                            highlight_beg =
+                                self.cursor_move_to_offset_internal(highlight_beg, next.start);
+                            let end = highlight_beg.visual_pos;
+                            let target = Rect {
+                                left: destination.left + self.margin_width + beg.x - origin.x,
+                                top: destination.top + y,
+                                right: destination.left + self.margin_width + end.x - origin.x,
+                                bottom: destination.top + y + 1,
+                            };
+
+                            'block: {
+                                let color = match kind {
+                                    HighlightKind::Other => break 'block,
+
+                                    HighlightKind::Comment => IndexedColor::Green,
+                                    HighlightKind::Method => IndexedColor::BrightYellow,
+                                    HighlightKind::String => IndexedColor::BrightRed,
+                                    HighlightKind::Variable => IndexedColor::BrightCyan,
+
+                                    HighlightKind::ConstantLanguage => IndexedColor::BrightBlue,
+                                    HighlightKind::ConstantNumeric => IndexedColor::BrightGreen,
+                                    HighlightKind::KeywordControl => IndexedColor::BrightMagenta,
+                                    HighlightKind::KeywordOther => IndexedColor::BrightBlue,
+                                    HighlightKind::MarkupBold => break 'block,
+                                    HighlightKind::MarkupChanged => IndexedColor::BrightBlue,
+                                    HighlightKind::MarkupDeleted => IndexedColor::BrightRed,
+                                    HighlightKind::MarkupHeading => IndexedColor::BrightBlue,
+                                    HighlightKind::MarkupInserted => IndexedColor::BrightGreen,
+                                    HighlightKind::MarkupItalic => break 'block,
+                                    HighlightKind::MarkupLink => break 'block,
+                                    HighlightKind::MarkupList => IndexedColor::BrightBlue,
+                                    HighlightKind::MarkupStrikethrough => break 'block,
+                                    HighlightKind::MetaHeader => IndexedColor::BrightBlue,
+                                };
+                                fb.blend_fg(target, fb.indexed(color));
+                            }
+
+                            'block: {
+                                let attr = match kind {
+                                    HighlightKind::MarkupBold => Attributes::Bold,
+                                    HighlightKind::MarkupItalic => Attributes::Italic,
+                                    HighlightKind::MarkupLink => Attributes::Underlined,
+                                    HighlightKind::MarkupStrikethrough => Attributes::Strikethrough,
+                                    _ => break 'block,
+                                };
+                                fb.replace_attr(target, Attributes::All, attr);
+                            }
+                        }
+                    }
                 }
 
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
@@ -2601,6 +2687,7 @@ impl TextBuffer {
         }
 
         self.active_edit_off = cursor.offset;
+        self.highlighter_cache.invalidate_from(cursor.logical_pos.y);
 
         // If word-wrap is enabled, the visual layout of all logical lines affected by the write
         // may have changed. This includes even text before the insertion point up to the line
@@ -2851,6 +2938,8 @@ impl TextBuffer {
             // There weren't any undo/redo entries.
             return;
         }
+
+        self.highlighter_cache.invalidate_from(damage_start);
 
         if entry_buffer_generation.is_some() {
             self.recalc_after_content_changed();
