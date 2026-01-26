@@ -534,11 +534,7 @@ fn utext_access_impl<'a>(
             }
         }
 
-        loop {
-            let Some(c) = it.next() else {
-                break;
-            };
-
+        while let Some(c) = it.next() {
             // Thanks to our `if utf16_len >= UTF16_LEN_LIMIT` check,
             // we can safely assume that this will fit.
             unsafe {
