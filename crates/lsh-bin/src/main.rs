@@ -179,7 +179,9 @@ fn run_render(generator: lsh::compiler::Generator, path: &Path) -> anyhow::Resul
         let scratch = scratch_arena(None);
         let highlights = engine.parse_next_line::<u32>(&scratch, line.as_bytes());
 
-        for [curr, next] in highlights.array_windows::<2>() {
+        for w in highlights.windows(2) {
+            let curr = &w[0];
+            let next = &w[1];
             let start = curr.start;
             let end = next.start;
             let kind = curr.kind;

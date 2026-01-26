@@ -358,7 +358,7 @@ fn encoding_picker_update_list(state: &mut State) {
         }
     }
 
-    matches.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    matches.sort_unstable_by_key(|b| std::cmp::Reverse(b.0));
     state.encoding_picker_results = Some(Vec::from_iter(matches.iter().map(|(_, enc)| *enc)));
 }
 
