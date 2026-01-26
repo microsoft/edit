@@ -154,7 +154,7 @@ pub fn switch_modes() -> io::Result<()> {
         if ptr::eq(STATE.stdin, Foundation::INVALID_HANDLE_VALUE)
             || ptr::eq(STATE.stdout, Foundation::INVALID_HANDLE_VALUE)
         {
-            return Err(get_last_error());
+            return Err(last_os_error());
         }
 
         check_bool_return(Console::GetConsoleMode(STATE.stdin, &raw mut STATE.stdin_mode_old))?;
@@ -534,7 +534,7 @@ unsafe fn load_library(name: *const u16) -> io::Result<NonNull<c_void>> {
 pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: *const c_char) -> io::Result<T> {
     unsafe {
         let ptr = LibraryLoader::GetProcAddress(handle.as_ptr(), name as *const u8);
-        if let Some(ptr) = ptr { Ok(mem::transmute_copy(&ptr)) } else { Err(get_last_error()) }
+        if let Some(ptr) = ptr { Ok(mem::transmute_copy(&ptr)) } else { Err(last_os_error()) }
     }
 }
 
@@ -644,15 +644,16 @@ fn wide_to_utf8<'a>(arena: &'a Arena, wide: &[u16]) -> ArenaString<'a> {
     res
 }
 
+#[inline]
 #[cold]
-pub fn get_last_error() -> io::Error {
+fn last_os_error() -> io::Error {
     io::Error::last_os_error()
 }
 
 fn check_bool_return(ret: BOOL) -> io::Result<()> {
-    if ret == 0 { Err(get_last_error()) } else { Ok(()) }
+    if ret == 0 { Err(last_os_error()) } else { Ok(()) }
 }
 
 fn check_ptr_return<T>(ret: *mut T) -> io::Result<NonNull<T>> {
-    NonNull::new(ret).ok_or_else(get_last_error)
+    NonNull::new(ret).ok_or_else(last_os_error)
 }
