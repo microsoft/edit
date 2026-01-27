@@ -1991,70 +1991,90 @@ impl TextBuffer {
                     global_off += chunk.len();
                 }
 
-                if let Some(highlighter) = &mut highlighter {
-                    let highlights = self.highlighter_cache.parse_line(
+                // If we have a highlighter...
+                if let Some(highlighter) = &mut highlighter
+                    && let highlights = self.highlighter_cache.parse_line(
                         &scratch,
                         highlighter,
                         cursor_beg.logical_pos.y,
-                    );
-                    let mut highlights = highlights.iter();
+                    )
+                    // ...and it yields something for this line...
+                    && let Some(first) = highlights.first()
+                {
+                    let mut highlight_beg =
+                        self.cursor_move_to_offset_internal(cursor_beg, first.start);
 
-                    if let Some(first) = highlights.next() {
-                        let mut highlight_kind = first.kind;
-                        let mut highlight_beg =
-                            self.cursor_move_to_offset_internal(cursor_beg, first.start);
+                    for pair in highlights.windows(2) {
+                        let curr = &pair[0];
+                        let next = &pair[1];
+                        let highlight_end =
+                            self.cursor_move_to_offset_internal(highlight_beg, next.start);
 
-                        for next in highlights {
-                            let kind = highlight_kind;
-                            highlight_kind = next.kind;
+                        if curr.kind != HighlightKind::Other {
+                            let color = match curr.kind {
+                                HighlightKind::Other => None,
 
-                            let beg = highlight_beg.visual_pos;
-                            highlight_beg =
-                                self.cursor_move_to_offset_internal(highlight_beg, next.start);
-                            let end = highlight_beg.visual_pos;
-                            let target = Rect {
-                                left: destination.left + self.margin_width + beg.x - origin.x,
-                                top: destination.top + y,
-                                right: destination.left + self.margin_width + end.x - origin.x,
-                                bottom: destination.top + y + 1,
+                                HighlightKind::Comment => Some(IndexedColor::Green),
+                                HighlightKind::Method => Some(IndexedColor::BrightYellow),
+                                HighlightKind::String => Some(IndexedColor::BrightRed),
+                                HighlightKind::Variable => Some(IndexedColor::BrightCyan),
+
+                                HighlightKind::ConstantLanguage => Some(IndexedColor::BrightBlue),
+                                HighlightKind::ConstantNumeric => Some(IndexedColor::BrightGreen),
+                                HighlightKind::KeywordControl => Some(IndexedColor::BrightMagenta),
+                                HighlightKind::KeywordOther => Some(IndexedColor::BrightBlue),
+                                HighlightKind::MarkupBold => None,
+                                HighlightKind::MarkupChanged => Some(IndexedColor::BrightBlue),
+                                HighlightKind::MarkupDeleted => Some(IndexedColor::BrightRed),
+                                HighlightKind::MarkupHeading => Some(IndexedColor::BrightBlue),
+                                HighlightKind::MarkupInserted => Some(IndexedColor::BrightGreen),
+                                HighlightKind::MarkupItalic => None,
+                                HighlightKind::MarkupLink => None,
+                                HighlightKind::MarkupList => Some(IndexedColor::BrightBlue),
+                                HighlightKind::MarkupStrikethrough => None,
+                                HighlightKind::MetaHeader => Some(IndexedColor::BrightBlue),
+                            };
+                            let attr = match curr.kind {
+                                HighlightKind::MarkupBold => Some(Attributes::Bold),
+                                HighlightKind::MarkupItalic => Some(Attributes::Italic),
+                                HighlightKind::MarkupLink => Some(Attributes::Underlined),
+                                HighlightKind::MarkupStrikethrough => {
+                                    Some(Attributes::Strikethrough)
+                                }
+                                _ => None,
                             };
 
-                            'block: {
-                                let color = match kind {
-                                    HighlightKind::Other => break 'block,
-
-                                    HighlightKind::Comment => IndexedColor::Green,
-                                    HighlightKind::Method => IndexedColor::BrightYellow,
-                                    HighlightKind::String => IndexedColor::BrightRed,
-                                    HighlightKind::Variable => IndexedColor::BrightCyan,
-
-                                    HighlightKind::ConstantLanguage => IndexedColor::BrightBlue,
-                                    HighlightKind::ConstantNumeric => IndexedColor::BrightGreen,
-                                    HighlightKind::KeywordControl => IndexedColor::BrightMagenta,
-                                    HighlightKind::KeywordOther => IndexedColor::BrightBlue,
-                                    HighlightKind::MarkupBold => break 'block,
-                                    HighlightKind::MarkupChanged => IndexedColor::BrightBlue,
-                                    HighlightKind::MarkupDeleted => IndexedColor::BrightRed,
-                                    HighlightKind::MarkupHeading => IndexedColor::BrightBlue,
-                                    HighlightKind::MarkupInserted => IndexedColor::BrightGreen,
-                                    HighlightKind::MarkupItalic => break 'block,
-                                    HighlightKind::MarkupLink => break 'block,
-                                    HighlightKind::MarkupList => IndexedColor::BrightBlue,
-                                    HighlightKind::MarkupStrikethrough => break 'block,
-                                    HighlightKind::MetaHeader => IndexedColor::BrightBlue,
+                            for y in highlight_beg.visual_pos.y..=highlight_end.visual_pos.y {
+                                let left = if y == highlight_beg.visual_pos.y {
+                                    destination.left
+                                        + self.margin_width
+                                        + highlight_beg.visual_pos.x
+                                        - origin.x
+                                } else {
+                                    destination.left + self.margin_width - origin.x
                                 };
-                                fb.blend_fg(target, fb.indexed(color));
-                            }
-
-                            'block: {
-                                let attr = match kind {
-                                    HighlightKind::MarkupBold => Attributes::Bold,
-                                    HighlightKind::MarkupItalic => Attributes::Italic,
-                                    HighlightKind::MarkupLink => Attributes::Underlined,
-                                    HighlightKind::MarkupStrikethrough => Attributes::Strikethrough,
-                                    _ => break 'block,
+                                let right = if y == highlight_end.visual_pos.y {
+                                    destination.left
+                                        + self.margin_width
+                                        + highlight_end.visual_pos.x
+                                        - origin.x
+                                } else {
+                                    CoordType::MAX
                                 };
-                                fb.replace_attr(target, Attributes::All, attr);
+                                let right = right.min(destination.right);
+                                let line_target = Rect {
+                                    left,
+                                    top: destination.top + y - origin.y,
+                                    right,
+                                    bottom: destination.top + y + 1 - origin.y,
+                                };
+
+                                if let Some(color) = color {
+                                    fb.blend_fg(line_target, fb.indexed(color));
+                                }
+                                if let Some(attr) = attr {
+                                    fb.replace_attr(line_target, Attributes::All, attr);
+                                }
                             }
                         }
                     }

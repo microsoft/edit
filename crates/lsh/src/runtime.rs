@@ -61,14 +61,14 @@ pub struct Runtime<'pa, 'ps, 'pc> {
     strings: &'ps [&'ps str],
     charsets: &'pc [[u16; 16]],
     entrypoint: u32,
-    stack: Vec<Registers>,
+    stack: Vec<u32>,
     registers: Registers,
 }
 
 /// Snapshot of the runtime state for incremental re-highlighting.
 #[derive(Clone)]
 pub struct RuntimeState {
-    stack: Vec<Registers>,
+    stack: Vec<u32>,
     registers: Registers,
 }
 
@@ -149,16 +149,13 @@ impl<'pa, 'ps, 'pc> Runtime<'pa, 'ps, 'pc> {
                 }
 
                 Call { tgt } => {
-                    // PC already points to the next instruction (return address)
-                    self.stack.push(self.registers);
+                    // PC already points to the next instruction (= return address)
+                    self.registers.save_registers(&mut self.stack);
                     self.registers.pc = tgt;
                 }
                 Return => {
-                    if let Some(registers) = self.stack.pop() {
-                        self.registers = registers;
-                    } else {
-                        self.registers = unsafe { mem::zeroed() };
-                        self.registers.pc = self.entrypoint;
+                    if !self.registers.load_registers(&mut self.stack) {
+                        self.registers = Registers { pc: self.entrypoint, ..Default::default() };
                         break;
                     }
                 }
@@ -344,9 +341,11 @@ impl<'pa, 'ps, 'pc> Runtime<'pa, 'ps, 'pc> {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Register {
-    ProgramCounter,
+    // These two registers are shared across function calls...
     InputOffset,
     HighlightStart,
+    // ...and the rest is caller-saved.
+    ProgramCounter,
     X3,
     X4,
     X5,
@@ -374,9 +373,9 @@ impl Register {
 
     pub fn mnemonic(&self) -> &'static str {
         match self {
-            Register::ProgramCounter => "pc",
             Register::InputOffset => "off",
             Register::HighlightStart => "hs",
+            Register::ProgramCounter => "pc",
             Register::X3 => "x3",
             Register::X4 => "x4",
             Register::X5 => "x5",
@@ -403,9 +402,9 @@ impl fmt::Display for Register {
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct Registers {
-    pub pc: u32,  // x0 = ProgramCounter
-    pub off: u32, // x1 = InputOffset
-    pub hs: u32,  // x2 = HighlightStart
+    pub off: u32, // x0 = InputOffset
+    pub hs: u32,  // x1 = HighlightStart
+    pub pc: u32,  // x2 = ProgramCounter
     pub x3: u32,
     pub x4: u32,
     pub x5: u32,
@@ -424,12 +423,42 @@ pub struct Registers {
 impl Registers {
     #[inline(always)]
     pub fn get(&self, reg: Register) -> u32 {
-        unsafe { (self as *const _ as *const u32).add(reg as usize).read() }
+        unsafe { self.as_ptr().add(reg as usize).read() }
     }
 
     #[inline(always)]
     pub fn set(&mut self, reg: Register, val: u32) {
-        unsafe { (self as *mut _ as *mut u32).add(reg as usize).write(val) }
+        unsafe { self.as_mut_ptr().add(reg as usize).write(val) }
+    }
+
+    #[inline(always)]
+    fn save_registers(&self, vec: &mut Vec<u32>) {
+        unsafe { vec.extend_from_slice(std::slice::from_raw_parts(self.as_ptr().add(2), 14)) };
+    }
+
+    #[inline(always)]
+    fn load_registers(&mut self, vec: &mut Vec<u32>) -> bool {
+        unsafe {
+            if vec.len() < 14 {
+                return false;
+            }
+
+            let src = vec.as_ptr().add(vec.len() - 14);
+            let dst = self.as_mut_ptr().add(2);
+            std::ptr::copy_nonoverlapping(src, dst, 14);
+            vec.truncate(vec.len() - 14);
+            true
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn as_ptr(&self) -> *const u32 {
+        self as *const _ as *const u32
+    }
+
+    #[inline(always)]
+    unsafe fn as_mut_ptr(&mut self) -> *mut u32 {
+        self as *mut _ as *mut u32
     }
 }
 
