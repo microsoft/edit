@@ -1752,7 +1752,6 @@ impl TextBuffer {
         let text_width = width - self.margin_width;
         let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut visual_pos_x_max = 0;
-        let mut highlighter = self.language.map(|l| Highlighter::new(&self.buffer, l));
 
         // Pick the cursor closer to the `origin.y`.
         let mut cursor = {
@@ -1991,95 +1990,6 @@ impl TextBuffer {
                     global_off += chunk.len();
                 }
 
-                // If we have a highlighter...
-                if let Some(highlighter) = &mut highlighter
-                    && let highlights = self.highlighter_cache.parse_line(
-                        &scratch,
-                        highlighter,
-                        cursor_beg.logical_pos.y,
-                    )
-                    // ...and it yields something for this line...
-                    && let Some(first) = highlights.first()
-                {
-                    let mut highlight_beg =
-                        self.cursor_move_to_offset_internal(cursor_beg, first.start);
-
-                    for pair in highlights.windows(2) {
-                        let curr = &pair[0];
-                        let next = &pair[1];
-                        let highlight_end =
-                            self.cursor_move_to_offset_internal(highlight_beg, next.start);
-
-                        if curr.kind != HighlightKind::Other {
-                            let color = match curr.kind {
-                                HighlightKind::Other => None,
-
-                                HighlightKind::Comment => Some(IndexedColor::Green),
-                                HighlightKind::Method => Some(IndexedColor::BrightYellow),
-                                HighlightKind::String => Some(IndexedColor::BrightRed),
-                                HighlightKind::Variable => Some(IndexedColor::BrightCyan),
-
-                                HighlightKind::ConstantLanguage => Some(IndexedColor::BrightBlue),
-                                HighlightKind::ConstantNumeric => Some(IndexedColor::BrightGreen),
-                                HighlightKind::KeywordControl => Some(IndexedColor::BrightMagenta),
-                                HighlightKind::KeywordOther => Some(IndexedColor::BrightBlue),
-                                HighlightKind::MarkupBold => None,
-                                HighlightKind::MarkupChanged => Some(IndexedColor::BrightBlue),
-                                HighlightKind::MarkupDeleted => Some(IndexedColor::BrightRed),
-                                HighlightKind::MarkupHeading => Some(IndexedColor::BrightBlue),
-                                HighlightKind::MarkupInserted => Some(IndexedColor::BrightGreen),
-                                HighlightKind::MarkupItalic => None,
-                                HighlightKind::MarkupLink => None,
-                                HighlightKind::MarkupList => Some(IndexedColor::BrightBlue),
-                                HighlightKind::MarkupStrikethrough => None,
-                                HighlightKind::MetaHeader => Some(IndexedColor::BrightBlue),
-                            };
-                            let attr = match curr.kind {
-                                HighlightKind::MarkupBold => Some(Attributes::Bold),
-                                HighlightKind::MarkupItalic => Some(Attributes::Italic),
-                                HighlightKind::MarkupLink => Some(Attributes::Underlined),
-                                HighlightKind::MarkupStrikethrough => {
-                                    Some(Attributes::Strikethrough)
-                                }
-                                _ => None,
-                            };
-
-                            for y in highlight_beg.visual_pos.y..=highlight_end.visual_pos.y {
-                                let left = if y == highlight_beg.visual_pos.y {
-                                    destination.left
-                                        + self.margin_width
-                                        + highlight_beg.visual_pos.x
-                                        - origin.x
-                                } else {
-                                    destination.left + self.margin_width - origin.x
-                                };
-                                let right = if y == highlight_end.visual_pos.y {
-                                    destination.left
-                                        + self.margin_width
-                                        + highlight_end.visual_pos.x
-                                        - origin.x
-                                } else {
-                                    CoordType::MAX
-                                };
-                                let right = right.min(destination.right);
-                                let line_target = Rect {
-                                    left,
-                                    top: destination.top + y - origin.y,
-                                    right,
-                                    bottom: destination.top + y + 1 - origin.y,
-                                };
-
-                                if let Some(color) = color {
-                                    fb.blend_fg(line_target, fb.indexed(color));
-                                }
-                                if let Some(attr) = attr {
-                                    fb.replace_attr(line_target, Attributes::All, attr);
-                                }
-                            }
-                        }
-                    }
-                }
-
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
 
@@ -2087,6 +1997,10 @@ impl TextBuffer {
 
             cursor = cursor_end;
         }
+
+        let logical_y_beg = self.cursor_for_rendering.unwrap().logical_pos.y;
+        let logical_y_end = cursor.logical_pos.y + 1;
+        self.render_apply_highlights(origin, destination, logical_y_beg..logical_y_end, fb);
 
         // Colorize the margin that we wrote above.
         if self.margin_width > 0 {
@@ -2151,6 +2065,99 @@ impl TextBuffer {
         }
 
         Some(RenderResult { visual_pos_x_max })
+    }
+
+    fn render_apply_highlights(
+        &mut self,
+        origin: Point,
+        destination: Rect,
+        logical_y_range: Range<CoordType>,
+        fb: &mut Framebuffer,
+    ) {
+        let Some(language) = self.language else {
+            return;
+        };
+
+        let mut highlighter = Highlighter::new(&self.buffer, language);
+        let cursor = self.cursor_for_rendering.unwrap();
+
+        for logical_y in logical_y_range {
+            let scratch = scratch_arena(None);
+            let highlights =
+                self.highlighter_cache.parse_line(&scratch, &mut highlighter, logical_y);
+
+            for pair in highlights.windows(2) {
+                let curr = &pair[0];
+                let next = &pair[1];
+
+                if curr.start < cursor.offset {
+                    continue;
+                }
+
+                let beg = self.cursor_move_to_offset_internal(cursor, curr.start);
+                let end = self.cursor_move_to_offset_internal(cursor, next.start);
+
+                if curr.kind != HighlightKind::Other {
+                    let color = match curr.kind {
+                        HighlightKind::Other => None,
+
+                        HighlightKind::Comment => Some(IndexedColor::Green),
+                        HighlightKind::Method => Some(IndexedColor::BrightYellow),
+                        HighlightKind::String => Some(IndexedColor::BrightRed),
+                        HighlightKind::Variable => Some(IndexedColor::BrightCyan),
+
+                        HighlightKind::ConstantLanguage => Some(IndexedColor::BrightBlue),
+                        HighlightKind::ConstantNumeric => Some(IndexedColor::BrightGreen),
+                        HighlightKind::KeywordControl => Some(IndexedColor::BrightMagenta),
+                        HighlightKind::KeywordOther => Some(IndexedColor::BrightBlue),
+                        HighlightKind::MarkupBold => None,
+                        HighlightKind::MarkupChanged => Some(IndexedColor::BrightBlue),
+                        HighlightKind::MarkupDeleted => Some(IndexedColor::BrightRed),
+                        HighlightKind::MarkupHeading => Some(IndexedColor::BrightBlue),
+                        HighlightKind::MarkupInserted => Some(IndexedColor::BrightGreen),
+                        HighlightKind::MarkupItalic => None,
+                        HighlightKind::MarkupLink => None,
+                        HighlightKind::MarkupList => Some(IndexedColor::BrightBlue),
+                        HighlightKind::MarkupStrikethrough => None,
+                        HighlightKind::MetaHeader => Some(IndexedColor::BrightBlue),
+                    };
+                    let attr = match curr.kind {
+                        HighlightKind::MarkupBold => Some(Attributes::Bold),
+                        HighlightKind::MarkupItalic => Some(Attributes::Italic),
+                        HighlightKind::MarkupLink => Some(Attributes::Underlined),
+                        HighlightKind::MarkupStrikethrough => Some(Attributes::Strikethrough),
+                        _ => None,
+                    };
+
+                    for y in beg.visual_pos.y..=end.visual_pos.y {
+                        let left = if y == beg.visual_pos.y {
+                            destination.left + self.margin_width + beg.visual_pos.x - origin.x
+                        } else {
+                            destination.left + self.margin_width - origin.x
+                        };
+                        let right = if y == end.visual_pos.y {
+                            destination.left + self.margin_width + end.visual_pos.x - origin.x
+                        } else {
+                            CoordType::MAX
+                        };
+                        let right = right.min(destination.right);
+                        let line_target = Rect {
+                            left,
+                            top: destination.top + y - origin.y,
+                            right,
+                            bottom: destination.top + y + 1 - origin.y,
+                        };
+
+                        if let Some(color) = color {
+                            fb.blend_fg(line_target, fb.indexed(color));
+                        }
+                        if let Some(attr) = attr {
+                            fb.replace_attr(line_target, Attributes::All, attr);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn cut(&mut self, clipboard: &mut Clipboard) {
