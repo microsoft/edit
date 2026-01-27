@@ -10,7 +10,6 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::fmt::format;
 use std::fs::read_dir;
 use std::io;
 use std::path::PathBuf;
@@ -18,6 +17,7 @@ use std::path::PathBuf;
 use stdext::arena::scratch_arena;
 
 use super::*;
+use crate::runtime::{Instruction, MnemonicFormattingConfig};
 
 pub struct Generator<'a> {
     compiler: Compiler<'a>,
@@ -114,11 +114,13 @@ impl<'a> Generator<'a> {
                 _ = writeln!(output, "{label_prefix}{}:{label_suffix}", label);
             }
 
-            let (instr, len) = Instruction::decode(&assembly.instructions[off..]);
+            let (Some(instr), len) = Instruction::decode(&assembly.instructions[off..]) else {
+                break;
+            };
             let mnemonic_width = match instr {
-                Some(Instruction::JumpIfMatchCharset { .. })
-                | Some(Instruction::JumpIfMatchPrefix { .. })
-                | Some(Instruction::JumpIfMatchPrefixInsensitive { .. }) => {
+                Instruction::JumpIfMatchCharset { .. }
+                | Instruction::JumpIfMatchPrefix { .. }
+                | Instruction::JumpIfMatchPrefixInsensitive { .. } => {
                     if vt {
                         60
                     } else {
@@ -129,32 +131,22 @@ impl<'a> Generator<'a> {
             };
 
             let scratch = scratch_arena(None);
-            if let Some(instr) = instr {
-                _ = write!(
-                    output,
-                    "{line_prefix}{off:>line_num_width$}:  {mnemonic:mnemonic_width$}",
-                    mnemonic = instr.mnemonic(&scratch, &mnemonic_config),
-                );
-            } else {
-                _ = write!(
-                    output,
-                    "{line_prefix}{off:>line_num_width$}:  {_n}{opcode:#02x}{n_}",
-                    opcode = assembly.instructions[off],
-                    _n = mnemonic_config.numeric_prefix,
-                    n_ = mnemonic_config.numeric_suffix,
-                );
-            }
+            _ = write!(
+                output,
+                "{line_prefix}{off:>line_num_width$}:  {mnemonic:mnemonic_width$}",
+                mnemonic = instr.mnemonic(&scratch, &mnemonic_config),
+            );
 
             match instr {
-                Some(Instruction::JumpIfMatchCharset { idx, .. }) => {
+                Instruction::JumpIfMatchCharset { idx, .. } => {
                     _ = write!(
                         output,
                         " {comment_prefix}// {:?}{comment_suffix}",
                         assembly.charsets[idx as usize]
                     )
                 }
-                Some(Instruction::JumpIfMatchPrefix { idx, .. })
-                | Some(Instruction::JumpIfMatchPrefixInsensitive { idx, .. }) => {
+                Instruction::JumpIfMatchPrefix { idx, .. }
+                | Instruction::JumpIfMatchPrefixInsensitive { idx, .. } => {
                     _ = write!(
                         output,
                         " {comment_prefix}// {:?}{comment_suffix}",
@@ -176,7 +168,7 @@ impl<'a> Generator<'a> {
 
         let mut output = String::new();
         output.push_str("// This file is auto-generated. Do not edit it manually.\n\n");
-        output.push_str("use lsh::engine::Language;\n\n");
+        output.push_str("use lsh::runtime::Language;\n\n");
 
         output.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum HighlightKind {\n");
         let members: Vec<_> = assembly
@@ -238,7 +230,7 @@ impl TryFrom<u32> for HighlightKind {{
         _ = writeln!(
             output,
             "\n#[rustfmt::skip] pub const ASSEMBLY: [u8; {len}] = [",
-            len = assembly.instructions.len(),
+            len = assembly.instructions.len() + Instruction::MAX_ENCODED_SIZE,
         );
         let line_num_width = assembly.instructions.len().checked_ilog10().unwrap_or(0) as usize + 1;
 
@@ -268,12 +260,24 @@ impl TryFrom<u32> for HighlightKind {{
                     output,
                     "{:<padding_width$}// {off:>line_num_width$}:  {mnemonic}",
                     "",
-                    padding_width = 9usize.saturating_sub(len) * 6,
+                    padding_width = Instruction::MAX_ENCODED_SIZE.saturating_sub(len) * 6,
                     mnemonic = instr.mnemonic(&scratch, &Default::default())
                 );
+            } else {
+                output.push('\n');
             }
 
             off += len;
+        }
+        // Normally the runtime would need to do bounds checks at all times to be safe,
+        // since there may be malformed bytecode (e.g. a bug in this compiler).
+        // We can fix that by padding the instruction stream with invalid opcodes at the end.
+        // This works as long as the runtime checks for valid opcodes. Even if the last valid
+        // opcode is chopped off (due to a bug above), the runtime can do an unchecked read
+        // of `MAX_ENCODED_SIZE` bytes without risking OOB access.
+        output.push_str("\n    // padding\n");
+        for _ in 0..Instruction::MAX_ENCODED_SIZE {
+            _ = writeln!(output, "    0xff,");
         }
         output.push_str("];\n");
 
@@ -283,16 +287,13 @@ impl TryFrom<u32> for HighlightKind {{
             len = assembly.charsets.len(),
         );
         for cs in assembly.charsets {
+            let cs = cs.serialize();
             output.push_str("    [");
-            for lo in 0..16 {
-                if lo > 0 {
-                    output.push_str(", ");
+            for (i, &v) in cs.iter().enumerate() {
+                if i != 0 {
+                    _ = write!(output, ", ");
                 }
-                let mut u = 0u16;
-                for hi in 0..16 {
-                    u |= (cs[hi * 16 + lo] as u16) << hi;
-                }
-                _ = write!(output, "0x{u:04x}");
+                _ = write!(output, "0x{v:04x}");
             }
             output.push_str("],\n");
         }

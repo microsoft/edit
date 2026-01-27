@@ -10,7 +10,7 @@
 //! → `frontend` (parse) → IR
 //! → `optimizer` → IR
 //! → `backend` (regalloc + codegen) → bytecode
-//! → `engine` (execute)
+//! → `runtime` (execute)
 //!
 //! The IR is a graph of `RefCell<IR>` nodes. Each node has a `.next` pointer and `If` nodes
 //! in particular have a `.then` pointer. This makes CFG manipulation trivial but means you can't
@@ -21,7 +21,7 @@
 //! - `off` advances only on successful regex matches. Failed matches leave it alone.
 //!   This is why the frontend emits backup/restore pairs around regex chains.
 //! - `hs` (highlight start) is used to track the input offset of the last yield statement,
-//!   which permits the engine (runtime) to highlight everything inbetween with the next yield's highlight kind.
+//!   which permits the runtime to highlight everything inbetween with the next yield's highlight kind.
 //!
 //! ## Charset encoding
 //!
@@ -49,9 +49,7 @@
 //! - No include statements, and all functions across all files share a single namespace.
 
 #![feature(allocator_api)]
-#![allow(irrefutable_let_patterns, unused, clippy::upper_case_acronyms)]
+#![allow(irrefutable_let_patterns, clippy::upper_case_acronyms)]
 
 pub mod compiler;
-pub mod engine;
-
-pub use crate::compiler::CompileResult;
+pub mod runtime;

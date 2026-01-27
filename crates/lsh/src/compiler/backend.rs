@@ -56,6 +56,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use stdext::arena::scratch_arena;
 
 use super::*;
+use crate::runtime::Instruction;
 
 #[derive(Debug, Clone, Copy)]
 enum Relocation<'a> {
@@ -119,14 +120,6 @@ impl<'a> Backend<'a> {
                 },
             });
         }
-
-        // Normally the runtime/engine would need to do bounds checks at all times to be safe,
-        // since there may be malformed bytecode (e.g. a bug in this compiler).
-        // We can fix that by padding the instruction stream with invalid opcodes at the end.
-        // This works as long as the runtime checks for valid opcodes. Even if the last valid
-        // opcode is chopped off (due to a bug above), the runtime can do an unchecked read
-        // of `MAX_ENCODED_SIZE` bytes without risking OOB access.
-        self.assembly.instructions.extend(std::iter::repeat_n(0xff, Instruction::MAX_ENCODED_SIZE));
 
         self.assembly.entrypoints = compiler
             .functions

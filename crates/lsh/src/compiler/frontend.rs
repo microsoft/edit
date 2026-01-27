@@ -37,18 +37,6 @@ struct RegexSpan<'a> {
     pub capture_groups: Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
 }
 
-enum LoopFlowControlKind {
-    Break,
-    Continue,
-}
-
-struct LoopFlowControl<'a> {
-    line: usize,
-    column: usize,
-    kind: LoopFlowControlKind,
-    ir: IRCell<'a>,
-}
-
 struct Context<'a> {
     loop_start: Option<IRCell<'a>>,
     loop_exit: Option<IRCell<'a>>,
@@ -256,10 +244,16 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             offset: usize::MAX,
         });
 
+        // NOTE: It's crucial that we connect the block with the loop before calling collect_interesting_charset,
+        // as the until statement's regex is not part of the loop but still counts as an "interesting charset",
+        // for the purpose of skipping uninteresting characters.
+        first.borrow_mut().set_next(loop_start);
+        loop_good.borrow_mut().set_next(block.first);
+
         // Skip any uninteresting characters before the next loop iteration.
         //   if /.*?/ {}
-        let interesting = self.compiler.collect_interesting_charset(block.first);
-        let fast_skip = if interesting.covers_all() {
+        let interesting = self.compiler.collect_interesting_charset(loop_start);
+        let fast_skip = if interesting.covers_none() {
             advance_check
         } else {
             let mut skip_charset = interesting.clone();
@@ -271,9 +265,6 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 offset: usize::MAX,
             })
         };
-
-        first.borrow_mut().set_next(loop_start);
-        loop_good.borrow_mut().set_next(block.first);
 
         if let mut block_last = block.last.borrow_mut()
             && block_last.wants_next()

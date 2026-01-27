@@ -2,13 +2,14 @@
 // Licensed under the MIT License.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, IsTerminal, Write as _, stdout};
+use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Write as _, stdout};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use anyhow::bail;
 use argh::FromArgs;
-use lsh::engine::Engine;
+use lsh::compiler::SerializedCharset;
+use lsh::runtime::Runtime;
 use stdext::arena::scratch_arena;
 use stdext::glob::glob_match;
 
@@ -148,36 +149,23 @@ fn run_render(generator: lsh::compiler::Generator, path: &Path) -> anyhow::Resul
 
     // Convert Assembly data to static references by leaking memory
     // This is fine for a CLI tool that runs once and exits
-    let charsets: Vec<[u16; 16]> = assembly
-        .charsets
-        .into_iter()
-        .map(|cs| {
-            let mut arr = [0u16; 16];
-            for lo in 0..16 {
-                let mut u = 0u16;
-                for hi in 0..16 {
-                    u |= (cs[hi * 16 + lo] as u16) << hi;
-                }
-                arr[lo] = u;
-            }
-            arr
-        })
-        .collect();
+    let charsets: Vec<SerializedCharset> =
+        assembly.charsets.into_iter().map(|cs| cs.serialize()).collect();
 
-    let mut engine = Engine::new(
+    let mut runtime = Runtime::new(
         &assembly.instructions,
         &assembly.strings,
         &charsets,
         entrypoint.address as u32,
     );
 
-    let reader = BufReader::new(File::open(path)?);
-    let mut stdout = stdout();
+    let reader = BufReader::with_capacity(128 * 1024, File::open(path)?);
+    let mut stdout = BufWriter::with_capacity(128 * 1024, stdout());
 
     for line in reader.lines() {
         let line = line?;
         let scratch = scratch_arena(None);
-        let highlights = engine.parse_next_line::<u32>(&scratch, line.as_bytes());
+        let highlights = runtime.parse_next_line::<u32>(&scratch, line.as_bytes());
 
         for w in highlights.windows(2) {
             let curr = &w[0];

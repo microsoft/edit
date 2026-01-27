@@ -17,7 +17,7 @@
 //!
 //! ## Charset representation
 //!
-//! `Charset` is a 256-bit bitmap (`[bool; 256]`). The engine uses a transposed `[u16; 16]`
+//! `Charset` is a 256-bit bitmap (`[bool; 256]`). The runtime uses a transposed `[u16; 16]`
 //! layout for SIMD reasons - see `generator.rs` where the conversion happens.
 //!
 //! ## Instruction encoding
@@ -32,27 +32,26 @@
 //!   The backend has its own DFS traversal for liveness analysis.
 
 mod backend;
+mod charset;
 mod frontend;
 mod generator;
-mod helpers;
 mod optimizer;
 mod regex;
 mod tokenizer;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
+use std::fmt;
 use std::fmt::Write as _;
-use std::marker::PhantomData;
-use std::mem::{MaybeUninit, transmute, zeroed};
-use std::ops::{Index, IndexMut};
+use std::mem::zeroed;
 use std::path::Path;
-use std::{fmt, ptr};
 
 use stdext::arena::{Arena, ArenaString};
 
+pub use self::charset::{Charset, SerializedCharset};
 use self::frontend::*;
 pub use self::generator::Generator;
-use crate::compiler::helpers::{Intern, arena_clone_str};
+use crate::runtime::Register;
 
 pub fn builtin_definitions_path() -> &'static Path {
     #[cfg(windows)]
@@ -302,7 +301,7 @@ impl<'a> Compiler<'a> {
                         _ = write!(output, "[{offset}: return]");
                     }
                     IRI::Flush { kind } => {
-                        _ = write!(output, "[{offset}: flush]");
+                        _ = write!(output, "[{offset}: flush {kind:?}]");
                     }
                     IRI::AwaitInput => {
                         _ = write!(output, "[{offset}: await input]");
@@ -367,6 +366,21 @@ impl<'a> Iterator for TreeVisitor<'a> {
 
         None
     }
+}
+
+pub struct Assembly<'a> {
+    pub instructions: Vec<u8>,
+    pub entrypoints: Vec<Entrypoint>,
+    pub charsets: Vec<&'a Charset>,
+    pub strings: Vec<&'a str>,
+    pub highlight_kinds: Vec<HighlightKind<'a>>,
+}
+
+pub struct Entrypoint {
+    pub name: String,
+    pub display_name: String,
+    pub paths: Vec<String>,
+    pub address: usize,
 }
 
 #[derive(Clone)]
@@ -449,12 +463,12 @@ enum IRI<'a> {
 }
 
 #[derive(Default)]
-pub struct IRReg {
+struct IRReg {
     id: u32,
     physical: Option<Register>,
 }
 
-pub type IRRegCell<'a> = &'a RefCell<IRReg>;
+type IRRegCell<'a> = &'a RefCell<IRReg>;
 
 impl IRReg {
     fn new(id: u32) -> Self {
@@ -476,12 +490,12 @@ impl fmt::Debug for IRReg {
 
 #[derive(Clone, Copy)]
 struct IRSpan<'a> {
-    pub first: IRCell<'a>,
-    pub last: IRCell<'a>,
+    first: IRCell<'a>,
+    last: IRCell<'a>,
 }
 
 impl<'a> IRSpan<'a> {
-    pub fn single(node: IRCell<'a>) -> Self {
+    fn single(node: IRCell<'a>) -> Self {
         Self { first: node, last: node }
     }
 }
@@ -509,7 +523,7 @@ impl<'a, 's> IRChainBuilder<'a, 's> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ComparisonOp {
+enum ComparisonOp {
     Eq,
     Ne,
     Lt,
@@ -538,660 +552,22 @@ impl<'a> IR<'a> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct Charset {
-    bits: [bool; 256],
+fn arena_clone_str<'a>(arena: &'a Arena, s: &str) -> &'a str {
+    ArenaString::from_str(arena, s).leak()
 }
 
-impl Charset {
-    const fn no() -> Self {
-        Charset { bits: [false; 256] }
-    }
-
-    const fn yes() -> Self {
-        Charset { bits: [true; 256] }
-    }
-
-    fn fill(&mut self, value: bool) {
-        self.bits.fill(value);
-    }
-
-    fn invert(&mut self) {
-        for b in &mut self.bits {
-            *b = !*b;
-        }
-    }
-
-    fn set(&mut self, index: u8, value: bool) {
-        self.bits[index as usize] = value;
-    }
-
-    fn merge(&mut self, other: &Charset) {
-        for (a, b) in self.bits.iter_mut().zip(other.bits.iter()) {
-            *a |= *b;
-        }
-    }
-
-    fn covers_all(&self) -> bool {
-        self.bits.iter().all(|&b| b)
-    }
-
-    fn covers_char(&self, b: u8) -> bool {
-        self.bits[b as usize]
-    }
-
-    fn covers_char_insensitive(&self, b: u8) -> bool {
-        self.bits[b.to_ascii_uppercase() as usize] && self.bits[b.to_ascii_lowercase() as usize]
-    }
-
-    fn covers_str(&self, s: &str) -> bool {
-        s.as_bytes().iter().all(|&b| self.bits[b as usize])
-    }
-
-    fn covers_str_insensitive(&self, s: &str) -> bool {
-        s.as_bytes().iter().all(|&b| {
-            self.bits[b.to_ascii_uppercase() as usize] && self.bits[b.to_ascii_lowercase() as usize]
-        })
-    }
-
-    fn is_superset(&self, other: &Charset) -> bool {
-        for (&s, &o) in self.bits.iter().zip(other.bits.iter()) {
-            if s && !o {
-                return false;
-            }
-        }
-        true
-    }
-
-    fn is_strict_superset(&self, other: &Charset) -> bool {
-        let mut has_extra = false;
-        for (&s, &o) in self.bits.iter().zip(other.bits.iter()) {
-            if !s && o {
-                return false;
-            }
-            has_extra |= s && !o;
-        }
-        has_extra
-    }
+trait Intern<'a, T: ?Sized> {
+    fn intern(&mut self, arena: &'a Arena, item: &T) -> &'a T;
 }
 
-impl Default for Charset {
-    fn default() -> Self {
-        Self::no()
-    }
-}
-
-impl fmt::Debug for Charset {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let show_char = |f: &mut fmt::Formatter<'_>, b: usize| {
-            let b = b as u8;
-            if b == b'"' {
-                write!(f, "&quot;")
-            } else if b.is_ascii_graphic() {
-                let b = b as char;
-                write!(f, "{b}")
-            } else {
-                write!(f, "0x{b:02X}")
-            }
-        };
-
-        let mut beg = 0;
-        let mut first = true;
-
-        write!(f, "[")?;
-
-        while beg < 256 {
-            while beg < 256 && !self.bits[beg] {
-                beg += 1;
-            }
-            if beg >= 256 {
-                break;
-            }
-
-            let mut end = beg;
-            while end < 256 && self.bits[end] {
-                end += 1;
-            }
-
-            if !first {
-                write!(f, ", ")?;
-            }
-            show_char(f, beg)?;
-            if end - beg > 1 {
-                write!(f, "-")?;
-                show_char(f, end - 1)?;
-            }
-
-            beg = end;
-            first = false;
-        }
-
-        write!(f, "]")
-    }
-}
-
-impl<I> Index<I> for Charset
-where
-    [bool]: Index<I>,
-{
-    type Output = <[bool] as Index<I>>::Output;
-
-    #[inline]
-    fn index(&self, index: I) -> &Self::Output {
-        self.bits.index(index)
-    }
-}
-
-impl<I> IndexMut<I> for Charset
-where
-    [bool]: IndexMut<I>,
-{
-    #[inline]
-    fn index_mut(&mut self, index: I) -> &mut Self::Output {
-        self.bits.index_mut(index)
-    }
-}
-
-impl<'a> Intern<'a, Charset> for Vec<&'a Charset> {
-    fn intern(&mut self, arena: &'a Arena, value: &Charset) -> &'a Charset {
+impl<'a> Intern<'a, str> for Vec<&'a str> {
+    fn intern(&mut self, arena: &'a Arena, value: &str) -> &'a str {
         if let Some(&s) = self.iter().find(|&&v| v == value) {
             s
         } else {
-            let s = arena.alloc_uninit().write(value.clone());
+            let s = arena_clone_str(arena, value);
             self.push(s);
             s
         }
     }
-}
-
-pub struct Assembly<'a> {
-    pub instructions: Vec<u8>,
-    pub entrypoints: Vec<Entrypoint>,
-    pub charsets: Vec<&'a Charset>,
-    pub strings: Vec<&'a str>,
-    pub highlight_kinds: Vec<HighlightKind<'a>>,
-}
-
-pub struct Entrypoint {
-    pub name: String,
-    pub display_name: String,
-    pub paths: Vec<String>,
-    pub address: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Register {
-    ProgramCounter,
-    InputOffset,
-    HighlightStart,
-    X3,
-    X4,
-    X5,
-    X6,
-    X7,
-    X8,
-    X9,
-    X10,
-    X11,
-    X12,
-    X13,
-    X14,
-    X15,
-}
-
-impl Register {
-    const FIRST_USER_REG: usize = 3; // aka x3
-    const COUNT: usize = 16;
-
-    fn from_usize(value: usize) -> Self {
-        debug_assert!(value < Self::COUNT);
-        unsafe { transmute::<u8, Register>(value as u8) }
-    }
-
-    fn mnemonic(&self) -> &'static str {
-        match self {
-            Register::ProgramCounter => "pc",
-            Register::InputOffset => "off",
-            Register::HighlightStart => "hs",
-            Register::X3 => "x3",
-            Register::X4 => "x4",
-            Register::X5 => "x5",
-            Register::X6 => "x6",
-            Register::X7 => "x7",
-            Register::X8 => "x8",
-            Register::X9 => "x9",
-            Register::X10 => "x10",
-            Register::X11 => "x11",
-            Register::X12 => "x12",
-            Register::X13 => "x13",
-            Register::X14 => "x14",
-            Register::X15 => "x15",
-        }
-    }
-}
-
-impl fmt::Display for Register {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.mnemonic())
-    }
-}
-
-#[repr(C)]
-#[derive(Default, Clone, Copy)]
-pub struct Registers {
-    pub pc: u32,  // x0 = ProgramCounter
-    pub off: u32, // x1 = InputOffset
-    pub hs: u32,  // x2 = HighlightStart
-    pub x3: u32,
-    pub x4: u32,
-    pub x5: u32,
-    pub x6: u32,
-    pub x7: u32,
-    pub x8: u32,
-    pub x9: u32,
-    pub x10: u32,
-    pub x11: u32,
-    pub x12: u32,
-    pub x13: u32,
-    pub x14: u32,
-    pub x15: u32,
-}
-
-impl Registers {
-    const COUNT: usize = 16;
-
-    #[inline(always)]
-    pub fn get(&self, reg: usize) -> u32 {
-        debug_assert!(reg < Self::COUNT);
-        unsafe { (self as *const _ as *const u32).add(reg).read() }
-    }
-
-    #[inline(always)]
-    pub fn set(&mut self, reg: usize, val: u32) {
-        debug_assert!(reg < Self::COUNT);
-        unsafe { (self as *mut _ as *mut u32).add(reg).write(val) }
-    }
-}
-
-struct RegisterAllocator(u16);
-
-impl RegisterAllocator {
-    fn new() -> Self {
-        RegisterAllocator((1 << Register::FIRST_USER_REG) - 1)
-    }
-
-    fn alloc(&mut self) -> Option<Register> {
-        let available = !self.0;
-        if available == 0 {
-            return None;
-        }
-
-        let idx = available.trailing_zeros() as usize;
-        self.0 |= 1 << idx;
-        Some(Register::from_usize(idx))
-    }
-
-    fn dealloc(&mut self, reg: Register) {
-        let idx = reg as usize;
-        if idx >= Register::FIRST_USER_REG {
-            self.0 &= !(1 << idx);
-        }
-    }
-}
-
-impl Default for RegisterAllocator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-pub struct AnnotatedInstruction<'a> {
-    pub instr: Instruction,
-    pub label: &'a str,
-}
-
-#[allow(dead_code)]
-#[repr(u8)]
-#[derive(Debug, Clone, Copy)]
-pub enum Instruction {
-    // NOTE: This allows for jumps by manipulating Register::ProgramCounter.
-    Mov { dst: Register, src: Register },
-    Add { dst: Register, src: Register },
-    Sub { dst: Register, src: Register },
-    MovImm { dst: Register, imm: u32 },
-    AddImm { dst: Register, imm: u32 },
-    SubImm { dst: Register, imm: u32 },
-
-    Call { tgt: u32 },
-    Return,
-
-    JumpEQ { lhs: Register, rhs: Register, tgt: u32 }, // ==
-    JumpNE { lhs: Register, rhs: Register, tgt: u32 }, // !=
-    JumpLT { lhs: Register, rhs: Register, tgt: u32 }, // <
-    JumpLE { lhs: Register, rhs: Register, tgt: u32 }, // <=
-    JumpGT { lhs: Register, rhs: Register, tgt: u32 }, // >
-    JumpGE { lhs: Register, rhs: Register, tgt: u32 }, // >=
-
-    // Jumps to `tgt` if we're at the end of the line.
-    JumpIfEndOfLine { tgt: u32 },
-
-    // Jumps to `tgt` if the test succeeds.
-    // `idx` specifies the charset/string to use.
-    JumpIfMatchCharset { idx: u32, tgt: u32 },
-    JumpIfMatchPrefix { idx: u32, tgt: u32 },
-    JumpIfMatchPrefixInsensitive { idx: u32, tgt: u32 },
-
-    // Flushes the current HighlightKind to the output.
-    FlushHighlight { kind: Register },
-
-    // Awaits more input to be available.
-    AwaitInput,
-}
-
-impl Instruction {
-    // JumpIfMatchCharset, etc., are 1 byte opcode + two u32 parameters.
-    pub const MAX_ENCODED_SIZE: usize = 9;
-
-    pub fn address_offset(&self) -> Option<usize> {
-        match *self {
-            Instruction::MovImm { .. }
-            | Instruction::AddImm { .. }
-            | Instruction::SubImm { .. } => Some(2), // opcode + dst
-
-            Instruction::Call { .. } => Some(1), // opcode
-
-            Instruction::JumpEQ { .. }
-            | Instruction::JumpNE { .. }
-            | Instruction::JumpLT { .. }
-            | Instruction::JumpLE { .. }
-            | Instruction::JumpGT { .. }
-            | Instruction::JumpGE { .. } => Some(2), // opcode + lhs/rhs pair
-
-            Instruction::JumpIfEndOfLine { .. } => Some(1), // opcode
-
-            Instruction::JumpIfMatchCharset { .. }
-            | Instruction::JumpIfMatchPrefix { .. }
-            | Instruction::JumpIfMatchPrefixInsensitive { .. } => Some(5), // opcode + idx
-
-            _ => None,
-        }
-    }
-
-    #[allow(clippy::identity_op)]
-    pub fn encode<'a>(&self, arena: &'a Arena) -> Vec<u8, &'a Arena> {
-        fn enc_reg_pair(lo: Register, hi: Register) -> u8 {
-            ((hi as u8) << 4) | (lo as u8)
-        }
-
-        fn enc_reg_single(lo: Register) -> u8 {
-            lo as u8
-        }
-
-        fn enc_u16(val: u16) -> [u8; 2] {
-            val.to_le_bytes()
-        }
-
-        fn enc_u32(val: u32) -> [u8; 4] {
-            val.to_le_bytes()
-        }
-
-        let mut bytes = Vec::with_capacity_in(16, arena);
-        #[allow(clippy::missing_transmute_annotations)]
-        bytes.push(unsafe { std::mem::transmute(std::mem::discriminant(self)) });
-
-        match *self {
-            Instruction::Mov { dst, src }
-            | Instruction::Add { dst, src }
-            | Instruction::Sub { dst, src } => {
-                bytes.push(enc_reg_pair(dst, src));
-            }
-            Instruction::MovImm { dst, imm }
-            | Instruction::AddImm { dst, imm }
-            | Instruction::SubImm { dst, imm } => {
-                bytes.push(enc_reg_single(dst));
-                bytes.extend_from_slice(&enc_u32(imm));
-            }
-
-            Instruction::Call { tgt } => {
-                bytes.extend_from_slice(&enc_u32(tgt));
-            }
-            Instruction::Return => {}
-
-            Instruction::JumpEQ { lhs, rhs, tgt }
-            | Instruction::JumpNE { lhs, rhs, tgt }
-            | Instruction::JumpLT { lhs, rhs, tgt }
-            | Instruction::JumpLE { lhs, rhs, tgt }
-            | Instruction::JumpGT { lhs, rhs, tgt }
-            | Instruction::JumpGE { lhs, rhs, tgt } => {
-                bytes.push(enc_reg_pair(lhs, rhs));
-                bytes.extend_from_slice(&enc_u32(tgt));
-            }
-
-            Instruction::JumpIfEndOfLine { tgt } => {
-                bytes.extend_from_slice(&enc_u32(tgt));
-            }
-            Instruction::JumpIfMatchCharset { idx, tgt }
-            | Instruction::JumpIfMatchPrefix { idx, tgt }
-            | Instruction::JumpIfMatchPrefixInsensitive { idx, tgt } => {
-                bytes.extend_from_slice(&enc_u32(idx));
-                bytes.extend_from_slice(&enc_u32(tgt));
-            }
-
-            Instruction::FlushHighlight { kind } => {
-                bytes.push(enc_reg_single(kind));
-            }
-            Instruction::AwaitInput => {}
-        }
-
-        bytes
-    }
-
-    pub fn decode(bytes: &[u8]) -> (Option<Self>, usize) {
-        fn dec_reg_pair(b: u8) -> (Register, Register) {
-            let hi = Register::from_usize((b >> 4) as usize);
-            let lo = Register::from_usize((b & 0xF) as usize);
-            (lo, hi)
-        }
-
-        fn dec_reg_single(b: u8) -> Register {
-            Register::from_usize(b as usize)
-        }
-
-        fn dec_u32(bytes: &[u8]) -> u32 {
-            u32::from_le_bytes(bytes[..4].try_into().unwrap())
-        }
-
-        let opcode = bytes[0];
-        match opcode {
-            0 => {
-                let (dst, src) = dec_reg_pair(bytes[1]);
-                (Some(Instruction::Mov { dst, src }), 2)
-            }
-            1 => {
-                let (dst, src) = dec_reg_pair(bytes[1]);
-                (Some(Instruction::Add { dst, src }), 2)
-            }
-            2 => {
-                let (dst, src) = dec_reg_pair(bytes[1]);
-                (Some(Instruction::Sub { dst, src }), 2)
-            }
-            3 => {
-                let dst = dec_reg_single(bytes[1]);
-                let imm = dec_u32(&bytes[2..]);
-                (Some(Instruction::MovImm { dst, imm }), 6)
-            }
-            4 => {
-                let dst = dec_reg_single(bytes[1]);
-                let imm = dec_u32(&bytes[2..]);
-                (Some(Instruction::AddImm { dst, imm }), 6)
-            }
-            5 => {
-                let dst = dec_reg_single(bytes[1]);
-                let imm = dec_u32(&bytes[2..]);
-                (Some(Instruction::SubImm { dst, imm }), 6)
-            }
-            6 => (Some(Instruction::Call { tgt: dec_u32(&bytes[1..]) }), 5),
-            7 => (Some(Instruction::Return), 1),
-            8 => {
-                let (lhs, rhs) = dec_reg_pair(bytes[1]);
-                let tgt = dec_u32(&bytes[2..]);
-                (Some(Instruction::JumpEQ { lhs, rhs, tgt }), 6)
-            }
-            9 => {
-                let (lhs, rhs) = dec_reg_pair(bytes[1]);
-                let tgt = dec_u32(&bytes[2..]);
-                (Some(Instruction::JumpNE { lhs, rhs, tgt }), 6)
-            }
-            10 => {
-                let (lhs, rhs) = dec_reg_pair(bytes[1]);
-                let tgt = dec_u32(&bytes[2..]);
-                (Some(Instruction::JumpLT { lhs, rhs, tgt }), 6)
-            }
-            11 => {
-                let (lhs, rhs) = dec_reg_pair(bytes[1]);
-                let tgt = dec_u32(&bytes[2..]);
-                (Some(Instruction::JumpLE { lhs, rhs, tgt }), 6)
-            }
-            12 => {
-                let (lhs, rhs) = dec_reg_pair(bytes[1]);
-                let tgt = dec_u32(&bytes[2..]);
-                (Some(Instruction::JumpGT { lhs, rhs, tgt }), 6)
-            }
-            13 => {
-                let (lhs, rhs) = dec_reg_pair(bytes[1]);
-                let tgt = dec_u32(&bytes[2..]);
-                (Some(Instruction::JumpGE { lhs, rhs, tgt }), 6)
-            }
-            14 => (Some(Instruction::JumpIfEndOfLine { tgt: dec_u32(&bytes[1..]) }), 5),
-            15 => {
-                let idx = dec_u32(&bytes[1..]);
-                let tgt = dec_u32(&bytes[5..]);
-                (Some(Instruction::JumpIfMatchCharset { idx, tgt }), 9)
-            }
-            16 => {
-                let idx = dec_u32(&bytes[1..]);
-                let tgt = dec_u32(&bytes[5..]);
-                (Some(Instruction::JumpIfMatchPrefix { idx, tgt }), 9)
-            }
-            17 => {
-                let idx = dec_u32(&bytes[1..]);
-                let tgt = dec_u32(&bytes[5..]);
-                (Some(Instruction::JumpIfMatchPrefixInsensitive { idx, tgt }), 9)
-            }
-            18 => {
-                let kind = dec_reg_single(bytes[1]);
-                (Some(Instruction::FlushHighlight { kind }), 2)
-            }
-            19 => (Some(Instruction::AwaitInput), 1),
-            _ => (None, 1),
-        }
-    }
-
-    pub fn mnemonic<'a>(
-        &self,
-        arena: &'a Arena,
-        config: &MnemonicFormattingConfig,
-    ) -> ArenaString<'a> {
-        let mut str = ArenaString::new_in(arena);
-        let _i = config.instruction_prefix;
-        let i_ = config.instruction_suffix;
-        let _r = config.register_prefix;
-        let r_ = config.register_suffix;
-        let _a = config.address_prefix;
-        let a_ = config.address_suffix;
-        let _n = config.numeric_prefix;
-        let n_ = config.numeric_suffix;
-
-        match *self {
-            Instruction::Mov { dst, src } => {
-                _ = write!(str, "{_i}mov{i_}    {_r}{dst}{r_}, {_r}{src}{r_}");
-            }
-            Instruction::Add { dst, src } => {
-                _ = write!(str, "{_i}add{i_}    {_r}{dst}{r_}, {_r}{src}{r_}");
-            }
-            Instruction::Sub { dst, src } => {
-                _ = write!(str, "{_i}sub{i_}    {_r}{dst}{r_}, {_r}{src}{r_}");
-            }
-            Instruction::MovImm { dst, imm } => {
-                if dst == Register::ProgramCounter {
-                    _ = write!(str, "{_i}movi{i_}   {_r}{dst}{r_}, {_a}{imm}{a_}");
-                } else {
-                    _ = write!(str, "{_i}movi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
-                }
-            }
-            Instruction::AddImm { dst, imm } => {
-                _ = write!(str, "{_i}addi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
-            }
-            Instruction::SubImm { dst, imm } => {
-                _ = write!(str, "{_i}subi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
-            }
-
-            Instruction::Call { tgt } => {
-                _ = write!(str, "{_i}call{i_}   {_a}{tgt}{a_}");
-            }
-            Instruction::Return => {
-                _ = write!(str, "{_i}ret{i_}");
-            }
-
-            Instruction::JumpEQ { lhs, rhs, tgt } => {
-                _ = write!(str, "{_i}jeq{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
-            }
-            Instruction::JumpNE { lhs, rhs, tgt } => {
-                _ = write!(str, "{_i}jne{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
-            }
-            Instruction::JumpLT { lhs, rhs, tgt } => {
-                _ = write!(str, "{_i}jlt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
-            }
-            Instruction::JumpLE { lhs, rhs, tgt } => {
-                _ = write!(str, "{_i}jle{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
-            }
-            Instruction::JumpGT { lhs, rhs, tgt } => {
-                _ = write!(str, "{_i}jgt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
-            }
-            Instruction::JumpGE { lhs, rhs, tgt } => {
-                _ = write!(str, "{_i}jge{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
-            }
-
-            Instruction::JumpIfEndOfLine { tgt } => {
-                _ = write!(str, "{_i}jeol{i_}   {_a}{tgt}{a_}");
-            }
-            Instruction::JumpIfMatchCharset { idx, tgt } => {
-                _ = write!(str, "{_i}jc{i_}     {_n}{idx}{n_}, {_a}{tgt}{a_}");
-            }
-            Instruction::JumpIfMatchPrefix { idx, tgt } => {
-                _ = write!(str, "{_i}jp{i_}     {_n}{idx}{n_}, {_a}{tgt}{a_}");
-            }
-            Instruction::JumpIfMatchPrefixInsensitive { idx, tgt } => {
-                _ = write!(str, "{_i}jpi{i_}    {_n}{idx}{n_}, {_a}{tgt}{a_}");
-            }
-
-            Instruction::FlushHighlight { kind } => {
-                _ = write!(str, "{_i}flush{i_}  {_r}{kind}{r_}");
-            }
-            Instruction::AwaitInput => {
-                _ = write!(str, "{_i}await{i_}");
-            }
-        }
-
-        str
-    }
-}
-
-#[derive(Default)]
-pub struct MnemonicFormattingConfig<'a> {
-    // Color used for highlighting the instruction.
-    pub instruction_prefix: &'a str,
-    pub instruction_suffix: &'a str,
-
-    // Color used for highlighting a register name.
-    pub register_prefix: &'a str,
-    pub register_suffix: &'a str,
-
-    // Color used for highlighting an immediate value.
-    pub address_prefix: &'a str,
-    pub address_suffix: &'a str,
-
-    // Color used for highlighting an immediate value.
-    pub numeric_prefix: &'a str,
-    pub numeric_suffix: &'a str,
 }

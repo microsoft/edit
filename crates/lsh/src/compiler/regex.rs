@@ -16,6 +16,11 @@
 //!
 //! ## Gotchas
 //!
+//! - IMPORTANT (also the most important TODO):
+//!   Alternatives are not properly implemented, because backtracking doesn't exist.
+//!   E.g. matching `(a|ab)[0-9]+` will NOT match `ab123` because after matching `a` from the
+//!   first alternative, it immediately tries to match `[0-9]+` and fails.
+//!
 //! - Single-character classes like `[eE]` get expanded into a chain of `Prefix` conditions
 //!   rather than using `Charset`. This is because prefix matching advances `off` by exactly
 //!   the matched length, while charset matching is greedy (matches as many as possible).
@@ -30,16 +35,24 @@
 //!
 //! ## TODO
 //!
-//! - Returning `Err(String)` but the caller wraps it in `CompileError`.
-//!   Should just return `CompileError` directly.
-//! - The rest of the fucking owl.
+//! - Delete the entire file.
+//! - Rewrite it based on a proper TDFA architecture.
 
-use std::ops::RangeInclusive;
 use std::ptr;
 
 use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind, Look};
 
 use super::*;
+
+const ASCII_WORD_CHARSET: Charset = {
+    let mut charset = Charset::no();
+    charset.set_range(b'0'..=b'9', true);
+    charset.set_range(b'A'..=b'Z', true);
+    charset.set_range(b'_'..=b'_', true);
+    charset.set_range(b'a'..=b'z', true);
+    charset.set_range(0xC2..=0xF4, true);
+    charset
+};
 
 pub fn parse<'a>(
     compiler: &mut Compiler<'a>,
@@ -190,7 +203,7 @@ fn transform_literal_plus<'a>(
 ) -> Result<IRCell<'a>, String> {
     assert!(lit.0.len() == 1);
     let mut c = Charset::default();
-    c[lit.0[0] as usize] = true;
+    c.set(lit.0[0], true);
     let c = compiler.intern_charset(&c);
     Ok(compiler.alloc_iri(IRI::If { condition: Condition::Charset(c), then: dst }))
 }
@@ -216,26 +229,30 @@ fn transform_class<'a>(
     let mut first: Option<IRCell<'a>> = None;
     let mut last: Option<IRCell<'a>> = None;
 
-    for i in 0..256 {
-        if !charset[i] {
+    for ch in 0..=255 {
+        if !charset.get(ch) {
             continue;
         }
 
-        if i >= 128 {
-            panic!("Invalid non-ASCII class character {i}");
+        if ch >= 128 {
+            panic!("Invalid non-ASCII class character {ch}");
         }
 
-        let ch = i as u8;
         let mut str = String::new();
         str.push(ch as char);
 
-        let upper = ch.to_ascii_lowercase() as usize;
-        // NOTE: Uppercase chars have a lower numeric value than lowercase chars.
-        // As such, we need to test for `is_ascii_uppercase`.
-        let insensitive = ch.is_ascii_uppercase() && charset[upper];
+        // Check if our given `class` covers lower- and uppercase of an ASCII letter,
+        // and if so, we have to turn that into a `PrefixInsensitive` condition.
+        //
+        // NOTE: Uppercase letters have a lower numerical value than lowercase letters.
+        // As such, we check for is_ascii_uppercase(), turn that into `insensitive == true`,
+        // and clear out the (numerically higher) lowercase bit from `class`, so we ignore it.
+        // We already handled it with our `PrefixInsensitive` condition after all.
+        let lower = ch.to_ascii_lowercase();
+        let insensitive = ch.is_ascii_uppercase() && charset.get(lower);
 
         if insensitive {
-            charset[upper] = false;
+            charset.set(lower, false);
             str.make_ascii_lowercase();
         }
 
@@ -409,7 +426,7 @@ fn append_fallback_recursive<'a>(
     if let IRI::If { condition: Condition::Charset(charset), then } = &node_ref.instr {
         // If the fallback charset is a superset of this node's charset,
         // we can append the fallback to this node's failure path
-        if is_superset(fallback_charset, charset) {
+        if fallback_charset.is_superset_of(charset) {
             // Recursively try to append to the success path first
             let appended_to_then = append_fallback_recursive(then, fallback, fallback_charset);
 
@@ -450,52 +467,22 @@ fn get_initial_charset<'a>(node: IRCell<'a>) -> Option<&'a Charset> {
     }
 }
 
-// Check if `superset` is a superset of `subset`
-fn is_superset(superset: &Charset, subset: &Charset) -> bool {
-    for i in 0..256 {
-        if subset[i] && !superset[i] {
-            return false;
-        }
-    }
-    true
-}
-
 // [a-z] -> 256-ary LUT
 fn class_to_charset(class: &ClassBytes) -> Charset {
     let mut charset = Charset::default();
 
     for r in class.iter() {
-        charset[r.start() as usize..=r.end() as usize].fill(true);
+        charset.set_range(r.start()..=r.end(), true);
     }
 
     // If the class includes \w, we also set any non-ASCII UTF8 starters.
     // That's not how Unicode works, but it simplifies the implementation.
-    if [(b'0', b'9'), (b'A', b'Z'), (b'_', b'_'), (b'a', b'z')]
+    if [b'0'..=b'9', b'A'..=b'Z', b'_'..=b'_', b'a'..=b'z']
         .iter()
-        .all(|&(beg, end)| charset[beg as usize..=end as usize].iter().all(|&b| b))
+        .all(|r| charset.covers_range(r.clone()))
     {
-        charset[0xC2..=0xF4].fill(true);
+        charset.set_range(0xC2..=0xF4, true);
     }
 
     charset
 }
-
-const ASCII_WORD_CHARSET: Charset = {
-    const fn fill(bits: &mut [bool; 256], range: RangeInclusive<u8>) {
-        let beg = *range.start() as usize;
-        let end = *range.end() as usize;
-        let mut i = beg;
-        while i <= end {
-            bits[i] = true;
-            i += 1;
-        }
-    }
-
-    let mut charset = Charset::no();
-    fill(&mut charset.bits, b'0'..=b'9');
-    fill(&mut charset.bits, b'A'..=b'Z');
-    fill(&mut charset.bits, b'_'..=b'_');
-    fill(&mut charset.bits, b'a'..=b'z');
-    fill(&mut charset.bits, 0xC2..=0xF4);
-    charset
-};

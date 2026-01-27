@@ -112,7 +112,7 @@ impl<'a> Tokenizer<'a> {
                 ',' => Token::Comma,
                 '$' => {
                     self.start_pos += 1; // Skip the '$'
-                    match self.read_integer(ch) {
+                    match self.read_integer() {
                         Token::Integer(idx) => Token::Submatch(idx),
                         other => other,
                     }
@@ -160,7 +160,7 @@ impl<'a> Tokenizer<'a> {
                         Token::Plus
                     }
                 }
-                '0'..='9' => self.read_integer(ch),
+                '0'..='9' => self.read_integer(),
                 c => self.read_identifier_or_keyword(c),
             },
         }
@@ -230,7 +230,7 @@ impl<'a> Tokenizer<'a> {
         Token::Regex(&self.input[beg..end])
     }
 
-    fn read_integer(&mut self, first: char) -> Token<'a> {
+    fn read_integer(&mut self) -> Token<'a> {
         while let Some(ch) = self.peek()
             && ch.is_ascii_digit()
         {

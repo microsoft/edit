@@ -13,8 +13,6 @@
 //! - Could merge consecutive `Add { off, off, 1 }` instructions.
 //! - Could eliminate unreachable code after `Return`.
 
-use std::cell::RefMut;
-use std::iter::repeat_n;
 use std::ptr;
 
 use stdext::arena::scratch_arena;
@@ -48,7 +46,7 @@ fn optimize_noop<'a>(compiler: &mut Compiler<'a>) {
             {
                 // `IRI::If` nodes have an additional "next" pointer.
                 let current = &mut *current;
-                let mut nexts = [
+                let nexts = [
                     current.next.as_mut(),
                     match &mut current.instr {
                         IRI::If { then, .. } => Some(then),
@@ -94,7 +92,7 @@ fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
     for function in &compiler.functions {
         for current_cell in compiler.visit_nodes_from(function.body) {
             // First, filter down to nodes that assign the `off` to a virtual register.
-            if let mut save = current_cell.borrow_mut()
+            if let save = current_cell.borrow()
                 && let IRI::Mov { dst: backup_reg, src } = save.instr
                 && ptr::eq(src, off_reg)
                 && backup_reg.borrow().physical.is_none()
@@ -106,7 +104,7 @@ fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
                     && let mut cond = cond.borrow_mut()
                     && matches!(cond.instr, IRI::If { .. })
                     && let Some(restore) = cond.next
-                    && let mut restore = restore.borrow_mut()
+                    && let restore = restore.borrow()
                     && matches!(restore.instr, IRI::Mov { dst, src } if ptr::eq(dst, off_reg) && ptr::eq(src, backup_reg))
                 {
                     cond.next = restore.next;
@@ -202,7 +200,7 @@ fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
         for current in compiler.visit_nodes_from(function.body) {
             let mut current = current.borrow_mut();
 
-            if let IRI::MovKind { dst, kind } = &mut current.instr {
+            if let IRI::MovKind { kind, .. } = &mut current.instr {
                 *kind = mapping[*kind as usize];
             }
         }

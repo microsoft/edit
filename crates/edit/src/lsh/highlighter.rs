@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use lsh::engine::*;
+use lsh::runtime::*;
 use stdext::arena::{Arena, scratch_arena};
 
 use crate::document::ReadableDocument;
@@ -16,14 +16,14 @@ pub struct Highlighter<'a> {
     doc: &'a dyn ReadableDocument,
     offset: usize,
     logical_pos_y: CoordType,
-    engine: Engine<'static, 'static, 'static>,
+    runtime: Runtime<'static, 'static, 'static>,
 }
 
 #[derive(Clone)]
 pub struct HighlighterState {
     offset: usize,
     logical_pos_y: CoordType,
-    state: EngineState,
+    state: RuntimeState,
 }
 
 impl<'doc> Highlighter<'doc> {
@@ -32,7 +32,7 @@ impl<'doc> Highlighter<'doc> {
             doc,
             offset: 0,
             logical_pos_y: 0,
-            engine: Engine::new(&ASSEMBLY, &STRINGS, &CHARSETS, language.entrypoint),
+            runtime: Runtime::new(&ASSEMBLY, &STRINGS, &CHARSETS, language.entrypoint),
         }
     }
 
@@ -46,7 +46,7 @@ impl<'doc> Highlighter<'doc> {
         HighlighterState {
             offset: self.offset,
             logical_pos_y: self.logical_pos_y,
-            state: self.engine.snapshot(),
+            state: self.runtime.snapshot(),
         }
     }
 
@@ -54,13 +54,13 @@ impl<'doc> Highlighter<'doc> {
     pub fn restore(&mut self, snapshot: &HighlighterState) {
         self.offset = snapshot.offset;
         self.logical_pos_y = snapshot.logical_pos_y;
-        self.engine.restore(&snapshot.state);
+        self.runtime.restore(&snapshot.state);
     }
 
     pub fn parse_next_line<'a>(
         &mut self,
         arena: &'a Arena,
-    ) -> Vec<Higlight<HighlightKind>, &'a Arena> {
+    ) -> Vec<Highlight<HighlightKind>, &'a Arena> {
         let scratch = scratch_arena(Some(arena));
         let (line_beg, line) = self.read_next_line(&scratch);
 
@@ -73,7 +73,7 @@ impl<'doc> Highlighter<'doc> {
         }
 
         let line = unicode::strip_newline(line);
-        let mut res = self.engine.parse_next_line(arena, line);
+        let mut res = self.runtime.parse_next_line(arena, line);
 
         // Adjust the range to account for the line offset.
         for h in &mut res {

@@ -11,7 +11,7 @@ use std::path::Path;
 
 pub use definitions::{FILE_ASSOCIATIONS, HighlightKind, LANGUAGES};
 pub use highlighter::*;
-pub use lsh::engine::Language;
+pub use lsh::runtime::Language;
 use stdext::glob::glob_match;
 
 pub fn process_file_associations<T>(
