@@ -1,0 +1,62 @@
+lsh: flip legacy flag, add follow-up hook & diff test
+
+Refactors placeholder logic and introduces a lightweight follow-up hook.
+Adds diff highlighting test and removes outdated asset to streamline visuals.
+
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+#
+# On branch foobar
+# Your branch is up to date with 'origin/foobar'.
+#
+# Changes to be committed:
+#	renamed:    foo.rs -> bar.rs
+#	modified:   src/lsh/definitions.rs
+#	deleted:    assets/old_logo.svg
+#	new file:   baz.rs
+#
+# ------------------------ >8 ------------------------
+# Do not modify or remove the line above.
+# Everything below it will be ignored.
+diff --git a/src/lsh/definitions.rs b/src/lsh/definitions.rs
+index a1b2c3d..d4c3b2a 100644
+--- a/src/lsh/definitions.rs
++++ b/src/lsh/definitions.rs
+@@ -12,9 +12,11 @@ // context line 12
+ // context line 13
+-// old placeholder logic A
+-const LEGACY_FLAG: bool = true;
+-// end legacy block
++// updated placeholder logic A
++const LEGACY_FLAG: bool = false; // flipped for test
++// added note: migration in progress
++// end legacy block
+ // context line 19
+ // context line 20
+@@ -42,7 +44,12 @@ // context line 42
+ // context line 43
+-    do_placeholder_action(alpha, beta);
++    // Split actions for clarity
++    do_placeholder_prepare(alpha);
++    do_placeholder_action(alpha, beta);
++    if (enable_extra()) {
++        do_placeholder_followup(beta);
++    }
+ // context line 50
+ // context line 51
+ // context line 52
+@@ -90,6 +97,15 @@ // context line 90
+ // context line 91
+ // context line 92
++/// Added lightweight fake helper
++fn enable_extra() -> bool {
++    // Pretend this consults a config value
++    true
++}
++
++// Temporary debug instrumentation (to be removed)
++const _DEBUG_HOOK: &str = "lsh:extra";
++
+ // context line 93
+ // context line 94
+ // context line 95
