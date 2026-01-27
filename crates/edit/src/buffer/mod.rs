@@ -2079,9 +2079,25 @@ impl TextBuffer {
         };
 
         let mut highlighter = Highlighter::new(&self.buffer, language);
-        let cursor = self.cursor_for_rendering.unwrap();
+
+        // Track cursor position for efficient offset-to-position conversions.
+        // Start from the rendering cursor which is at the beginning of the visible area.
+        let mut cursor = self.cursor_for_rendering.unwrap();
+
+        // Visible vertical range in visual coordinates.
+        let visible_top = origin.y;
+        let visible_bottom = origin.y + destination.height();
+
+        // Text area boundaries in screen coordinates (excluding margin).
+        let text_left = destination.left + self.margin_width;
+        let text_right = destination.right;
 
         for logical_y in logical_y_range {
+            // Seek cursor to the start of this logical line for efficient lookups.
+            // This is important because highlights are sorted by offset within
+            // each logical line.
+            cursor = self.goto_line_start(cursor, logical_y);
+
             let scratch = scratch_arena(None);
             let highlights =
                 self.highlighter_cache.parse_line(&scratch, &mut highlighter, logical_y);
@@ -2090,70 +2106,108 @@ impl TextBuffer {
                 let curr = &pair[0];
                 let next = &pair[1];
 
-                if curr.start < cursor.offset {
+                // Skip highlights with no visual effect.
+                if curr.kind == HighlightKind::Other {
                     continue;
                 }
 
+                // Convert byte offsets to cursor positions. Since highlights are
+                // sorted by offset, we chain from cursor -> beg -> end for efficiency.
                 let beg = self.cursor_move_to_offset_internal(cursor, curr.start);
-                let end = self.cursor_move_to_offset_internal(cursor, next.start);
+                let end = self.cursor_move_to_offset_internal(beg, next.start);
+                cursor = end;
 
-                if curr.kind != HighlightKind::Other {
-                    let color = match curr.kind {
-                        HighlightKind::Other => None,
+                let color = match curr.kind {
+                    HighlightKind::Other => None,
+                    HighlightKind::Comment => Some(IndexedColor::Green),
+                    HighlightKind::Method => Some(IndexedColor::BrightYellow),
+                    HighlightKind::String => Some(IndexedColor::BrightRed),
+                    HighlightKind::Variable => Some(IndexedColor::BrightCyan),
+                    HighlightKind::ConstantLanguage => Some(IndexedColor::BrightBlue),
+                    HighlightKind::ConstantNumeric => Some(IndexedColor::BrightGreen),
+                    HighlightKind::KeywordControl => Some(IndexedColor::BrightMagenta),
+                    HighlightKind::KeywordOther => Some(IndexedColor::BrightBlue),
+                    HighlightKind::MarkupBold => None,
+                    HighlightKind::MarkupChanged => Some(IndexedColor::BrightBlue),
+                    HighlightKind::MarkupDeleted => Some(IndexedColor::BrightRed),
+                    HighlightKind::MarkupHeading => Some(IndexedColor::BrightBlue),
+                    HighlightKind::MarkupInserted => Some(IndexedColor::BrightGreen),
+                    HighlightKind::MarkupItalic => None,
+                    HighlightKind::MarkupLink => None,
+                    HighlightKind::MarkupList => Some(IndexedColor::BrightBlue),
+                    HighlightKind::MarkupStrikethrough => None,
+                    HighlightKind::MetaHeader => Some(IndexedColor::BrightBlue),
+                };
+                let attr = match curr.kind {
+                    HighlightKind::MarkupBold => Some(Attributes::Bold),
+                    HighlightKind::MarkupItalic => Some(Attributes::Italic),
+                    HighlightKind::MarkupLink => Some(Attributes::Underlined),
+                    HighlightKind::MarkupStrikethrough => Some(Attributes::Strikethrough),
+                    _ => None,
+                };
 
-                        HighlightKind::Comment => Some(IndexedColor::Green),
-                        HighlightKind::Method => Some(IndexedColor::BrightYellow),
-                        HighlightKind::String => Some(IndexedColor::BrightRed),
-                        HighlightKind::Variable => Some(IndexedColor::BrightCyan),
+                // Handle the case where the highlight spans multiple visual lines
+                // due to word wrapping. The range is [beg, end) in terms of offsets,
+                // which maps to visual lines [beg.visual_pos.y, end.visual_pos.y].
+                //
+                // When beg and end are on the same visual line, we highlight
+                // [beg.visual_pos.x, end.visual_pos.x).
+                //
+                // When they span multiple lines:
+                // - First line: [beg.visual_pos.x, end_of_line)
+                // - Middle lines: [0, end_of_line)
+                // - Last line: [0, end.visual_pos.x)
+                //
+                // However, if end.visual_pos.x == 0, the last line has no content
+                // to highlight (the span ends exactly at the line boundary).
+                let visual_y_end = if end.visual_pos.x == 0 && end.visual_pos.y > beg.visual_pos.y {
+                    // The span ends at position 0 of a new visual line, meaning
+                    // it actually ends at the end of the previous visual line.
+                    end.visual_pos.y - 1
+                } else {
+                    end.visual_pos.y
+                };
 
-                        HighlightKind::ConstantLanguage => Some(IndexedColor::BrightBlue),
-                        HighlightKind::ConstantNumeric => Some(IndexedColor::BrightGreen),
-                        HighlightKind::KeywordControl => Some(IndexedColor::BrightMagenta),
-                        HighlightKind::KeywordOther => Some(IndexedColor::BrightBlue),
-                        HighlightKind::MarkupBold => None,
-                        HighlightKind::MarkupChanged => Some(IndexedColor::BrightBlue),
-                        HighlightKind::MarkupDeleted => Some(IndexedColor::BrightRed),
-                        HighlightKind::MarkupHeading => Some(IndexedColor::BrightBlue),
-                        HighlightKind::MarkupInserted => Some(IndexedColor::BrightGreen),
-                        HighlightKind::MarkupItalic => None,
-                        HighlightKind::MarkupLink => None,
-                        HighlightKind::MarkupList => Some(IndexedColor::BrightBlue),
-                        HighlightKind::MarkupStrikethrough => None,
-                        HighlightKind::MetaHeader => Some(IndexedColor::BrightBlue),
+                // Use min/max to skip visual lines outside the visible vertical range.
+                for visual_y in
+                    beg.visual_pos.y.max(visible_top)..(visual_y_end + 1).min(visible_bottom)
+                {
+                    let vis_left = if visual_y == beg.visual_pos.y {
+                        beg.visual_pos.x
+                    } else {
+                        // Wrapped continuation lines start at visual x=0.
+                        0
                     };
-                    let attr = match curr.kind {
-                        HighlightKind::MarkupBold => Some(Attributes::Bold),
-                        HighlightKind::MarkupItalic => Some(Attributes::Italic),
-                        HighlightKind::MarkupLink => Some(Attributes::Underlined),
-                        HighlightKind::MarkupStrikethrough => Some(Attributes::Strikethrough),
-                        _ => None,
+                    let vis_right = if visual_y == end.visual_pos.y {
+                        end.visual_pos.x
+                    } else {
+                        // Line extends to the word wrap column or beyond.
+                        COORD_TYPE_SAFE_MAX
                     };
 
-                    for y in beg.visual_pos.y..=end.visual_pos.y {
-                        let left = if y == beg.visual_pos.y {
-                            destination.left + self.margin_width + beg.visual_pos.x - origin.x
-                        } else {
-                            destination.left + self.margin_width - origin.x
-                        };
-                        let right = if y == end.visual_pos.y {
-                            destination.left + self.margin_width + end.visual_pos.x - origin.x
-                        } else {
-                            CoordType::MAX
-                        };
-                        let right = right.min(destination.right);
-                        let line_target = Rect {
-                            left,
-                            top: destination.top + y - origin.y,
-                            right,
-                            bottom: destination.top + y + 1 - origin.y,
-                        };
+                    // Convert to screen coordinates.
+                    let screen_left = text_left + vis_left - origin.x;
+                    let screen_right = (text_left + vis_right - origin.x).min(text_right);
+                    let screen_y = destination.top + visual_y - origin.y;
 
-                        if let Some(color) = color {
-                            fb.blend_fg(line_target, fb.indexed(color));
-                        }
-                        if let Some(attr) = attr {
-                            fb.replace_attr(line_target, Attributes::All, attr);
-                        }
+                    // Create the target rectangle, clamped to the text area.
+                    let rect = Rect {
+                        left: screen_left.max(text_left),
+                        top: screen_y,
+                        right: screen_right,
+                        bottom: screen_y + 1,
+                    };
+
+                    // Skip empty or invalid rectangles.
+                    if rect.left >= rect.right {
+                        continue;
+                    }
+
+                    if let Some(color) = color {
+                        fb.blend_fg(rect, fb.indexed(color));
+                    }
+                    if let Some(attr) = attr {
+                        fb.replace_attr(rect, Attributes::All, attr);
                     }
                 }
             }
