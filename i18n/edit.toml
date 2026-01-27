@@ -876,6 +876,9 @@ vi = "Ngắt dòng tự động"
 zh_hans = "自动换行"
 zh_hant = "自動換行"
 
+[ViewVirtualSpace]
+en = "Enable Virtual Space"
+
 [ViewGoToFile]
 en = "Go to File…"
 ar = "الانتقال إلى ملف…"
