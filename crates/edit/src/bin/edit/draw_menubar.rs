@@ -121,6 +121,30 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
             tb.set_word_wrap(!word_wrap);
             ctx.needs_rerender();
         }
+
+        // We need to drop the borrow before accessing split_layout
+        drop(tb);
+
+        // Split view menu items
+        if ctx.menubar_menu_button(loc(LocId::ViewSplitHorizontal), 'H', kbmod::CTRL | vk::BACKSLASH)
+        {
+            state.wants_split_horizontal = true;
+            ctx.needs_rerender();
+        }
+        if ctx.menubar_menu_button(loc(LocId::ViewSplitVertical), 'V', kbmod::CTRL_SHIFT | vk::BACKSLASH) {
+            state.wants_split_vertical = true;
+            ctx.needs_rerender();
+        }
+        if state.split_layout.pane_count() > 1 {
+            if ctx.menubar_menu_button(loc(LocId::ViewClosePane), 'C', kbmod::CTRL_SHIFT | vk::W) {
+                state.wants_close_pane = true;
+                ctx.needs_rerender();
+            }
+            if ctx.menubar_menu_button(loc(LocId::ViewFocusNextPane), 'N', vk::F6) {
+                state.wants_focus_next_pane = true;
+                ctx.needs_rerender();
+            }
+        }
     }
 
     ctx.menubar_menu_end();

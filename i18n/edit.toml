@@ -902,6 +902,62 @@ vi = "Đi tới tệp…"
 zh_hans = "转到文件…"
 zh_hant = "跳至檔案…"
 
+# Split editor horizontally (side by side)
+[ViewSplitHorizontal]
+en = "Split Editor Right"
+de = "Editor rechts teilen"
+es = "Dividir editor a la derecha"
+fr = "Diviser l'éditeur à droite"
+it = "Dividi editor a destra"
+ja = "エディターを右に分割"
+ko = "편집기를 오른쪽으로 분할"
+pt_br = "Dividir editor à direita"
+ru = "Разделить редактор вправо"
+zh_hans = "向右拆分编辑器"
+zh_hant = "向右分割編輯器"
+
+# Split editor vertically (stacked)
+[ViewSplitVertical]
+en = "Split Editor Down"
+de = "Editor nach unten teilen"
+es = "Dividir editor hacia abajo"
+fr = "Diviser l'éditeur vers le bas"
+it = "Dividi editor in basso"
+ja = "エディターを下に分割"
+ko = "편집기를 아래로 분할"
+pt_br = "Dividir editor para baixo"
+ru = "Разделить редактор вниз"
+zh_hans = "向下拆分编辑器"
+zh_hant = "向下分割編輯器"
+
+# Close the current pane
+[ViewClosePane]
+en = "Close Pane"
+de = "Bereich schließen"
+es = "Cerrar panel"
+fr = "Fermer le volet"
+it = "Chiudi riquadro"
+ja = "ペインを閉じる"
+ko = "창 닫기"
+pt_br = "Fechar painel"
+ru = "Закрыть панель"
+zh_hans = "关闭窗格"
+zh_hant = "關閉窗格"
+
+# Focus the next pane
+[ViewFocusNextPane]
+en = "Focus Next Pane"
+de = "Nächsten Bereich fokussieren"
+es = "Enfocar siguiente panel"
+fr = "Sélectionner le volet suivant"
+it = "Seleziona riquadro successivo"
+ja = "次のペインにフォーカス"
+ko = "다음 창에 포커스"
+pt_br = "Focar no próximo painel"
+ru = "Фокус на следующую панель"
+zh_hans = "聚焦下一个窗格"
+zh_hant = "聚焦下一個窗格"
+
 # A menu bar item
 [Help]
 en = "Help"
