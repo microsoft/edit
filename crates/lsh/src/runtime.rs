@@ -8,6 +8,10 @@
 //! - The main loop is "unsafe". Profile before "cleaning" it up.
 //! - `charset_gobble`, `inlined_mem(i)cmp` are hot paths.
 //!
+//! ## Instruction encoding
+//!
+//! Variable-length encoding, 1-9 bytes per instruction. See [`Instruction::encode`].
+//!
 //! ## Gotchas
 //!
 //! - `Return` with empty stack resets the VM to entrypoint and clears registers.
@@ -15,6 +19,8 @@
 //! - `AwaitInput` only breaks the loop if `off >= line.len()`. If not at EOL, it's a no-op.
 //!   This allows the DSL to say "wait for more input OR continue if there is some".
 //! - The result always has a sentinel span at `line.len()`. Consumers can rely on this.
+//! - [`Instruction::address_offset`] returns where, within an instruction, the jump target lives,
+//!   as used by the backend's relocation system.
 
 use std::fmt::{self, Debug, Write as _};
 
