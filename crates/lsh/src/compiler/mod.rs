@@ -37,7 +37,6 @@ mod frontend;
 mod generator;
 mod optimizer;
 mod regex;
-mod tokenizer;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};

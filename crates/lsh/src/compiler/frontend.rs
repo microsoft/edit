@@ -9,23 +9,22 @@
 //!   second `x`. But the variable *name* still maps to the new vreg, so later reads see it.
 //! - Physical registers (off, etc.) don't follow SSA. Reading them doesn't create a vreg;
 //!   the `parse_expression` function handles this by copying to a fresh vreg.
-//! - The `raise!` macro captures tokenizer position at call time. Don't advance() before raising.
+//! - The `raise!` macro captures token_start position at call time. Don't advance before raising.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
-use super::tokenizer::*;
 use super::*;
 
 macro_rules! raise {
     ($self:ident, $msg:literal) => {{
         let path = $self.path.to_string();
-        let (line, column) = $self.tokenizer.position();
+        let (line, column) = $self.position();
         return Err(CompileError { path, line, column, message: $msg.to_string() })
     }};
     ($self:ident, $($arg:tt)*) => {{
         let path = $self.path.to_string();
-        let (line, column) = $self.tokenizer.position();
+        let (line, column) = $self.position();
         return Err(CompileError { path, line, column, message: format!($($arg)*) })
     }};
 }
@@ -46,8 +45,9 @@ struct Context<'a> {
 pub struct Parser<'a, 'c, 'src> {
     compiler: &'c mut Compiler<'a>,
     path: &'src str,
-    tokenizer: Tokenizer<'src>,
-    current_token: Token<'src>,
+    src: &'src str,
+    pos: usize,
+    token_start: usize,
     context: Vec<Context<'a>, &'a Arena>,
     variables: HashMap<&'src str, IRRegCell<'a>>,
 }
@@ -55,19 +55,11 @@ pub struct Parser<'a, 'c, 'src> {
 impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     pub fn new(compiler: &'c mut Compiler<'a>, path: &'src str, src: &'src str) -> Self {
         let context = Vec::new_in(compiler.arena);
-        Self {
-            compiler,
-            path,
-            tokenizer: Tokenizer::new(src),
-            current_token: Token::Eof,
-            context,
-            variables: Default::default(),
-        }
+        Self { compiler, path, src, pos: 0, token_start: 0, context, variables: Default::default() }
     }
 
     pub fn run(&mut self) -> CompileResult<()> {
-        self.advance();
-        while !matches!(self.current_token, Token::Eof) {
+        while !self.is_at_eof() {
             let f = self.parse_function()?;
             self.compiler.functions.push(f);
         }
@@ -77,25 +69,14 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     fn parse_attributes(&mut self) -> CompileResult<FunctionAttributes<'a>> {
         let mut attributes = FunctionAttributes::default();
 
-        while self.current_token == Token::Hash {
-            self.advance();
-            self.expect_token(Token::LeftBracket)?;
+        while self.peek() == Some('#') {
+            self.pos += 1;
+            self.expect('[')?;
 
-            let key = match self.current_token {
-                Token::Identifier(k) => k,
-                _ => raise!(self, "expected attribute name"),
-            };
-            self.advance();
-
-            self.expect_token(Token::Equals)?;
-
-            let value = match self.current_token {
-                Token::String(s) => arena_clone_str(self.compiler.arena, s),
-                _ => raise!(self, "expected attribute value"),
-            };
-            self.advance();
-
-            self.expect_token(Token::RightBracket)?;
+            let key = self.read_identifier()?;
+            self.expect('=')?;
+            let value = arena_clone_str(self.compiler.arena, self.read_string()?);
+            self.expect(']')?;
 
             match key {
                 "display_name" => attributes.display_name = Some(value),
@@ -114,23 +95,19 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         let attributes = self.parse_attributes()?;
 
-        let public = if matches!(self.current_token, Token::Pub) {
-            self.advance();
+        let public = if self.is_keyword("pub") {
+            self.pos += 3;
             true
         } else {
             false
         };
 
-        self.expect_token(Token::Fn)?;
+        self.expect_keyword("fn")?;
 
-        let name = match self.current_token {
-            Token::Identifier(n) => arena_clone_str(self.compiler.arena, n),
-            _ => raise!(self, "expected function name"),
-        };
-        self.advance();
+        let name = arena_clone_str(self.compiler.arena, self.read_identifier()?);
 
-        self.expect_token(Token::LeftParen)?;
-        self.expect_token(Token::RightParen)?;
+        self.expect('(')?;
+        self.expect(')')?;
 
         let span = self.parse_block()?;
 
@@ -144,12 +121,12 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_block(&mut self) -> CompileResult<IRSpan<'a>> {
-        self.expect_token(Token::LeftBrace)?;
+        self.expect('{')?;
 
         // TODO: a bit inoptimal to always allocate a noop node
         let mut result: Option<IRSpan> = None;
 
-        while !matches!(self.current_token, Token::RightBrace | Token::Eof) {
+        while !matches!(self.peek(), Some('}') | None) {
             let s = self.parse_statement()?;
             if let Some(span) = &mut result {
                 span.last.borrow_mut().set_next(s.first);
@@ -159,7 +136,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             }
         }
 
-        self.expect_token(Token::RightBrace)?;
+        self.expect('}')?;
         Ok(match result {
             Some(span) => span,
             None => IRSpan::single(self.compiler.alloc_noop()),
@@ -167,23 +144,42 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_statement(&mut self) -> CompileResult<IRSpan<'a>> {
-        match self.current_token {
-            Token::Var => self.parse_var_declaration(),
-            Token::Loop => self.parse_loop(),
-            Token::Until => self.parse_until(),
-            Token::Break => self.parse_break(),
-            Token::Continue => self.parse_continue(),
-            Token::Return => self.parse_return(),
-            Token::If => self.parse_if(),
-            Token::Await => self.parse_await(),
-            Token::Yield => self.parse_yield(),
-            Token::Identifier(_) => self.parse_identifier(),
-            _ => raise!(self, "unexpected token: {:?}", self.current_token),
+        if self.is_keyword("var") {
+            return self.parse_var_declaration();
         }
+        if self.is_keyword("loop") {
+            return self.parse_loop();
+        }
+        if self.is_keyword("until") {
+            return self.parse_until();
+        }
+        if self.is_keyword("break") {
+            return self.parse_break();
+        }
+        if self.is_keyword("continue") {
+            return self.parse_continue();
+        }
+        if self.is_keyword("return") {
+            return self.parse_return();
+        }
+        if self.is_keyword("if") {
+            return self.parse_if();
+        }
+        if self.is_keyword("await") {
+            return self.parse_await();
+        }
+        if self.is_keyword("yield") {
+            return self.parse_yield();
+        }
+        if self.peek().is_some_and(Self::is_ident_start) {
+            return self.parse_identifier_stmt();
+        }
+        self.mark();
+        raise!(self, "unexpected token")
     }
 
     fn parse_loop(&mut self) -> CompileResult<IRSpan<'a>> {
-        self.expect_token(Token::Loop)?;
+        self.expect_keyword("loop")?;
 
         let loop_start = self.compiler.alloc_noop();
         let loop_exit = self.compiler.alloc_noop();
@@ -191,7 +187,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_until(&mut self) -> CompileResult<IRSpan<'a>> {
-        self.expect_token(Token::Until)?;
+        self.expect_keyword("until")?;
 
         let re = self.parse_if_regex()?;
 
@@ -276,8 +272,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_break(&mut self) -> CompileResult<IRSpan<'a>> {
-        self.expect_token(Token::Break)?;
-        self.expect_token(Token::Semicolon)?;
+        self.expect_keyword("break")?;
+        self.expect(';')?;
 
         if let Some(exit) = self.context.last_mut().and_then(|ctx| ctx.loop_exit) {
             let ir = self.compiler.alloc_noop();
@@ -289,8 +285,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_continue(&mut self) -> CompileResult<IRSpan<'a>> {
-        self.expect_token(Token::Continue)?;
-        self.expect_token(Token::Semicolon)?;
+        self.expect_keyword("continue")?;
+        self.expect(';')?;
 
         if let Some(start) = self.context.last_mut().and_then(|ctx| ctx.loop_start) {
             let ir = self.compiler.alloc_noop();
@@ -302,15 +298,15 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_return(&mut self) -> CompileResult<IRSpan<'a>> {
-        self.expect_token(Token::Return)?;
-        self.expect_token(Token::Semicolon)?;
+        self.expect_keyword("return")?;
+        self.expect(';')?;
         Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Return)))
     }
 
     fn parse_if(&mut self) -> CompileResult<IRSpan<'a>> {
-        self.expect_token(Token::If)?;
+        self.expect_keyword("if")?;
 
-        if matches!(self.current_token, Token::Regex(_)) {
+        if self.peek() == Some('/') {
             self.parse_if_regex_chain()
         } else {
             self.parse_if_comparison()
@@ -365,16 +361,16 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             re.dst_bad.borrow_mut().set_next(dst_bad);
 
             // No else branch? dst_bad (= no hit) means we're done, so make that connection.
-            if !matches!(self.current_token, Token::Else) {
+            if !self.is_keyword("else") {
                 dst_bad.borrow_mut().set_next(last);
                 break;
             }
 
-            // Gobble the "else" token.
-            self.advance();
+            // Gobble the "else" keyword.
+            self.pos += 4;
 
             // The else branch has a block? That's our dst_bad.
-            if !matches!(self.current_token, Token::If) {
+            if !self.is_keyword("if") {
                 let bl = self.parse_block()?;
                 dst_bad.borrow_mut().set_next(bl.first);
                 // Connect the end of the {} to the end of the if/else chain.
@@ -387,7 +383,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             }
 
             // Otherwise, we expect an "if" in the next iteration to form an "else if".
-            self.expect_token(Token::If)?;
+            self.expect_keyword("if")?;
             prev = Some(dst_bad);
         }
 
@@ -396,30 +392,34 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
     fn parse_if_comparison(&mut self) -> CompileResult<IRSpan<'a>> {
         // Parse: if var1 OP var2 { block } where OP is ==, !=, <, >, <=, >=
-        let lhs_name = match self.current_token {
-            Token::Identifier(n) => n,
-            _ => raise!(self, "expected variable name"),
-        };
+        let lhs_name = self.read_identifier()?;
         let lhs_vreg = self.get_variable(lhs_name)?;
-        self.advance();
 
-        let op = match self.current_token {
-            Token::EqualsEquals => ComparisonOp::Eq,
-            Token::NotEquals => ComparisonOp::Ne,
-            Token::LessThan => ComparisonOp::Lt,
-            Token::GreaterThan => ComparisonOp::Gt,
-            Token::LessThanEquals => ComparisonOp::Le,
-            Token::GreaterThanEquals => ComparisonOp::Ge,
-            _ => raise!(self, "expected comparison operator (==, !=, <, >, <=, >=)"),
+        self.mark();
+        let op = if self.is_str("==") {
+            self.pos += 2;
+            ComparisonOp::Eq
+        } else if self.is_str("!=") {
+            self.pos += 2;
+            ComparisonOp::Ne
+        } else if self.is_str("<=") {
+            self.pos += 2;
+            ComparisonOp::Le
+        } else if self.is_str(">=") {
+            self.pos += 2;
+            ComparisonOp::Ge
+        } else if self.is_str("<") {
+            self.pos += 1;
+            ComparisonOp::Lt
+        } else if self.is_str(">") {
+            self.pos += 1;
+            ComparisonOp::Gt
+        } else {
+            raise!(self, "expected comparison operator (==, !=, <, >, <=, >=)")
         };
-        self.advance();
 
-        let rhs_name = match self.current_token {
-            Token::Identifier(n) => n,
-            _ => raise!(self, "expected variable name"),
-        };
+        let rhs_name = self.read_identifier()?;
         let rhs_vreg = self.get_variable(rhs_name)?;
-        self.advance();
 
         let dst_good = self.compiler.alloc_noop();
         let dst_bad = self.compiler.alloc_noop();
@@ -438,11 +438,11 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         let end = self.compiler.alloc_noop();
 
         // Handle optional else branch
-        if matches!(self.current_token, Token::Else) {
-            self.advance();
+        if self.is_keyword("else") {
+            self.pos += 4;
 
             // Check for else if
-            if matches!(self.current_token, Token::If) {
+            if self.is_keyword("if") {
                 let else_if_span = self.parse_if()?;
                 dst_bad.borrow_mut().set_next(else_if_span.first);
                 if let mut block_last = bl.last.borrow_mut()
@@ -483,10 +483,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_if_regex(&mut self) -> CompileResult<RegexSpan<'a>> {
-        let pattern = match self.current_token {
-            Token::Regex(s) => s,
-            _ => raise!(self, "expected regex"),
-        };
+        let pattern = self.read_regex()?;
         let dst_good = self.compiler.alloc_noop();
         let dst_bad = self.compiler.alloc_noop();
         let mut capture_groups = Vec::new_in(self.compiler.arena);
@@ -496,46 +493,40 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             Err(e) => raise!(self, "{}", e),
         };
 
-        self.advance();
-
         Ok(RegexSpan { src, dst_good, dst_bad, capture_groups })
     }
 
     fn parse_await(&mut self) -> CompileResult<IRSpan<'a>> {
-        self.expect_token(Token::Await)?;
+        self.expect_keyword("await")?;
 
-        match self.current_token {
-            Token::Identifier("input") => self.advance(),
-            _ => raise!(self, "expected 'input' after await"),
+        let ident = self.read_identifier()?;
+        if ident != "input" {
+            raise!(self, "expected 'input' after await");
         }
 
-        self.expect_token(Token::Semicolon)?;
+        self.expect(';')?;
 
         let ir = self.compiler.alloc_iri(IRI::AwaitInput);
         Ok(IRSpan::single(ir))
     }
 
     fn parse_yield(&mut self) -> CompileResult<IRSpan<'a>> {
-        self.expect_token(Token::Yield)?;
+        self.expect_keyword("yield")?;
 
         // Check if this is a capture group reference: yield $n as color
-        if let Token::Submatch(capture_index) = self.current_token {
-            let capture_index = capture_index as usize - 1;
-            self.advance();
+        if self.peek() == Some('$') {
+            self.pos += 1;
+            let capture_index = self.read_integer()? as usize - 1;
 
             // Expect "as"
-            match self.current_token {
-                Token::Identifier("as") => self.advance(),
-                _ => raise!(self, "expected 'as' after capture group reference"),
+            let kw = self.read_identifier()?;
+            if kw != "as" {
+                raise!(self, "expected 'as' after capture group reference");
             }
 
-            let color = match self.current_token {
-                Token::Identifier(c) => c,
-                _ => raise!(self, "expected color name after 'as'"),
-            };
+            let color = self.read_identifier()?;
             let kind = self.compiler.intern_highlight_kind(color).value;
-            self.advance();
-            self.expect_token(Token::Semicolon)?;
+            self.expect(';')?;
 
             let (start_vreg, end_vreg) = match self.context.last() {
                 Some(ctx) if capture_index < ctx.capture_groups.len() => {
@@ -571,14 +562,10 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             Ok(span)
         } else {
             // Normal yield: yield color;
-            let color = match self.current_token {
-                Token::Identifier(c) => c,
-                _ => raise!(self, "expected color name after yield"),
-            };
+            let color = self.read_identifier()?;
             let kind = self.compiler.intern_highlight_kind(color).value;
 
-            self.advance();
-            self.expect_token(Token::Semicolon)?;
+            self.expect(';')?;
 
             let vreg = self.compiler.alloc_vreg();
             let span = self
@@ -592,17 +579,12 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     fn parse_var_declaration(&mut self) -> CompileResult<IRSpan<'a>> {
-        self.expect_token(Token::Var)?;
+        self.expect_keyword("var")?;
 
-        let name = match self.current_token {
-            Token::Identifier(n) => n,
-            _ => raise!(self, "expected variable name"),
-        };
-        self.advance();
-
-        self.expect_token(Token::Equals)?;
+        let name = self.read_identifier()?;
+        self.expect('=')?;
         let (expr, vreg) = self.parse_expression()?;
-        self.expect_token(Token::Semicolon)?;
+        self.expect(';')?;
 
         match self.variables.entry(name) {
             Entry::Vacant(e) => _ = e.insert(vreg),
@@ -612,80 +594,71 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         Ok(expr)
     }
 
-    fn parse_identifier(&mut self) -> CompileResult<IRSpan<'a>> {
-        let name = match self.current_token {
-            Token::Identifier(n) => n,
-            _ => raise!(self, "expected identifier"),
-        };
-        self.advance();
+    fn parse_identifier_stmt(&mut self) -> CompileResult<IRSpan<'a>> {
+        let name = self.read_identifier()?;
 
-        match self.current_token {
+        match self.peek() {
             // foo();
-            Token::LeftParen => {
-                self.advance();
-                self.expect_token(Token::RightParen)?;
-                self.expect_token(Token::Semicolon)?;
+            Some('(') => {
+                self.pos += 1;
+                self.expect(')')?;
+                self.expect(';')?;
                 let name = self.compiler.strings.intern(self.compiler.arena, name);
                 Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Call { name })))
             }
             // foo = expr;
-            Token::Equals => {
-                self.advance();
+            Some('=') if !self.is_str("==") => {
+                self.pos += 1;
                 let (expr, vreg) = self.parse_expression()?;
-                self.expect_token(Token::Semicolon)?;
+                self.expect(';')?;
                 self.variables.insert(name, vreg);
                 Ok(expr)
             }
             // foo += expr;
-            Token::PlusEquals => {
+            Some('+') if self.is_str("+=") => {
                 let lhs_vreg = self.get_variable(name)?;
-                self.advance();
+                self.pos += 2;
 
-                let Token::Integer(val) = self.current_token else {
-                    raise!(self, "expected integer literal after '+='");
-                };
-                self.advance();
-
-                self.expect_token(Token::Semicolon)?;
+                let val = self.read_integer()?;
+                self.expect(';')?;
 
                 let ir = self.compiler.alloc_iri(IRI::AddImm { dst: lhs_vreg, imm: val });
                 self.variables.insert(name, lhs_vreg);
                 Ok(IRSpan::single(ir))
             }
-            _ => raise!(self, "expected '(', or '=', '+=' after identifier"),
+            _ => {
+                self.mark();
+                raise!(self, "expected '(', '=' or '+=' after identifier")
+            }
         }
     }
 
     fn parse_expression(&mut self) -> CompileResult<(IRSpan<'a>, IRRegCell<'a>)> {
-        let (lhs_span, lhs_vreg) = match self.current_token {
-            Token::Integer(val) => {
+        self.mark();
+        let (lhs_span, lhs_vreg) = match self.peek() {
+            Some('0'..='9') => {
+                let val = self.read_integer()?;
                 let vreg = self.compiler.alloc_vreg();
                 let ir = self.compiler.alloc_iri(IRI::MovImm { dst: vreg, imm: val });
-                self.advance();
                 (IRSpan::single(ir), vreg)
             }
-            Token::Identifier(name) => {
+            Some(c) if Self::is_ident_start(c) => {
+                let name = self.read_identifier()?;
                 let vreg = self.get_variable(name)?;
-                self.advance();
                 (IRSpan::single(self.compiler.alloc_noop()), vreg)
             }
             _ => raise!(self, "expected integer or identifier in expression"),
         };
 
         // Check for binary operator
-        if matches!(self.current_token, Token::Plus) {
-            self.advance();
+        if self.peek() == Some('+') && !self.is_str("+=") {
+            self.pos += 1;
 
             // Parse right-hand side - only integer literals supported
-            match self.current_token {
-                Token::Integer(val) => {
-                    self.advance();
-                    let add_ir = self.compiler.alloc_iri(IRI::AddImm { dst: lhs_vreg, imm: val });
-                    lhs_span.last.borrow_mut().set_next(add_ir);
-                    Ok((IRSpan { first: lhs_span.first, last: add_ir }, lhs_vreg))
-                }
-                _ => raise!(self, "expected integer literal after '+'"),
-            }
+            let val = self.read_integer()?;
+            let add_ir = self.compiler.alloc_iri(IRI::AddImm { dst: lhs_vreg, imm: val });
+            lhs_span.last.borrow_mut().set_next(add_ir);
+            Ok((IRSpan { first: lhs_span.first, last: add_ir }, lhs_vreg))
         } else if lhs_vreg.borrow().physical.is_some() {
             // For expressions of type `var virtual = phyiscal;`, we need to ensure
             // that we actually copy the physical register into a new virtual one.
@@ -705,16 +678,157 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         }
     }
 
-    fn expect_token(&mut self, expected: Token) -> CompileResult<()> {
-        if std::mem::discriminant(&self.current_token) == std::mem::discriminant(&expected) {
-            self.advance();
-            Ok(())
-        } else {
-            raise!(self, "expected {:?}, found {:?}", expected, self.current_token)
+    //
+    // vvv Tokenization helpers start here vvv
+    //
+
+    fn is_ident_start(ch: char) -> bool {
+        ch.is_ascii_alphabetic() || ch == '_'
+    }
+
+    fn is_ident_char(ch: char) -> bool {
+        ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'
+    }
+
+    fn rest(&self) -> &'src str {
+        &self.src[self.pos..]
+    }
+
+    fn skip_whitespace_comments(&mut self) {
+        loop {
+            let rest = self.rest();
+            let trimmed = rest.trim_ascii_start();
+            self.pos = self.src.len() - trimmed.len();
+
+            if let Some(after_comment) = trimmed.strip_prefix("//") {
+                self.pos += 2 + after_comment.find('\n').unwrap_or(after_comment.len());
+            } else {
+                break;
+            }
         }
     }
 
-    fn advance(&mut self) {
-        self.current_token = self.tokenizer.next();
+    fn peek(&mut self) -> Option<char> {
+        self.skip_whitespace_comments();
+        self.rest().chars().next()
+    }
+
+    fn is_str(&self, s: &str) -> bool {
+        self.rest().starts_with(s)
+    }
+
+    fn is_at_eof(&mut self) -> bool {
+        self.skip_whitespace_comments();
+        self.pos >= self.src.len()
+    }
+
+    /// Mark current position for error reporting.
+    fn mark(&mut self) {
+        self.skip_whitespace_comments();
+        self.token_start = self.pos;
+    }
+
+    fn position(&self) -> (usize, usize) {
+        let before = &self.src[..self.token_start];
+        let line = before.bytes().filter(|&b| b == b'\n').count() + 1;
+        let column = before.rfind('\n').map_or(before.len(), |i| before.len() - i - 1) + 1;
+        (line, column)
+    }
+
+    fn expect(&mut self, ch: char) -> CompileResult<()> {
+        self.mark();
+        if self.rest().starts_with(ch) {
+            self.pos += ch.len_utf8();
+            Ok(())
+        } else {
+            raise!(self, "expected '{}'", ch)
+        }
+    }
+
+    fn expect_keyword(&mut self, kw: &str) -> CompileResult<()> {
+        self.mark();
+        if let Some(rest) = self.rest().strip_prefix(kw)
+            && !rest.chars().next().is_some_and(Self::is_ident_char)
+        {
+            self.pos += kw.len();
+            Ok(())
+        } else {
+            raise!(self, "expected '{}'", kw)
+        }
+    }
+
+    /// Check if next token is keyword (without consuming).
+    fn is_keyword(&mut self, kw: &str) -> bool {
+        self.skip_whitespace_comments();
+        self.rest()
+            .strip_prefix(kw)
+            .is_some_and(|rest| !rest.chars().next().is_some_and(Self::is_ident_char))
+    }
+
+    fn read_identifier(&mut self) -> CompileResult<&'src str> {
+        self.mark();
+        let start = self.pos;
+
+        if !self.rest().chars().next().is_some_and(Self::is_ident_start) {
+            raise!(self, "expected identifier");
+        }
+
+        let rest = self.rest();
+        let len = rest.find(|c| !Self::is_ident_char(c)).unwrap_or(rest.len());
+        self.pos += len;
+        Ok(&self.src[start..self.pos])
+    }
+
+    fn read_integer(&mut self) -> CompileResult<u32> {
+        self.mark();
+        let start = self.pos;
+
+        let rest = self.rest();
+        let len = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+        self.pos += len;
+
+        if start == self.pos {
+            raise!(self, "expected integer");
+        }
+
+        self.src[start..self.pos].parse().map_err(|_| {
+            let path = self.path.to_string();
+            let (line, column) = self.position();
+            CompileError { path, line, column, message: "invalid integer".to_string() }
+        })
+    }
+
+    fn read_string(&mut self) -> CompileResult<&'src str> {
+        self.mark();
+        self.expect('"')?;
+        let start = self.pos;
+        let end = self.find_closing_delimiter(b'"');
+        self.pos = end;
+        self.expect('"')?;
+        Ok(&self.src[start..end])
+    }
+
+    fn read_regex(&mut self) -> CompileResult<&'src str> {
+        self.mark();
+        self.expect('/')?;
+        let start = self.pos;
+        let end = self.find_closing_delimiter(b'/');
+        self.pos = end;
+        self.expect('/')?;
+        Ok(&self.src[start..end])
+    }
+
+    /// Find unescaped closing delimiter (handles `\x` escapes).
+    fn find_closing_delimiter(&self, delim: u8) -> usize {
+        let bytes = self.rest().as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => i += 2,
+                b if b == delim => return self.pos + i,
+                _ => i += 1,
+            }
+        }
+        self.pos + bytes.len()
     }
 }
