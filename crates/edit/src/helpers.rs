@@ -78,9 +78,6 @@ pub struct Size {
 }
 
 impl Size {
-    pub const MIN: Self = Self { width: 0, height: 0 };
-    pub const MAX: Self = Self { width: CoordType::MAX, height: CoordType::MAX };
-
     pub fn as_rect(&self) -> Rect {
         Rect { left: 0, top: 0, right: self.width, bottom: self.height }
     }
@@ -147,14 +144,6 @@ impl Rect {
 
         Self { left: l, top: t, right: r, bottom: b }
     }
-}
-
-/// [`std::cmp::minmax`] is unstable, as per usual.
-pub fn minmax<T>(v1: T, v2: T) -> [T; 2]
-where
-    T: Ord,
-{
-    if v2 < v1 { [v2, v1] } else { [v1, v2] }
 }
 
 /// [`Read`] but with [`MaybeUninit<u8>`] buffers.
