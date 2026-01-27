@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Parser: transforms DSL source into IR graph.
+//! Frontend: DSL source code -> IR graph
 //!
 //! ## Gotchas
 //!
