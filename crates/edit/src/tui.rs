@@ -2205,6 +2205,7 @@ impl<'a> Context<'a, '_> {
         // Scrolling works even if the node isn't focused.
         if self.input_scroll_delta != Point::default()
             && node_prev.inner_clipped.contains(self.tui.mouse_position)
+            && self.tui.is_node_focused(node_prev.id)
         {
             tc.scroll_offset.x += self.input_scroll_delta.x;
             tc.scroll_offset.y += self.input_scroll_delta.y;
