@@ -1,0 +1,142 @@
+diff --git a/src/lsh/definitions.rs b/src/lsh/definitions.rs
+index a1b2c3d..d4c3b2a 100644
+--- a/src/lsh/definitions.rs
++++ b/src/lsh/definitions.rs
+@@ -12,9 +12,11 @@ // context line 12
+ // context line 13
+-// old placeholder logic A
+-const LEGACY_FLAG: bool = true;
+-// end legacy block
++// updated placeholder logic A
++const LEGACY_FLAG: bool = false; // flipped for test
++// added note: migration in progress
++// end legacy block
+ // context line 19
+ // context line 20
+@@ -42,7 +44,12 @@ // context line 42
+ // context line 43
+-    do_placeholder_action(alpha, beta);
++    // Split actions for clarity
++    do_placeholder_prepare(alpha);
++    do_placeholder_action(alpha, beta);
++    if (enable_extra()) {
++        do_placeholder_followup(beta);
++    }
+ // context line 50
+ // context line 51
+ // context line 52
+@@ -90,6 +97,15 @@ // context line 90
+ // context line 91
+ // context line 92
++/// Added lightweight fake helper
++fn enable_extra() -> bool {
++    // Pretend this consults a config value
++    true
++}
++
++// Temporary debug instrumentation (to be removed)
++const _DEBUG_HOOK: &str = "lsh:extra";
++
+ // context line 93
+ // context line 94
+ // context line 95
+
+diff --git a/src/tui.rs b/src/tui.rs
+index 1122334..5566778 100644
+--- a/src/tui.rs
++++ b/src/tui.rs
+@@ -5,8 +5,13 @@ // context line 5
+ // context line 6
+ // context line 7
+-// previous rendering stub
+-render_placeholder(frame);
++// refined rendering sequence
++begin_frame(frame);
++render_header(frame);
++render_body(frame);
++render_footer(frame);
++end_frame(frame);
++
+ // context line 14
+ // context line 15
+ // context line 16
+
+diff --git a/README.md b/README.md
+index 9aa9aa9..1bb1bb1 100644
+--- a/README.md
++++ b/README.md
+@@ -1,6 +1,11 @@
+ # Project Title
+-Some brief description here.
++Some brief description here (updated).
++
++Experimental notes:
++- Added fake diff example
++- Demonstrates multi-hunk & multi-file patch
++
+ ## Usage
+ Run the binary as needed.
+
+diff --git a/Cargo.toml b/Cargo.toml
+index cafe123..fade321 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -8,7 +8,10 @@ edition = "2021"
+ # context
+ [features]
+-default = []
++default = ["experimental-preview"]
++experimental-preview = []
++
++# NOTE: Above feature is placeholder & fake
+
+ [dependencies]
+ # context
+@@ -20,6 +23,7 @@ anyhow = "1"
+ # context
+ # instrumentation (fake addition)
+ tracing = "0.1"
++tracing-subscriber = "0.3"
+
+diff --git a/src/feature/experimental.rs b/src/feature/experimental.rs
+new file mode 100644
+index 0000000..abc1234
+--- /dev/null
++++ b/src/feature/experimental.rs
+@@ -0,0 +1,24 @@
++//! Placeholder experimental module (fake content).
++//! This file exists only to demonstrate a multi-file diff.
++#![allow(dead_code)]
++
++pub struct ExperimentalToggle {
++    enabled: bool,
++}
++
++impl ExperimentalToggle {
++    pub fn new() -> Self {
++        Self { enabled: true }
++    }
++    pub fn enabled(&self) -> bool {
++        self.enabled
++    }
++}
++
++pub fn run_experimental_path() {
++    if ExperimentalToggle::new().enabled() {
++        // Fake behavior
++        eprintln!("(fake) running experimental path");
++    }
++}
++
+
+diff --git a/assets/old_logo.svg b/assets/old_logo.svg
+deleted file mode 100644
+index 55aa55a..0000000
+--- a/assets/old_logo.svg
++++ /dev/null
+@@ -1,5 +0,0 @@
+-<!-- Fake removed asset -->
+-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+-  <rect width="10" height="10" fill="#FF00FF"/>
+-  <text x="1" y="9" font-size="3">X</text>
+-</svg>
