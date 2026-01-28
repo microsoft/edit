@@ -4,12 +4,12 @@
 pub fn git_rebase_todo() {
     if /#.*/ {
         yield comment;
-    } else if /(?:break|exec|b|x)\b{end-half}/ {
+    } else if /(?:break|exec|b|x)\>/ {
         yield keyword.control;
         if /.*/ {
             yield comment;
         }
-    } else if /(?:drop|edit|fixup|pick|reword|squash|d|e|f|p|r|s)\b{end-half}/ {
+    } else if /(?:drop|edit|fixup|pick|reword|squash|d|e|f|p|r|s)\>/ {
         yield keyword.control;
 
         if /\s+/ {

@@ -33,5 +33,7 @@ pub fn json() {
         } else if /\w+/ {
             // Invalid token? Skip.
         }
+
+        yield other;
     }
 }

@@ -197,6 +197,8 @@ pub fn markdown() {
             } else if /\\./ {
                 // Gobble escape char
             }
+
+            yield other;
         }
     }
 }

@@ -50,6 +50,7 @@
 
 #![feature(allocator_api)]
 #![allow(irrefutable_let_patterns, clippy::upper_case_acronyms)]
+#![allow(unused)]
 
 pub mod compiler;
 pub mod runtime;

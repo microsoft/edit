@@ -38,8 +38,10 @@ pub fn xml() {
             }
         } else if /<!(DOCTYPE)[^>]*>/ {
             yield $1 as constant.language;
+            yield other;
         } else if /(?:<\?|<)([\w:.-]+)/ {
             yield $1 as constant.language;
+            yield other;
 
             until />/ {
                 yield other;
@@ -47,6 +49,7 @@ pub fn xml() {
 
                 if /([\w:.-]+)\s*=/ {
                     yield $1 as variable;
+                    yield other;
                 } else if /"/ {
                     until /"/ {
                         yield string;
@@ -65,8 +68,11 @@ pub fn xml() {
             yield other;
         } else if /<\/([\w:.-]+)\s*>/ {
             yield $1 as constant.language;
+            yield other;
         } else if /(?:&#|&)[\w:.-]+;/ {
             yield constant.numeric;
         }
+
+        yield other;
     }
 }

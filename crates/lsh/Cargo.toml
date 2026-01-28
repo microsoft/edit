@@ -8,5 +8,4 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-regex-syntax = { version = "0.8", default-features = false }
 stdext.workspace = true

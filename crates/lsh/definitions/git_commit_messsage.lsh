@@ -10,7 +10,6 @@ pub fn git_commit_message() {
             yield markup.deleted;
         } else if /new file:.*/ {
             yield markup.inserted;
-        } else if /.*/ {
         }
     } else if /diff --git.*/ {
         yield meta.header;

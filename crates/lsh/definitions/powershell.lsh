@@ -58,5 +58,7 @@ pub fn powershell() {
         } else if /[\w\d?:]+/ {
             // Gobble any other tokens that should not be highlighted
         }
+
+        yield other;
     }
 }

@@ -1,49 +1,53 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Regex-to-IR compiler using `regex_syntax` as the parser.
+//! Regex -> IR Compiler
 //!
-//! ## Supported patterns
+//! This module compiles regex patterns into IR instructions.
+//! Ideally this would use a proper TNFA → TDFA(1) compiler, but that's really complex.
+//! We get by with a dead simple translation, because we have:
 //!
-//! - Literals: `foo`, `bar`
-//! - Character classes: `[a-z]`, `[^0-9]`, `.` (any byte), `\w`, `\d`, etc.
-//! - Quantifiers: `?`, `+`, `*` (greedy only)
-//! - Alternation: `a|b|c`
-//! - Concatenation: `abc`
-//! - Capture groups: `(...)` (for `yield $1 as color`)
-//! - Word boundary: `\b` (ASCII only, via `Look::WordEndHalfAscii`)
-//! - End of line: `$`
+//! - No backreferences
+//! - No lookahead/lookbehind (except `\>` word boundary)
+//! - Greedy matching only (no lazy quantifiers)
+//! - Implicit `^`
 //!
-//! ## Gotchas
+//! The code generator uses continuation-passing style (CPS): each `emit()` call receives
+//! two continuation nodes (`on_match` and `on_fail`) and returns the entry node for that
+//! subpattern. This means we build the IR graph **backwards** - we must know where to
+//! jump on success/failure before we can emit the current node.
 //!
-//! - IMPORTANT (also the most important TODO):
-//!   Alternatives are not properly implemented, because backtracking doesn't exist.
-//!   E.g. matching `(a|ab)[0-9]+` will NOT match `ab123` because after matching `a` from the
-//!   first alternative, it immediately tries to match `[0-9]+` and fails.
+//! This reverse iteration has a side effect on capture groups: they get pushed onto the
+//! captures list in reverse order. We fix this with `captures.reverse()` at the end.
 //!
-//! - Single-character classes like `[eE]` get expanded into a chain of `Prefix` conditions
-//!   rather than using `Charset`. This is because prefix matching advances `off` by exactly
-//!   the matched length, while charset matching is greedy (matches as many as possible).
-//! - For patterns like `[a-z]+|\w+`, the compiler tries to chain alternatives so that if
-//!   the more specific pattern fails partway through, it falls back to the more general one.
-//!   This is the `try_append_as_fallback` logic - it's complex and may have edge cases.
-//! - If a charset includes `\w` (word characters), the compiler also sets bits for UTF-8
-//!   continuation byte starters (0xC2-0xF4). This lets `\w+` consume multibyte characters
-//!   even though we operate on bytes. It's not Unicode-correct but works for identifiers.
-//! - The `parse()` function modifies `dst_good`/`dst_bad` nodes' `.next` pointers.
-//!   Don't pass nodes that are already wired into the IR graph.
+//! # Supported Patterns
 //!
-//! ## TODO
+//! | Pattern      | IR Translation                                           |
+//! |--------------|----------------------------------------------------------|
+//! | `foo`        | `Prefix("foo")` - single prefix check                    |
+//! | `\+\+\+`     | `Prefix("+++")` - escapes fused into literals            |
+//! | `(?i:foo)`   | `PrefixInsensitive("foo")`                               |
+//! | `[a-z]+`     | `Charset{cs, min=1, max=∞}` - greedy char class          |
+//! | `[a-z]?`     | `Charset{cs, min=0, max=1}` - optional char              |
+//! | `$`          | `EndOfLine` condition                                    |
+//! | `.*`         | `MovImm off, MAX` - skip to end of line                  |
+//! | `\>`         | `If Charset(\w) then FAIL else MATCH` - word boundary    |
+//! | `(foo)`      | Wraps inner with `Mov` to save start/end positions       |
 //!
-//! - Delete the entire file.
-//! - Rewrite it based on a proper TDFA architecture.
-
-use std::ptr;
-
-use regex_syntax::hir::{Class, ClassBytes, ClassBytesRange, Hir, HirKind, Look};
+//! # Gotchas
+//!
+//! - `\w` includes bytes 0xC2-0xF4 (UTF-8 leading bytes) so that it can consume multibyte characters.
+//!   This isn't Unicode-correct but works for identifiers in most programming languages.
+//! - We don't create loops to keep the IR generation and optimization simple.
+//!   This means that e.g. (a|b)+ is not supported. For now that's fine.
+//! - The `parse()` function wires its generated IR into the provided destination nodes.
+//!   Don't pass nodes that are already part of the IR graph.
 
 use super::*;
 
+// 0xC2-0xF4 are UTF-8 leading bytes for multibyte sequences. Including them lets
+// `\w+` consume entire multibyte characters, which is important for identifiers
+// containing non-ASCII letters (e.g., `naïve`, `café`).
 const ASCII_WORD_CHARSET: Charset = {
     let mut charset = Charset::no();
     charset.set_range(b'0'..=b'9', true);
@@ -54,435 +58,698 @@ const ASCII_WORD_CHARSET: Charset = {
     charset
 };
 
+// Whitespace character set for `\s`
+const ASCII_WHITESPACE_CHARSET: Charset = {
+    let mut charset = Charset::no();
+    charset.set(b' ', true);
+    charset.set(b'\t', true);
+    charset.set(b'\n', true);
+    charset.set(b'\r', true);
+    charset.set(0x0B, true); // vertical tab
+    charset.set(0x0C, true); // form feed
+    charset
+};
+
+// Digit character set for `\d`
+const ASCII_DIGIT_CHARSET: Charset = {
+    let mut charset = Charset::no();
+    charset.set_range(b'0'..=b'9', true);
+    charset
+};
+
+pub type CaptureList<'a> = Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>;
+
+#[derive(Debug, Clone)]
+enum Regex {
+    /// Empty input
+    Empty,
+    /// `foo`
+    Literal(String, bool), // (string, case_insensitive)
+    /// `[a-z]`
+    CharClass(Charset),
+    /// `[a-z][0-9]`
+    Concat(Vec<Regex>),
+    /// `a|b|c`
+    Alt(Vec<Regex>),
+    /// `?`, `+`, `*`, `{n,m}`
+    Repeat {
+        inner: Box<Regex>,
+        min: u32,
+        max: u32, // u32::MAX means unbounded
+    },
+    /// `(foo)`, `(?:foo)`
+    Group { inner: Box<Regex>, capturing: bool },
+    /// `$`
+    EndOfLine,
+    /// `\>`
+    WordEnd,
+    /// `.`
+    Dot,
+}
+
+struct RegexParser<'a> {
+    input: &'a str,
+    pos: usize,
+    case_insensitive: bool,
+}
+
+impl<'a> RegexParser<'a> {
+    fn new(input: &'a str) -> Self {
+        Self { input, pos: 0, case_insensitive: false }
+    }
+
+    fn parse(mut self) -> Result<Regex, String> {
+        let result = self.parse_alternation()?;
+        if self.pos < self.input.len() {
+            return Err(format!(
+                "unexpected character '{}' at position {}",
+                self.peek().unwrap(),
+                self.pos
+            ));
+        }
+        Ok(result)
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.input[self.pos..].chars().next()
+    }
+
+    fn advance(&mut self) -> Option<char> {
+        let c = self.peek()?;
+        self.pos += c.len_utf8();
+        Some(c)
+    }
+
+    fn expect(&mut self, expected: char) -> Result<(), String> {
+        match self.advance() {
+            Some(c) if c == expected => Ok(()),
+            Some(c) => {
+                Err(format!("expected '{}', found '{}' at position {}", expected, c, self.pos))
+            }
+            None => Err(format!("expected '{}', found end of pattern", expected)),
+        }
+    }
+
+    /// a|b|c
+    fn parse_alternation(&mut self) -> Result<Regex, String> {
+        let mut alts = vec![self.parse_concatenation()?];
+
+        while self.peek() == Some('|') {
+            self.advance();
+            alts.push(self.parse_concatenation()?);
+        }
+
+        if alts.len() == 1 { Ok(alts.pop().unwrap()) } else { Ok(Regex::Alt(alts)) }
+    }
+
+    /// [a-b][c-d]
+    fn parse_concatenation(&mut self) -> Result<Regex, String> {
+        let mut parts = Vec::new();
+
+        while let Some(c) = self.peek() {
+            // Stop at alternation or group end
+            if c == '|' || c == ')' {
+                break;
+            }
+
+            parts.push(self.parse_quantified()?);
+        }
+
+        match parts.len() {
+            0 => Ok(Regex::Empty),
+            1 => Ok(parts.pop().unwrap()),
+            _ => Ok(Regex::Concat(parts)),
+        }
+    }
+
+    /// a?, a*, a+, a{n,m}
+    fn parse_quantified(&mut self) -> Result<Regex, String> {
+        let base = self.parse_atom()?;
+
+        let (min, max) = match self.peek() {
+            Some('?') => {
+                self.advance();
+                (0, 1)
+            }
+            Some('*') => {
+                self.advance();
+                (0, u32::MAX)
+            }
+            Some('+') => {
+                self.advance();
+                (1, u32::MAX)
+            }
+            Some('{') => self.parse_repetition_bounds()?,
+            _ => return Ok(base),
+        };
+
+        Ok(Regex::Repeat { inner: Box::new(base), min, max })
+    }
+
+    /// {n,m}
+    fn parse_repetition_bounds(&mut self) -> Result<(u32, u32), String> {
+        self.expect('{')?;
+
+        let min = self.parse_number()?;
+
+        let max = if self.peek() == Some(',') {
+            self.advance();
+            if self.peek() == Some('}') { u32::MAX } else { self.parse_number()? }
+        } else {
+            min
+        };
+
+        self.expect('}')?;
+        Ok((min, max))
+    }
+
+    fn parse_number(&mut self) -> Result<u32, String> {
+        let start = self.pos;
+        while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+            self.advance();
+        }
+        if start == self.pos {
+            return Err("expected number".to_string());
+        }
+        self.input[start..self.pos].parse().map_err(|e| format!("invalid number: {}", e))
+    }
+
+    /// Parse a single atom (literal, class, group, anchor)
+    fn parse_atom(&mut self) -> Result<Regex, String> {
+        match self.peek() {
+            None => Ok(Regex::Empty),
+            Some('(') => self.parse_group(),
+            Some('[') => self.parse_char_class(),
+            Some('.') => {
+                self.advance();
+                Ok(Regex::Dot)
+            }
+            Some('$') => {
+                self.advance();
+                Ok(Regex::EndOfLine)
+            }
+            _ => self.parse_literal(),
+        }
+    }
+
+    /// Parse a literal string, including escaped metacharacters like `\+`, `\*`, etc.
+    ///
+    /// This function is responsible for a critical optimization: fusing consecutive escaped
+    /// metacharacters into a single literal. For example, `\+\+\+` becomes `Literal("+++")`.
+    fn parse_literal(&mut self) -> Result<Regex, String> {
+        let mut lit = String::new();
+
+        loop {
+            match self.peek() {
+                Some('\\') => {
+                    let escape_char = self.input[self.pos + 1..].chars().next();
+                    match escape_char {
+                        // Character classes
+                        Some('w' | 'W' | 'd' | 'D' | 's' | 'S') => {
+                            if lit.is_empty() {
+                                // Start with the class
+                                self.advance(); // consume '\'
+                                return self.parse_escape_as_regex();
+                            } else {
+                                // Return accumulated literal, leave escape for next parse
+                                break;
+                            }
+                        }
+                        // Word boundary
+                        Some('>') => {
+                            if lit.is_empty() {
+                                self.advance(); // consume '\'
+                                self.advance(); // consume '>'
+                                return Ok(Regex::WordEnd);
+                            } else {
+                                break;
+                            }
+                        }
+                        // Simple escape
+                        Some(c) if !c.is_ascii_alphanumeric() => {
+                            // Check if this char would be quantified
+                            let after_escape = self.pos + 1 + c.len_utf8();
+                            if after_escape < self.input.len() && !lit.is_empty() {
+                                let next = self.input[after_escape..].chars().next();
+                                if matches!(next, Some('?' | '*' | '+' | '{')) {
+                                    break;
+                                }
+                            }
+                            self.advance(); // consume '\'
+                            self.advance(); // consume escaped char
+                            lit.push(c);
+                        }
+                        Some(c) => {
+                            return Err(format!("unknown escape sequence '\\{}'", c));
+                        }
+                        None => {
+                            return Err("unexpected end of pattern after backslash".to_string());
+                        }
+                    }
+                }
+                Some(c) if !is_meta_char(c) => {
+                    let next_pos = self.pos + c.len_utf8();
+                    if next_pos < self.input.len() && !lit.is_empty() {
+                        let next = self.input[next_pos..].chars().next();
+                        if matches!(next, Some('?' | '*' | '+' | '{')) {
+                            break;
+                        }
+                    }
+                    lit.push(c);
+                    self.advance();
+                }
+                _ => break,
+            }
+        }
+
+        // We couldn't parse anything - must be an unexpected meta character
+        if lit.is_empty() {
+            return Err(format!(
+                "unexpected character '{}' at position {}",
+                self.peek().unwrap_or('\0'),
+                self.pos
+            ));
+        }
+
+        Ok(Regex::Literal(lit, self.case_insensitive))
+    }
+
+    /// \w, \d, etc.
+    fn parse_escape_as_regex(&mut self) -> Result<Regex, String> {
+        match self.advance() {
+            Some('w') => Ok(Regex::CharClass(ASCII_WORD_CHARSET)),
+            Some('W') => {
+                let mut cs = ASCII_WORD_CHARSET;
+                cs.invert();
+                Ok(Regex::CharClass(cs))
+            }
+            Some('d') => Ok(Regex::CharClass(ASCII_DIGIT_CHARSET)),
+            Some('D') => {
+                let mut cs = ASCII_DIGIT_CHARSET;
+                cs.invert();
+                Ok(Regex::CharClass(cs))
+            }
+            Some('s') => Ok(Regex::CharClass(ASCII_WHITESPACE_CHARSET)),
+            Some('S') => {
+                let mut cs = ASCII_WHITESPACE_CHARSET;
+                cs.invert();
+                Ok(Regex::CharClass(cs))
+            }
+            Some(c) => Err(format!("unknown escape sequence '\\{}'", c)),
+            None => Err("unexpected end of pattern after backslash".to_string()),
+        }
+    }
+
+    /// (foo), (?:foo), (?i:foo)
+    fn parse_group(&mut self) -> Result<Regex, String> {
+        self.expect('(')?;
+
+        // Check for special group types
+        if self.peek() == Some('?') {
+            self.advance();
+            match self.peek() {
+                Some(':') => {
+                    // Non-capturing (?:...)
+                    self.advance();
+                    let inner = self.parse_alternation()?;
+                    self.expect(')')?;
+                    Ok(Regex::Group { inner: Box::new(inner), capturing: false })
+                }
+                Some('i') => {
+                    // Case-insensitive (?i:...)
+                    self.advance();
+                    self.expect(':')?;
+                    let old_ci = self.case_insensitive;
+                    self.case_insensitive = true;
+                    let inner = self.parse_alternation()?;
+                    self.case_insensitive = old_ci;
+                    self.expect(')')?;
+                    Ok(Regex::Group { inner: Box::new(inner), capturing: false })
+                }
+                _ => Err("unsupported group modifier".to_string()),
+            }
+        } else {
+            // Capturing (...)
+            let inner = self.parse_alternation()?;
+            self.expect(')')?;
+            Ok(Regex::Group { inner: Box::new(inner), capturing: true })
+        }
+    }
+
+    /// [a-z], [^a-z], etc.
+    fn parse_char_class(&mut self) -> Result<Regex, String> {
+        self.expect('[')?;
+
+        let negated = if self.peek() == Some('^') {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        let mut charset = Charset::no();
+
+        // First char can be ] or - literally
+        if self.peek() == Some(']') {
+            charset.set(b']', true);
+            self.advance();
+        }
+
+        while let Some(c) = self.peek() {
+            if c == ']' {
+                self.advance();
+                break;
+            }
+
+            if c == '\\' {
+                self.advance();
+                let escaped = self.parse_escape_char()?;
+                match escaped {
+                    EscapedChar::Char(b) => charset.set(b, true),
+                    EscapedChar::Class(cs) => charset.merge(&cs),
+                }
+            } else {
+                let start = c as u8;
+                self.advance();
+
+                // Check for range
+                if self.peek() == Some('-') && !self.input[self.pos + 1..].starts_with(']') {
+                    self.advance(); // consume -
+                    let end = match self.peek() {
+                        Some('\\') => {
+                            self.advance();
+                            match self.parse_escape_char()? {
+                                EscapedChar::Char(b) => b,
+                                EscapedChar::Class(_) => {
+                                    return Err("cannot use character class in range".to_string());
+                                }
+                            }
+                        }
+                        Some(c) => {
+                            self.advance();
+                            c as u8
+                        }
+                        None => {
+                            return Err("unexpected end of pattern in character class".to_string());
+                        }
+                    };
+                    charset.set_range(start..=end, true);
+                } else {
+                    charset.set(start, true);
+                }
+            }
+        }
+
+        if negated {
+            charset.invert();
+        }
+
+        Ok(Regex::CharClass(charset))
+    }
+
+    fn parse_escape_char(&mut self) -> Result<EscapedChar, String> {
+        match self.advance() {
+            Some('w') => Ok(EscapedChar::Class(ASCII_WORD_CHARSET)),
+            Some('W') => {
+                let mut cs = ASCII_WORD_CHARSET;
+                cs.invert();
+                Ok(EscapedChar::Class(cs))
+            }
+            Some('d') => Ok(EscapedChar::Class(ASCII_DIGIT_CHARSET)),
+            Some('D') => {
+                let mut cs = ASCII_DIGIT_CHARSET;
+                cs.invert();
+                Ok(EscapedChar::Class(cs))
+            }
+            Some('s') => Ok(EscapedChar::Class(ASCII_WHITESPACE_CHARSET)),
+            Some('S') => {
+                let mut cs = ASCII_WHITESPACE_CHARSET;
+                cs.invert();
+                Ok(EscapedChar::Class(cs))
+            }
+            Some(c) if !c.is_ascii_alphanumeric() => Ok(EscapedChar::Char(c as u8)),
+            Some(c) => Err(format!("unknown escape sequence '\\{}'", c)),
+            None => Err("unexpected end of pattern after backslash".to_string()),
+        }
+    }
+}
+
+enum EscapedChar {
+    Char(u8),
+    Class(Charset),
+}
+
+fn is_meta_char(c: char) -> bool {
+    matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '|' | '?' | '*' | '+' | '.' | '^' | '$')
+}
+
+struct CodeGen<'a, 'c> {
+    compiler: &'c mut Compiler<'a>,
+    captures: CaptureList<'a>,
+    dst_good: IRCell<'a>,
+    dst_bad: IRCell<'a>,
+}
+
+impl<'a, 'c> CodeGen<'a, 'c> {
+    fn new(compiler: &'c mut Compiler<'a>, dst_good: IRCell<'a>, dst_bad: IRCell<'a>) -> Self {
+        let captures = CaptureList::new_in(compiler.arena);
+        Self { compiler, captures, dst_good, dst_bad }
+    }
+
+    fn generate(&mut self, regex: &Regex) -> Result<IRCell<'a>, String> {
+        self.emit(regex, self.dst_good, self.dst_bad)
+    }
+
+    /// Core emission function. Returns the entry node for matching `regex`.
+    ///
+    /// The generated IR forms a DAG where:
+    /// - Matching the pattern leads to `on_match`
+    /// - Failing to match leads to `on_fail`
+    ///
+    /// For `IRI::If` nodes: `then` = match branch, `next` = fail branch.
+    fn emit(
+        &mut self,
+        regex: &Regex,
+        on_match: IRCell<'a>,
+        on_fail: IRCell<'a>,
+    ) -> Result<IRCell<'a>, String> {
+        match regex {
+            Regex::Empty => Ok(on_match),
+
+            Regex::Literal(s, case_insensitive) => {
+                if s.is_empty() {
+                    return Ok(on_match);
+                }
+                let s = self.compiler.intern_string(s);
+                let condition = if *case_insensitive {
+                    Condition::PrefixInsensitive(s)
+                } else {
+                    Condition::Prefix(s)
+                };
+                let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
+                if_node.borrow_mut().next = Some(on_fail);
+                Ok(if_node)
+            }
+
+            Regex::CharClass(cs) => {
+                let cs = self.compiler.intern_charset(cs);
+                let condition = Condition::Charset { cs, min: 1, max: u32::MAX };
+                let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
+                if_node.borrow_mut().next = Some(on_fail);
+                Ok(if_node)
+            }
+
+            Regex::Dot => {
+                let cs = Charset::yes();
+                let cs = self.compiler.intern_charset(&cs);
+                let condition = Condition::Charset { cs, min: 1, max: 1 };
+                let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
+                if_node.borrow_mut().next = Some(on_fail);
+                Ok(if_node)
+            }
+
+            Regex::EndOfLine => {
+                let if_node = self
+                    .compiler
+                    .alloc_iri(IRI::If { condition: Condition::EndOfLine, then: on_match });
+                if_node.borrow_mut().next = Some(on_fail);
+                Ok(if_node)
+            }
+
+            Regex::WordEnd => {
+                // \> is a zero-width assertion: succeeds if NOT followed by a word char.
+                // We invert the logic: check for word char, swap success/failure branches.
+                let cs = self.compiler.intern_charset(&ASCII_WORD_CHARSET);
+                let condition = Condition::Charset { cs, min: 1, max: 1 };
+                let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_fail });
+                if_node.borrow_mut().next = Some(on_match);
+                Ok(if_node)
+            }
+
+            Regex::Concat(parts) => {
+                let mut current_target = on_match;
+
+                // We iterate in reverse because of continuation-passing style,
+                // as explained in the module doc.
+                for part in parts.iter().rev() {
+                    current_target = self.emit(part, current_target, on_fail)?;
+                }
+
+                Ok(current_target)
+            }
+
+            Regex::Alt(alts) => {
+                let mut current_fail = on_fail;
+
+                // We iterate in reverse because of continuation-passing style,
+                // as explained in the module doc.
+                for alt in alts.iter().rev() {
+                    current_fail = self.emit(alt, on_match, current_fail)?;
+                }
+
+                Ok(current_fail)
+            }
+
+            Regex::Repeat { inner, min, max } => {
+                self.emit_repeat(inner, *min, *max, on_match, on_fail)
+            }
+
+            Regex::Group { inner, capturing } => {
+                if *capturing {
+                    // Capturing group: wrap inner pattern with Mov instructions to save
+                    // the start and end positions of the matched substring.
+                    let start_reg = self.compiler.alloc_vreg();
+                    let end_reg = self.compiler.alloc_vreg();
+
+                    let off_reg = self.compiler.get_reg(Register::InputOffset);
+                    let save_end = self.compiler.alloc_iri(IRI::Mov { dst: end_reg, src: off_reg });
+                    save_end.borrow_mut().next = Some(on_match);
+
+                    let inner_node = self.emit(inner, save_end, on_fail)?;
+
+                    // Push *after* emit, so nested groups come first in the reversed list.
+                    self.captures.push((start_reg, end_reg));
+
+                    let save_start =
+                        self.compiler.alloc_iri(IRI::Mov { dst: start_reg, src: off_reg });
+                    save_start.borrow_mut().next = Some(inner_node);
+
+                    Ok(save_start)
+                } else {
+                    self.emit(inner, on_match, on_fail)
+                }
+            }
+        }
+    }
+
+    /// Emit IR for repetition quantifiers (`?`, `+`, `*`, `{n,m}`).
+    ///
+    /// # Why no loops?
+    ///
+    /// Creating IR loops (self-referential nodes) would complicate the optimizer.
+    /// Since no LSH file needs unbounded repetition on complex patterns (`(foo)+`), we simply reject them.
+    fn emit_repeat(
+        &mut self,
+        inner: &Regex,
+        min: u32,
+        max: u32,
+        on_match: IRCell<'a>,
+        on_fail: IRCell<'a>,
+    ) -> Result<IRCell<'a>, String> {
+        // `.*` = skip to end of line. Very common pattern, special-cased for speed.
+        if min == 0 && max == u32::MAX && matches!(*inner, Regex::Dot) {
+            let off_reg = self.compiler.get_reg(Register::InputOffset);
+            let skip_node = self.compiler.alloc_iri(IRI::MovImm { dst: off_reg, imm: u32::MAX });
+            skip_node.borrow_mut().next = Some(on_match);
+            return Ok(skip_node);
+        }
+
+        // `.+` = one or more of any char.
+        if min >= 1 && max == u32::MAX && matches!(*inner, Regex::Dot) {
+            let cs = Charset::yes();
+            return self.emit_charset(&cs, min, max, on_match, on_fail);
+        }
+
+        // CharClass: delegate to emit_charset which uses the VM's native min/max support.
+        if let Regex::CharClass(ref cs) = *inner {
+            return self.emit_charset(cs, min, max, on_match, on_fail);
+        }
+
+        // Single-char literal like `#+`: convert to charset for efficient handling.
+        if let Regex::Literal(ref s, case_insensitive) = *inner
+            && s.len() == 1
+        {
+            let b = s.as_bytes()[0];
+            let mut cs = Charset::no();
+            if case_insensitive {
+                cs.set(b.to_ascii_lowercase(), true);
+                cs.set(b.to_ascii_uppercase(), true);
+            } else {
+                cs.set(b, true);
+            }
+            return self.emit_charset(&cs, min, max, on_match, on_fail);
+        }
+
+        // Reject unbounded repetition on anything else - would need loops.
+        if max == u32::MAX {
+            return Err(
+                "unbounded repetition on complex patterns are not yet supported (would require loops)"
+                    .to_string(),
+            );
+        }
+
+        // Bounded repetition: unroll. `x{2,4}` gets translated to `x x x? x?`.
+        // We emit in reverse order (continuation-passing style),
+        // so optional matches come first, then required matches.
+        let mut current = on_match;
+        // Optional: Both branches succeed go to `current`.
+        for _ in min..max {
+            current = self.emit(inner, current, current)?;
+        }
+        // Required: Failure goes to `on_fail`.
+        for _ in 0..min {
+            current = self.emit(inner, current, on_fail)?;
+        }
+        Ok(current)
+    }
+
+    fn emit_charset(
+        &mut self,
+        cs: &Charset,
+        min: u32,
+        max: u32,
+        on_match: IRCell<'a>,
+        on_fail: IRCell<'a>,
+    ) -> Result<IRCell<'a>, String> {
+        let cs = self.compiler.intern_charset(cs);
+        let condition = Condition::Charset { cs, min, max };
+        let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
+
+        // min=0 implies that it cannot fail. Remove `on_fail` to allow for later optimizations.
+        if_node.borrow_mut().next = Some(if min == 0 { on_match } else { on_fail });
+
+        Ok(if_node)
+    }
+}
+
+/// Parse a regex pattern and generate IR that matches it.
+///
+/// The generated IR is wired to `dst_good` on successful match and `dst_bad` on failure.
+/// The returned tuple contains the start of the IR graph and a list of capture group ranges.
 pub fn parse<'a>(
     compiler: &mut Compiler<'a>,
     pattern: &str,
     dst_good: IRCell<'a>,
     dst_bad: IRCell<'a>,
-    capture_groups: &mut Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
-) -> Result<IRCell<'a>, String> {
-    let hir = match regex_syntax::ParserBuilder::new()
-        .utf8(false)
-        .unicode(false)
-        .dot_matches_new_line(true)
-        .build()
-        .parse(pattern)
-    {
-        Ok(hir) => hir,
-        Err(e) => return Err(format!("{e}")),
-    };
+) -> Result<(IRCell<'a>, CaptureList<'a>), String> {
+    let parser = RegexParser::new(pattern);
+    let regex = parser.parse()?;
 
-    let src = transform(compiler, dst_good, &hir, capture_groups)?;
+    let mut codegen = CodeGen::new(compiler, dst_good, dst_bad);
+    let entry = codegen.generate(&regex)?;
 
-    // Connect all unset .next pointers to dst_bad.
-    for node in compiler.visit_nodes_from(src) {
-        if !ptr::eq(node, dst_good)
-            && !ptr::eq(node, dst_bad)
-            && let mut node = node.borrow_mut()
-            && node.wants_next()
-        {
-            node.set_next(dst_bad);
-        }
-    }
+    // Reverse captures: Concat iterates in reverse, so groups are pushed in reverse order.
+    codegen.captures.reverse();
 
-    Ok(src)
-}
-
-fn transform<'a>(
-    compiler: &mut Compiler<'a>,
-    dst: IRCell<'a>,
-    hir: &Hir,
-    capture_groups: &mut Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
-) -> Result<IRCell<'a>, String> {
-    fn is_any_class(class: &ClassBytes) -> bool {
-        class.ranges() == [ClassBytesRange::new(0, 255)]
-    }
-
-    match hir.kind() {
-        HirKind::Empty => Ok(dst),
-        HirKind::Literal(lit) => transform_literal(compiler, dst, &lit.0),
-        HirKind::Class(Class::Bytes(class)) if is_any_class(class) => transform_any(compiler, dst),
-        HirKind::Class(Class::Bytes(class)) => transform_class(compiler, dst, class),
-        HirKind::Class(Class::Unicode(class)) => {
-            transform_class(compiler, dst, &class.to_byte_class().unwrap())
-        }
-        HirKind::Look(Look::End) => {
-            Ok(compiler.alloc_iri(IRI::If { condition: Condition::EndOfLine, then: dst }))
-        }
-        HirKind::Look(Look::WordEndHalfAscii) => {
-            // If the test hits, then we failed the word boundary, so go to dst_bad.
-            // We don't have dst_bad here, so allocate a noop node, which later gets
-            // picked up with its unset .next pointer, and set to dst_bad automatically.
-            let bad = compiler.alloc_noop();
-            let c = compiler.intern_charset(&ASCII_WORD_CHARSET);
-            Ok(compiler.alloc_ir(IR {
-                next: Some(dst),
-                instr: IRI::If { condition: Condition::Charset(c), then: bad },
-                offset: usize::MAX,
-            }))
-        }
-        HirKind::Repetition(rep) => match (rep.min, rep.max, rep.greedy, rep.sub.kind()) {
-            (0, None, true, HirKind::Class(Class::Bytes(class))) => {
-                if is_any_class(class) {
-                    transform_any_star(compiler, dst)
-                } else {
-                    let src = transform_class_plus(compiler, dst, class)?;
-                    transform_option(src, dst)
-                }
-            }
-            (0, Some(1), true, _) => {
-                let src = transform(compiler, dst, &rep.sub, capture_groups)?;
-                transform_option(src, dst)
-            }
-            (1, None, true, HirKind::Literal(lit)) => transform_literal_plus(compiler, dst, lit),
-            (1, None, true, HirKind::Class(Class::Bytes(class))) => {
-                transform_class_plus(compiler, dst, class)
-            }
-            _ => panic!("Unsupported HIR: {hir:?}"),
-        },
-        HirKind::Concat(hirs) => transform_concat(compiler, dst, hirs, capture_groups),
-        HirKind::Alternation(hirs) => transform_alt(compiler, dst, hirs, capture_groups),
-        HirKind::Capture(capture) => {
-            // Save the current input offset before matching the capture group
-            let start_vreg = compiler.alloc_vreg();
-            let save_start = compiler.alloc_iri(IRI::Mov {
-                dst: start_vreg,
-                src: compiler.get_reg(Register::InputOffset),
-            });
-
-            // Transform the sub-expression
-            let end_marker = compiler.alloc_noop();
-            save_start.borrow_mut().set_next(transform(
-                compiler,
-                end_marker,
-                &capture.sub,
-                capture_groups,
-            )?);
-
-            // Save the end offset after matching
-            let end_vreg = compiler.alloc_vreg();
-            let save_end = compiler.alloc_iri(IRI::Mov {
-                dst: end_vreg,
-                src: compiler.get_reg(Register::InputOffset),
-            });
-            end_marker.borrow_mut().set_next(save_end);
-            save_end.borrow_mut().set_next(dst);
-
-            // Store the capture group (index is 1-based in regex, 0-based in our vec)
-            let vec_index = (capture.index as usize).saturating_sub(1);
-            // Ensure the vector is large enough
-            while capture_groups.len() <= vec_index {
-                let dummy_start = compiler.alloc_vreg();
-                let dummy_end = compiler.alloc_vreg();
-                capture_groups.push((dummy_start, dummy_end));
-            }
-            capture_groups[vec_index] = (start_vreg, end_vreg);
-
-            Ok(save_start)
-        }
-        _ => panic!("Unsupported HIR: {hir:?}"),
-    }
-}
-
-// string
-fn transform_literal<'a>(
-    compiler: &mut Compiler<'a>,
-    dst: IRCell<'a>,
-    lit: &[u8],
-) -> Result<IRCell<'a>, String> {
-    let s = String::from_utf8(lit.to_vec()).unwrap();
-    let s = compiler.intern_string(&s);
-    Ok(compiler.alloc_iri(IRI::If { condition: Condition::Prefix(s), then: dst }))
-}
-
-// a+
-fn transform_literal_plus<'a>(
-    compiler: &mut Compiler<'a>,
-    dst: IRCell<'a>,
-    lit: &regex_syntax::hir::Literal,
-) -> Result<IRCell<'a>, String> {
-    assert!(lit.0.len() == 1);
-    let mut c = Charset::default();
-    c.set(lit.0[0], true);
-    let c = compiler.intern_charset(&c);
-    Ok(compiler.alloc_iri(IRI::If { condition: Condition::Charset(c), then: dst }))
-}
-
-// [a-z]+
-fn transform_class_plus<'a>(
-    compiler: &mut Compiler<'a>,
-    dst: IRCell<'a>,
-    class: &ClassBytes,
-) -> Result<IRCell<'a>, String> {
-    let c = class_to_charset(class);
-    let c = compiler.intern_charset(&c);
-    Ok(compiler.alloc_iri(IRI::If { condition: Condition::Charset(c), then: dst }))
-}
-
-// [eE]
-fn transform_class<'a>(
-    compiler: &mut Compiler<'a>,
-    dst: IRCell<'a>,
-    class: &ClassBytes,
-) -> Result<IRCell<'a>, String> {
-    let mut charset = class_to_charset(class);
-    let mut first: Option<IRCell<'a>> = None;
-    let mut last: Option<IRCell<'a>> = None;
-
-    for ch in 0..=255 {
-        if !charset.get(ch) {
-            continue;
-        }
-
-        if ch >= 128 {
-            panic!("Invalid non-ASCII class character {ch}");
-        }
-
-        let mut str = String::new();
-        str.push(ch as char);
-
-        // Check if our given `class` covers lower- and uppercase of an ASCII letter,
-        // and if so, we have to turn that into a `PrefixInsensitive` condition.
-        //
-        // NOTE: Uppercase letters have a lower numerical value than lowercase letters.
-        // As such, we check for is_ascii_uppercase(), turn that into `insensitive == true`,
-        // and clear out the (numerically higher) lowercase bit from `class`, so we ignore it.
-        // We already handled it with our `PrefixInsensitive` condition after all.
-        let lower = ch.to_ascii_lowercase();
-        let insensitive = ch.is_ascii_uppercase() && charset.get(lower);
-
-        if insensitive {
-            charset.set(lower, false);
-            str.make_ascii_lowercase();
-        }
-
-        let str = compiler.intern_string(&str);
-        let condition =
-            if insensitive { Condition::PrefixInsensitive(str) } else { Condition::Prefix(str) };
-
-        let node = compiler.alloc_iri(IRI::If { condition, then: dst });
-        if first.is_none() {
-            first = Some(node);
-        }
-        if let Some(last) = &last {
-            last.borrow_mut().set_next(node);
-        }
-        last = Some(node);
-    }
-
-    Ok(first.unwrap())
-}
-
-// .?
-fn transform_option<'a>(src: IRCell<'a>, dst: IRCell<'a>) -> Result<IRCell<'a>, String> {
-    let mut n = src.borrow_mut();
-
-    while let Some(next) = n.next {
-        n = next.borrow_mut();
-    }
-
-    n.set_next(dst);
-    Ok(src)
-}
-
-// .*
-fn transform_any_star<'a>(
-    compiler: &mut Compiler<'a>,
-    dst: IRCell<'a>,
-) -> Result<IRCell<'a>, String> {
-    Ok(compiler.alloc_ir(IR {
-        next: Some(dst),
-        instr: IRI::MovImm { dst: compiler.get_reg(Register::InputOffset), imm: u32::MAX },
-        offset: usize::MAX,
-    }))
-}
-
-// .
-fn transform_any<'a>(compiler: &mut Compiler<'a>, dst: IRCell<'a>) -> Result<IRCell<'a>, String> {
-    Ok(compiler.alloc_ir(IR {
-        next: Some(dst),
-        instr: IRI::AddImm { dst: compiler.get_reg(Register::InputOffset), imm: 1 },
-        offset: usize::MAX,
-    }))
-}
-
-// (a)(b)
-fn transform_concat<'a>(
-    compiler: &mut Compiler<'a>,
-    dst: IRCell<'a>,
-    hirs: &[Hir],
-    capture_groups: &mut Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
-) -> Result<IRCell<'a>, String> {
-    fn is_lowercase_literal(hir: &Hir) -> Option<u8> {
-        if let HirKind::Class(Class::Bytes(class)) = hir.kind()
-            && let ranges = class.ranges()
-            && ranges.len() == 2
-            && ranges[0].len() == 1
-            && ranges[1].len() == 1
-            && let lower_a = ranges[0].start().to_ascii_lowercase()
-            && let lower_b = ranges[1].start().to_ascii_lowercase()
-            && lower_a == lower_b
-        {
-            Some(lower_a)
-        } else {
-            None
-        }
-    }
-
-    let mut it = hirs.iter().peekable();
-    let mut first: Option<IRCell<'a>> = None;
-    let mut last: Option<IRCell<'a>> = None;
-
-    while let Some(hir) = it.next() {
-        // Transform [aA][bB][cC] into PrefixInsensitive("abc").
-        let prefix_insensitive = is_lowercase_literal(hir).map(|ch| {
-            let mut str = String::new();
-            str.push(ch as char);
-
-            while let Some(next_hir) = it.peek() {
-                if let Some(next_ch) = is_lowercase_literal(next_hir) {
-                    str.push(next_ch as char);
-                    it.next();
-                } else {
-                    break;
-                }
-            }
-
-            str.make_ascii_lowercase();
-            str
-        });
-
-        let dst = compiler.alloc_noop();
-        let src = if let Some(str) = prefix_insensitive {
-            let str = compiler.intern_string(&str);
-            compiler.alloc_iri(IRI::If { condition: Condition::PrefixInsensitive(str), then: dst })
-        } else {
-            transform(compiler, dst, hir, capture_groups)?
-        };
-        if first.is_none() {
-            first = Some(src);
-        }
-        if let Some(last) = &last {
-            last.borrow_mut().set_next(src);
-        }
-        last = Some(dst);
-    }
-
-    if let Some(last) = &last {
-        last.borrow_mut().set_next(dst);
-    }
-
-    Ok(first.unwrap())
-}
-
-// (a|b)
-fn transform_alt<'a>(
-    compiler: &mut Compiler<'a>,
-    dst: IRCell<'a>,
-    hirs: &[Hir],
-    capture_groups: &mut Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
-) -> Result<IRCell<'a>, String> {
-    let mut first: Option<IRCell<'a>> = None;
-    let mut last: Option<IRCell<'a>> = None;
-
-    for hir in hirs {
-        let node = transform(compiler, dst, hir, capture_groups)?;
-        if first.is_none() {
-            first = Some(node);
-        }
-        if let Some(last) = &last {
-            // Try to merge this alternative as a fallback of previous alternatives
-            // if their charsets are compatible (superset relationship)
-            if !try_append_as_fallback(last, node) {
-                last.borrow_mut().set_next(node);
-            }
-        }
-        last = Some(node);
-    }
-
-    Ok(first.unwrap())
-}
-
-// Try to append `fallback` as a fallback to nodes in `tree` where the charset
-// of `fallback` is a superset of the charset in `tree`. This allows patterns like
-// `[a-z]+foo|\w+bar` to match `foobar` by trying the more specific pattern first,
-// and falling back to the more general pattern on failure.
-fn try_append_as_fallback<'a>(tree: &IRCell<'a>, fallback: IRCell<'a>) -> bool {
-    let fallback_charset = get_initial_charset(fallback);
-    if fallback_charset.is_none() {
-        return false;
-    }
-
-    append_fallback_recursive(tree, fallback, fallback_charset.unwrap())
-}
-
-fn append_fallback_recursive<'a>(
-    node: &IRCell<'a>,
-    fallback: IRCell<'a>,
-    fallback_charset: &Charset,
-) -> bool {
-    let mut node_ref = node.borrow_mut();
-
-    if let IRI::If { condition: Condition::Charset(charset), then } = &node_ref.instr {
-        // If the fallback charset is a superset of this node's charset,
-        // we can append the fallback to this node's failure path
-        if fallback_charset.is_superset_of(charset) {
-            // Recursively try to append to the success path first
-            let appended_to_then = append_fallback_recursive(then, fallback, fallback_charset);
-
-            // If not appended to success path, append to failure path (next)
-            if !appended_to_then {
-                if let Some(next) = node_ref.next {
-                    // Try to append recursively to the next node
-                    if !append_fallback_recursive(&next, fallback, fallback_charset) {
-                        // If we couldn't append recursively, this might be the right place
-                        // But we already have a next pointer, so we need to be careful
-                        // For now, don't override existing next pointers in this branch
-                    }
-                } else {
-                    // This node has no next pointer yet, so we can set it to the fallback
-                    node_ref.next = Some(fallback);
-                    return true;
-                }
-            }
-            return appended_to_then;
-        }
-    }
-
-    // Try recursively on the next node
-    if let Some(next) = node_ref.next {
-        drop(node_ref); // Release the borrow before recursing
-        return append_fallback_recursive(&next, fallback, fallback_charset);
-    }
-
-    false
-}
-
-// Get the initial charset that a regex tree matches
-fn get_initial_charset<'a>(node: IRCell<'a>) -> Option<&'a Charset> {
-    let node_ref = node.borrow();
-    match &node_ref.instr {
-        IRI::If { condition: Condition::Charset(charset), .. } => Some(*charset),
-        _ => None,
-    }
-}
-
-// [a-z] -> 256-ary LUT
-fn class_to_charset(class: &ClassBytes) -> Charset {
-    let mut charset = Charset::default();
-
-    for r in class.iter() {
-        charset.set_range(r.start()..=r.end(), true);
-    }
-
-    // If the class includes \w, we also set any non-ASCII UTF8 starters.
-    // That's not how Unicode works, but it simplifies the implementation.
-    if [b'0'..=b'9', b'A'..=b'Z', b'_'..=b'_', b'a'..=b'z']
-        .iter()
-        .all(|r| charset.covers_range(r.clone()))
-    {
-        charset.set_range(0xC2..=0xF4, true);
-    }
-
-    charset
+    Ok((entry, codegen.captures))
 }

@@ -145,37 +145,29 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
     fn parse_statement(&mut self) -> CompileResult<IRSpan<'a>> {
         if self.is_keyword("var") {
-            return self.parse_var_declaration();
+            self.parse_var_declaration()
+        } else if self.is_keyword("loop") {
+            self.parse_loop()
+        } else if self.is_keyword("until") {
+            self.parse_until()
+        } else if self.is_keyword("break") {
+            self.parse_break()
+        } else if self.is_keyword("continue") {
+            self.parse_continue()
+        } else if self.is_keyword("return") {
+            self.parse_return()
+        } else if self.is_keyword("if") {
+            self.parse_if()
+        } else if self.is_keyword("await") {
+            self.parse_await()
+        } else if self.is_keyword("yield") {
+            self.parse_yield()
+        } else if self.peek().is_some_and(Self::is_ident_start) {
+            self.parse_identifier_stmt()
+        } else {
+            self.mark();
+            raise!(self, "unexpected token")
         }
-        if self.is_keyword("loop") {
-            return self.parse_loop();
-        }
-        if self.is_keyword("until") {
-            return self.parse_until();
-        }
-        if self.is_keyword("break") {
-            return self.parse_break();
-        }
-        if self.is_keyword("continue") {
-            return self.parse_continue();
-        }
-        if self.is_keyword("return") {
-            return self.parse_return();
-        }
-        if self.is_keyword("if") {
-            return self.parse_if();
-        }
-        if self.is_keyword("await") {
-            return self.parse_await();
-        }
-        if self.is_keyword("yield") {
-            return self.parse_yield();
-        }
-        if self.peek().is_some_and(Self::is_ident_start) {
-            return self.parse_identifier_stmt();
-        }
-        self.mark();
-        raise!(self, "unexpected token")
     }
 
     fn parse_loop(&mut self) -> CompileResult<IRSpan<'a>> {
@@ -249,15 +241,19 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         // Skip any uninteresting characters before the next loop iteration.
         //   if /.*?/ {}
         let interesting = self.compiler.collect_interesting_charset(loop_start);
-        let fast_skip = if interesting.covers_none() {
+        let fast_skip = if interesting.covers_all() {
             advance_check
         } else {
             let mut skip_charset = interesting.clone();
             skip_charset.invert();
             let skip_charset = self.compiler.intern_charset(&skip_charset);
+
             self.compiler.alloc_ir(IR {
                 next: Some(advance_check),
-                instr: IRI::If { condition: Condition::Charset(skip_charset), then: advance_check },
+                instr: IRI::If {
+                    condition: Condition::Charset { cs: skip_charset, min: 1, max: u32::MAX },
+                    then: advance_check,
+                },
                 offset: usize::MAX,
             })
         };
@@ -438,62 +434,41 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         let end = self.compiler.alloc_noop();
 
         // Handle optional else branch
-        if self.is_keyword("else") {
+        let next = if self.is_keyword("else") {
             self.pos += 4;
 
-            // Check for else if
-            if self.is_keyword("if") {
-                let else_if_span = self.parse_if()?;
-                dst_bad.borrow_mut().set_next(else_if_span.first);
-                if let mut block_last = bl.last.borrow_mut()
-                    && block_last.wants_next()
-                {
-                    block_last.set_next(end);
-                }
-                if let mut else_if_last = else_if_span.last.borrow_mut()
-                    && else_if_last.wants_next()
-                {
-                    else_if_last.set_next(end);
-                }
-                Ok(IRSpan { first: cmp, last: end })
-            } else {
-                let else_bl = self.parse_block()?;
-                dst_bad.borrow_mut().set_next(else_bl.first);
-                if let mut block_last = bl.last.borrow_mut()
-                    && block_last.wants_next()
-                {
-                    block_last.set_next(end);
-                }
-                if let mut else_last = else_bl.last.borrow_mut()
-                    && else_last.wants_next()
-                {
-                    else_last.set_next(end);
-                }
-                Ok(IRSpan { first: cmp, last: end })
-            }
-        } else {
-            dst_bad.borrow_mut().set_next(end);
-            if let mut block_last = bl.last.borrow_mut()
-                && block_last.wants_next()
+            let else_bl = if self.is_keyword("if") { self.parse_if() } else { self.parse_block() };
+            let else_bl = else_bl?;
+
+            if let mut else_last = else_bl.last.borrow_mut()
+                && else_last.wants_next()
             {
-                block_last.set_next(end);
+                else_last.set_next(end);
             }
-            Ok(IRSpan { first: cmp, last: end })
+
+            else_bl.first
+        } else {
+            end
+        };
+
+        dst_bad.borrow_mut().set_next(next);
+        if let mut block_last = bl.last.borrow_mut()
+            && block_last.wants_next()
+        {
+            block_last.set_next(end);
         }
+
+        Ok(IRSpan { first: cmp, last: end })
     }
 
     fn parse_if_regex(&mut self) -> CompileResult<RegexSpan<'a>> {
         let pattern = self.read_regex()?;
         let dst_good = self.compiler.alloc_noop();
         let dst_bad = self.compiler.alloc_noop();
-        let mut capture_groups = Vec::new_in(self.compiler.arena);
-        let src = match regex::parse(self.compiler, pattern, dst_good, dst_bad, &mut capture_groups)
-        {
-            Ok(s) => s,
-            Err(e) => raise!(self, "{}", e),
-        };
-
-        Ok(RegexSpan { src, dst_good, dst_bad, capture_groups })
+        match regex::parse(self.compiler, pattern, dst_good, dst_bad) {
+            Ok((src, capture_groups)) => Ok(RegexSpan { src, dst_good, dst_bad, capture_groups }),
+            Err(err) => raise!(self, "{}", err),
+        }
     }
 
     fn parse_await(&mut self) -> CompileResult<IRSpan<'a>> {
@@ -540,24 +515,24 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 None => raise!(self, "no regex context available for capture group reference"),
             };
 
+            let hs_preg = self.compiler.get_reg(Register::HighlightStart);
+            let off_preg = self.compiler.get_reg(Register::InputOffset);
+            let off_vreg = self.compiler.alloc_vreg();
             let kind_vreg = self.compiler.alloc_vreg();
 
             let span = self
                 .compiler
                 .build_chain()
-                // Set HighlightStart to the start of the capture group
-                .append(IRI::Mov {
-                    dst: self.compiler.get_reg(Register::HighlightStart),
-                    src: start_vreg,
-                })
-                // Set HighlightKind to the color
+                // Save offset
+                .append(IRI::Mov { dst: off_vreg, src: off_preg })
+                // Set start/end temporarily
+                .append(IRI::Mov { dst: hs_preg, src: start_vreg })
+                .append(IRI::Mov { dst: off_preg, src: end_vreg })
+                // Highlight!
                 .append(IRI::MovKind { dst: kind_vreg, kind })
-                // Set InputOffset to the end of the capture group and flush
-                .append(IRI::Mov {
-                    dst: self.compiler.get_reg(Register::InputOffset),
-                    src: end_vreg,
-                })
                 .append(IRI::Flush { kind: kind_vreg })
+                // Restore offset
+                .append(IRI::Mov { dst: off_preg, src: off_vreg })
                 .build();
             Ok(span)
         } else {

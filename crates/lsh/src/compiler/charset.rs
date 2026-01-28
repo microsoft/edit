@@ -19,6 +19,10 @@ impl Charset {
         Charset { bits: [usize::MIN; _] }
     }
 
+    pub const fn yes() -> Self {
+        Charset { bits: [usize::MAX; _] }
+    }
+
     pub fn invert(&mut self) {
         for b in &mut self.bits {
             *b = !*b;
@@ -33,6 +37,10 @@ impl Charset {
 
     pub fn covers_none(&self) -> bool {
         self.bits.iter().all(|&b| b == usize::MIN)
+    }
+
+    pub fn covers_all(&self) -> bool {
+        self.bits.iter().all(|&b| b == usize::MAX)
     }
 
     pub fn covers_range(&self, range: RangeInclusive<u8>) -> bool {

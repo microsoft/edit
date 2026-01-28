@@ -151,20 +151,36 @@ impl<'a> Compiler<'a> {
     /// Collect all "interesting" characters from conditions in a loop body.
     /// Returns a charset where true = interesting character that should be checked.
     fn collect_interesting_charset(&self, loop_body: IRCell<'a>) -> Charset {
+        let mut iter = self.visit_nodes_from(loop_body);
         let mut charset = Charset::no();
-        let mut visited = HashSet::new();
 
-        for node in self.visit_nodes_from(loop_body) {
-            let node_ptr = node as *const _;
-            if !visited.insert(node_ptr) {
-                continue;
-            }
+        #[allow(clippy::while_let_loop)]
+        loop {
+            // Can't use `while let`, because that borrows `iter`
+            // and that prevents us from calling `skip_node()`.
+            let Some(node) = iter.next() else {
+                break;
+            };
 
-            if let IRI::If { condition, .. } = node.borrow().instr {
+            if let IRI::If { condition, then } = node.borrow().instr {
+                // For the purpose of computing fast-skips the contents of if conditions are irrelevant,
+                // so skip the subtree. This is actually quite important. This this as an example:
+                //   loop {
+                //     if /a/ {
+                //       loop {
+                //         if /b/ {
+                //         }
+                //       }
+                //     }
+                //   }
+                // The inverted charset of the inner /b/ includes "a". If we merge that into the outer
+                // loop's charset we get one that covers all characters, making fast-skips impossible.
+                iter.skip_node(then);
+
                 match condition {
                     Condition::Cmp { .. } => {}
                     Condition::EndOfLine => {}
-                    Condition::Charset(cs) => {
+                    Condition::Charset { cs, .. } => {
                         // Merge this charset
                         charset.merge(cs);
                     }
@@ -238,7 +254,7 @@ impl<'a> Compiler<'a> {
                             .iter()
                             .find(|hk| hk.value == kind)
                             .map_or("???", |hk| hk.identifier);
-                        _ = write!(output, "[\"{offset}: {dst:?} = {kind}\"]");
+                        _ = write!(output, "[\"{offset}: {dst:?} = `{kind}`\"]");
                     }
                     IRI::AddImm { dst, imm } => {
                         let dst = dst.borrow();
@@ -248,6 +264,8 @@ impl<'a> Compiler<'a> {
                         _ = write!(output, "{{\"{offset}: ");
                         _ = match condition {
                             Condition::Cmp { lhs, rhs, op } => {
+                                let lhs = lhs.borrow();
+                                let rhs = rhs.borrow();
                                 let op_str = match op {
                                     ComparisonOp::Eq => "==",
                                     ComparisonOp::Ne => "!=",
@@ -259,7 +277,12 @@ impl<'a> Compiler<'a> {
                                 write!(output, "{lhs:?} {op_str} {rhs:?}")
                             }
                             Condition::EndOfLine => write!(output, "eol"),
-                            Condition::Charset(cs) => write!(output, "charset: {cs:?}"),
+                            Condition::Charset { cs, min, max } => match (min, max) {
+                                (0, 1) => write!(output, "charset: {cs:?}?"),
+                                (0, u32::MAX) => write!(output, "charset: {cs:?}*"),
+                                (1, u32::MAX) => write!(output, "charset: {cs:?}+"),
+                                _ => write!(output, "charset: {cs:?}{{{min},{max}}}"),
+                            },
                             Condition::Prefix(s) => write!(output, "match: {s}"),
                             Condition::PrefixInsensitive(s) => write!(output, "imatch: {s}"),
                         };
@@ -274,6 +297,7 @@ impl<'a> Compiler<'a> {
                         _ = write!(output, "[{offset}: return]");
                     }
                     IRI::Flush { kind } => {
+                        let kind = kind.borrow();
                         _ = write!(output, "[{offset}: flush {kind:?}]");
                     }
                     IRI::AwaitInput => {
@@ -312,6 +336,12 @@ struct TreeVisitor<'a> {
     current: Option<IRCell<'a>>,
     stack: VecDeque<IRCell<'a>>,
     visited: HashSet<*const RefCell<IR<'a>>>,
+}
+
+impl<'a> TreeVisitor<'a> {
+    fn skip_node(&mut self, node: IRCell<'a>) {
+        self.visited.insert(node as *const _);
+    }
 }
 
 impl<'a> Iterator for TreeVisitor<'a> {
@@ -509,14 +539,26 @@ enum ComparisonOp {
 enum Condition<'a> {
     Cmp { lhs: IRRegCell<'a>, rhs: IRRegCell<'a>, op: ComparisonOp },
     EndOfLine,
-    Charset(&'a Charset),
+    Charset { cs: &'a Charset, min: u32, max: u32 },
     Prefix(&'a str),
     PrefixInsensitive(&'a str),
 }
 
 impl<'a> IR<'a> {
     fn wants_next(&self) -> bool {
-        self.next.is_none() && !matches!(self.instr, IRI::Return)
+        if self.next.is_some() {
+            return false;
+        }
+
+        match self.instr {
+            IRI::Mov { dst, .. } | IRI::MovImm { dst, .. }
+                if dst.borrow().id == Register::ProgramCounter as u32 =>
+            {
+                false
+            }
+            IRI::Return => false,
+            _ => true,
+        }
     }
 
     fn set_next(&mut self, n: IRCell<'a>) {

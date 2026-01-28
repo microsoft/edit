@@ -44,5 +44,7 @@ pub fn lsh() {
         } else if /"/ {
             double_quote_string();
         }
+
+        yield other;
     }
 }

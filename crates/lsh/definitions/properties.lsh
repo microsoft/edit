@@ -41,12 +41,15 @@ pub fn properties() {
 
         if /[;#].*/ {
             yield comment;
-        } else if /([\w.-]+)\s*(=)\s*/ {
+        } else if /([\w.-]+)\s*=\s*[\w.-]*/ {
             yield $1 as variable;
+            yield other;
         } else if /'/ {
             single_quote_string();
         } else if /"/ {
             double_quote_string();
         }
+
+        yield other;
     }
 }
