@@ -1,32 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Backend: liveness analysis, register allocation, and bytecode generation.
+//! Backend: IR graph -> bytecode
 //!
-//! ## Algorithm (Cornell CS 4120)
+//! ## Algorithm
 //!
-//! Source: https://www.cs.cornell.edu/courses/cs4120/2022sp/notes/
+//! Source: <https://www.cs.cornell.edu/courses/cs4120/2022sp/notes/>
 //!
 //! - Linearize IR nodes using DFS to assign instruction indices
 //! - Compute liveness using backward dataflow analysis
 //! - Compute live intervals from liveness sets
 //! - Linear scan register allocation
 //! - Generate bytecode with physical registers
-//!
-//! ## Why DFS ordering is essential
-//!
-//! Live intervals are `[min_index, max_index]` across all instructions where a vreg
-//! is live. BFS interleaves independent branches, making branch-local vregs appear
-//! to span the whole function.
-//!
-//! Example: `if /a/ { x = off } else if /b/ { y = off }` with BFS numbering:
-//! ```text
-//! [0: if /a/] [1: if /b/] [2: x=off] [3: y=off] [4: use x] [5: use y]
-//! ```
-//! Here `x` appears live [2,4] and `y` appears live [3,5], overlapping at [3,4].
-//!
-//! DFS numbers each branch contiguously: `[0: if /a/] [1: x=off] [2: use x] [3: if /b/] ...`
-//! Now `x` is live [1,2] and `y` is live [4,5] - no overlap, can share a register.
 //!
 //! ## Relocation system
 //!
@@ -45,6 +30,20 @@
 //!   We need to then emit a jump to the already-assigned address.
 //! - Physical registers have `physical = Some(...)`.
 //!   Liveness analysis ignores them (they're always "live").
+//!
+//! ### DFS
+//!
+//! Live intervals are `[min_index, max_index]` across all instructions where a vreg is live.
+//! BFS interleaves independent branches, making branch-local vregs appear to span the whole function.
+//!
+//! Example: `if /a/ { x = off } else if /b/ { y = off }` with BFS numbering:
+//! ```text
+//! [0: if /a/] [1: if /b/] [2: x=off] [3: y=off] [4: use x] [5: use y]
+//! ```
+//! Here `x` appears live `[2,4]` and `y` appears live `[3,5]`, overlapping at `[3,4]`.
+//!
+//! DFS numbers each branch contiguously: `[0: if /a/] [1: x=off] [2: use x] [3: if /b/] ...`
+//! Now `x` is live `[1,2]` and `y` is live `[4,5]` - no overlap & can share a register.
 //!
 //! ## TODO
 //!
@@ -454,13 +453,13 @@ struct LiveInterval {
 struct LivenessAnalysis<'a> {
     /// IR nodes in DFS order (instruction indices correspond to positions here).
     nodes: Vec<IRCell<'a>>,
-    /// CFG: successors[i] contains indices of nodes that can follow node i.
+    /// CFG: `successors[i]` contains indices of nodes that can follow node i.
     successors: Vec<Vec<usize>>,
-    /// Map from vreg ID to its IRRegCell (for applying allocation results).
+    /// Map from vreg ID to its [`IRRegCell`] (for applying allocation results).
     vreg_cells: HashMap<u32, IRRegCell<'a>>,
-    /// Liveness sets: live_in[i] = vregs live at entry to instruction i.
+    /// Liveness sets: `live_in[i]` = vregs live at entry to instruction i.
     live_in: Vec<HashSet<u32>>,
-    /// Liveness sets: live_out[i] = vregs live at exit from instruction i.
+    /// Liveness sets: `live_out[i]` = vregs live at exit from instruction i.
     live_out: Vec<HashSet<u32>>,
 }
 

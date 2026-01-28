@@ -8,6 +8,10 @@
 //! - The main loop is "unsafe". Profile before "cleaning" it up.
 //! - `charset_gobble`, `inlined_mem(i)cmp` are hot paths.
 //!
+//! ## Instruction encoding
+//!
+//! Variable-length encoding, 1-9 bytes per instruction. See [`Instruction::encode`].
+//!
 //! ## Gotchas
 //!
 //! - `Return` with empty stack resets the VM to entrypoint and clears registers.
@@ -15,6 +19,8 @@
 //! - `AwaitInput` only breaks the loop if `off >= line.len()`. If not at EOL, it's a no-op.
 //!   This allows the DSL to say "wait for more input OR continue if there is some".
 //! - The result always has a sentinel span at `line.len()`. Consumers can rely on this.
+//! - [`Instruction::address_offset`] returns where, within an instruction, the jump target lives,
+//!   as used by the backend's relocation system.
 
 use std::fmt::{self, Debug, Write as _};
 use std::mem;
@@ -769,104 +775,71 @@ impl Instruction {
     }
 
     pub fn decode(bytes: &[u8]) -> (Option<Self>, usize) {
-        fn dec_reg_pair(b: u8) -> (Register, Register) {
-            let hi = Register::from_usize((b >> 4) as usize);
-            let lo = Register::from_usize((b & 0xF) as usize);
-            (lo, hi)
-        }
-
-        fn dec_reg_single(b: u8) -> Register {
-            Register::from_usize(b as usize)
-        }
-
-        fn dec_u32(bytes: &[u8]) -> u32 {
-            u32::from_le_bytes(bytes[..4].try_into().unwrap())
-        }
-
-        let opcode = bytes[0];
-        match opcode {
-            0 => {
-                let (dst, src) = dec_reg_pair(bytes[1]);
-                (Some(Instruction::Mov { dst, src }), 2)
+        let mut pc = 0;
+        let instr = instruction_decode!(bytes, pc, {
+            Mov { dst, src } => {
+                Instruction::Mov { dst, src }
             }
-            1 => {
-                let (dst, src) = dec_reg_pair(bytes[1]);
-                (Some(Instruction::Add { dst, src }), 2)
+            Add { dst, src } => {
+                Instruction::Add { dst, src }
             }
-            2 => {
-                let (dst, src) = dec_reg_pair(bytes[1]);
-                (Some(Instruction::Sub { dst, src }), 2)
+            Sub { dst, src } => {
+                Instruction::Sub { dst, src }
             }
-            3 => {
-                let dst = dec_reg_single(bytes[1]);
-                let imm = dec_u32(&bytes[2..]);
-                (Some(Instruction::MovImm { dst, imm }), 6)
+            MovImm { dst, imm } => {
+                Instruction::MovImm { dst, imm }
             }
-            4 => {
-                let dst = dec_reg_single(bytes[1]);
-                let imm = dec_u32(&bytes[2..]);
-                (Some(Instruction::AddImm { dst, imm }), 6)
+            AddImm { dst, imm } => {
+                Instruction::AddImm { dst, imm }
             }
-            5 => {
-                let dst = dec_reg_single(bytes[1]);
-                let imm = dec_u32(&bytes[2..]);
-                (Some(Instruction::SubImm { dst, imm }), 6)
+            SubImm { dst, imm } => {
+                Instruction::SubImm { dst, imm }
             }
-            6 => (Some(Instruction::Call { tgt: dec_u32(&bytes[1..]) }), 5),
-            7 => (Some(Instruction::Return), 1),
-            8 => {
-                let (lhs, rhs) = dec_reg_pair(bytes[1]);
-                let tgt = dec_u32(&bytes[2..]);
-                (Some(Instruction::JumpEQ { lhs, rhs, tgt }), 6)
+            Call { tgt } => {
+                Instruction::Call { tgt }
             }
-            9 => {
-                let (lhs, rhs) = dec_reg_pair(bytes[1]);
-                let tgt = dec_u32(&bytes[2..]);
-                (Some(Instruction::JumpNE { lhs, rhs, tgt }), 6)
+            Return => {
+                Instruction::Return
             }
-            10 => {
-                let (lhs, rhs) = dec_reg_pair(bytes[1]);
-                let tgt = dec_u32(&bytes[2..]);
-                (Some(Instruction::JumpLT { lhs, rhs, tgt }), 6)
+            JumpEQ { lhs, rhs, tgt } => {
+                Instruction::JumpEQ { lhs, rhs, tgt }
             }
-            11 => {
-                let (lhs, rhs) = dec_reg_pair(bytes[1]);
-                let tgt = dec_u32(&bytes[2..]);
-                (Some(Instruction::JumpLE { lhs, rhs, tgt }), 6)
+            JumpNE { lhs, rhs, tgt } => {
+                Instruction::JumpNE { lhs, rhs, tgt }
             }
-            12 => {
-                let (lhs, rhs) = dec_reg_pair(bytes[1]);
-                let tgt = dec_u32(&bytes[2..]);
-                (Some(Instruction::JumpGT { lhs, rhs, tgt }), 6)
+            JumpLT { lhs, rhs, tgt } => {
+                Instruction::JumpLT { lhs, rhs, tgt }
             }
-            13 => {
-                let (lhs, rhs) = dec_reg_pair(bytes[1]);
-                let tgt = dec_u32(&bytes[2..]);
-                (Some(Instruction::JumpGE { lhs, rhs, tgt }), 6)
+            JumpLE { lhs, rhs, tgt } => {
+                Instruction::JumpLE { lhs, rhs, tgt }
             }
-            14 => (Some(Instruction::JumpIfEndOfLine { tgt: dec_u32(&bytes[1..]) }), 5),
-            15 => {
-                let idx = dec_u32(&bytes[1..]);
-                let tgt = dec_u32(&bytes[5..]);
-                (Some(Instruction::JumpIfMatchCharset { idx, tgt }), 9)
+            JumpGT { lhs, rhs, tgt } => {
+                Instruction::JumpGT { lhs, rhs, tgt }
             }
-            16 => {
-                let idx = dec_u32(&bytes[1..]);
-                let tgt = dec_u32(&bytes[5..]);
-                (Some(Instruction::JumpIfMatchPrefix { idx, tgt }), 9)
+            JumpGE { lhs, rhs, tgt } => {
+                Instruction::JumpGE { lhs, rhs, tgt }
             }
-            17 => {
-                let idx = dec_u32(&bytes[1..]);
-                let tgt = dec_u32(&bytes[5..]);
-                (Some(Instruction::JumpIfMatchPrefixInsensitive { idx, tgt }), 9)
+            JumpIfEndOfLine { tgt }=> {
+                Instruction::JumpIfEndOfLine { tgt }
             }
-            18 => {
-                let kind = dec_reg_single(bytes[1]);
-                (Some(Instruction::FlushHighlight { kind }), 2)
+            JumpIfMatchCharset { idx, tgt } => {
+                Instruction::JumpIfMatchCharset { idx, tgt }
             }
-            19 => (Some(Instruction::AwaitInput), 1),
-            _ => (None, 1),
-        }
+            JumpIfMatchPrefix { idx, tgt } => {
+                Instruction::JumpIfMatchPrefix { idx, tgt }
+            }
+            JumpIfMatchPrefixInsensitive { idx, tgt } => {
+                Instruction::JumpIfMatchPrefixInsensitive { idx, tgt }
+            }
+            FlushHighlight { kind } => {
+                Instruction::FlushHighlight { kind }
+            }
+            AwaitInput=> {
+                Instruction::AwaitInput
+            }
+            _ => return (None, 1),
+        });
+        (Some(instr), pc)
     }
 
     pub fn mnemonic<'a>(

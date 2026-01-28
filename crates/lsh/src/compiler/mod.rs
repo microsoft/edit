@@ -1,35 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Compiler core: IR definitions, instruction encoding, and shared infrastructure.
+//! The LSH compiler
 //!
-//! ## IR representation
-//!
-//! The IR is a graph of `RefCell<IR>` nodes linked via `next` and `then` pointers.
-//! This isn't a traditional SSA or basic block representation - it's more like a
-//! flowchart where each node is one instruction. The `offset` field is set during
-//! codegen to the final bytecode address.
-//!
-//! ## Register architecture
-//!
-//! The `IRReg.physical` field starts as `None` for vregs and gets filled in by regalloc.
-//! For physical registers, it's set during `Compiler::new()`.
-//!
-//! ## Charset representation
-//!
-//! `Charset` is a 256-bit bitmap (`[bool; 256]`). The runtime uses a transposed `[u16; 16]`
-//! layout for SIMD reasons - see `generator.rs` where the conversion happens.
-//!
-//! ## Instruction encoding
-//!
-//! Variable-length encoding, 1-9 bytes per instruction. See `Instruction::encode/decode`.
-//! The `address_offset()` method returns where within an instruction the jump target lives,
-//! used by the backend's relocation system.
-//!
-//! ## Quirks
-//!
-//! - `TreeVisitor` does BFS, which is fine for iteration but *not* for linearization.
-//!   The backend has its own DFS traversal for liveness analysis.
+//! See crate documentation.
 
 mod backend;
 mod charset;
