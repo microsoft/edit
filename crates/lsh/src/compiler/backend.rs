@@ -239,29 +239,34 @@ impl<'a> Backend<'a> {
                 match ir.instr {
                     IRI::Noop => {}
                     IRI::Mov { dst, src } => {
-                        let dst_reg = dst.borrow();
-                        let src_reg = src.borrow();
-                        let dst = dst_reg.physical.unwrap();
-                        let src = src_reg.physical.unwrap();
-                        self.push_instruction(Mov { dst, src });
+                        // NOTE: Liveness analysis doesn't assign physical registers for dead stores.
+                        // In practice this shouldn't hit because optimizer.rs also removes dead stores.
+                        // In essence, optimizer.rs is a bit redundant and it may be worth checking if they can be unified.
+                        if let (Some(dst), Some(src)) =
+                            (dst.borrow().physical, src.borrow().physical)
+                        {
+                            self.push_instruction(Mov { dst, src });
+                        }
                     }
                     IRI::MovImm { dst, imm } => {
-                        let dst_reg = dst.borrow();
-                        let dst = dst_reg.physical.unwrap();
-                        self.push_instruction(MovImm { dst, imm });
+                        if let Some(dst) = dst.borrow().physical {
+                            self.push_instruction(MovImm { dst, imm });
+                        }
                     }
                     IRI::MovKind { dst, kind } => {
-                        let dst_reg = dst.borrow();
-                        let dst = dst_reg.physical.unwrap();
-                        self.push_instruction(MovImm { dst, imm: kind });
+                        if let Some(dst) = dst.borrow().physical {
+                            self.push_instruction(MovImm { dst, imm: kind });
+                        }
                     }
                     IRI::AddImm { dst, imm } => {
-                        let dst_reg = dst.borrow();
-                        let dst = dst_reg.physical.unwrap();
-                        self.push_instruction(AddImm { dst, imm });
+                        if let Some(dst) = dst.borrow().physical {
+                            self.push_instruction(AddImm { dst, imm });
+                        }
                     }
                     IRI::If { condition, then } => {
                         stack.push_back(then);
+
+                        debug_assert!(!std::ptr::eq(ir_cell, then));
 
                         match condition {
                             Condition::Cmp { lhs, rhs, op } => {
@@ -306,10 +311,10 @@ impl<'a> Backend<'a> {
                                 let tgt = self.dst_by_node(then) as u32;
                                 self.push_instruction(JumpIfEndOfLine { tgt });
                             }
-                            Condition::Charset(h) => {
-                                let idx = self.visit_charset(h) as u32;
+                            Condition::Charset { cs, min, max } => {
+                                let idx = self.visit_charset(cs) as u32;
                                 let tgt = self.dst_by_node(then) as u32;
-                                self.push_instruction(JumpIfMatchCharset { idx, tgt });
+                                self.push_instruction(JumpIfMatchCharset { idx, min, max, tgt });
                             }
                             Condition::Prefix(s) => {
                                 let idx = self.visit_string(s) as u32;
@@ -652,8 +657,9 @@ impl<'a> LivenessAnalysis<'a> {
 
         match ir.instr {
             IRI::Mov { dst, src } => {
-                let dst_reg = dst.borrow();
-                if dst_reg.physical.is_none() {
+                if let dst_reg = dst.borrow()
+                    && dst_reg.physical.is_none()
+                {
                     def_set.insert(dst_reg.id);
                 }
                 let src_reg = src.borrow();
@@ -662,20 +668,23 @@ impl<'a> LivenessAnalysis<'a> {
                 }
             }
             IRI::MovImm { dst, .. } => {
-                let dst_reg = dst.borrow();
-                if dst_reg.physical.is_none() {
+                if let dst_reg = dst.borrow()
+                    && dst_reg.physical.is_none()
+                {
                     def_set.insert(dst_reg.id);
                 }
             }
             IRI::MovKind { dst, .. } => {
-                let dst_reg = dst.borrow();
-                if dst_reg.physical.is_none() {
+                if let dst_reg = dst.borrow()
+                    && dst_reg.physical.is_none()
+                {
                     def_set.insert(dst_reg.id);
                 }
             }
             IRI::AddImm { dst, .. } => {
-                let dst_reg = dst.borrow();
-                if dst_reg.physical.is_none() {
+                if let dst_reg = dst.borrow()
+                    && dst_reg.physical.is_none()
+                {
                     def_set.insert(dst_reg.id);
                 }
             }

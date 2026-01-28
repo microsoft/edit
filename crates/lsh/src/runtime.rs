@@ -189,7 +189,7 @@ pub enum Instruction {
 
     // Jumps to `tgt` if the test succeeds.
     // `idx` specifies the charset/string to use.
-    JumpIfMatchCharset { idx: u32, tgt: u32 },
+    JumpIfMatchCharset { idx: u32, min: u32, max: u32, tgt: u32 },
     JumpIfMatchPrefix { idx: u32, tgt: u32 },
     JumpIfMatchPrefixInsensitive { idx: u32, tgt: u32 },
 
@@ -221,7 +221,7 @@ macro_rules! instruction_decode {
 
         JumpIfEndOfLine { $jeol_tgt:ident } => $jeol_handler:block
 
-        JumpIfMatchCharset { $jc_idx:ident, $jc_tgt:ident } => $jc_handler:block
+        JumpIfMatchCharset { $jc_idx:ident, $jc_min:ident, $jc_max:ident, $jc_tgt:ident } => $jc_handler:block
         JumpIfMatchPrefix { $jp_idx:ident, $jp_tgt:ident } => $jp_handler:block
         JumpIfMatchPrefixInsensitive { $jpi_idx:ident, $jpi_tgt:ident } => $jpi_handler:block
 
@@ -259,129 +259,157 @@ macro_rules! instruction_decode {
 
         match __opcode {
             0 => {
+                // Mov
                 $pc += 2;
                 let ($mov_dst, $mov_src) = dec_reg_pair(__asm, __off + 1);
                 $mov_handler
             }
             1 => {
+                // Add
                 $pc += 2;
                 let ($add_dst, $add_src) = dec_reg_pair(__asm, __off + 1);
                 $add_handler
             }
             2 => {
+                // Sub
                 $pc += 2;
                 let ($sub_dst, $sub_src) = dec_reg_pair(__asm, __off + 1);
                 $sub_handler
             }
             3 => {
+                // MovImm
                 $pc += 6;
                 let $movi_dst = dec_reg_single(__asm, __off + 1);
                 let $movi_imm = dec_u32(__asm, __off + 2);
                 $movi_handler
             }
             4 => {
+                // AddImm
                 $pc += 6;
                 let $addi_dst = dec_reg_single(__asm, __off + 1);
                 let $addi_imm = dec_u32(__asm, __off + 2);
                 $addi_handler
             }
             5 => {
+                // SubImm
                 $pc += 6;
                 let $subi_dst = dec_reg_single(__asm, __off + 1);
                 let $subi_imm = dec_u32(__asm, __off + 2);
                 $subi_handler
             }
+
             6 => {
+                // Call
                 $pc += 5;
                 let $call_tgt = dec_u32(__asm, __off + 1);
                 $call_handler
             }
             7 => {
+                // Return
                 $pc += 1;
                 $ret_handler
             }
+
             8 => {
+                // JumpEQ
                 $pc += 6;
                 let ($jeq_lhs, $jeq_rhs) = dec_reg_pair(__asm, __off + 1);
                 let $jeq_tgt = dec_u32(__asm, __off + 2);
                 $jeq_handler
             }
             9 => {
+                // JumpNE
                 $pc += 6;
                 let ($jne_lhs, $jne_rhs) = dec_reg_pair(__asm, __off + 1);
                 let $jne_tgt = dec_u32(__asm, __off + 2);
                 $jne_handler
             }
             10 => {
+                // JumpLT
                 $pc += 6;
                 let ($jlt_lhs, $jlt_rhs) = dec_reg_pair(__asm, __off + 1);
                 let $jlt_tgt = dec_u32(__asm, __off + 2);
                 $jlt_handler
             }
             11 => {
+                // JumpLE
                 $pc += 6;
                 let ($jle_lhs, $jle_rhs) = dec_reg_pair(__asm, __off + 1);
                 let $jle_tgt = dec_u32(__asm, __off + 2);
                 $jle_handler
             }
             12 => {
+                // JumpGT
                 $pc += 6;
                 let ($jgt_lhs, $jgt_rhs) = dec_reg_pair(__asm, __off + 1);
                 let $jgt_tgt = dec_u32(__asm, __off + 2);
                 $jgt_handler
             }
             13 => {
+                // JumpGE
                 $pc += 6;
                 let ($jge_lhs, $jge_rhs) = dec_reg_pair(__asm, __off + 1);
                 let $jge_tgt = dec_u32(__asm, __off + 2);
                 $jge_handler
             }
+
             14 => {
+                // JumpIfEndOfLine
                 $pc += 5;
                 let $jeol_tgt = dec_u32(__asm, __off + 1);
                 $jeol_handler
             }
+
             15 => {
-                $pc += 9;
+                // JumpIfMatchCharset
+                $pc += 17;
                 let $jc_idx = dec_u32(__asm, __off + 1);
-                let $jc_tgt = dec_u32(__asm, __off + 5);
+                let $jc_min = dec_u32(__asm, __off + 5);
+                let $jc_max = dec_u32(__asm, __off + 9);
+                let $jc_tgt = dec_u32(__asm, __off + 13);
                 $jc_handler
             }
             16 => {
+                // JumpIfMatchPrefix
                 $pc += 9;
                 let $jp_idx = dec_u32(__asm, __off + 1);
                 let $jp_tgt = dec_u32(__asm, __off + 5);
                 $jp_handler
             }
             17 => {
+                // JumpIfMatchPrefixInsensitive
                 $pc += 9;
                 let $jpi_idx = dec_u32(__asm, __off + 1);
                 let $jpi_tgt = dec_u32(__asm, __off + 5);
                 $jpi_handler
             }
+
             18 => {
+                // FlushHighlight
                 $pc += 2;
                 let $flush_kind = dec_reg_single(__asm, __off + 1);
                 $flush_handler
             }
             19 => {
+                // AwaitInput
                 $pc += 1;
                 $await_handler
             }
+
             _ => $bad_opcode,
         }
     }};
 }
 
 impl Instruction {
-    // JumpIfMatchCharset, etc., are 1 byte opcode + two u32 parameters.
-    pub const MAX_ENCODED_SIZE: usize = 9;
+    // JumpIfMatchCharset, etc., are 1 byte opcode + 4 u32 parameters.
+    pub const MAX_ENCODED_SIZE: usize = 1 + 4 * 4;
 
     pub fn address_offset(&self) -> Option<usize> {
         match *self {
             Instruction::MovImm { .. }
             | Instruction::AddImm { .. }
-            | Instruction::SubImm { .. } => Some(2), // opcode + dst
+            | Instruction::SubImm { .. } => Some(1 + 1), // opcode + dst
 
             Instruction::Call { .. } => Some(1), // opcode
 
@@ -390,13 +418,13 @@ impl Instruction {
             | Instruction::JumpLT { .. }
             | Instruction::JumpLE { .. }
             | Instruction::JumpGT { .. }
-            | Instruction::JumpGE { .. } => Some(2), // opcode + lhs/rhs pair
+            | Instruction::JumpGE { .. } => Some(1 + 1), // opcode + lhs/rhs pair
 
             Instruction::JumpIfEndOfLine { .. } => Some(1), // opcode
 
-            Instruction::JumpIfMatchCharset { .. }
-            | Instruction::JumpIfMatchPrefix { .. }
-            | Instruction::JumpIfMatchPrefixInsensitive { .. } => Some(5), // opcode + idx
+            Instruction::JumpIfMatchCharset { .. } => Some(1 + 3 * 4), // opcode + idx + min + max
+            Instruction::JumpIfMatchPrefix { .. }
+            | Instruction::JumpIfMatchPrefixInsensitive { .. } => Some(1 + 4), // opcode + idx
 
             _ => None,
         }
@@ -451,8 +479,13 @@ impl Instruction {
             Instruction::JumpIfEndOfLine { tgt } => {
                 bytes.extend_from_slice(&enc_u32(tgt));
             }
-            Instruction::JumpIfMatchCharset { idx, tgt }
-            | Instruction::JumpIfMatchPrefix { idx, tgt }
+            Instruction::JumpIfMatchCharset { idx, min, max, tgt } => {
+                bytes.extend_from_slice(&enc_u32(idx));
+                bytes.extend_from_slice(&enc_u32(min));
+                bytes.extend_from_slice(&enc_u32(max));
+                bytes.extend_from_slice(&enc_u32(tgt));
+            }
+            Instruction::JumpIfMatchPrefix { idx, tgt }
             | Instruction::JumpIfMatchPrefixInsensitive { idx, tgt } => {
                 bytes.extend_from_slice(&enc_u32(idx));
                 bytes.extend_from_slice(&enc_u32(tgt));
@@ -515,8 +548,8 @@ impl Instruction {
             JumpIfEndOfLine { tgt }=> {
                 Instruction::JumpIfEndOfLine { tgt }
             }
-            JumpIfMatchCharset { idx, tgt } => {
-                Instruction::JumpIfMatchCharset { idx, tgt }
+            JumpIfMatchCharset { idx, min, max, tgt } => {
+                Instruction::JumpIfMatchCharset { idx, min, max, tgt }
             }
             JumpIfMatchPrefix { idx, tgt } => {
                 Instruction::JumpIfMatchPrefix { idx, tgt }
@@ -603,8 +636,11 @@ impl Instruction {
             Instruction::JumpIfEndOfLine { tgt } => {
                 _ = write!(str, "{_i}jeol{i_}   {_a}{tgt}{a_}");
             }
-            Instruction::JumpIfMatchCharset { idx, tgt } => {
-                _ = write!(str, "{_i}jc{i_}     {_n}{idx}{n_}, {_a}{tgt}{a_}");
+            Instruction::JumpIfMatchCharset { idx, min, max, tgt } => {
+                _ = write!(
+                    str,
+                    "{_i}jc{i_}     {_n}{idx}{n_}, {_n}{min}{n_}, {_n}{max}{n_}, {_a}{tgt}{a_}"
+                );
             }
             Instruction::JumpIfMatchPrefix { idx, tgt } => {
                 _ = write!(str, "{_i}jp{i_}     {_n}{idx}{n_}, {_a}{tgt}{a_}");

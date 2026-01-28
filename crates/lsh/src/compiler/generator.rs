@@ -117,25 +117,29 @@ impl<'a> Generator<'a> {
             let (Some(instr), len) = Instruction::decode(&assembly.instructions[off..]) else {
                 break;
             };
-            let mnemonic_width = match instr {
-                Instruction::JumpIfMatchCharset { .. }
-                | Instruction::JumpIfMatchPrefix { .. }
-                | Instruction::JumpIfMatchPrefixInsensitive { .. } => {
-                    if vt {
-                        60
-                    } else {
-                        30
-                    }
-                }
-                _ => 0,
-            };
 
             let scratch = scratch_arena(None);
-            _ = write!(
-                output,
-                "{line_prefix}{off:>line_num_width$}:  {mnemonic:mnemonic_width$}",
-                mnemonic = instr.mnemonic(&scratch, &mnemonic_config),
-            );
+            let mnemonic = instr.mnemonic(&scratch, &mnemonic_config);
+            _ = write!(output, "{line_prefix}{off:>line_num_width$}:  {mnemonic}");
+
+            let text_chars = {
+                let mut count = 0;
+                let mut in_escape = false;
+                for c in mnemonic.bytes() {
+                    if in_escape {
+                        if c.is_ascii_alphabetic() {
+                            in_escape = false;
+                        }
+                    } else if c == b'\x1b' {
+                        in_escape = true;
+                    } else {
+                        count += 1;
+                    }
+                }
+                count
+            };
+            let padding_width = 40usize.saturating_sub(text_chars);
+            _ = write!(output, "{:<padding_width$}", "");
 
             match instr {
                 Instruction::JumpIfMatchCharset { idx, .. } => {
