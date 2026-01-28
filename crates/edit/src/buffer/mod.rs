@@ -41,8 +41,10 @@ use stdext::{ReplaceRange as _, minmax, slice_as_uninit_mut, slice_copy_safe};
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;
 use crate::document::{ReadableDocument, WriteableDocument};
-use crate::framebuffer::{Framebuffer, IndexedColor};
+use crate::framebuffer::{Attributes, Framebuffer, IndexedColor};
 use crate::helpers::*;
+use crate::lsh::cache::HighlighterCache;
+use crate::lsh::{HighlightKind, Highlighter, Language};
 use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
 use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
@@ -249,6 +251,7 @@ pub struct TextBuffer {
     selection: Option<TextBufferSelection>,
     selection_generation: u32,
     search: Option<UnsafeCell<ActiveSearch>>,
+    highlighter_cache: HighlighterCache,
 
     width: CoordType,
     margin_width: CoordType,
@@ -258,6 +261,7 @@ pub struct TextBuffer {
     tab_size: CoordType,
     indent_with_tabs: bool,
     line_highlight_enabled: bool,
+    language: Option<&'static Language>,
     ruler: CoordType,
     encoding: &'static str,
     newlines_are_crlf: bool,
@@ -297,6 +301,7 @@ impl TextBuffer {
             selection: None,
             selection_generation: 0,
             search: None,
+            highlighter_cache: HighlighterCache::new(),
 
             width: 0,
             margin_width: 0,
@@ -306,6 +311,7 @@ impl TextBuffer {
             tab_size: 4,
             indent_with_tabs: false,
             line_highlight_enabled: false,
+            language: None,
             ruler: 0,
             encoding: "UTF-8",
             newlines_are_crlf: cfg!(windows), // Windows users want CRLF
@@ -598,6 +604,15 @@ impl TextBuffer {
         self.line_highlight_enabled = enabled;
     }
 
+    pub fn language(&self) -> Option<&'static Language> {
+        self.language
+    }
+
+    pub fn set_language(&mut self, language: Option<&'static Language>) {
+        self.language = language;
+        self.highlighter_cache.invalidate_from(0);
+    }
+
     /// Sets a ruler column, e.g. 80.
     pub fn set_ruler(&mut self, column: CoordType) {
         self.ruler = column;
@@ -676,6 +691,7 @@ impl TextBuffer {
         self.set_selection(None);
         self.mark_as_clean();
         self.reflow();
+        self.highlighter_cache.invalidate_from(0);
     }
 
     /// Copies the contents of the buffer into a string.
@@ -1982,6 +1998,10 @@ impl TextBuffer {
             cursor = cursor_end;
         }
 
+        let logical_y_beg = self.cursor_for_rendering.unwrap().logical_pos.y;
+        let logical_y_end = cursor.logical_pos.y + 1;
+        self.render_apply_highlights(origin, destination, logical_y_beg..logical_y_end, fb);
+
         // Colorize the margin that we wrote above.
         if self.margin_width > 0 {
             let margin = Rect {
@@ -2045,6 +2065,153 @@ impl TextBuffer {
         }
 
         Some(RenderResult { visual_pos_x_max })
+    }
+
+    fn render_apply_highlights(
+        &mut self,
+        origin: Point,
+        destination: Rect,
+        logical_y_range: Range<CoordType>,
+        fb: &mut Framebuffer,
+    ) {
+        let Some(language) = self.language else {
+            return;
+        };
+
+        let mut highlighter = Highlighter::new(&self.buffer, language);
+
+        // Track cursor position for efficient offset-to-position conversions.
+        // Start from the rendering cursor which is at the beginning of the visible area.
+        let mut cursor = self.cursor_for_rendering.unwrap();
+
+        // Visible vertical range in visual coordinates.
+        let visible_top = origin.y;
+        let visible_bottom = origin.y + destination.height();
+
+        // Text area boundaries in screen coordinates (excluding margin).
+        let text_left = destination.left + self.margin_width;
+        let text_right = destination.right;
+
+        for logical_y in logical_y_range {
+            // Seek cursor to the start of this logical line for efficient lookups.
+            // This is important because highlights are sorted by offset within
+            // each logical line.
+            cursor = self.goto_line_start(cursor, logical_y);
+
+            let scratch = scratch_arena(None);
+            let highlights =
+                self.highlighter_cache.parse_line(&scratch, &mut highlighter, logical_y);
+
+            for pair in highlights.windows(2) {
+                let curr = &pair[0];
+                let next = &pair[1];
+
+                // Skip highlights with no visual effect.
+                if curr.kind == HighlightKind::Other {
+                    continue;
+                }
+
+                // Convert byte offsets to cursor positions. Since highlights are
+                // sorted by offset, we chain from cursor -> beg -> end for efficiency.
+                let beg = self.cursor_move_to_offset_internal(cursor, curr.start);
+                let end = self.cursor_move_to_offset_internal(beg, next.start);
+                cursor = end;
+
+                let color = match curr.kind {
+                    HighlightKind::Other => None,
+                    HighlightKind::Comment => Some(IndexedColor::Green),
+                    HighlightKind::Method => Some(IndexedColor::BrightYellow),
+                    HighlightKind::String => Some(IndexedColor::BrightRed),
+                    HighlightKind::Variable => Some(IndexedColor::BrightCyan),
+                    HighlightKind::ConstantLanguage => Some(IndexedColor::BrightBlue),
+                    HighlightKind::ConstantNumeric => Some(IndexedColor::BrightGreen),
+                    HighlightKind::KeywordControl => Some(IndexedColor::BrightMagenta),
+                    HighlightKind::KeywordOther => Some(IndexedColor::BrightBlue),
+                    HighlightKind::MarkupBold => None,
+                    HighlightKind::MarkupChanged => Some(IndexedColor::BrightBlue),
+                    HighlightKind::MarkupDeleted => Some(IndexedColor::BrightRed),
+                    HighlightKind::MarkupHeading => Some(IndexedColor::BrightBlue),
+                    HighlightKind::MarkupInserted => Some(IndexedColor::BrightGreen),
+                    HighlightKind::MarkupItalic => None,
+                    HighlightKind::MarkupLink => None,
+                    HighlightKind::MarkupList => Some(IndexedColor::BrightBlue),
+                    HighlightKind::MarkupStrikethrough => None,
+                    HighlightKind::MetaHeader => Some(IndexedColor::BrightBlue),
+                };
+                let attr = match curr.kind {
+                    HighlightKind::MarkupBold => Some(Attributes::Bold),
+                    HighlightKind::MarkupItalic => Some(Attributes::Italic),
+                    HighlightKind::MarkupLink => Some(Attributes::Underlined),
+                    HighlightKind::MarkupStrikethrough => Some(Attributes::Strikethrough),
+                    _ => None,
+                };
+
+                // Handle the case where the highlight spans multiple visual lines
+                // due to word wrapping. The range is [beg, end) in terms of offsets,
+                // which maps to visual lines [beg.visual_pos.y, end.visual_pos.y].
+                //
+                // When beg and end are on the same visual line, we highlight
+                // [beg.visual_pos.x, end.visual_pos.x).
+                //
+                // When they span multiple lines:
+                // - First line: [beg.visual_pos.x, end_of_line)
+                // - Middle lines: [0, end_of_line)
+                // - Last line: [0, end.visual_pos.x)
+                //
+                // However, if end.visual_pos.x == 0, the last line has no content
+                // to highlight (the span ends exactly at the line boundary).
+                let visual_y_end = if end.visual_pos.x == 0 && end.visual_pos.y > beg.visual_pos.y {
+                    // The span ends at position 0 of a new visual line, meaning
+                    // it actually ends at the end of the previous visual line.
+                    end.visual_pos.y - 1
+                } else {
+                    end.visual_pos.y
+                };
+
+                // Use min/max to skip visual lines outside the visible vertical range.
+                for visual_y in
+                    beg.visual_pos.y.max(visible_top)..(visual_y_end + 1).min(visible_bottom)
+                {
+                    let vis_left = if visual_y == beg.visual_pos.y {
+                        beg.visual_pos.x
+                    } else {
+                        // Wrapped continuation lines start at visual x=0.
+                        0
+                    };
+                    let vis_right = if visual_y == end.visual_pos.y {
+                        end.visual_pos.x
+                    } else {
+                        // Line extends to the word wrap column or beyond.
+                        COORD_TYPE_SAFE_MAX
+                    };
+
+                    // Convert to screen coordinates.
+                    let screen_left = text_left + vis_left - origin.x;
+                    let screen_right = (text_left + vis_right - origin.x).min(text_right);
+                    let screen_y = destination.top + visual_y - origin.y;
+
+                    // Create the target rectangle, clamped to the text area.
+                    let rect = Rect {
+                        left: screen_left.max(text_left),
+                        top: screen_y,
+                        right: screen_right,
+                        bottom: screen_y + 1,
+                    };
+
+                    // Skip empty or invalid rectangles.
+                    if rect.left >= rect.right {
+                        continue;
+                    }
+
+                    if let Some(color) = color {
+                        fb.blend_fg(rect, fb.indexed(color));
+                    }
+                    if let Some(attr) = attr {
+                        fb.replace_attr(rect, Attributes::All, attr);
+                    }
+                }
+            }
+        }
     }
 
     pub fn cut(&mut self, clipboard: &mut Clipboard) {
@@ -2501,7 +2668,7 @@ impl TextBuffer {
     }
 
     /// Extracts the contents of the current selection the user made.
-    /// This differs from [`TextBuffer::extract_selection()`] in that
+    /// This differs from `TextBuffer::extract_selection()` in that
     /// it does nothing if the selection was made by searching.
     pub fn extract_user_selection(&mut self, delete: bool) -> Option<Vec<u8>> {
         if !self.has_selection() {
@@ -2601,6 +2768,7 @@ impl TextBuffer {
         }
 
         self.active_edit_off = cursor.offset;
+        self.highlighter_cache.invalidate_from(cursor.logical_pos.y);
 
         // If word-wrap is enabled, the visual layout of all logical lines affected by the write
         // may have changed. This includes even text before the insertion point up to the line
@@ -2851,6 +3019,8 @@ impl TextBuffer {
             // There weren't any undo/redo entries.
             return;
         }
+
+        self.highlighter_cache.invalidate_from(damage_start);
 
         if entry_buffer_generation.is_some() {
             self.recalc_after_content_changed();

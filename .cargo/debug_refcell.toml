@@ -1,0 +1,3 @@
+[unstable]
+build-std = ["std"]
+build-std-features = ["debug_refcell"]

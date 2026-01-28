@@ -1,0 +1,8 @@
+#[display_name = "Ignore"]
+#[path = "**/.git-blame-ignore-revs"]
+#[path = "**/.gitignore"]
+pub fn git_ignore() {
+    if /#.*/ {
+        yield comment;
+    }
+}

@@ -1,0 +1,39 @@
+#[display_name = "JSON"]
+#[path = "**/*.json"]
+#[path = "**/*.jsonc"]
+pub fn json() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /"/ {
+            double_quote_string();
+        } else if /true|false|null/ {
+            if /\w+/ {
+                // Not a keyword after all.
+            } else {
+                yield constant.language;
+            }
+        } else if /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/ {
+            if /\w+/ {
+                // Not a number after all.
+            } else {
+                yield constant.numeric;
+            }
+        } else if /\w+/ {
+            // Invalid token? Skip.
+        }
+
+        yield other;
+    }
+}

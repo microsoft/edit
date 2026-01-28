@@ -28,6 +28,8 @@ impl From<apperr::Error> for FormatApperr {
 impl std::fmt::Display for FormatApperr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
+            apperr::Error::SettingsInvalidJson => f.write_str("Settings JSON is malformed"),
+            apperr::Error::SettingsInvalidValue => f.write_str("Invalid settings value"),
             apperr::Error::Icu(icu::ICU_MISSING_ERROR) => f.write_str(loc(LocId::ErrorIcuMissing)),
             apperr::Error::Icu(ref err) => err.fmt(f),
             apperr::Error::Io(ref err) => err.fmt(f),
@@ -152,6 +154,8 @@ pub struct State {
     pub search_options: buffer::SearchOptions,
     pub search_success: bool,
 
+    pub wants_language_picker: bool,
+
     pub wants_encoding_picker: bool,
     pub wants_encoding_change: StateEncodingChange,
     pub encoding_picker_needle: String,
@@ -199,6 +203,8 @@ impl State {
             search_replacement: Default::default(),
             search_options: Default::default(),
             search_success: true,
+
+            wants_language_picker: false,
 
             wants_encoding_picker: false,
             encoding_picker_needle: Default::default(),

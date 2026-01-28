@@ -10,6 +10,7 @@ mod draw_filepicker;
 mod draw_menubar;
 mod draw_statusbar;
 mod localization;
+mod settings;
 mod state;
 
 use std::borrow::Cow;
@@ -32,6 +33,8 @@ use localization::*;
 use state::*;
 use stdext::arena::{self, Arena, ArenaString, scratch_arena};
 use stdext::arena_format;
+
+use crate::settings::Settings;
 
 #[cfg(target_pointer_width = "32")]
 const SCRATCH_ARENA_CAPACITY: usize = 128 * MEBI;
@@ -72,6 +75,8 @@ fn run() -> apperr::Result<()> {
     if handle_args(&mut state)? {
         return Ok(());
     }
+
+    Settings::reload()?;
 
     // This will reopen stdin if it's redirected (which may fail) and switch
     // the terminal to raw mode which prevents the user from pressing Ctrl+C.
@@ -324,6 +329,9 @@ fn draw(ctx: &mut Context, state: &mut State) {
     }
     if state.wants_save {
         draw_handle_save(ctx, state);
+    }
+    if state.wants_language_picker {
+        draw_dialog_language_change(ctx, state);
     }
     if state.wants_encoding_change != StateEncodingChange::None {
         draw_dialog_encoding_change(ctx, state);

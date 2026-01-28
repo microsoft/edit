@@ -5,13 +5,16 @@
 
 use std::hint::black_box;
 use std::io::Cursor;
+use std::ops::Range;
+use std::path::Path;
 use std::{mem, vec};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
 use edit::simd::MemsetSafe;
-use edit::{buffer, glob, hash, json, oklab, simd, unicode};
-use stdext::arena::{self, Arena, scratch_arena};
+use edit::{buffer, hash, json, lsh, oklab, simd, unicode};
+use stdext::arena::{Arena, scratch_arena};
+use stdext::{arena, glob, varint};
 
 struct EditingTracePatch<'a>(usize, usize, &'a str);
 
@@ -178,6 +181,34 @@ fn bench_json(c: &mut Criterion) {
     );
 }
 
+fn bench_lsh(c: &mut Criterion) {
+    let bytes = include_bytes!("../../../assets/highlighting-tests/markdown.md");
+    let bytes = &bytes[..];
+    let lang = lsh::LANGUAGES.iter().find(|lang| lang.id == "markdown").unwrap();
+    let highlighter = lsh::Highlighter::new(black_box(&bytes), lang);
+
+    c.benchmark_group("lsh").throughput(Throughput::Bytes(bytes.len() as u64)).bench_function(
+        "markdown",
+        |b| {
+            b.iter(|| {
+                let mut h = highlighter.clone();
+                loop {
+                    let scratch = scratch_arena(None);
+                    let res = h.parse_next_line(&scratch);
+                    if res.is_empty() {
+                        break;
+                    }
+                }
+            })
+        },
+    );
+
+    c.benchmark_group("lsh").bench_function("process_file_associations", |b| {
+        let path = Path::new("/some/long/path/to/file/foo.bar.foo.bar.foo.bar");
+        b.iter(|| lsh::process_file_associations(lsh::FILE_ASSOCIATIONS, black_box(path)))
+    });
+}
+
 fn bench_oklab(c: &mut Criterion) {
     c.benchmark_group("oklab")
         .bench_function("StraightRgba::as_oklab", |b| {
@@ -279,6 +310,73 @@ fn bench_unicode(c: &mut Criterion) {
         });
 }
 
+fn bench_varint(c: &mut Criterion) {
+    const BUFFER_SIZE: usize = MEBI;
+
+    let mut buffer = Vec::with_capacity(BUFFER_SIZE + 16);
+
+    // Knuth's MMIX LCG
+    let mut rng_state = 1442695040888963407u64;
+    let mut rng = || {
+        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rng_state as u32
+    };
+
+    // Bitmask with Rejection (as used by Apple)
+    let mut rng_state = 1442695040888963407u64;
+    let mut rng_range = |range: Range<u32>| {
+        let range_size = range.len() as u32;
+        let mask = range_size.next_power_of_two() - 1;
+        loop {
+            rng_state =
+                rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let value = rng_state as u32 & mask;
+            if value < range_size {
+                return range.start.wrapping_add(value);
+            }
+        }
+    };
+
+    loop {
+        // Generate values according to a non-uniform distribution.
+        // The distribution roughly corresponds to what LSH encounters.
+        let value = match rng() {
+            // ~35%: <=7 bits
+            0..1503238553 => rng_range(0..0x7F),
+            // ~40%: <=14 bits
+            1503238553..3221225472 => rng_range(0x80..0x3FFF),
+            // ~20%: <=21 bits
+            3221225472..4026531840 => rng_range(0x4000..0x1FFFFF),
+            // ~5%: u32::MAX
+            _ => (1 << 28) - 1,
+        };
+
+        buffer.extend(varint::encode(value));
+
+        if buffer.len() > BUFFER_SIZE {
+            break;
+        }
+    }
+
+    // As per the varint::decode() safety requirements, we need 8 bytes of padding.
+    // We pre-allocated `buffer` with extra capacity, so we technically fulfill that.
+    // _Technically_, however, we also make Rust unhappy, because it's uninitialized memory.
+    // It's just that I really really don't care about any such antics. It's memory.
+
+    c.benchmark_group("varint").bench_function("decode", |b| {
+        let mut off = 0;
+
+        b.iter(|| {
+            let (val, len) = unsafe { varint::decode(buffer.as_ptr().add(off)) };
+            black_box(val);
+            off += len;
+            if off >= buffer.len() {
+                off = 0;
+            }
+        });
+    });
+}
+
 fn bench(c: &mut Criterion) {
     arena::init(128 * MEBI).unwrap();
 
@@ -286,12 +384,14 @@ fn bench(c: &mut Criterion) {
     bench_glob(c);
     bench_hash(c);
     bench_json(c);
+    bench_lsh(c);
     bench_oklab(c);
     bench_simd_lines_fwd(c);
     bench_simd_memchr2(c);
     bench_simd_memset::<u32>(c);
     bench_simd_memset::<u8>(c);
     bench_unicode(c);
+    bench_varint(c);
 }
 
 criterion_group!(benches, bench);

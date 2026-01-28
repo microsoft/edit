@@ -508,6 +508,13 @@ impl Framebuffer {
 
                 if last_attr != attr {
                     let diff = last_attr ^ attr;
+                    if diff.is(Attributes::Bold) {
+                        if attr.is(Attributes::Bold) {
+                            result.push_str("\x1b[1m");
+                        } else {
+                            result.push_str("\x1b[22m");
+                        }
+                    }
                     if diff.is(Attributes::Italic) {
                         if attr.is(Attributes::Italic) {
                             result.push_str("\x1b[3m");
@@ -520,6 +527,13 @@ impl Framebuffer {
                             result.push_str("\x1b[4m");
                         } else {
                             result.push_str("\x1b[24m");
+                        }
+                    }
+                    if diff.is(Attributes::Strikethrough) {
+                        if attr.is(Attributes::Strikethrough) {
+                            result.push_str("\x1b[9m");
+                        } else {
+                            result.push_str("\x1b[29m");
                         }
                     }
                     last_attr = attr;
@@ -830,9 +844,11 @@ pub struct Attributes(u8);
 #[allow(non_upper_case_globals)]
 impl Attributes {
     pub const None: Self = Self(0);
-    pub const Italic: Self = Self(0b1);
-    pub const Underlined: Self = Self(0b10);
-    pub const All: Self = Self(0b11);
+    pub const Bold: Self = Self(1);
+    pub const Italic: Self = Self(2);
+    pub const Underlined: Self = Self(4);
+    pub const Strikethrough: Self = Self(8);
+    pub const All: Self = Self(16 - 1);
 
     pub const fn is(self, attr: Self) -> bool {
         (self.0 & attr.0) == attr.0

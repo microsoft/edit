@@ -1,0 +1,78 @@
+#[display_name = "XML"]
+#[path = "**/*.csproj.user"]
+#[path = "**/*.csproj"]
+#[path = "**/*.html"]
+#[path = "**/*.nuspec"]
+#[path = "**/*.proj"]
+#[path = "**/*.props"]
+#[path = "**/*.rss"]
+#[path = "**/*.slnx"]
+#[path = "**/*.svg"]
+#[path = "**/*.targets"]
+#[path = "**/*.vcxproj.filters"]
+#[path = "**/*.vcxproj"]
+#[path = "**/*.xaml"]
+#[path = "**/*.xml"]
+#[path = "**/*.xml"]
+pub fn xml() {
+    until /$/ {
+        yield other;
+
+        if /<!--/ {
+            loop {
+                yield comment;
+                await input;
+                if /-->/ {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /<!\[CDATA\[/ {
+            loop {
+                yield string;
+                await input;
+                if /\]\]>/ {
+                    yield string;
+                    break;
+                }
+            }
+        } else if /<!(DOCTYPE)[^>]*>/ {
+            yield $1 as constant.language;
+            yield other;
+        } else if /(?:<\?|<)([\w:.-]+)/ {
+            yield $1 as constant.language;
+            yield other;
+
+            until />/ {
+                yield other;
+                await input;
+
+                if /([\w:.-]+)\s*=/ {
+                    yield $1 as variable;
+                    yield other;
+                } else if /"/ {
+                    until /"/ {
+                        yield string;
+                        await input;
+                    }
+                    yield string;
+                } else if /'/ {
+                    until /'/ {
+                        yield string;
+                        await input;
+                    }
+                    yield string;
+                }
+            }
+
+            yield other;
+        } else if /<\/([\w:.-]+)\s*>/ {
+            yield $1 as constant.language;
+            yield other;
+        } else if /(?:&#|&)[\w:.-]+;/ {
+            yield constant.numeric;
+        }
+
+        yield other;
+    }
+}

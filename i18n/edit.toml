@@ -376,6 +376,19 @@ vi = "Lưu thành…"
 zh_hans = "另存为…"
 zh_hant = "另存新檔…"
 
+[FilePreferences]
+en = "Preferences"
+de = "Einstellungen"
+es = "Configuración"
+fr = "Paramètres"
+it = "Impostazioni"
+ja = "設定"
+ko = "설정"
+pt_br = "Configurações"
+ru = "Параметры"
+zh_hans = "设置"
+zh_hant = "設定"
+
 [FileClose]
 en = "Close File"
 ar = "إغلاق الملف"
@@ -1660,6 +1673,32 @@ uk = "Закрити"
 vi = "Đóng"
 zh_hans = "关闭"
 zh_hant = "關閉"
+
+[LanguageSelectMode]
+en = "Select Language Mode"
+de = "Sprachmodus auswählen"
+es = "Seleccionar modo de lenguaje"
+fr = "Sélectionner le mode du langage"
+it = "Seleziona modalità del linguaggio"
+ja = "言語モードの選択"
+ko = "언어 모드 선택"
+pt_br = "Selecionar modo de linguagem"
+ru = "Выбрать режим языка"
+zh_hans = "选择语言模式"
+zh_hant = "選擇語言模式"
+
+[LanguageAutoDetect]
+en = "Auto Detect"
+de = "Automatisch erkennen"
+es = "Detección automática"
+fr = "Détection automatique"
+it = "Rilevamento automatico"
+ja = "自動検出"
+ko = "자동 감지"
+pt_br = "Detectar automaticamente"
+ru = "Определить автоматически"
+zh_hans = "自动检测"
+zh_hant = "自動偵測"
 
 [EncodingReopen]
 en = "Reopen with encoding…"

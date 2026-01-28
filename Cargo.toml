@@ -7,7 +7,7 @@ resolver = "2"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/microsoft/edit"
-rust-version = "1.88"
+rust-version = "1.92"
 
 # We use `opt-level = "s"` as it significantly reduces binary size.
 # We could then use the `#[optimize(speed)]` attribute for spot optimizations.
@@ -28,5 +28,7 @@ lto = "thin"                # Similarly, speed up linking by a ton
 
 [workspace.dependencies]
 edit = { path = "./crates/edit" }
+lsh = { path = "./crates/lsh" }
+lsh-bin = { path = "./crates/lsh-bin" }
 stdext = { path = "./crates/stdext" }
 unicode-gen = { path = "./crates/unicode-gen" }
