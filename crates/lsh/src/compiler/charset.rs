@@ -3,13 +3,11 @@ use std::ops::RangeInclusive;
 
 use stdext::arena::Arena;
 
-use super::Intern;
-
 const WORD_BITS: usize = usize::BITS as usize;
 
 pub type SerializedCharset = [u16; 16];
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Charset {
     bits: [usize; 256 / WORD_BITS],
 }
@@ -168,18 +166,6 @@ impl fmt::Debug for Charset {
         }
 
         write!(f, "]")
-    }
-}
-
-impl<'a> Intern<'a, Charset> for Vec<&'a Charset> {
-    fn intern(&mut self, arena: &'a Arena, value: &Charset) -> &'a Charset {
-        if let Some(&s) = self.iter().find(|&&v| v == value) {
-            s
-        } else {
-            let s = arena.alloc_uninit().write(value.clone());
-            self.push(s);
-            s
-        }
     }
 }
 

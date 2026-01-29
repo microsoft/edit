@@ -98,14 +98,6 @@ pub struct Backend<'a> {
     functions_seen: HashMap<&'a str, usize>,
     /// Map from IR node pointer to its instruction index.
     nodes_seen: HashMap<*const RefCell<IR<'a>>, usize>,
-    /// Interned charsets.
-    charsets_seen: HashMap<*const Charset, usize>,
-    /// Interned strings.
-    strings_seen: HashMap<*const str, usize>,
-    /// Charsets in order of first use.
-    charsets: Vec<&'a Charset>,
-    /// Strings in order of first use.
-    strings: Vec<&'a str>,
 }
 
 impl<'a> Backend<'a> {
@@ -114,10 +106,6 @@ impl<'a> Backend<'a> {
             pending: Default::default(),
             functions_seen: Default::default(),
             nodes_seen: Default::default(),
-            charsets_seen: Default::default(),
-            strings_seen: Default::default(),
-            charsets: Default::default(),
-            strings: Default::default(),
         }
     }
 
@@ -178,13 +166,18 @@ impl<'a> Backend<'a> {
             })
             .collect();
 
-        Ok(Assembly {
-            instructions,
-            entrypoints,
-            charsets: self.charsets,
-            strings: self.strings,
-            highlight_kinds: compiler.highlight_kinds.clone(),
-        })
+        let charsets =
+            compiler.charsets.iter().filter(|h| h.usage_count != 0).map(|h| h.value).collect();
+        let strings =
+            compiler.strings.iter().filter(|h| h.usage_count != 0).map(|h| h.value).collect();
+        let highlight_kinds = compiler
+            .highlight_kinds
+            .iter()
+            .filter(|h| h.usage_count != 0)
+            .map(|h| h.value)
+            .collect();
+
+        Ok(Assembly { instructions, entrypoints, charsets, strings, highlight_kinds })
     }
 
     /// Iterative relaxation: compute byte offsets until stable.
@@ -378,7 +371,8 @@ impl<'a> Backend<'a> {
                     }
                     IRI::MovKind { dst, kind } => {
                         if let Some(dst) = dst.borrow().physical {
-                            self.push_instruction(MovImm { dst, imm: kind });
+                            let imm = kind.id;
+                            self.push_instruction(MovImm { dst, imm });
                         }
                     }
                     IRI::AddImm { dst, imm } => {
@@ -426,21 +420,21 @@ impl<'a> Backend<'a> {
                                 );
                             }
                             Condition::Charset { cs, min, max } => {
-                                let idx = self.visit_charset(cs) as u32;
+                                let idx = cs.id;
                                 self.push_instruction_with_target(
                                     JumpIfMatchCharset { idx, min, max, tgt: 0 },
                                     target,
                                 );
                             }
                             Condition::Prefix(s) => {
-                                let idx = self.visit_string(s) as u32;
+                                let idx = s.id;
                                 self.push_instruction_with_target(
                                     JumpIfMatchPrefix { idx, tgt: 0 },
                                     target,
                                 );
                             }
                             Condition::PrefixInsensitive(s) => {
-                                let idx = self.visit_string(s) as u32;
+                                let idx = s.id;
                                 self.push_instruction_with_target(
                                     JumpIfMatchPrefixInsensitive { idx, tgt: 0 },
                                     target,
@@ -495,22 +489,6 @@ impl<'a> Backend<'a> {
 
     fn push_instruction_with_target(&mut self, instr: Instruction, target: JumpTarget<'a>) {
         self.pending.push(PendingInstruction::with_target(instr, target));
-    }
-
-    fn visit_charset(&mut self, h: &'a Charset) -> usize {
-        *self.charsets_seen.entry(h as *const _).or_insert_with(|| {
-            let idx = self.charsets.len();
-            self.charsets.push(h);
-            idx
-        })
-    }
-
-    fn visit_string(&mut self, s: &'a str) -> usize {
-        *self.strings_seen.entry(s as *const _).or_insert_with(|| {
-            let idx = self.strings.len();
-            self.strings.push(s);
-            idx
-        })
     }
 }
 

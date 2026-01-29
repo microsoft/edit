@@ -559,7 +559,7 @@ macro_rules! instruction_decode {
 
         #[inline(always)]
         unsafe fn dec_varint(bytes: &[u8], off: usize) -> (u32, usize) {
-            unsafe { varint::decode_branchless(bytes.as_ptr().add(off)) }
+            unsafe { varint::decode_branchy(bytes.as_ptr().add(off)) }
         }
 
         let __asm: &[u8] = $assembly;
