@@ -45,7 +45,41 @@ pub fn encode(val: u32) -> Vec<u8> {
 ///
 /// The caller must ensure that `data..data+4` is valid memory.
 /// It doesn't need to be a valid value, but it must be readable.
-pub unsafe fn decode(data: *const u8) -> (u32, usize) {
+#[inline]
+pub unsafe fn decode_branchy(data: *const u8) -> (u32, usize) {
+    unsafe {
+        let lead = *data;
+        if lead & 0x01 == 0x00 {
+            // 1 byte
+            let val = (lead >> 1) as u32;
+            (val, 1)
+        } else if lead & 0x03 == 0x01 {
+            // 2 bytes
+            let val = (data as *const u16).read_unaligned();
+            let val = (val >> 2) as u32;
+            (val, 2)
+        } else if lead & 0x07 == 0x03 {
+            // 3 bytes
+            let val = (data as *const u32).read_unaligned();
+            let val = (val >> 3) & 0x001f_ffff;
+            (val, 3)
+        } else if lead & 0x0f == 0x07 {
+            // 4 bytes
+            let val = (data as *const u32).read_unaligned();
+            let val = val >> 4;
+            (val, 4)
+        } else {
+            (u32::MAX, 1)
+        }
+    }
+}
+
+/// # Safety
+///
+/// The caller must ensure that `data..data+4` is valid memory.
+/// It doesn't need to be a valid value, but it must be readable.
+#[inline]
+pub unsafe fn decode_branchless(data: *const u8) -> (u32, usize) {
     // For inputs such as:
     //   [0xff, 0xff, 0xff, 0xff]
     // the shifts below will shift by more than 31 digits, which Rust considers undefined behavior.
@@ -78,6 +112,7 @@ pub unsafe fn decode(data: *const u8) -> (u32, usize) {
             // This is where you'd put more architecture-specific optimizations.
             // In fact this is where I'd put my ARM optimizations, but it doesn't have anything like `bextr`. :(
 
+            #[allow(unreachable_code)]
             let mut res = val;
             // Shift out the bytes we read but don't need.
             res <<= 32 - 8 * len;
@@ -102,7 +137,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_encode_decode_roundtrip() {
+    fn test_decode_branchy() {
         // Test various boundary values
         let test_values = [
             0u32,
@@ -122,21 +157,52 @@ mod tests {
         for &val in &test_values {
             let encoded = encode(val);
             println!("Value {} encoded as: {:02X?}", val, encoded);
-            let (decoded, len) = unsafe { decode(encoded.as_ptr()) };
+            let (decoded, len) = unsafe { decode_branchy(encoded.as_ptr()) };
             println!("  Decoded as: {} with length {}", decoded, len);
             assert_eq!(decoded, val, "Failed roundtrip for value {}", val);
             assert_eq!(len, encoded.len(), "Length mismatch for value {}", val);
         }
+
+        unsafe {
+            assert_eq!((0, 1), decode_branchy([0, 0xbb, 0xcc, 0xdd].as_ptr()));
+            assert_eq!((123, 1), decode_branchy([0xf6, 0xbb, 0xcc, 0xdd].as_ptr()));
+            assert_eq!((1234, 2), decode_branchy([0x49, 0x13, 0xcc, 0xdd].as_ptr()));
+            assert_eq!((u32::MAX, 1), decode_branchy([0xff, 0xbb, 0xcc, 0xdd].as_ptr()));
+        }
     }
 
     #[test]
-    fn test_specific_encodings() {
-        // Test specific byte patterns
+    fn test_decode_branchless() {
+        // Test various boundary values
+        let test_values = [
+            0u32,
+            1,
+            123,
+            127, // Max 1 byte
+            128, // Min 2 bytes
+            1234,
+            16383,     // Max 2 bytes
+            16384,     // Min 3 bytes
+            2097151,   // Max 3 bytes
+            2097152,   // Min 4 bytes
+            268435455, // Max 4 bytes
+            u32::MAX,  // Special case
+        ];
+
+        for &val in &test_values {
+            let encoded = encode(val);
+            println!("Value {} encoded as: {:02X?}", val, encoded);
+            let (decoded, len) = unsafe { decode_branchless(encoded.as_ptr()) };
+            println!("  Decoded as: {} with length {}", decoded, len);
+            assert_eq!(decoded, val, "Failed roundtrip for value {}", val);
+            assert_eq!(len, encoded.len(), "Length mismatch for value {}", val);
+        }
+
         unsafe {
-            assert_eq!((0, 1), decode([0, 0xbb, 0xcc, 0xdd].as_ptr()));
-            assert_eq!((123, 1), decode([0xf6, 0xbb, 0xcc, 0xdd].as_ptr()));
-            assert_eq!((1234, 2), decode([0x49, 0x13, 0xcc, 0xdd].as_ptr()));
-            assert_eq!((u32::MAX, 1), decode([0xff, 0xbb, 0xcc, 0xdd].as_ptr()));
+            assert_eq!((0, 1), decode_branchless([0, 0xbb, 0xcc, 0xdd].as_ptr()));
+            assert_eq!((123, 1), decode_branchless([0xf6, 0xbb, 0xcc, 0xdd].as_ptr()));
+            assert_eq!((1234, 2), decode_branchless([0x49, 0x13, 0xcc, 0xdd].as_ptr()));
+            assert_eq!((u32::MAX, 1), decode_branchless([0xff, 0xbb, 0xcc, 0xdd].as_ptr()));
         }
     }
 }

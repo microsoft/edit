@@ -363,18 +363,31 @@ fn bench_varint(c: &mut Criterion) {
     // _Technically_, however, we also make Rust unhappy, because it's uninitialized memory.
     // It's just that I really really don't care about any such antics. It's memory.
 
-    c.benchmark_group("varint").bench_function("decode", |b| {
-        let mut off = 0;
+    c.benchmark_group("varint")
+        .bench_function("decode_branchy", |b| {
+            let mut off = 0;
 
-        b.iter(|| {
-            let (val, len) = unsafe { varint::decode(buffer.as_ptr().add(off)) };
-            black_box(val);
-            off += len;
-            if off >= buffer.len() {
-                off = 0;
-            }
+            b.iter(|| {
+                let (val, len) = unsafe { varint::decode_branchy(buffer.as_ptr().add(off)) };
+                black_box(val);
+                off += len;
+                if off >= buffer.len() {
+                    off = 0;
+                }
+            });
+        })
+        .bench_function("decode_branchless", |b| {
+            let mut off = 0;
+
+            b.iter(|| {
+                let (val, len) = unsafe { varint::decode_branchless(buffer.as_ptr().add(off)) };
+                black_box(val);
+                off += len;
+                if off >= buffer.len() {
+                    off = 0;
+                }
+            });
         });
-    });
 }
 
 fn bench(c: &mut Criterion) {

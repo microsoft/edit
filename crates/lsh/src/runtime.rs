@@ -26,6 +26,7 @@ use std::fmt::{self, Debug, Write as _};
 use std::mem;
 
 use stdext::arena::{Arena, ArenaString, scratch_arena};
+use stdext::varint;
 
 /// A compiled language definition with its bytecode entrypoint.
 pub struct Language {
@@ -557,8 +558,8 @@ macro_rules! instruction_decode {
         }
 
         #[inline(always)]
-        fn dec_u32(bytes: &[u8], off: usize) -> u32 {
-            unsafe { (bytes.as_ptr().add(off) as *const u32).read_unaligned() }
+        unsafe fn dec_varint(bytes: &[u8], off: usize) -> (u32, usize) {
+            unsafe { varint::decode_branchless(bytes.as_ptr().add(off)) }
         }
 
         let __asm: &[u8] = $assembly;
@@ -590,30 +591,30 @@ macro_rules! instruction_decode {
             }
             3 => {
                 // MovImm
-                $pc += 6;
                 let $movi_dst = dec_reg_single(__asm, __off + 1);
-                let $movi_imm = dec_u32(__asm, __off + 2);
+                let ($movi_imm, __len) = unsafe { dec_varint(__asm, __off + 2) };
+                $pc += (2 + __len) as u32;
                 $movi_handler
             }
             4 => {
                 // AddImm
-                $pc += 6;
                 let $addi_dst = dec_reg_single(__asm, __off + 1);
-                let $addi_imm = dec_u32(__asm, __off + 2);
+                let ($addi_imm, __len) = unsafe { dec_varint(__asm, __off + 2) };
+                $pc += (2 + __len) as u32;
                 $addi_handler
             }
             5 => {
                 // SubImm
-                $pc += 6;
                 let $subi_dst = dec_reg_single(__asm, __off + 1);
-                let $subi_imm = dec_u32(__asm, __off + 2);
+                let ($subi_imm, __len) = unsafe { dec_varint(__asm, __off + 2) };
+                $pc += (2 + __len) as u32;
                 $subi_handler
             }
 
             6 => {
                 // Call
-                $pc += 5;
-                let $call_tgt = dec_u32(__asm, __off + 1);
+                let ($call_tgt, __len) = unsafe { dec_varint(__asm, __off + 1) };
+                $pc += (1 + __len) as u32;
                 $call_handler
             }
             7 => {
@@ -624,75 +625,86 @@ macro_rules! instruction_decode {
 
             8 => {
                 // JumpEQ
-                $pc += 6;
                 let ($jeq_lhs, $jeq_rhs) = dec_reg_pair(__asm, __off + 1);
-                let $jeq_tgt = dec_u32(__asm, __off + 2);
+                let ($jeq_tgt, __len) = unsafe { dec_varint(__asm, __off + 2) };
+                $pc += (2 + __len) as u32;
                 $jeq_handler
             }
             9 => {
                 // JumpNE
-                $pc += 6;
                 let ($jne_lhs, $jne_rhs) = dec_reg_pair(__asm, __off + 1);
-                let $jne_tgt = dec_u32(__asm, __off + 2);
+                let ($jne_tgt, __len) = unsafe { dec_varint(__asm, __off + 2) };
+                $pc += (2 + __len) as u32;
                 $jne_handler
             }
             10 => {
                 // JumpLT
-                $pc += 6;
                 let ($jlt_lhs, $jlt_rhs) = dec_reg_pair(__asm, __off + 1);
-                let $jlt_tgt = dec_u32(__asm, __off + 2);
+                let ($jlt_tgt, __len) = unsafe { dec_varint(__asm, __off + 2) };
+                $pc += (2 + __len) as u32;
                 $jlt_handler
             }
             11 => {
                 // JumpLE
-                $pc += 6;
                 let ($jle_lhs, $jle_rhs) = dec_reg_pair(__asm, __off + 1);
-                let $jle_tgt = dec_u32(__asm, __off + 2);
+                let ($jle_tgt, __len) = unsafe { dec_varint(__asm, __off + 2) };
+                $pc += (2 + __len) as u32;
                 $jle_handler
             }
             12 => {
                 // JumpGT
-                $pc += 6;
                 let ($jgt_lhs, $jgt_rhs) = dec_reg_pair(__asm, __off + 1);
-                let $jgt_tgt = dec_u32(__asm, __off + 2);
+                let ($jgt_tgt, __len) = unsafe { dec_varint(__asm, __off + 2) };
+                $pc += (2 + __len) as u32;
                 $jgt_handler
             }
             13 => {
                 // JumpGE
-                $pc += 6;
                 let ($jge_lhs, $jge_rhs) = dec_reg_pair(__asm, __off + 1);
-                let $jge_tgt = dec_u32(__asm, __off + 2);
+                let ($jge_tgt, __len) = unsafe { dec_varint(__asm, __off + 2) };
+                $pc += (2 + __len) as u32;
                 $jge_handler
             }
 
             14 => {
                 // JumpIfEndOfLine
-                $pc += 5;
-                let $jeol_tgt = dec_u32(__asm, __off + 1);
+                let ($jeol_tgt, __len) = unsafe { dec_varint(__asm, __off + 1) };
+                $pc += (1 + __len) as u32;
                 $jeol_handler
             }
 
             15 => {
                 // JumpIfMatchCharset
-                $pc += 17;
-                let $jc_idx = dec_u32(__asm, __off + 1);
-                let $jc_min = dec_u32(__asm, __off + 5);
-                let $jc_max = dec_u32(__asm, __off + 9);
-                let $jc_tgt = dec_u32(__asm, __off + 13);
+                let mut __p = __off + 1;
+                let ($jc_idx, __len) = unsafe { dec_varint(__asm, __p) };
+                __p += __len;
+                let ($jc_min, __len) = unsafe { dec_varint(__asm, __p) };
+                __p += __len;
+                let ($jc_max, __len) = unsafe { dec_varint(__asm, __p) };
+                __p += __len;
+                let ($jc_tgt, __len) = unsafe { dec_varint(__asm, __p) };
+                __p += __len;
+                $pc = __p as u32;
                 $jc_handler
             }
             16 => {
                 // JumpIfMatchPrefix
-                $pc += 9;
-                let $jp_idx = dec_u32(__asm, __off + 1);
-                let $jp_tgt = dec_u32(__asm, __off + 5);
+                let mut __p = __off + 1;
+                let ($jp_idx, __len) = unsafe { dec_varint(__asm, __p) };
+                __p += __len;
+                let ($jp_tgt, __len) = unsafe { dec_varint(__asm, __p) };
+                __p += __len;
+                $pc = __p as u32;
                 $jp_handler
             }
             17 => {
                 // JumpIfMatchPrefixInsensitive
-                $pc += 9;
-                let $jpi_idx = dec_u32(__asm, __off + 1);
-                let $jpi_tgt = dec_u32(__asm, __off + 5);
+                let mut __p = __off + 1;
+                let ($jpi_idx, __len) = unsafe { dec_varint(__asm, __p) };
+                __p += __len;
+                let ($jpi_tgt, __len) = unsafe { dec_varint(__asm, __p) };
+                __p += __len;
+                $pc = __p as u32;
                 $jpi_handler
             }
 
@@ -716,31 +728,44 @@ macro_rules! instruction_decode {
 use instruction_decode;
 
 impl Instruction {
-    // JumpIfMatchCharset, etc., are 1 byte opcode + 4 u32 parameters.
+    // JumpIfMatchCharset has 1 byte opcode + 4 varint parameters (4 bytes max each).
     pub const MAX_ENCODED_SIZE: usize = 1 + 4 * 4;
 
-    pub fn address_offset(&self) -> Option<usize> {
+    /// Returns the encoded size of this instruction in bytes.
+    pub fn encoded_size(&self) -> usize {
+        fn varint_size(val: u32) -> usize {
+            varint::encode(val).len()
+        }
+
         match *self {
-            Instruction::MovImm { .. }
-            | Instruction::AddImm { .. }
-            | Instruction::SubImm { .. } => Some(1 + 1), // opcode + dst
+            Instruction::Mov { .. } | Instruction::Add { .. } | Instruction::Sub { .. } => 2,
 
-            Instruction::Call { .. } => Some(1), // opcode
+            Instruction::MovImm { imm, .. }
+            | Instruction::AddImm { imm, .. }
+            | Instruction::SubImm { imm, .. } => 2 + varint_size(imm),
 
-            Instruction::JumpEQ { .. }
-            | Instruction::JumpNE { .. }
-            | Instruction::JumpLT { .. }
-            | Instruction::JumpLE { .. }
-            | Instruction::JumpGT { .. }
-            | Instruction::JumpGE { .. } => Some(1 + 1), // opcode + lhs/rhs pair
+            Instruction::Call { tgt } => 1 + varint_size(tgt),
+            Instruction::Return => 1,
 
-            Instruction::JumpIfEndOfLine { .. } => Some(1), // opcode
+            Instruction::JumpEQ { tgt, .. }
+            | Instruction::JumpNE { tgt, .. }
+            | Instruction::JumpLT { tgt, .. }
+            | Instruction::JumpLE { tgt, .. }
+            | Instruction::JumpGT { tgt, .. }
+            | Instruction::JumpGE { tgt, .. } => 2 + varint_size(tgt),
 
-            Instruction::JumpIfMatchCharset { .. } => Some(1 + 3 * 4), // opcode + idx + min + max
-            Instruction::JumpIfMatchPrefix { .. }
-            | Instruction::JumpIfMatchPrefixInsensitive { .. } => Some(1 + 4), // opcode + idx
+            Instruction::JumpIfEndOfLine { tgt } => 1 + varint_size(tgt),
 
-            _ => None,
+            Instruction::JumpIfMatchCharset { idx, min, max, tgt } => {
+                1 + varint_size(idx) + varint_size(min) + varint_size(max) + varint_size(tgt)
+            }
+            Instruction::JumpIfMatchPrefix { idx, tgt }
+            | Instruction::JumpIfMatchPrefixInsensitive { idx, tgt } => {
+                1 + varint_size(idx) + varint_size(tgt)
+            }
+
+            Instruction::FlushHighlight { .. } => 2,
+            Instruction::AwaitInput => 1,
         }
     }
 
@@ -754,11 +779,7 @@ impl Instruction {
             lo as u8
         }
 
-        fn enc_u32(val: u32) -> [u8; 4] {
-            val.to_le_bytes()
-        }
-
-        let mut bytes = Vec::with_capacity_in(16, arena);
+        let mut bytes = Vec::with_capacity_in(Self::MAX_ENCODED_SIZE, arena);
         #[allow(clippy::missing_transmute_annotations)]
         bytes.push(unsafe { std::mem::transmute(std::mem::discriminant(self)) });
 
@@ -772,11 +793,11 @@ impl Instruction {
             | Instruction::AddImm { dst, imm }
             | Instruction::SubImm { dst, imm } => {
                 bytes.push(enc_reg_single(dst));
-                bytes.extend_from_slice(&enc_u32(imm));
+                bytes.extend_from_slice(&varint::encode(imm));
             }
 
             Instruction::Call { tgt } => {
-                bytes.extend_from_slice(&enc_u32(tgt));
+                bytes.extend_from_slice(&varint::encode(tgt));
             }
             Instruction::Return => {}
 
@@ -787,22 +808,22 @@ impl Instruction {
             | Instruction::JumpGT { lhs, rhs, tgt }
             | Instruction::JumpGE { lhs, rhs, tgt } => {
                 bytes.push(enc_reg_pair(lhs, rhs));
-                bytes.extend_from_slice(&enc_u32(tgt));
+                bytes.extend_from_slice(&varint::encode(tgt));
             }
 
             Instruction::JumpIfEndOfLine { tgt } => {
-                bytes.extend_from_slice(&enc_u32(tgt));
+                bytes.extend_from_slice(&varint::encode(tgt));
             }
             Instruction::JumpIfMatchCharset { idx, min, max, tgt } => {
-                bytes.extend_from_slice(&enc_u32(idx));
-                bytes.extend_from_slice(&enc_u32(min));
-                bytes.extend_from_slice(&enc_u32(max));
-                bytes.extend_from_slice(&enc_u32(tgt));
+                bytes.extend_from_slice(&varint::encode(idx));
+                bytes.extend_from_slice(&varint::encode(min));
+                bytes.extend_from_slice(&varint::encode(max));
+                bytes.extend_from_slice(&varint::encode(tgt));
             }
             Instruction::JumpIfMatchPrefix { idx, tgt }
             | Instruction::JumpIfMatchPrefixInsensitive { idx, tgt } => {
-                bytes.extend_from_slice(&enc_u32(idx));
-                bytes.extend_from_slice(&enc_u32(tgt));
+                bytes.extend_from_slice(&varint::encode(idx));
+                bytes.extend_from_slice(&varint::encode(tgt));
             }
 
             Instruction::FlushHighlight { kind } => {
@@ -879,7 +900,7 @@ impl Instruction {
             }
             _ => return (None, 1),
         });
-        (Some(instr), pc)
+        (Some(instr), pc as usize)
     }
 
     pub fn mnemonic<'a>(
