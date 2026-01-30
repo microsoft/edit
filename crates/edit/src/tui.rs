@@ -2354,6 +2354,11 @@ impl<'a> Context<'a, '_> {
                     return make_cursor_visible;
                 }
             }
+
+            self.set_input_consumed();
+            return make_cursor_visible;
+        }
+
         if !tc.has_focus {
             return false;
         }
