@@ -52,13 +52,34 @@ impl fmt::Display for CompileError {
     }
 }
 
+#[derive(Debug)]
+pub struct CharsetHandle<'a> {
+    pub id: u32,
+    pub value: &'a Charset,
+    pub usage_count: u32,
+}
+
+#[derive(Debug)]
+pub struct StringHandle<'a> {
+    pub id: u32,
+    pub value: &'a str,
+    pub usage_count: u32,
+}
+
+#[derive(Debug)]
+pub struct HighlightKindHandle<'a> {
+    pub id: u32,
+    pub value: &'a str,
+    pub usage_count: u32,
+}
+
 pub struct Compiler<'a> {
     arena: &'a Arena,
     physical_registers: [IRRegCell<'a>; Register::COUNT],
     functions: Vec<Function<'a>>,
-    charsets: Vec<&'a Charset>,
-    strings: Vec<&'a str>,
-    highlight_kinds: Vec<HighlightKind<'a>>,
+    charsets: Vec<&'a CharsetHandle<'a>>,
+    strings: Vec<&'a StringHandle<'a>>,
+    highlight_kinds: Vec<&'a HighlightKindHandle<'a>>,
     next_vreg_id: Cell<u32>,
 }
 
@@ -71,9 +92,12 @@ impl<'a> Compiler<'a> {
             functions: Default::default(),
             charsets: Default::default(),
             strings: Default::default(),
-            highlight_kinds: vec![HighlightKind { identifier: "other", value: 0 }],
+            highlight_kinds: Default::default(),
             next_vreg_id: Cell::new(0),
         };
+
+        // The `other` highlight kind is always present.
+        s.intern_string("other");
 
         for i in 0..Register::COUNT {
             let reg = s.alloc_vreg();
@@ -121,25 +145,41 @@ impl<'a> Compiler<'a> {
         self.arena.alloc_uninit().write(RefCell::new(IRReg::new(id)))
     }
 
-    fn intern_charset(&mut self, charset: &Charset) -> &'a Charset {
-        self.charsets.intern(self.arena, charset)
+    fn intern_charset(&mut self, charset: &Charset) -> &'a CharsetHandle<'a> {
+        if let Some(&h) = self.charsets.iter().find(|&&v| v.value == charset) {
+            h
+        } else {
+            let id = self.charsets.len() as u32;
+            let value = self.arena.alloc_uninit().write(charset.clone());
+            let h = self.arena.alloc_uninit().write(CharsetHandle { id, value, usage_count: 0 });
+            self.charsets.push(h);
+            h
+        }
     }
 
-    fn intern_string(&mut self, s: &str) -> &'a str {
-        self.strings.intern(self.arena, s)
+    fn intern_string(&mut self, s: &str) -> &'a StringHandle<'a> {
+        if let Some(&h) = self.strings.iter().find(|&&v| v.value == s) {
+            h
+        } else {
+            let id = self.strings.len() as u32;
+            let value = arena_clone_str(self.arena, s);
+            let h = self.arena.alloc_uninit().write(StringHandle { id, value, usage_count: 0 });
+            self.strings.push(h);
+            h
+        }
     }
 
-    fn intern_highlight_kind(&mut self, identifier: &str) -> &HighlightKind<'a> {
-        let idx = match self.highlight_kinds.binary_search_by(|hk| hk.identifier.cmp(identifier)) {
-            Ok(idx) => idx,
-            Err(idx) => {
-                let identifier = arena_clone_str(self.arena, identifier);
-                let value = self.highlight_kinds.len() as u32;
-                self.highlight_kinds.insert(idx, HighlightKind { identifier, value });
-                idx
-            }
-        };
-        &self.highlight_kinds[idx]
+    fn intern_highlight_kind(&mut self, s: &str) -> &'a HighlightKindHandle<'a> {
+        if let Some(&h) = self.highlight_kinds.iter().find(|&&v| v.value == s) {
+            h
+        } else {
+            let id = self.highlight_kinds.len() as u32;
+            let value = arena_clone_str(self.arena, s);
+            let h =
+                self.arena.alloc_uninit().write(HighlightKindHandle { id, value, usage_count: 0 });
+            self.highlight_kinds.push(h);
+            h
+        }
     }
 
     fn visit_nodes_from(&self, root: IRCell<'a>) -> TreeVisitor<'a> {
@@ -182,11 +222,11 @@ impl<'a> Compiler<'a> {
                     Condition::EndOfLine => {}
                     Condition::Charset { cs, .. } => {
                         // Merge this charset
-                        charset.merge(cs);
+                        charset.merge(&cs.value);
                     }
                     Condition::Prefix(s) | Condition::PrefixInsensitive(s) => {
                         // First character of the prefix is interesting
-                        if let Some(&b) = s.as_bytes().first() {
+                        if let Some(&b) = s.value.as_bytes().first() {
                             charset.set(b, true);
                             if matches!(condition, Condition::PrefixInsensitive(_)) {
                                 charset.set(b.to_ascii_uppercase(), true);
@@ -249,12 +289,7 @@ impl<'a> Compiler<'a> {
                     }
                     IRI::MovKind { dst, kind } => {
                         let dst = dst.borrow();
-                        let kind = self
-                            .highlight_kinds
-                            .iter()
-                            .find(|hk| hk.value == kind)
-                            .map_or("???", |hk| hk.identifier);
-                        _ = write!(output, "[\"{offset}: {dst:?} = `{kind}`\"]");
+                        _ = write!(output, "[\"{offset}: {dst:?} = `{}`\"]", kind.value);
                     }
                     IRI::AddImm { dst, imm } => {
                         let dst = dst.borrow();
@@ -283,8 +318,10 @@ impl<'a> Compiler<'a> {
                                 (1, u32::MAX) => write!(output, "charset: {cs:?}+"),
                                 _ => write!(output, "charset: {cs:?}{{{min},{max}}}"),
                             },
-                            Condition::Prefix(s) => write!(output, "match: {s}"),
-                            Condition::PrefixInsensitive(s) => write!(output, "imatch: {s}"),
+                            Condition::Prefix(s) => write!(output, "match: {}", s.value),
+                            Condition::PrefixInsensitive(s) => {
+                                write!(output, "imatch: {}", s.value)
+                            }
                         };
                         _ = writeln!(output, "\"}}");
                         _ = writeln!(output, "    {} -->|yes| {}", node, then.borrow());
@@ -376,7 +413,7 @@ pub struct Assembly<'a> {
     pub entrypoints: Vec<Entrypoint>,
     pub charsets: Vec<&'a Charset>,
     pub strings: Vec<&'a str>,
-    pub highlight_kinds: Vec<HighlightKind<'a>>,
+    pub highlight_kinds: Vec<&'a str>,
 }
 
 pub struct Entrypoint {
@@ -386,26 +423,12 @@ pub struct Entrypoint {
     pub address: usize,
 }
 
-#[derive(Clone)]
-pub struct HighlightKind<'a> {
-    pub identifier: &'a str,
-    pub value: u32,
-}
-
-impl<'a> HighlightKind<'a> {
-    pub fn fmt_camelcase(&self) -> HighlightKindCamelcaseFormatter<'a> {
-        HighlightKindCamelcaseFormatter { identifier: self.identifier }
-    }
-}
-
-pub struct HighlightKindCamelcaseFormatter<'a> {
-    identifier: &'a str,
-}
+pub struct HighlightKindCamelcaseFormatter<'a>(&'a str);
 
 impl<'a> fmt::Display for HighlightKindCamelcaseFormatter<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut capitalize_next = true;
-        for c in self.identifier.chars() {
+        for c in self.0.chars() {
             if c == '.' {
                 capitalize_next = true;
             } else if capitalize_next {
@@ -456,7 +479,7 @@ enum IRI<'a> {
     Noop,
     Mov { dst: IRRegCell<'a>, src: IRRegCell<'a> },
     MovImm { dst: IRRegCell<'a>, imm: u32 },
-    MovKind { dst: IRRegCell<'a>, kind: u32 },
+    MovKind { dst: IRRegCell<'a>, kind: &'a HighlightKindHandle<'a> },
     AddImm { dst: IRRegCell<'a>, imm: u32 },
     If { condition: Condition<'a>, then: IRCell<'a> },
     Call { name: &'a str },
@@ -539,9 +562,9 @@ enum ComparisonOp {
 enum Condition<'a> {
     Cmp { lhs: IRRegCell<'a>, rhs: IRRegCell<'a>, op: ComparisonOp },
     EndOfLine,
-    Charset { cs: &'a Charset, min: u32, max: u32 },
-    Prefix(&'a str),
-    PrefixInsensitive(&'a str),
+    Charset { cs: &'a CharsetHandle<'a>, min: u32, max: u32 },
+    Prefix(&'a StringHandle<'a>),
+    PrefixInsensitive(&'a StringHandle<'a>),
 }
 
 impl<'a> IR<'a> {
@@ -569,20 +592,4 @@ impl<'a> IR<'a> {
 
 fn arena_clone_str<'a>(arena: &'a Arena, s: &str) -> &'a str {
     ArenaString::from_str(arena, s).leak()
-}
-
-trait Intern<'a, T: ?Sized> {
-    fn intern(&mut self, arena: &'a Arena, item: &T) -> &'a T;
-}
-
-impl<'a> Intern<'a, str> for Vec<&'a str> {
-    fn intern(&mut self, arena: &'a Arena, value: &str) -> &'a str {
-        if let Some(&s) = self.iter().find(|&&v| v == value) {
-            s
-        } else {
-            let s = arena_clone_str(arena, value);
-            self.push(s);
-            s
-        }
-    }
 }

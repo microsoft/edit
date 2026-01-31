@@ -11,23 +11,28 @@
 //! - Compute liveness using backward dataflow analysis
 //! - Compute live intervals from liveness sets
 //! - Linear scan register allocation
-//! - Generate bytecode with physical registers
+//! - Generate instructions with symbolic relocations
+//! - Iterative relaxation to compute final addresses (for varint encoding)
+//! - Emit final bytecode
 //!
 //! ## Relocation system
 //!
-//! Jump targets aren't known during code generation (forward references). The backend
-//! emits placeholder zeros and records `Relocation` entries. After each function,
-//! `process_relocations()` patches the bytecode with resolved addresses.
+//! Jump targets use symbolic references during code generation. After all
+//! functions are compiled, iterative relaxation resolves addresses:
+//!
+//! 1. Start with pessimistic (max-size) varint encoding
+//! 2. Compute byte offsets for all instructions
+//! 3. Re-encode with actual addresses (may shrink varints)
+//! 4. Repeat until no sizes change (guaranteed to converge)
 //!
 //! Two relocation types:
 //! - `ByName` - cross-function calls, resolved when the target function is compiled
-//! - `ByNode` - intra-function jumps to IR nodes not yet serialized
+//! - `ByNode` - intra-function jumps to IR nodes
 //!
 //! ## Quirks
 //!
-//! - `IR.offset` starts as `usize::MAX` (unvisited). Codegen sets it to the bytecode
-//!   address. If we encounter a node with `offset != MAX`, it's a backward reference (loop)
-//!   We need to then emit a jump to the already-assigned address.
+//! - `IR.offset` starts as `usize::MAX` (unvisited). Codegen sets it to the
+//!   *instruction index* (not byte offset). After relaxation, it holds the byte offset.
 //! - Physical registers have `physical = Some(...)`.
 //!   Liveness analysis ignores them (they're always "live").
 //!
@@ -57,83 +62,188 @@ use stdext::arena::scratch_arena;
 use super::*;
 use crate::runtime::Instruction;
 
+/// Symbolic reference to a jump target, resolved during relaxation.
 #[derive(Debug, Clone, Copy)]
-enum Relocation<'a> {
-    ByName(usize, &'a str),
-    ByNode(usize, IRCell<'a>),
+enum JumpTarget<'a> {
+    /// Reference to a named function (cross-function call).
+    ByName(&'a str),
+    /// Reference to an IR node (intra-function jump).
+    ByNode(IRCell<'a>),
+}
+
+/// An instruction with its symbolic jump target (if any).
+struct PendingInstruction<'a> {
+    /// The instruction with a placeholder target address (0).
+    instr: Instruction,
+    /// If this instruction has a jump target, how to resolve it.
+    target: Option<JumpTarget<'a>>,
+    /// Current computed byte offset (updated during relaxation).
+    offset: usize,
+}
+
+impl<'a> PendingInstruction<'a> {
+    fn new(instr: Instruction) -> Self {
+        Self { instr, target: None, offset: 0 }
+    }
+
+    fn with_target(instr: Instruction, target: JumpTarget<'a>) -> Self {
+        Self { instr, target: Some(target), offset: 0 }
+    }
 }
 
 pub struct Backend<'a> {
-    assembly: Assembly<'a>,
-    relocations: Vec<Relocation<'a>>,
+    /// Pending instructions awaiting address resolution.
+    pending: Vec<PendingInstruction<'a>>,
+    /// Map from function name to its starting instruction index.
     functions_seen: HashMap<&'a str, usize>,
-    charsets_seen: HashMap<*const Charset, usize>,
-    strings_seen: HashMap<*const str, usize>,
+    /// Map from IR node pointer to its instruction index.
+    nodes_seen: HashMap<*const RefCell<IR<'a>>, usize>,
 }
 
 impl<'a> Backend<'a> {
     pub fn new() -> Self {
         Self {
-            assembly: Assembly {
-                instructions: Default::default(),
-                entrypoints: Default::default(),
-                charsets: Default::default(),
-                strings: Default::default(),
-                highlight_kinds: Default::default(),
-            },
-            relocations: Default::default(),
+            pending: Default::default(),
             functions_seen: Default::default(),
-            charsets_seen: Default::default(),
-            strings_seen: Default::default(),
+            nodes_seen: Default::default(),
         }
     }
 
     pub fn compile(mut self, compiler: &Compiler<'a>) -> CompileResult<Assembly<'a>> {
+        // Phase 1: Generate instructions with symbolic relocations
         for function in &compiler.functions {
             self.allocate_registers(function)?;
 
-            let entrypoint_offset = self.assembly.instructions.len();
-            self.functions_seen.insert(function.name, entrypoint_offset);
+            let entrypoint_idx = self.pending.len();
+            self.functions_seen.insert(function.name, entrypoint_idx);
             self.generate_code(function)?;
-            self.process_relocations();
         }
 
-        if !self.relocations.is_empty() {
-            let names: String = self
-                .relocations
-                .iter()
-                .filter_map(|reloc| match reloc {
-                    Relocation::ByName(_, name) => Some(*name),
-                    Relocation::ByNode(_, _) => None,
-                })
-                .collect::<Vec<&str>>()
-                .join(", ");
-            return Err(CompileError {
-                path: String::new(),
-                line: 0,
-                column: 0,
-                message: if !names.is_empty() {
-                    format!("unresolved function call names: {names}")
-                } else {
-                    "unresolved IR nodes".to_string()
-                },
-            });
+        // Verify all function references are resolved
+        for pi in &self.pending {
+            if let Some(JumpTarget::ByName(name)) = pi.target
+                && !self.functions_seen.contains_key(name)
+            {
+                return Err(CompileError {
+                    path: String::new(),
+                    line: 0,
+                    column: 0,
+                    message: format!("unresolved function call: {name}"),
+                });
+            }
         }
 
-        self.assembly.entrypoints = compiler
+        // Phase 2: Iterative relaxation to compute final byte offsets
+        self.relax();
+
+        // Update IR node offsets from instruction index to byte offset
+        for (node_ptr, &instr_idx) in &self.nodes_seen {
+            let byte_offset = self.pending[instr_idx].offset;
+            // SAFETY: We hold the only reference to these nodes during compilation
+            unsafe { (**node_ptr).borrow_mut().offset = byte_offset };
+        }
+
+        // Phase 3: Emit final bytecode
+        let scratch = scratch_arena(None);
+        let mut instructions = Vec::new();
+        for pi in &self.pending {
+            instructions.extend(pi.instr.encode(&scratch));
+        }
+
+        // Build entrypoints from function offsets
+        let entrypoints = compiler
             .functions
             .iter()
             .filter(|f| f.public)
-            .map(|f| Entrypoint {
-                name: f.name.to_string(),
-                display_name: f.attributes.display_name.unwrap_or(f.name).to_string(),
-                paths: f.attributes.paths.iter().map(|s| s.to_string()).collect(),
-                address: f.body.borrow().offset,
+            .map(|f| {
+                let instr_idx = self.functions_seen[f.name];
+                Entrypoint {
+                    name: f.name.to_string(),
+                    display_name: f.attributes.display_name.unwrap_or(f.name).to_string(),
+                    paths: f.attributes.paths.iter().map(|s| s.to_string()).collect(),
+                    address: self.pending[instr_idx].offset,
+                }
             })
             .collect();
-        self.assembly.highlight_kinds = compiler.highlight_kinds.clone();
 
-        Ok(self.assembly)
+        let charsets =
+            compiler.charsets.iter().filter(|h| h.usage_count != 0).map(|h| h.value).collect();
+        let strings =
+            compiler.strings.iter().filter(|h| h.usage_count != 0).map(|h| h.value).collect();
+        let highlight_kinds = compiler
+            .highlight_kinds
+            .iter()
+            .filter(|h| h.usage_count != 0)
+            .map(|h| h.value)
+            .collect();
+
+        Ok(Assembly { instructions, entrypoints, charsets, strings, highlight_kinds })
+    }
+
+    /// Iterative relaxation: compute byte offsets until stable.
+    ///
+    /// Addresses can only decrease when instructions shrink (smaller varints),
+    /// so this is guaranteed to converge.
+    fn relax(&mut self) {
+        loop {
+            // Resolve targets and compute new instruction sizes
+            let mut changed = false;
+            for i in 0..self.pending.len() {
+                if let Some(target) = self.pending[i].target {
+                    let target_offset = self.resolve_target(target);
+                    let old_instr = self.pending[i].instr;
+                    self.pending[i].instr = Self::patch_target(old_instr, target_offset as u32);
+                }
+            }
+
+            // Recompute byte offsets
+            let mut offset = 0;
+            for pi in &mut self.pending {
+                if pi.offset != offset {
+                    pi.offset = offset;
+                    changed = true;
+                }
+                offset += pi.instr.encoded_size();
+            }
+
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// Resolve a symbolic jump target to its current byte offset.
+    fn resolve_target(&self, target: JumpTarget<'a>) -> usize {
+        match target {
+            JumpTarget::ByName(name) => {
+                let instr_idx = self.functions_seen[name];
+                self.pending[instr_idx].offset
+            }
+            JumpTarget::ByNode(node) => {
+                let instr_idx = self.nodes_seen[&(node as *const _)];
+                self.pending[instr_idx].offset
+            }
+        }
+    }
+
+    /// Patch an instruction's jump target field with a resolved address.
+    fn patch_target(instr: Instruction, tgt: u32) -> Instruction {
+        use Instruction::*;
+        match instr {
+            MovImm { dst, .. } if dst == Register::ProgramCounter => MovImm { dst, imm: tgt },
+            Call { .. } => Call { tgt },
+            JumpEQ { lhs, rhs, .. } => JumpEQ { lhs, rhs, tgt },
+            JumpNE { lhs, rhs, .. } => JumpNE { lhs, rhs, tgt },
+            JumpLT { lhs, rhs, .. } => JumpLT { lhs, rhs, tgt },
+            JumpLE { lhs, rhs, .. } => JumpLE { lhs, rhs, tgt },
+            JumpGT { lhs, rhs, .. } => JumpGT { lhs, rhs, tgt },
+            JumpGE { lhs, rhs, .. } => JumpGE { lhs, rhs, tgt },
+            JumpIfEndOfLine { .. } => JumpIfEndOfLine { tgt },
+            JumpIfMatchCharset { idx, min, max, .. } => JumpIfMatchCharset { idx, min, max, tgt },
+            JumpIfMatchPrefix { idx, .. } => JumpIfMatchPrefix { idx, tgt },
+            JumpIfMatchPrefixInsensitive { idx, .. } => JumpIfMatchPrefixInsensitive { idx, tgt },
+            other => other,
+        }
     }
 
     /// Perform liveness analysis and register allocation for a function.
@@ -218,23 +328,29 @@ impl<'a> Backend<'a> {
         Ok(allocation)
     }
 
-    /// Generate bytecode for a function (assumes registers already allocated).
+    /// Generate instructions for a function (assumes registers already allocated).
     fn generate_code(&mut self, function: &Function<'a>) -> CompileResult<()> {
         use Instruction::*;
 
         let mut stack: VecDeque<IRCell<'a>> = VecDeque::new();
         stack.push_back(function.body);
 
-        while let Some(ir_cell) = stack.pop_front() {
-            let mut ir = ir_cell.borrow_mut();
-
-            if ir.offset != usize::MAX {
+        while let Some(start_cell) = stack.pop_front() {
+            if start_cell.borrow().offset != usize::MAX {
                 // Already serialized
                 continue;
             }
 
+            // Track the current node as we follow the chain
+            let mut current_cell = start_cell;
+
             loop {
-                ir.offset = self.assembly.instructions.len();
+                let mut ir = current_cell.borrow_mut();
+
+                // Track this IR node's instruction index
+                let instr_idx = self.pending.len();
+                ir.offset = instr_idx;
+                self.nodes_seen.insert(current_cell as *const _, instr_idx);
 
                 match ir.instr {
                     IRI::Noop => {}
@@ -255,7 +371,8 @@ impl<'a> Backend<'a> {
                     }
                     IRI::MovKind { dst, kind } => {
                         if let Some(dst) = dst.borrow().physical {
-                            self.push_instruction(MovImm { dst, imm: kind });
+                            let imm = kind.id;
+                            self.push_instruction(MovImm { dst, imm });
                         }
                     }
                     IRI::AddImm { dst, imm } => {
@@ -266,71 +383,70 @@ impl<'a> Backend<'a> {
                     IRI::If { condition, then } => {
                         stack.push_back(then);
 
-                        debug_assert!(!std::ptr::eq(ir_cell, then));
+                        debug_assert!(!std::ptr::eq(current_cell, then));
 
+                        let target = JumpTarget::ByNode(then);
                         match condition {
                             Condition::Cmp { lhs, rhs, op } => {
                                 let lhs_phys = lhs.borrow().physical.unwrap();
                                 let rhs_phys = rhs.borrow().physical.unwrap();
-                                let tgt = self.dst_by_node(then) as u32;
 
-                                match op {
-                                    ComparisonOp::Eq => self.push_instruction(JumpEQ {
-                                        lhs: lhs_phys,
-                                        rhs: rhs_phys,
-                                        tgt,
-                                    }),
-                                    ComparisonOp::Ne => self.push_instruction(JumpNE {
-                                        lhs: lhs_phys,
-                                        rhs: rhs_phys,
-                                        tgt,
-                                    }),
-                                    ComparisonOp::Lt => self.push_instruction(JumpLT {
-                                        lhs: lhs_phys,
-                                        rhs: rhs_phys,
-                                        tgt,
-                                    }),
-                                    ComparisonOp::Gt => self.push_instruction(JumpGT {
-                                        lhs: lhs_phys,
-                                        rhs: rhs_phys,
-                                        tgt,
-                                    }),
-                                    ComparisonOp::Le => self.push_instruction(JumpLE {
-                                        lhs: lhs_phys,
-                                        rhs: rhs_phys,
-                                        tgt,
-                                    }),
-                                    ComparisonOp::Ge => self.push_instruction(JumpGE {
-                                        lhs: lhs_phys,
-                                        rhs: rhs_phys,
-                                        tgt,
-                                    }),
-                                }
+                                let instr = match op {
+                                    ComparisonOp::Eq => {
+                                        JumpEQ { lhs: lhs_phys, rhs: rhs_phys, tgt: 0 }
+                                    }
+                                    ComparisonOp::Ne => {
+                                        JumpNE { lhs: lhs_phys, rhs: rhs_phys, tgt: 0 }
+                                    }
+                                    ComparisonOp::Lt => {
+                                        JumpLT { lhs: lhs_phys, rhs: rhs_phys, tgt: 0 }
+                                    }
+                                    ComparisonOp::Gt => {
+                                        JumpGT { lhs: lhs_phys, rhs: rhs_phys, tgt: 0 }
+                                    }
+                                    ComparisonOp::Le => {
+                                        JumpLE { lhs: lhs_phys, rhs: rhs_phys, tgt: 0 }
+                                    }
+                                    ComparisonOp::Ge => {
+                                        JumpGE { lhs: lhs_phys, rhs: rhs_phys, tgt: 0 }
+                                    }
+                                };
+                                self.push_instruction_with_target(instr, target);
                             }
                             Condition::EndOfLine => {
-                                let tgt = self.dst_by_node(then) as u32;
-                                self.push_instruction(JumpIfEndOfLine { tgt });
+                                self.push_instruction_with_target(
+                                    JumpIfEndOfLine { tgt: 0 },
+                                    target,
+                                );
                             }
                             Condition::Charset { cs, min, max } => {
-                                let idx = self.visit_charset(cs) as u32;
-                                let tgt = self.dst_by_node(then) as u32;
-                                self.push_instruction(JumpIfMatchCharset { idx, min, max, tgt });
+                                let idx = cs.id;
+                                self.push_instruction_with_target(
+                                    JumpIfMatchCharset { idx, min, max, tgt: 0 },
+                                    target,
+                                );
                             }
                             Condition::Prefix(s) => {
-                                let idx = self.visit_string(s) as u32;
-                                let tgt = self.dst_by_node(then) as u32;
-                                self.push_instruction(JumpIfMatchPrefix { idx, tgt });
+                                let idx = s.id;
+                                self.push_instruction_with_target(
+                                    JumpIfMatchPrefix { idx, tgt: 0 },
+                                    target,
+                                );
                             }
                             Condition::PrefixInsensitive(s) => {
-                                let idx = self.visit_string(s) as u32;
-                                let tgt = self.dst_by_node(then) as u32;
-                                self.push_instruction(JumpIfMatchPrefixInsensitive { idx, tgt });
+                                let idx = s.id;
+                                self.push_instruction_with_target(
+                                    JumpIfMatchPrefixInsensitive { idx, tgt: 0 },
+                                    target,
+                                );
                             }
                         }
                     }
                     IRI::Call { name } => {
-                        let tgt = self.dst_by_name(name) as u32;
-                        self.push_instruction(Call { tgt });
+                        self.push_instruction_with_target(
+                            Call { tgt: 0 },
+                            JumpTarget::ByName(name),
+                        );
                     }
                     IRI::Return => {
                         self.push_instruction(Return);
@@ -348,15 +464,19 @@ impl<'a> Backend<'a> {
                     break;
                 };
 
-                ir = next.borrow_mut();
+                drop(ir);
 
-                if ir.offset != usize::MAX {
-                    self.push_instruction(MovImm {
-                        dst: Register::ProgramCounter,
-                        imm: ir.offset as u32,
-                    });
+                if next.borrow().offset != usize::MAX {
+                    // Backward jump to already-visited node
+                    self.push_instruction_with_target(
+                        MovImm { dst: Register::ProgramCounter, imm: 0 },
+                        JumpTarget::ByNode(next),
+                    );
                     break;
                 }
+
+                // Continue following the chain
+                current_cell = next;
             }
         }
 
@@ -364,81 +484,11 @@ impl<'a> Backend<'a> {
     }
 
     fn push_instruction(&mut self, instr: Instruction) {
-        if let Some(reloc) = self.relocations.last_mut() {
-            let offset = match reloc {
-                Relocation::ByName(off, _) => off,
-                Relocation::ByNode(off, _) => off,
-            };
-
-            if *offset == self.assembly.instructions.len()
-                && let Some(delta) = instr.address_offset()
-            {
-                *offset += delta;
-            }
-        }
-
-        let scratch = scratch_arena(None);
-        self.assembly.instructions.extend(instr.encode(&scratch));
+        self.pending.push(PendingInstruction::new(instr));
     }
 
-    fn visit_charset(&mut self, h: &'a Charset) -> usize {
-        *self.charsets_seen.entry(h as *const _).or_insert_with(|| {
-            let idx = self.assembly.charsets.len();
-            self.assembly.charsets.push(h);
-            idx
-        })
-    }
-
-    fn visit_string(&mut self, s: &'a str) -> usize {
-        *self.strings_seen.entry(s as *const _).or_insert_with(|| {
-            let idx = self.assembly.strings.len();
-            self.assembly.strings.push(s);
-            idx
-        })
-    }
-
-    fn dst_by_node(&mut self, ir: IRCell<'a>) -> usize {
-        let off = ir.borrow().offset;
-        if off != usize::MAX {
-            off
-        } else {
-            self.relocations.push(Relocation::ByNode(self.assembly.instructions.len(), ir));
-            0
-        }
-    }
-
-    fn dst_by_name(&mut self, name: &'a str) -> usize {
-        match self.functions_seen.get(name) {
-            Some(&dst) => dst,
-            None => {
-                self.relocations.push(Relocation::ByName(self.assembly.instructions.len(), name));
-                0
-            }
-        }
-    }
-
-    fn process_relocations(&mut self) {
-        self.relocations.retain_mut(|reloc| {
-            let (off, resolved) = match *reloc {
-                Relocation::ByName(off, name) => match self.functions_seen.get(name) {
-                    None => return true,
-                    Some(&resolved) => (off, resolved),
-                },
-                Relocation::ByNode(off, node) => match node.borrow().offset {
-                    usize::MAX => return true,
-                    resolved => (off, resolved),
-                },
-            };
-
-            let range = off..off + 4;
-            if let Some(target) = self.assembly.instructions.get_mut(range) {
-                target.copy_from_slice(&(resolved as u32).to_le_bytes());
-            } else {
-                panic!("Unexpected relocation target offset: {off}");
-            }
-
-            false
-        });
+    fn push_instruction_with_target(&mut self, instr: Instruction, target: JumpTarget<'a>) {
+        self.pending.push(PendingInstruction::with_target(instr, target));
     }
 }
 

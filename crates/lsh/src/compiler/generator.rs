@@ -178,11 +178,11 @@ impl<'a> Generator<'a> {
         let members: Vec<_> = assembly
             .highlight_kinds
             .iter()
-            .map(|hk| (hk, format!("{} = {},", hk.fmt_camelcase(), hk.value)))
+            .map(|hk| (hk, format!("{} = {},", HighlightKindCamelcaseFormatter(hk), hk)))
             .collect();
         let width = members.iter().map(|s| s.1.len()).max().unwrap_or(0);
         for (hk, member) in members {
-            _ = writeln!(output, "    {member:<width$} // {}", hk.identifier);
+            _ = writeln!(output, "    {member:<width$} // {}", hk);
         }
         output.push_str("}\n");
 
@@ -203,7 +203,7 @@ impl TryFrom<u32> for HighlightKind {{
     }}
 }}
 ",
-                last.fmt_camelcase()
+                HighlightKindCamelcaseFormatter(last)
             );
         }
 

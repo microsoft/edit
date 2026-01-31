@@ -159,12 +159,9 @@ fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
 /// This isn't an optimization for the VM, it's one for my autistic side.
 /// I like it if the identifiers are sorted and the values contiguous.
 fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
-    let scratch = scratch_arena(None);
-    let mut mapping = Vec::new_in(&*scratch);
-
     compiler.highlight_kinds.sort_unstable_by(|a, b| {
-        let a = a.identifier;
-        let b = b.identifier;
+        let a = a.value;
+        let b = b.value;
 
         // Global identifiers without a dot come first.
         let nested_a = a.contains('.');
@@ -189,20 +186,7 @@ fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
         a.split('.').cmp(b.split('.'))
     });
 
-    mapping.resize(compiler.highlight_kinds.len(), u32::MAX);
     for (idx, hk) in compiler.highlight_kinds.iter_mut().enumerate() {
-        let idx = idx as u32;
-        mapping[hk.value as usize] = idx;
-        hk.value = idx;
-    }
-
-    for function in &compiler.functions {
-        for current in compiler.visit_nodes_from(function.body) {
-            let mut current = current.borrow_mut();
-
-            if let IRI::MovKind { kind, .. } = &mut current.instr {
-                *kind = mapping[*kind as usize];
-            }
-        }
+        hk.id = idx as u32;
     }
 }

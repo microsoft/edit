@@ -500,7 +500,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             }
 
             let color = self.read_identifier()?;
-            let kind = self.compiler.intern_highlight_kind(color).value;
+            let kind = self.compiler.intern_highlight_kind(color);
             self.expect(';')?;
 
             let (start_vreg, end_vreg) = match self.context.last() {
@@ -538,7 +538,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         } else {
             // Normal yield: yield color;
             let color = self.read_identifier()?;
-            let kind = self.compiler.intern_highlight_kind(color).value;
+            let kind = self.compiler.intern_highlight_kind(color);
 
             self.expect(';')?;
 
@@ -578,7 +578,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 self.pos += 1;
                 self.expect(')')?;
                 self.expect(';')?;
-                let name = self.compiler.strings.intern(self.compiler.arena, name);
+                let name = arena_clone_str(self.compiler.arena, name);
                 Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Call { name })))
             }
             // foo = expr;
