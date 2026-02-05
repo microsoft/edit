@@ -156,7 +156,7 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
             ctx.attr_overflow(Overflow::TruncateHead);
             ctx.attr_position(Position::Center);
 
-            ctx.label("copyright", "Copyright (c) Microsoft Corp 2025");
+            ctx.label("copyright", "Copyright (c) Microsoft Corp 2026");
             ctx.attr_overflow(Overflow::TruncateTail);
             ctx.attr_position(Position::Center);
 
