@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![feature(allocator_api, breakpoint, linked_list_cursors)]
+#![feature(allocator_api, linked_list_cursors)]
 #![cfg_attr(
     target_arch = "loongarch64",
     feature(stdarch_loongarch, stdarch_loongarch_feature_detection, loongarch_target_feature),
