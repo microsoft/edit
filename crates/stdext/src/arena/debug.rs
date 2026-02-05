@@ -107,6 +107,10 @@ impl Arena {
         self.delegate_target().alloc_uninit()
     }
 
+    pub fn alloc_uninit_array<const N: usize, T>(&self) -> &mut [MaybeUninit<T>; N] {
+        self.delegate_target().alloc_uninit_array()
+    }
+
     pub fn alloc_uninit_slice<T>(&self, count: usize) -> &mut [MaybeUninit<T>] {
         self.delegate_target().alloc_uninit_slice(count)
     }

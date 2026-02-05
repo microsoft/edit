@@ -7,8 +7,7 @@
     cold_path,
     linked_list_cursors,
     maybe_uninit_fill,
-    maybe_uninit_slice,
-    maybe_uninit_uninit_array_transpose
+    maybe_uninit_slice
 )]
 #![cfg_attr(
     target_arch = "loongarch64",

@@ -687,7 +687,7 @@ impl TextBuffer {
     /// Reads a file from disk into the text buffer, detecting encoding and BOM.
     pub fn read_file(&mut self, file: &mut File, encoding: Option<&'static str>) -> IoResult<()> {
         let scratch = scratch_arena(None);
-        let mut buf = scratch.alloc_uninit().transpose();
+        let buf = scratch.alloc_uninit_array();
         let mut first_chunk_len = 0;
         let mut read = 0;
 
@@ -713,9 +713,9 @@ impl TextBuffer {
 
         let done = read == 0;
         if self.encoding == "UTF-8" {
-            self.read_file_as_utf8(file, &mut buf, first_chunk_len, done)?;
+            self.read_file_as_utf8(file, buf, first_chunk_len, done)?;
         } else {
-            self.read_file_with_icu(file, &mut buf, first_chunk_len, done)?;
+            self.read_file_with_icu(file, buf, first_chunk_len, done)?;
         }
 
         // Figure out
