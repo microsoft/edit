@@ -25,7 +25,7 @@ mod navigation;
 
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
-use std::collections::LinkedList;
+use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, Read as _, Write as _};
@@ -229,8 +229,8 @@ pub type RcTextBuffer = Rc<TextBufferCell>;
 pub struct TextBuffer {
     buffer: GapBuffer,
 
-    undo_stack: LinkedList<SemiRefCell<HistoryEntry>>,
-    redo_stack: LinkedList<SemiRefCell<HistoryEntry>>,
+    undo_stack: VecDeque<SemiRefCell<HistoryEntry>>,
+    redo_stack: VecDeque<SemiRefCell<HistoryEntry>>,
     last_history_type: HistoryType,
     last_save_generation: u32,
 
@@ -281,8 +281,8 @@ impl TextBuffer {
         Ok(Self {
             buffer: GapBuffer::new(small)?,
 
-            undo_stack: LinkedList::new(),
-            redo_stack: LinkedList::new(),
+            undo_stack: Default::default(),
+            redo_stack: Default::default(),
             last_history_type: HistoryType::Other,
             last_save_generation: 0,
 
@@ -2742,17 +2742,14 @@ impl TextBuffer {
                     (&mut self.redo_stack, &mut self.undo_stack)
                 };
 
-                if let Some(g) = entry_buffer_generation
-                    && from.back().is_none_or(|c| c.borrow().generation_before != g)
-                {
-                    break;
-                }
-
-                let Some(list) = from.cursor_back_mut().remove_current_as_list() else {
+                // Only pop the entry if its buffer generation matches the previous one
+                let Some(g) = from.pop_back_if(|c| {
+                    entry_buffer_generation.is_none_or(|g| g == c.borrow().generation_before)
+                }) else {
                     break;
                 };
 
-                to.cursor_back_mut().splice_after(list);
+                to.push_back(g);
             }
 
             let change = {

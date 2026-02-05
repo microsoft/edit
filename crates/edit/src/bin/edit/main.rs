@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![feature(allocator_api, linked_list_cursors, string_from_utf8_lossy_owned)]
+#![feature(allocator_api, string_from_utf8_lossy_owned)]
 
 mod apperr;
 mod documents;
