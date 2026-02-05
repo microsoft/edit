@@ -182,6 +182,15 @@ impl Arena {
         let ptr = self.alloc_raw(bytes, alignment);
         unsafe { slice::from_raw_parts_mut(ptr.cast().as_ptr(), count) }
     }
+
+    /// A workaround for `alloc_uninit_slice(count).write_filled()` being unstable (`maybe_uninit_fill`).
+    #[inline]
+    #[allow(clippy::mut_from_ref)]
+    pub fn alloc_slice<T: Copy>(&self, count: usize, value: T) -> &mut [T] {
+        let slice = self.alloc_uninit_slice(count);
+        slice.fill(MaybeUninit::new(value));
+        unsafe { slice.assume_init_mut() }
+    }
 }
 
 impl Drop for Arena {

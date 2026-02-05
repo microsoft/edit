@@ -3577,7 +3577,7 @@ impl<'a> NodeMap<'a> {
         let shift = 64 - width;
         let mask = (slots - 1) as u64;
 
-        let slots = arena.alloc_uninit_slice(slots).write_filled(None);
+        let slots = arena.alloc_slice(slots, None);
         let mut node = tree.root_first;
 
         loop {
