@@ -143,7 +143,6 @@
 //! }
 //! ```
 
-use std::arch::breakpoint;
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -845,9 +844,7 @@ impl Tui {
         // If the focus has changed, the new node may need to be re-rendered.
         // Same, every time we encounter a previously unknown node via `get_prev_node`,
         // because that means it likely failed to get crucial information such as the layout size.
-        if cfg!(debug_assertions) && self.settling_have == 15 {
-            breakpoint();
-        }
+        debug_assert!(self.settling_have <= 15);
         self.settling_want = (self.settling_have + 1).min(20);
     }
 
@@ -3577,7 +3574,7 @@ impl<'a> NodeMap<'a> {
         let shift = 64 - width;
         let mask = (slots - 1) as u64;
 
-        let slots = arena.alloc_uninit_slice(slots).write_filled(None);
+        let slots = arena.alloc_slice(slots, None);
         let mut node = tree.root_first;
 
         loop {
