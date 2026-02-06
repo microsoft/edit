@@ -7,7 +7,7 @@ resolver = "2"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/microsoft/edit"
-rust-version = "1.88"
+rust-version = "1.93"
 
 # We use `opt-level = "s"` as it significantly reduces binary size.
 # We could then use the `#[optimize(speed)]` attribute for spot optimizations.
