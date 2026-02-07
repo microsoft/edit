@@ -15,29 +15,9 @@
 
 use std::mem;
 
-/// A marker trait for types that are safe to `memset`.
-///
-/// # Safety
-///
-/// Just like with C's `memset`, bad things happen
-/// if you use this with non-trivial types.
-pub unsafe trait MemsetSafe: Copy {}
-
-unsafe impl MemsetSafe for u8 {}
-unsafe impl MemsetSafe for u16 {}
-unsafe impl MemsetSafe for u32 {}
-unsafe impl MemsetSafe for u64 {}
-unsafe impl MemsetSafe for usize {}
-
-unsafe impl MemsetSafe for i8 {}
-unsafe impl MemsetSafe for i16 {}
-unsafe impl MemsetSafe for i32 {}
-unsafe impl MemsetSafe for i64 {}
-unsafe impl MemsetSafe for isize {}
-
 /// Fills a slice with the given value.
-#[inline]
-pub fn memset<T: MemsetSafe>(dst: &mut [T], val: T) {
+#[inline(always)]
+pub fn memset<T: Copy>(dst: &mut [T], val: T) {
     unsafe {
         match mem::size_of::<T>() {
             1 => {
@@ -65,12 +45,12 @@ pub fn memset<T: MemsetSafe>(dst: &mut [T], val: T) {
                 let val = mem::transmute_copy::<_, u64>(&val);
                 memset_raw(beg as *mut u8, end as *mut u8, val);
             }
-            _ => unreachable!(),
+            _ => dst.fill(val),
         }
     }
 }
 
-#[inline]
+#[inline(always)]
 fn memset_raw(beg: *mut u8, end: *mut u8, val: u64) {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "loongarch64"))]
     return unsafe { MEMSET_DISPATCH(beg, end, val) };
@@ -412,7 +392,7 @@ mod tests {
 
     fn check_memset<T>(val: T, len: usize)
     where
-        T: MemsetSafe + Not<Output = T> + PartialEq + fmt::Debug,
+        T: Copy + Not<Output = T> + PartialEq + fmt::Debug,
     {
         let mut buf = vec![!val; len];
         memset(&mut buf, val);

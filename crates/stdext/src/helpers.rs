@@ -3,7 +3,6 @@
 
 //! Random assortment of helpers I didn't know where to put.
 
-use std::alloc::Allocator;
 use std::borrow::Cow;
 use std::mem::{self, MaybeUninit};
 use std::ops::{Bound, Range, RangeBounds};
@@ -90,7 +89,7 @@ pub trait ReplaceRange<T: Copy> {
     fn replace_range<R: RangeBounds<usize>>(&mut self, range: R, src: &[T]);
 }
 
-impl<T: Copy, A: Allocator> ReplaceRange<T> for Vec<T, A> {
+impl<T: Copy> ReplaceRange<T> for Vec<T> {
     fn replace_range<R: RangeBounds<usize>>(&mut self, range: R, src: &[T]) {
         let start = match range.start_bound() {
             Bound::Included(&start) => start,
@@ -106,7 +105,7 @@ impl<T: Copy, A: Allocator> ReplaceRange<T> for Vec<T, A> {
     }
 }
 
-fn vec_replace_impl<T: Copy, A: Allocator>(dst: &mut Vec<T, A>, range: Range<usize>, src: &[T]) {
+fn vec_replace_impl<T: Copy>(dst: &mut Vec<T>, range: Range<usize>, src: &[T]) {
     unsafe {
         let dst_len = dst.len();
         let src_len = src.len();

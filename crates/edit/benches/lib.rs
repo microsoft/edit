@@ -1,28 +1,26 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![feature(allocator_api)]
-
 use std::hint::black_box;
 use std::io::Cursor;
 use std::{mem, vec};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
-use edit::simd::MemsetSafe;
 use edit::{buffer, glob, hash, json, oklab, simd, unicode};
-use stdext::arena::{self, Arena, scratch_arena};
+use stdext::arena::{self, scratch_arena};
+use stdext::collections::BorrowedVec;
 
 struct EditingTracePatch<'a>(usize, usize, &'a str);
 
 struct EditingTraceTransaction<'a> {
-    patches: Vec<EditingTracePatch<'a>, &'a Arena>,
+    patches: BorrowedVec<'a, EditingTracePatch<'a>>,
 }
 
 struct EditingTraceData<'a> {
     start_content: &'a str,
     end_content: &'a str,
-    txns: Vec<EditingTraceTransaction<'a>, &'a Arena>,
+    txns: BorrowedVec<'a, EditingTraceTransaction<'a>>,
 }
 
 fn bench_buffer(c: &mut Criterion) {
@@ -39,24 +37,25 @@ fn bench_buffer(c: &mut Criterion) {
         let mut res = EditingTraceData {
             start_content: root.get_str("startContent").unwrap(),
             end_content: root.get_str("endContent").unwrap(),
-            txns: Vec::with_capacity_in(txns.len(), &scratch),
+            txns: BorrowedVec::empty(),
         };
+        res.txns.reserve(&*scratch, txns.len());
 
         for txn in txns {
             let txn = txn.as_object().unwrap();
             let patches = txn.get_array("patches").unwrap();
-            let mut txn =
-                EditingTraceTransaction { patches: Vec::with_capacity_in(patches.len(), &scratch) };
+            let mut txn = EditingTraceTransaction { patches: BorrowedVec::empty() };
+            txn.patches.reserve(&*scratch, patches.len());
 
             for patch in patches {
                 let patch = patch.as_array().unwrap();
                 let offset = patch[0].as_number().unwrap() as usize;
                 let del_len = patch[1].as_number().unwrap() as usize;
                 let ins_str = patch[2].as_str().unwrap();
-                txn.patches.push(EditingTracePatch(offset, del_len, ins_str));
+                txn.patches.push(&*scratch, EditingTracePatch(offset, del_len, ins_str));
             }
 
-            res.txns.push(txn);
+            res.txns.push(&*scratch, txn);
         }
 
         res
@@ -226,7 +225,7 @@ fn bench_simd_memchr2(c: &mut Criterion) {
     }
 }
 
-fn bench_simd_memset<T: MemsetSafe + Copy + Default>(c: &mut Criterion) {
+fn bench_simd_memset<T: Copy + Default>(c: &mut Criterion) {
     let mut group = c.benchmark_group("simd");
     let name = format!("memset<{}>", std::any::type_name::<T>());
     let size = mem::size_of::<T>();
@@ -241,7 +240,7 @@ fn bench_simd_memset<T: MemsetSafe + Copy + Default>(c: &mut Criterion) {
             &bytes,
             |b, &bytes| {
                 let slice = unsafe { buf.get_unchecked_mut(..bytes / size) };
-                b.iter(|| simd::memset(black_box(slice), Default::default()));
+                b.iter(|| stdext::simd::memset(black_box(slice), Default::default()));
             },
         );
     }
@@ -281,6 +280,28 @@ fn bench_unicode(c: &mut Criterion) {
 
 fn bench(c: &mut Criterion) {
     arena::init(128 * MEBI).unwrap();
+    {
+        let mut group = c.benchmark_group("vec");
+        for &bytes in &[8usize, 128 + 8, KIBI, 128 * KIBI] {
+            group
+                .throughput(Throughput::Bytes(bytes as u64))
+                .bench_with_input(BenchmarkId::new("stdlib", bytes), &bytes, |b, &bytes| {
+                    b.iter(|| {
+                        let mut v = Vec::new();
+                        v.extend(std::iter::repeat_n(0, bytes));
+                        black_box(v);
+                    })
+                })
+                .bench_with_input(BenchmarkId::new("stdext", bytes), &bytes, |b, &bytes| {
+                    b.iter(|| {
+                        let scratch = scratch_arena(None);
+                        let mut v = BorrowedVec::empty();
+                        v.push_repeat(&*scratch, 0, bytes);
+                        black_box(v);
+                    })
+                });
+        }
+    }
 
     bench_buffer(c);
     bench_glob(c);

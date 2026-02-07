@@ -3,12 +3,12 @@
 
 #![allow(clippy::missing_safety_doc, clippy::mut_from_ref)]
 
-use std::alloc::{AllocError, Allocator, Layout};
 use std::io;
 use std::ops::Deref;
 use std::ptr::NonNull;
 
 use super::release;
+use crate::collections::Allocator;
 
 /// A debug wrapper for [`release::Arena`].
 ///
@@ -106,44 +106,13 @@ impl Deref for Arena {
 }
 
 unsafe impl Allocator for Arena {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        Ok(self.delegate_target().alloc_raw(layout.size(), layout.align()))
-    }
-
-    fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.delegate_target().allocate_zeroed(layout)
-    }
-
-    // While it is possible to shrink the tail end of the arena, it is
-    // not very useful given the existence of scoped scratch arenas.
-    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        unsafe { self.delegate_target().deallocate(ptr, layout) }
-    }
-
-    unsafe fn grow(
+    fn realloc(
         &self,
-        ptr: NonNull<u8>,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        unsafe { self.delegate_target().grow(ptr, old_layout, new_layout) }
-    }
-
-    unsafe fn grow_zeroed(
-        &self,
-        ptr: NonNull<u8>,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        unsafe { self.delegate_target().grow_zeroed(ptr, old_layout, new_layout) }
-    }
-
-    unsafe fn shrink(
-        &self,
-        ptr: NonNull<u8>,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        unsafe { self.delegate_target().shrink(ptr, old_layout, new_layout) }
+        old_ptr: NonNull<u8>,
+        old_size: usize,
+        new_size: usize,
+        align: usize,
+    ) -> NonNull<[u8]> {
+        self.delegate_target().realloc(old_ptr, old_size, new_size, align)
     }
 }

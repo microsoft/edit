@@ -14,8 +14,9 @@ use std::path::Path;
 use std::ptr::{NonNull, null_mut};
 use std::{io, thread, time};
 
-use stdext::arena::{Arena, ArenaString, scratch_arena};
+use stdext::arena::{Arena, scratch_arena};
 use stdext::arena_format;
+use stdext::collections::{BorrowedString, BorrowedVec};
 
 use crate::helpers::*;
 
@@ -169,14 +170,14 @@ fn get_window_size() -> (u16, u16) {
 /// Returns `None` if there was an error reading from stdin.
 /// Returns `Some("")` if the given timeout was reached.
 /// Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaString<'_>> {
+pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BorrowedString<'_>> {
     unsafe {
         if STATE.inject_resize {
             timeout = time::Duration::ZERO;
         }
 
         let read_poll = timeout != time::Duration::MAX;
-        let mut buf = Vec::new_in(arena);
+        let mut buf = BorrowedVec::empty();
 
         // We don't know if the input is valid UTF8, so we first use a Vec and then
         // later turn it into UTF8 using `from_utf8_lossy_owned`.
@@ -271,7 +272,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
             }
         }
 
-        let mut result = ArenaString::from_utf8_lossy_owned(buf);
+        let mut result = BorrowedString::from_utf8_lossy_owned(buf);
 
         // We received a SIGWINCH? Add a fake window size sequence for our input parser.
         // I prepend it so that on startup, the TUI system gets first initialized with a size.
@@ -431,11 +432,11 @@ pub fn load_icu() -> io::Result<LibIcu> {
 /// but I found that many (most?) Linux distributions don't do this for some reason.
 /// This function returns the suffix, if any.
 #[cfg(edit_icu_renaming_auto_detect)]
-pub fn icu_detect_renaming_suffix(arena: &Arena, handle: NonNull<c_void>) -> ArenaString<'_> {
+pub fn icu_detect_renaming_suffix(arena: &Arena, handle: NonNull<c_void>) -> BorrowedString<'_> {
     unsafe {
         type T = *const c_void;
 
-        let mut res = ArenaString::new_in(arena);
+        let mut res = BorrowedString::new_in(arena);
 
         // Check if the ICU library is using unversioned symbols.
         // Return an empty suffix in that case.
@@ -506,7 +507,7 @@ where
         let name = unsafe { std::ffi::CStr::from_ptr(name) };
         let name = unsafe { name.to_str().unwrap_unchecked() };
 
-        let mut res = ManuallyDrop::new(ArenaString::new_in(arena));
+        let mut res = ManuallyDrop::new(BorrowedString::new_in(arena));
         res.reserve(name.len() + suffix.len() + 1);
         res.push_str(name);
         res.push_str(suffix);
@@ -515,8 +516,8 @@ where
     }
 }
 
-pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
-    let mut locales = Vec::new_in(arena);
+pub fn preferred_languages(arena: &Arena) -> Vec<BorrowedString<'_>, &Arena> {
+    let mut locales = BorrowedVec::empty();
 
     for key in ["LANGUAGE", "LC_ALL", "LANG"] {
         if let Ok(val) = std::env::var(key)
@@ -525,9 +526,9 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
             locales.extend(val.split(':').filter(|s| !s.is_empty()).map(|s| {
                 // Replace all underscores with dashes,
                 // because the localization code expects pt-br, not pt_BR.
-                let mut res = Vec::new_in(arena);
+                let mut res = BorrowedVec::empty();
                 res.extend(s.as_bytes().iter().map(|&b| if b == b'_' { b'-' } else { b }));
-                unsafe { ArenaString::from_utf8_unchecked(res) }
+                unsafe { BorrowedString::from_utf8_unchecked(res) }
             }));
             break;
         }
