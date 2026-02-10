@@ -9,7 +9,8 @@
 use std::fmt;
 use std::hint::unreachable_unchecked;
 
-use stdext::arena::{Arena, ArenaString};
+use stdext::arena::Arena;
+use stdext::collections::{BString, BVec};
 
 use crate::unicode::MeasurementConfig;
 
@@ -224,7 +225,7 @@ impl<'a, 'i> Parser<'a, 'i> {
     fn parse_string(&mut self) -> Result<Value<'a>, ParseError> {
         self.expect(b'"')?;
 
-        let mut result = ArenaString::new_in(self.arena);
+        let mut result = BString::empty();
 
         loop {
             if self.pos >= self.bytes.len() {
@@ -251,16 +252,17 @@ impl<'a, 'i> Parser<'a, 'i> {
                         self.pos += 1;
                     }
 
-                    result.push_str(&self.input[beg..self.pos]);
+                    result.push_str(self.arena, &self.input[beg..self.pos]);
                 }
             }
         }
 
-        Ok(Value::String(result.leak()))
+        let str = result.leak();
+        Ok(Value::String(str))
     }
 
     #[cold]
-    fn parse_escape(&mut self, result: &mut ArenaString) -> Result<(), ParseError> {
+    fn parse_escape(&mut self, result: &mut BString<'a>) -> Result<(), ParseError> {
         if self.pos >= self.bytes.len() {
             // Unterminated escape sequence
             return Err(self.fail(self.pos, ParseErrorKind::Syntax));
@@ -285,12 +287,12 @@ impl<'a, 'i> Parser<'a, 'i> {
             }
         };
 
-        result.push(ch as char);
+        result.push(self.arena, ch as char);
         Ok(())
     }
 
     #[cold]
-    fn parse_unicode_escape(&mut self, result: &mut ArenaString) -> Result<(), ParseError> {
+    fn parse_unicode_escape(&mut self, result: &mut BString<'a>) -> Result<(), ParseError> {
         let start = self.pos - 2; // parse_escape() already advanced past "\u"
         let mut code = self.parse_hex4()?;
 
@@ -308,7 +310,7 @@ impl<'a, 'i> Parser<'a, 'i> {
 
         match char::from_u32(code) {
             Some(c) => {
-                result.push(c);
+                result.push(self.arena, c);
                 Ok(())
             }
             None => Err(self.fail(start, ParseErrorKind::Syntax)),
@@ -331,7 +333,7 @@ impl<'a, 'i> Parser<'a, 'i> {
     }
 
     fn parse_array(&mut self, depth: usize) -> Result<Value<'a>, ParseError> {
-        let mut values = Vec::new_in(self.arena);
+        let mut values = BVec::empty();
         let mut expects_comma = false;
 
         self.expect(b'[')?;
@@ -359,7 +361,7 @@ impl<'a, 'i> Parser<'a, 'i> {
                         return Err(self.fail(self.pos, ParseErrorKind::Syntax));
                     }
 
-                    values.push(self.parse_value(depth + 1)?);
+                    values.push(self.arena, self.parse_value(depth + 1)?);
                     expects_comma = true;
                 }
             }
@@ -370,7 +372,7 @@ impl<'a, 'i> Parser<'a, 'i> {
     }
 
     fn parse_object(&mut self, depth: usize) -> Result<Value<'a>, ParseError> {
-        let mut entries = Vec::new_in(self.arena);
+        let mut entries = BVec::empty();
         let mut expects_comma = false;
 
         self.expect(b'{')?;
@@ -409,7 +411,7 @@ impl<'a, 'i> Parser<'a, 'i> {
                     self.expect(b':')?;
 
                     let value = self.parse_value(depth + 1)?;
-                    entries.push((key, value));
+                    entries.push(self.arena, (key, value));
                     expects_comma = true;
                 }
             }

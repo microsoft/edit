@@ -3,13 +3,13 @@
 
 #![allow(clippy::mut_from_ref)]
 
-use std::alloc::{AllocError, Allocator, Layout};
 use std::cell::Cell;
 use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
 use std::{io, mem, slice};
 
-use crate::{cold_path, sys};
+use crate::alloc::Allocator;
+use crate::sys;
 
 #[cfg(target_pointer_width = "32")]
 const ALLOC_CHUNK_SIZE: usize = 32 * 1024;
@@ -189,98 +189,35 @@ impl Default for Arena {
     }
 }
 
-unsafe impl Allocator for Arena {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        Ok(self.alloc_raw(layout.size(), layout.align()))
-    }
-
-    fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let p = self.alloc_raw(layout.size(), layout.align());
-        unsafe { p.cast::<u8>().as_ptr().write_bytes(0, p.len()) }
-        Ok(p)
-    }
-
-    // While it is possible to shrink the tail end of the arena, it is
-    // not very useful given the existence of scoped scratch arenas.
-    unsafe fn deallocate(&self, _: NonNull<u8>, _: Layout) {}
-
-    unsafe fn grow(
+impl Allocator for Arena {
+    unsafe fn realloc(
         &self,
-        ptr: NonNull<u8>,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        debug_assert!(new_layout.size() >= old_layout.size());
-        debug_assert!(new_layout.align() <= old_layout.align());
-
-        let new_ptr;
-
-        // Growing the given area is possible if it is at the end of the arena.
-        if unsafe { ptr.add(old_layout.size()) == self.base.add(self.offset.get()) } {
-            new_ptr = ptr;
-            let delta = new_layout.size() - old_layout.size();
-            // Assuming that the given ptr/length area is at the end of the arena,
-            // we can just push more memory to the end of the arena to grow it.
-            self.alloc_raw(delta, 1);
-        } else {
-            cold_path();
-
-            new_ptr = self.allocate(new_layout)?.cast();
-
-            // SAFETY: It's weird to me that this doesn't assert new_layout.size() >= old_layout.size(),
-            // but neither does the stdlib code at the time of writing.
-            // So, assuming that is not needed, this code is safe since it just copies the old data over.
-            unsafe {
-                ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_ptr(), old_layout.size());
-                self.deallocate(ptr, old_layout);
+        old_ptr: NonNull<u8>,
+        old_size: usize,
+        new_size: usize,
+        align: usize,
+    ) -> NonNull<[u8]> {
+        if unsafe { old_ptr.add(old_size) == self.base.add(self.offset.get()) } {
+            // Check if it's the last allocation we made.
+            // If so, we can grow/shrink it in place without copying.
+            if new_size > old_size {
+                self.alloc_raw(new_size - old_size, align);
+            } else {
+                self.offset.set(self.offset.get() - old_size + new_size);
             }
-        }
-
-        Ok(NonNull::slice_from_raw_parts(new_ptr, new_layout.size()))
-    }
-
-    unsafe fn grow_zeroed(
-        &self,
-        ptr: NonNull<u8>,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        unsafe {
-            // SAFETY: Same as grow().
-            let ptr = self.grow(ptr, old_layout, new_layout)?;
-
-            // SAFETY: At this point, `ptr` must be valid for `new_layout.size()` bytes,
-            // allowing us to safely zero out the delta since `old_layout.size()`.
-            ptr.cast::<u8>()
-                .add(old_layout.size())
-                .write_bytes(0, new_layout.size() - old_layout.size());
-
-            Ok(ptr)
-        }
-    }
-
-    unsafe fn shrink(
-        &self,
-        ptr: NonNull<u8>,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        debug_assert!(new_layout.size() <= old_layout.size());
-        debug_assert!(new_layout.align() <= old_layout.align());
-
-        let mut len = old_layout.size();
-
-        // Shrinking the given area is possible if it is at the end of the arena.
-        if unsafe { ptr.add(len) == self.base.add(self.offset.get()) } {
-            self.offset.set(self.offset.get() - len + new_layout.size());
-            len = new_layout.size();
+            NonNull::slice_from_raw_parts(old_ptr, new_size)
+        } else if new_size > old_size {
+            // Otherwise, we have to allocate a new area and copy it over.
+            unsafe {
+                let new_ptr = self.alloc_raw(new_size, align);
+                ptr::copy_nonoverlapping(old_ptr.as_ptr(), new_ptr.as_ptr() as *mut _, old_size);
+                new_ptr
+            }
         } else {
-            debug_assert!(
-                false,
-                "Did you call shrink_to_fit()? Only the last allocation can be shrunk!"
-            );
+            debug_assert!(false, "only the last allocation can be shrunk");
+            NonNull::slice_from_raw_parts(old_ptr, old_size)
         }
-
-        Ok(NonNull::slice_from_raw_parts(ptr, len))
     }
+
+    unsafe fn dealloc(&self, _ptr: NonNull<u8>, _size: usize, _align: usize) {}
 }

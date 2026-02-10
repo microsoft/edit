@@ -3,7 +3,8 @@
 
 //! Base64 facilities.
 
-use stdext::arena::ArenaString;
+use stdext::arena::Arena;
+use stdext::collections::BString;
 
 const CHARSET: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -15,7 +16,7 @@ pub fn encode_len(src_len: usize) -> usize {
 }
 
 /// Encodes the given bytes as base64 and appends them to the destination string.
-pub fn encode(dst: &mut ArenaString, src: &[u8]) {
+pub fn encode<'a>(arena: &'a Arena, dst: &mut BString<'a>, src: &[u8]) {
     unsafe {
         let mut inp = src.as_ptr();
         let mut remaining = src.len();
@@ -23,7 +24,7 @@ pub fn encode(dst: &mut ArenaString, src: &[u8]) {
 
         let out_len = encode_len(src.len());
         // ... we can then use this fact to reserve space all at once.
-        dst.reserve(out_len);
+        dst.reserve(arena, out_len);
 
         // SAFETY: Getting a pointer to the reserved space is only safe
         // *after* calling `reserve()` as it may change the pointer.
@@ -79,16 +80,17 @@ pub fn encode(dst: &mut ArenaString, src: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use stdext::arena::{Arena, ArenaString};
+    use stdext::arena::scratch_arena;
+    use stdext::collections::BString;
 
     use super::encode;
 
     #[test]
     fn test_basic() {
-        let arena = Arena::new(4 * 1024).unwrap();
+        let scratch = scratch_arena(None);
         let enc = |s: &[u8]| {
-            let mut dst = ArenaString::new_in(&arena);
-            encode(&mut dst, s);
+            let mut dst = BString::empty();
+            encode(&scratch, &mut dst, s);
             dst
         };
         assert_eq!(enc(b""), "");

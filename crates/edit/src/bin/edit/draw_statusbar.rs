@@ -9,6 +9,7 @@ use edit::input::vk;
 use edit::tui::*;
 use stdext::arena::scratch_arena;
 use stdext::arena_format;
+use stdext::collections::BVec;
 
 use crate::localization::*;
 use crate::state::*;
@@ -291,14 +292,14 @@ fn encoding_picker_update_list(state: &mut State) {
 
     let encodings = icu::get_available_encodings();
     let scratch = scratch_arena(None);
-    let mut matches = Vec::new_in(&*scratch);
+    let mut matches = BVec::empty();
 
     for enc in encodings.all {
         let local_scratch = scratch_arena(Some(&scratch));
         let (score, _) = score_fuzzy(&local_scratch, enc.label, needle, true);
 
         if score > 0 {
-            matches.push((score, *enc));
+            matches.push(&*scratch, (score, *enc));
         }
     }
 

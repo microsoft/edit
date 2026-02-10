@@ -26,7 +26,6 @@ mod navigation;
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
 use std::collections::LinkedList;
-use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, Read as _, Write as _};
 use std::mem::{self, MaybeUninit};
@@ -35,8 +34,9 @@ use std::rc::Rc;
 use std::str;
 
 pub use gap_buffer::GapBuffer;
-use stdext::arena::{Arena, ArenaString, scratch_arena};
-use stdext::{ReplaceRange as _, minmax, slice_as_uninit_mut, slice_copy_safe};
+use stdext::arena::{Arena, scratch_arena};
+use stdext::collections::{BString, BVec};
+use stdext::{ReplaceRange as _, arena_write_fmt, minmax, slice_as_uninit_mut, slice_copy_safe};
 
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;
@@ -164,7 +164,7 @@ pub struct SearchOptions {
 
 enum RegexReplacement<'a> {
     Group(i32),
-    Text(Vec<u8, &'a Arena>),
+    Text(BVec<'a, u8>),
 }
 
 /// Caches the start and length of the active edit line for a single edit.
@@ -1303,15 +1303,15 @@ impl TextBuffer {
         arena: &'a Arena,
         search: &mut ActiveSearch,
         replacement: &[u8],
-    ) -> Vec<RegexReplacement<'a>, &'a Arena> {
-        let mut res = Vec::new_in(arena);
+    ) -> BVec<'a, RegexReplacement<'a>> {
+        let mut res = BVec::empty();
 
         if !search.options.use_regex {
             return res;
         }
 
         let group_count = search.regex.group_count();
-        let mut text = Vec::new_in(arena);
+        let mut text = BVec::empty();
         let mut text_beg = 0;
 
         loop {
@@ -1319,7 +1319,7 @@ impl TextBuffer {
 
             // Push the raw, unescaped text, if any.
             if text_beg < off {
-                text.extend_from_slice(&replacement[text_beg..off]);
+                text.extend_from_slice(arena, &replacement[text_beg..off]);
             }
 
             // Unescape any escaped characters.
@@ -1333,12 +1333,15 @@ impl TextBuffer {
                 let ch = replacement.get(off - 1).map_or(b'\\', |&c| c);
 
                 // Unescape and append the character.
-                text.push(match ch {
-                    b'n' => b'\n',
-                    b'r' => b'\r',
-                    b't' => b'\t',
-                    ch => ch,
-                });
+                text.push(
+                    arena,
+                    match ch {
+                        b'n' => b'\n',
+                        b'r' => b'\r',
+                        b't' => b'\t',
+                        ch => ch,
+                    },
+                );
             }
 
             // Parse out a group number, if any.
@@ -1374,18 +1377,18 @@ impl TextBuffer {
                 if !acc_bad {
                     group = acc;
                 } else {
-                    text.extend_from_slice(&replacement[beg..end]);
+                    text.extend_from_slice(arena, &replacement[beg..end]);
                 }
 
                 off = end;
             }
 
             if !text.is_empty() {
-                res.push(RegexReplacement::Text(text));
-                text = Vec::new_in(arena);
+                res.push(arena, RegexReplacement::Text(text));
+                text = BVec::empty();
             }
             if group >= 0 {
-                res.push(RegexReplacement::Group(group));
+                res.push(arena, RegexReplacement::Group(group));
             }
 
             text_beg = off;
@@ -1753,8 +1756,8 @@ impl TextBuffer {
 
         for y in 0..height {
             let scratch = scratch_arena(None);
-            let mut line = ArenaString::new_in(&scratch);
-            line.reserve(width as usize * 2);
+            let mut line = BString::empty();
+            line.reserve(&*scratch, width as usize * 2);
 
             let visual_line = origin.y + y;
             let mut cursor_beg =
@@ -1777,14 +1780,21 @@ impl TextBuffer {
                     // because `line_number_width` can't possibly be larger than 19.
                     let off = 19 - line_number_width;
                     unsafe { std::hint::assert_unchecked(off < MARGIN_TEMPLATE.len()) };
-                    line.push_str(&MARGIN_TEMPLATE[off..]);
+                    line.push_str(&*scratch, &MARGIN_TEMPLATE[off..]);
                 } else if self.word_wrap_column <= 0 || cursor_beg.logical_pos.x == 0 {
                     // Regular line? Place "123 | " in the margin.
-                    _ = write!(line, "{:1$} │ ", cursor_beg.logical_pos.y + 1, line_number_width);
+                    arena_write_fmt!(
+                        &*scratch,
+                        line,
+                        "{:1$} │ ",
+                        cursor_beg.logical_pos.y + 1,
+                        line_number_width
+                    );
                 } else {
                     // Wrapped line? Place " ... | " in the margin.
                     let number_width = (cursor_beg.logical_pos.y + 1).ilog10() as usize + 1;
-                    _ = write!(
+                    arena_write_fmt!(
+                        &*scratch,
                         line,
                         "{0:1$}{0:∙<2$} │ ",
                         "",
@@ -1875,7 +1885,7 @@ impl TextBuffer {
                     if cursor_next.visual_pos.x > origin.x {
                         let overlap = cursor_next.visual_pos.x - origin.x;
                         debug_assert!((1..=7).contains(&overlap));
-                        line.push_str(&TAB_WHITESPACE[..overlap as usize]);
+                        line.push_str(&*scratch, &TAB_WHITESPACE[..overlap as usize]);
                         cursor_beg = cursor_next;
                     }
                 }
@@ -1938,7 +1948,7 @@ impl TextBuffer {
                                 );
                             }
 
-                            line.push_str(&whitespace[..prefix_add + tab_size as usize]);
+                            line.push_str(&*scratch, &whitespace[..prefix_add + tab_size as usize]);
                         } else if ch <= '\x1f' || ('\u{7f}'..='\u{9f}').contains(&ch) {
                             // Append a Unicode representation of the C0 or C1 control character.
                             visualizer_buf[2] = if ch <= '\x1f' {
@@ -1950,7 +1960,9 @@ impl TextBuffer {
                             };
 
                             // Our manually constructed UTF8 is never going to be invalid. Trust.
-                            line.push_str(unsafe { str::from_utf8_unchecked(&visualizer_buf) });
+                            line.push_str(&*scratch, unsafe {
+                                str::from_utf8_unchecked(&visualizer_buf)
+                            });
 
                             // Highlight the control character yellow.
                             cursor_line =
@@ -1967,7 +1979,7 @@ impl TextBuffer {
                             fb.blend_bg(visualizer_rect, bg);
                             fb.blend_fg(visualizer_rect, fg);
                         } else {
-                            line.push(ch);
+                            line.push(&*scratch, ch);
                         }
                     }
 
@@ -2123,7 +2135,7 @@ impl TextBuffer {
 
         let mut offset = 0;
         let scratch = scratch_arena(None);
-        let mut newline_buffer = ArenaString::new_in(&scratch);
+        let mut newline_buffer = BString::empty();
 
         loop {
             // Can't use `unicode::newlines_forward` because bracketed paste uses CR instead of LF/CRLF.
@@ -2170,7 +2182,7 @@ impl TextBuffer {
 
             // First, write the newline.
             newline_buffer.clear();
-            newline_buffer.push_str(if self.newlines_are_crlf { "\r\n" } else { "\n" });
+            newline_buffer.push_str(&*scratch, if self.newlines_are_crlf { "\r\n" } else { "\n" });
 
             if !raw {
                 // We'll give the next line the same indentation as the previous one.
@@ -2203,13 +2215,13 @@ impl TextBuffer {
                 // If tabs are enabled, add as many tabs as we can.
                 if self.indent_with_tabs {
                     let tab_count = newline_indentation / self.tab_size;
-                    newline_buffer.push_repeat('\t', tab_count as usize);
+                    newline_buffer.push_repeat(&*scratch, '\t', tab_count as usize);
                     newline_indentation -= tab_count * self.tab_size;
                 }
 
                 // If tabs are disabled, or if the indentation wasn't a multiple of the tab size,
                 // add spaces to make up the difference.
-                newline_buffer.push_repeat(' ', newline_indentation as usize);
+                newline_buffer.push_repeat(&*scratch, ' ', newline_indentation as usize);
             }
 
             self.edit_write(newline_buffer.as_bytes());

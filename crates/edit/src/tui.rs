@@ -146,11 +146,11 @@
 use std::arch::breakpoint;
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
-use std::fmt::Write as _;
 use std::{io, iter, mem, ptr, time};
 
-use stdext::arena::{Arena, ArenaString, scratch_arena};
-use stdext::{arena_format, opt_ptr_eq, str_from_raw_parts};
+use stdext::arena::{Arena, scratch_arena};
+use stdext::collections::{BString, BVec};
+use stdext::{arena_format, arena_write_fmt, opt_ptr_eq, str_from_raw_parts};
 
 use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
@@ -773,7 +773,7 @@ impl Tui {
 
         for root in Tree::iterate_siblings(Some(self.prev_tree.root_first)) {
             let mut root = root.borrow_mut();
-            root.compute_intrinsic_size();
+            root.compute_intrinsic_size(unsafe { mem::transmute(&self.arena_next) });
         }
 
         let viewport = self.size.as_rect();
@@ -852,7 +852,7 @@ impl Tui {
     }
 
     /// Renders the last frame into the framebuffer and returns the VT output.
-    pub fn render<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
+    pub fn render<'a>(&mut self, arena: &'a Arena) -> BString<'a> {
         self.framebuffer.flip(self.size);
         for child in self.prev_tree.iterate_roots() {
             let mut child = child.borrow_mut();
@@ -869,15 +869,18 @@ impl Tui {
             return;
         }
 
-        let scratch = scratch_arena(None);
-
         if node.attributes.bordered {
             // ┌────┐
             {
-                let mut fill = ArenaString::new_in(&scratch);
-                fill.push('┌');
-                fill.push_repeat('─', (outer_clipped.right - outer_clipped.left - 2) as usize);
-                fill.push('┐');
+                let scratch = scratch_arena(None);
+                let mut fill = BString::empty();
+                fill.push(&*scratch, '┌');
+                fill.push_repeat(
+                    &*scratch,
+                    '─',
+                    (outer_clipped.right - outer_clipped.left - 2) as usize,
+                );
+                fill.push(&*scratch, '┐');
                 self.framebuffer.replace_text(
                     outer_clipped.top,
                     outer_clipped.left,
@@ -888,10 +891,15 @@ impl Tui {
 
             // │    │
             {
-                let mut fill = ArenaString::new_in(&scratch);
-                fill.push('│');
-                fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left - 2) as usize);
-                fill.push('│');
+                let scratch = scratch_arena(None);
+                let mut fill = BString::empty();
+                fill.push(&*scratch, '│');
+                fill.push_repeat(
+                    &*scratch,
+                    ' ',
+                    (outer_clipped.right - outer_clipped.left - 2) as usize,
+                );
+                fill.push(&*scratch, '│');
 
                 for y in outer_clipped.top + 1..outer_clipped.bottom - 1 {
                     self.framebuffer.replace_text(
@@ -905,10 +913,15 @@ impl Tui {
 
             // └────┘
             {
-                let mut fill = ArenaString::new_in(&scratch);
-                fill.push('└');
-                fill.push_repeat('─', (outer_clipped.right - outer_clipped.left - 2) as usize);
-                fill.push('┘');
+                let scratch = scratch_arena(None);
+                let mut fill = BString::empty();
+                fill.push(&*scratch, '└');
+                fill.push_repeat(
+                    &*scratch,
+                    '─',
+                    (outer_clipped.right - outer_clipped.left - 2) as usize,
+                );
+                fill.push(&*scratch, '┘');
                 self.framebuffer.replace_text(
                     outer_clipped.bottom - 1,
                     outer_clipped.left,
@@ -920,8 +933,13 @@ impl Tui {
 
         if node.attributes.float.is_some() {
             if !node.attributes.bordered {
-                let mut fill = ArenaString::new_in(&scratch);
-                fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left) as usize);
+                let scratch = scratch_arena(None);
+                let mut fill = BString::empty();
+                fill.push_repeat(
+                    &*scratch,
+                    ' ',
+                    (outer_clipped.right - outer_clipped.left) as usize,
+                );
 
                 for y in outer_clipped.top..outer_clipped.bottom {
                     self.framebuffer.replace_text(
@@ -1079,11 +1097,11 @@ impl Tui {
 
             let scratch = scratch_arena(None);
 
-            let mut modified = ArenaString::new_in(&scratch);
-            modified.reserve(text.len() + 3);
-            modified.push_str(&text[..skipped.start]);
-            modified.push('…');
-            modified.push_str(&text[skipped.end..]);
+            let mut modified = BString::empty();
+            modified.reserve(&*scratch, text.len() + 3);
+            modified.push_str(&*scratch, &text[..skipped.start]);
+            modified.push(&*scratch, '…');
+            modified.push_str(&*scratch, &text[skipped.end..]);
 
             self.framebuffer.replace_text(target.top, target.left, target.right, &modified);
         }
@@ -1129,89 +1147,104 @@ impl Tui {
     }
 
     /// Outputs a debug string of the layout and focus tree.
-    pub fn debug_layout<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
-        let mut result = ArenaString::new_in(arena);
-        result.push_str("general:\r\n- focus_path:\r\n");
+    pub fn debug_layout<'a>(&mut self, arena: &'a Arena) -> BString<'a> {
+        let mut result = BString::empty();
+        result.push_str(arena, "general:\r\n- focus_path:\r\n");
 
         for &id in &self.focused_node_path {
-            _ = write!(result, "  - {id:016x}\r\n");
+            arena_write_fmt!(arena, result, "  - {id:016x}\r\n");
         }
 
-        result.push_str("\r\ntree:\r\n");
+        result.push_str(arena, "\r\ntree:\r\n");
 
         for root in self.prev_tree.iterate_roots() {
             Tree::visit_all(root, root, true, |node| {
                 let node = node.borrow();
                 let depth = node.depth;
-                result.push_repeat(' ', depth * 2);
-                _ = write!(result, "- id: {:016x}\r\n", node.id);
+                result.push_repeat(arena, ' ', depth * 2);
+                arena_write_fmt!(arena, result, "- id: {:016x}\r\n", node.id);
 
-                result.push_repeat(' ', depth * 2);
-                _ = write!(result, "  classname:    {}\r\n", node.classname);
+                result.push_repeat(arena, ' ', depth * 2);
+                arena_write_fmt!(arena, result, "  classname:    {}\r\n", node.classname);
 
                 if depth == 0
                     && let Some(parent) = node.parent
                 {
                     let parent = parent.borrow();
-                    result.push_repeat(' ', depth * 2);
-                    _ = write!(result, "  parent:       {:016x}\r\n", parent.id);
+                    result.push_repeat(arena, ' ', depth * 2);
+                    arena_write_fmt!(arena, result, "  parent:       {:016x}\r\n", parent.id);
                 }
 
-                result.push_repeat(' ', depth * 2);
-                _ = write!(
+                result.push_repeat(arena, ' ', depth * 2);
+                arena_write_fmt!(
+                    arena,
                     result,
                     "  intrinsic:    {{{}, {}}}\r\n",
-                    node.intrinsic_size.width, node.intrinsic_size.height
+                    node.intrinsic_size.width,
+                    node.intrinsic_size.height
                 );
 
-                result.push_repeat(' ', depth * 2);
-                _ = write!(
+                result.push_repeat(arena, ' ', depth * 2);
+                arena_write_fmt!(
+                    arena,
                     result,
                     "  outer:        {{{}, {}, {}, {}}}\r\n",
-                    node.outer.left, node.outer.top, node.outer.right, node.outer.bottom
+                    node.outer.left,
+                    node.outer.top,
+                    node.outer.right,
+                    node.outer.bottom
                 );
 
-                result.push_repeat(' ', depth * 2);
-                _ = write!(
+                result.push_repeat(arena, ' ', depth * 2);
+                arena_write_fmt!(
+                    arena,
                     result,
                     "  inner:        {{{}, {}, {}, {}}}\r\n",
-                    node.inner.left, node.inner.top, node.inner.right, node.inner.bottom
+                    node.inner.left,
+                    node.inner.top,
+                    node.inner.right,
+                    node.inner.bottom
                 );
 
                 if node.attributes.bordered {
-                    result.push_repeat(' ', depth * 2);
-                    result.push_str("  bordered:     true\r\n");
+                    result.push_repeat(arena, ' ', depth * 2);
+                    result.push_str(arena, "  bordered:     true\r\n");
                 }
 
                 if node.attributes.bg.to_ne() != 0 {
-                    result.push_repeat(' ', depth * 2);
-                    _ = write!(result, "  bg:           {:?}\r\n", node.attributes.bg);
+                    result.push_repeat(arena, ' ', depth * 2);
+                    arena_write_fmt!(arena, result, "  bg:           {:?}\r\n", node.attributes.bg);
                 }
 
                 if node.attributes.fg.to_ne() != 0 {
-                    result.push_repeat(' ', depth * 2);
-                    _ = write!(result, "  fg:           {:?}\r\n", node.attributes.fg);
+                    result.push_repeat(arena, ' ', depth * 2);
+                    arena_write_fmt!(arena, result, "  fg:           {:?}\r\n", node.attributes.fg);
                 }
 
                 if self.is_node_focused(node.id) {
-                    result.push_repeat(' ', depth * 2);
-                    result.push_str("  focused:      true\r\n");
+                    result.push_repeat(arena, ' ', depth * 2);
+                    result.push_str(arena, "  focused:      true\r\n");
                 }
 
                 match &node.content {
                     NodeContent::Text(content) => {
-                        result.push_repeat(' ', depth * 2);
-                        _ = write!(result, "  text:         \"{}\"\r\n", &content.text);
+                        result.push_repeat(arena, ' ', depth * 2);
+                        arena_write_fmt!(
+                            arena,
+                            result,
+                            "  text:         \"{}\"\r\n",
+                            &content.text
+                        );
                     }
                     NodeContent::Textarea(content) => {
                         let tb = content.buffer.borrow();
                         let tb = &*tb;
-                        result.push_repeat(' ', depth * 2);
-                        _ = write!(result, "  textarea:     {tb:p}\r\n");
+                        result.push_repeat(arena, ' ', depth * 2);
+                        arena_write_fmt!(arena, result, "  textarea:     {tb:p}\r\n");
                     }
                     NodeContent::Scrollarea(..) => {
-                        result.push_repeat(' ', depth * 2);
-                        result.push_str("  scrollable:   true\r\n");
+                        result.push_repeat(arena, ' ', depth * 2);
+                        result.push_str(arena, "  scrollable:   true\r\n");
                     }
                     _ => {}
                 }
@@ -1746,7 +1779,7 @@ impl<'a> Context<'a, '_> {
 
         let mut last_node = self.tree.last_node.borrow_mut();
         let title = if title.is_empty() {
-            ArenaString::new_in(self.arena())
+            BString::empty()
         } else {
             arena_format!(self.arena(), " {} ", title)
         };
@@ -1778,7 +1811,7 @@ impl<'a> Context<'a, '_> {
 
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.content = NodeContent::Table(TableContent {
-            columns: Vec::new_in(self.arena()),
+            columns: BVec::empty(),
             cell_gap: Default::default(),
         });
     }
@@ -1789,7 +1822,7 @@ impl<'a> Context<'a, '_> {
         let mut last_node = self.tree.last_node.borrow_mut();
         if let NodeContent::Table(spec) = &mut last_node.content {
             spec.columns.clear();
-            spec.columns.extend_from_slice(columns);
+            spec.columns.extend_from_slice(self.arena(), columns);
         } else {
             debug_assert!(false);
         }
@@ -1936,8 +1969,8 @@ impl<'a> Context<'a, '_> {
     pub fn styled_label_begin(&mut self, classname: &'static str) {
         self.block_begin(classname);
         self.tree.last_node.borrow_mut().content = NodeContent::Text(TextContent {
-            text: ArenaString::new_in(self.arena()),
-            chunks: Vec::with_capacity_in(4, self.arena()),
+            text: BString::empty(),
+            chunks: BVec::empty(),
             overflow: Overflow::Clip,
         });
     }
@@ -1951,11 +1984,10 @@ impl<'a> Context<'a, '_> {
 
         let last = content.chunks.last().unwrap_or(&INVALID_STYLED_TEXT_CHUNK);
         if last.offset != content.text.len() && last.fg != fg {
-            content.chunks.push(StyledTextChunk {
-                offset: content.text.len(),
-                fg,
-                attr: last.attr,
-            });
+            content.chunks.push(
+                self.arena(),
+                StyledTextChunk { offset: content.text.len(), fg, attr: last.attr },
+            );
         }
     }
 
@@ -1968,7 +2000,10 @@ impl<'a> Context<'a, '_> {
 
         let last = content.chunks.last().unwrap_or(&INVALID_STYLED_TEXT_CHUNK);
         if last.offset != content.text.len() && last.attr != attr {
-            content.chunks.push(StyledTextChunk { offset: content.text.len(), fg: last.fg, attr });
+            content.chunks.push(
+                self.arena(),
+                StyledTextChunk { offset: content.text.len(), fg: last.fg, attr },
+            );
         }
     }
 
@@ -1979,7 +2014,7 @@ impl<'a> Context<'a, '_> {
             unreachable!();
         };
 
-        content.text.push_str(text);
+        content.text.push_str(self.arena(), text);
     }
 
     /// Ends the current label block.
@@ -3316,20 +3351,20 @@ impl<'a> Context<'a, '_> {
     fn menubar_shortcut(&mut self, shortcut: InputKey) {
         let shortcut_letter = shortcut.value() as u8 as char;
         if shortcut_letter.is_ascii_uppercase() {
-            let mut shortcut_text = ArenaString::new_in(self.arena());
+            let mut shortcut_text = BString::empty();
             if shortcut.modifiers_contains(kbmod::CTRL) {
-                shortcut_text.push_str(self.tui.modifier_translations.ctrl);
-                shortcut_text.push('+');
+                shortcut_text.push_str(self.arena(), self.tui.modifier_translations.ctrl);
+                shortcut_text.push(self.arena(), '+');
             }
             if shortcut.modifiers_contains(kbmod::ALT) {
-                shortcut_text.push_str(self.tui.modifier_translations.alt);
-                shortcut_text.push('+');
+                shortcut_text.push_str(self.arena(), self.tui.modifier_translations.alt);
+                shortcut_text.push(self.arena(), '+');
             }
             if shortcut.modifiers_contains(kbmod::SHIFT) {
-                shortcut_text.push_str(self.tui.modifier_translations.shift);
-                shortcut_text.push('+');
+                shortcut_text.push_str(self.arena(), self.tui.modifier_translations.shift);
+                shortcut_text.push(self.arena(), '+');
             }
-            shortcut_text.push(shortcut_letter);
+            shortcut_text.push(self.arena(), shortcut_letter);
 
             self.label("shortcut", &shortcut_text);
         } else {
@@ -3650,7 +3685,7 @@ struct ListContent<'a> {
 
 /// NOTE: Must not contain items that require drop().
 struct TableContent<'a> {
-    columns: Vec<CoordType, &'a Arena>,
+    columns: BVec<'a, CoordType>,
     cell_gap: Size,
 }
 
@@ -3666,8 +3701,8 @@ const INVALID_STYLED_TEXT_CHUNK: StyledTextChunk =
 
 /// NOTE: Must not contain items that require drop().
 struct TextContent<'a> {
-    text: ArenaString<'a>,
-    chunks: Vec<StyledTextChunk, &'a Arena>,
+    text: BString<'a>,
+    chunks: BVec<'a, StyledTextChunk>,
     overflow: Overflow,
 }
 
@@ -3700,7 +3735,7 @@ enum NodeContent<'a> {
     #[default]
     None,
     List(ListContent<'a>),
-    Modal(ArenaString<'a>), // title
+    Modal(BString<'a>), // title
     Table(TableContent<'a>),
     Text(TextContent<'a>),
     Textarea(TextareaContent<'a>),
@@ -3777,7 +3812,7 @@ struct Node<'a> {
     inner_clipped: Rect, // in screen-space, calculated during layout, restricted to the viewport
 }
 
-impl Node<'_> {
+impl<'a> Node<'a> {
     /// Given an outer rectangle (including padding and borders) of this node,
     /// this returns the inner rectangle (excluding padding and borders).
     fn outer_to_inner(&self, mut outer: Rect) -> Rect {
@@ -3814,7 +3849,7 @@ impl Node<'_> {
     }
 
     /// Computes the intrinsic size of this node and its children.
-    fn compute_intrinsic_size(&mut self) {
+    fn compute_intrinsic_size(&mut self, arena: &'a Arena) {
         match &mut self.content {
             NodeContent::Table(spec) => {
                 // Calculate each row's height and the maximum width of each of its columns.
@@ -3824,7 +3859,7 @@ impl Node<'_> {
 
                     for (column, cell) in Tree::iterate_siblings(row.children.first).enumerate() {
                         let mut cell = cell.borrow_mut();
-                        cell.compute_intrinsic_size();
+                        cell.compute_intrinsic_size(arena);
 
                         let size = cell.intrinsic_to_outer();
 
@@ -3838,7 +3873,7 @@ impl Node<'_> {
                         // last column (flexible 1/1) must be 3 times as wide as the 2nd one (1/3rd).
                         // It's not a big deal yet, because such functionality isn't needed just yet.
                         if column >= spec.columns.len() {
-                            spec.columns.push(0);
+                            spec.columns.push(arena, 0);
                         }
                         spec.columns[column] = spec.columns[column].max(size.width);
 
@@ -3884,7 +3919,7 @@ impl Node<'_> {
 
                 for child in Tree::iterate_siblings(self.children.first) {
                     let mut child = child.borrow_mut();
-                    child.compute_intrinsic_size();
+                    child.compute_intrinsic_size(arena);
 
                     let size = child.intrinsic_to_outer();
                     max_width = max_width.max(size.width);

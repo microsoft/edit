@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 #![feature(
-    allocator_api,
     breakpoint,
     cold_path,
     linked_list_cursors,

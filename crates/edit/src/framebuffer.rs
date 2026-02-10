@@ -4,16 +4,17 @@
 //! A shoddy framebuffer for terminal applications.
 
 use std::cell::Cell;
-use std::fmt::Write;
 use std::ops::{BitOr, BitXor};
 use std::ptr;
 use std::slice::ChunksExact;
 
-use stdext::arena::{Arena, ArenaString};
+use stdext::arena::Arena;
+use stdext::arena_write_fmt;
+use stdext::collections::BString;
+use stdext::simd::memset;
 
 use crate::helpers::{CoordType, Point, Rect, Size};
 use crate::oklab::StraightRgba;
-use crate::simd::{MemsetSafe, memset};
 use crate::unicode::MeasurementConfig;
 
 // Same constants as used in the PCG family of RNGs.
@@ -424,7 +425,7 @@ impl Framebuffer {
 
     /// Renders the framebuffer contents accumulated since the
     /// last call to `flip()` and returns them serialized as VT.
-    pub fn render<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
+    pub fn render<'a>(&mut self, arena: &'a Arena) -> BString<'a> {
         let idx = self.frame_counter & 1;
         // Borrows the front/back buffers without letting Rust know that we have a reference to self.
         // SAFETY: Well this is certainly correct, but whether Rust and its strict rules likes it is another question.
@@ -445,7 +446,7 @@ impl Framebuffer {
         let mut back_fgs = back.fg_bitmap.iter();
         let mut back_attrs = back.attributes.iter();
 
-        let mut result = ArenaString::new_in(arena);
+        let mut result = BString::empty();
         let mut last_bg = u64::MAX;
         let mut last_fg = u64::MAX;
         let mut last_attr = Attributes::None;
@@ -478,9 +479,9 @@ impl Framebuffer {
             let mut chunk_end = 0;
 
             if result.is_empty() {
-                result.push_str("\x1b[m");
+                result.push_str(arena, "\x1b[m");
             }
-            _ = write!(result, "\x1b[{};1H", y + 1);
+            arena_write_fmt!(arena, result, "\x1b[{};1H", y + 1);
 
             while {
                 let bg = back_bg[chunk_end];
@@ -498,28 +499,28 @@ impl Framebuffer {
 
                 if last_bg != bg.to_ne() as u64 {
                     last_bg = bg.to_ne() as u64;
-                    self.format_color(&mut result, false, bg);
+                    self.format_color(arena, &mut result, false, bg);
                 }
 
                 if last_fg != fg.to_ne() as u64 {
                     last_fg = fg.to_ne() as u64;
-                    self.format_color(&mut result, true, fg);
+                    self.format_color(arena, &mut result, true, fg);
                 }
 
                 if last_attr != attr {
                     let diff = last_attr ^ attr;
                     if diff.is(Attributes::Italic) {
                         if attr.is(Attributes::Italic) {
-                            result.push_str("\x1b[3m");
+                            result.push_str(arena, "\x1b[3m");
                         } else {
-                            result.push_str("\x1b[23m");
+                            result.push_str(arena, "\x1b[23m");
                         }
                     }
                     if diff.is(Attributes::Underlined) {
                         if attr.is(Attributes::Underlined) {
-                            result.push_str("\x1b[4m");
+                            result.push_str(arena, "\x1b[4m");
                         } else {
-                            result.push_str("\x1b[24m");
+                            result.push_str(arena, "\x1b[24m");
                         }
                     }
                     last_attr = attr;
@@ -527,7 +528,7 @@ impl Framebuffer {
 
                 let beg = cfg.cursor().offset;
                 let end = cfg.goto_visual(Point { x: chunk_end as CoordType, y: 0 }).offset;
-                result.push_str(&back_line[beg..end]);
+                result.push_str(arena, &back_line[beg..end]);
 
                 chunk_end < back_bg.len()
             } {}
@@ -541,7 +542,8 @@ impl Framebuffer {
                 // CUP to the cursor position.
                 // DECSCUSR to set the cursor style.
                 // DECTCEM to show the cursor.
-                _ = write!(
+                arena_write_fmt!(
+                    arena,
                     result,
                     "\x1b[{};{}H\x1b[{} q\x1b[?25h",
                     back.cursor.pos.y + 1,
@@ -550,14 +552,20 @@ impl Framebuffer {
                 );
             } else {
                 // DECTCEM to hide the cursor.
-                result.push_str("\x1b[?25l");
+                result.push_str(arena, "\x1b[?25l");
             }
         }
 
         result
     }
 
-    fn format_color(&self, dst: &mut ArenaString, fg: bool, mut color: StraightRgba) {
+    fn format_color<'a>(
+        &self,
+        arena: &'a Arena,
+        dst: &mut BString<'a>,
+        fg: bool,
+        mut color: StraightRgba,
+    ) {
         let typ = if fg { '3' } else { '4' };
 
         // Some terminals support transparent backgrounds which are used
@@ -574,7 +582,7 @@ impl Framebuffer {
         // and "color that happens to be default foreground" separate.
         // (This also applies to the background color by the way.)
         if color.to_ne() == 0 {
-            _ = write!(dst, "\x1b[{typ}9m");
+            arena_write_fmt!(arena, dst, "\x1b[{typ}9m");
             return;
         }
 
@@ -587,7 +595,7 @@ impl Framebuffer {
         let r = color.red();
         let g = color.green();
         let b = color.blue();
-        _ = write!(dst, "\x1b[{typ}8;2;{r};{g};{b}m");
+        arena_write_fmt!(arena, dst, "\x1b[{typ}8;2;{r};{g};{b}m");
     }
 }
 
@@ -838,8 +846,6 @@ impl Attributes {
         (self.0 & attr.0) == attr.0
     }
 }
-
-unsafe impl MemsetSafe for Attributes {}
 
 impl BitOr for Attributes {
     type Output = Self;
