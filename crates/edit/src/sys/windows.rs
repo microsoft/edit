@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 use std::ffi::{OsString, c_char, c_void};
-use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::mem::MaybeUninit;
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle};
@@ -10,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull, null, null_mut};
 use std::{io, mem, time};
 
-use stdext::arena::{Arena, ArenaString, scratch_arena};
+use stdext::arena::{Arena, scratch_arena};
+use stdext::arena_write_fmt;
+use stdext::collections::{BString, BVec};
 use windows_sys::Win32::Storage::FileSystem;
 use windows_sys::Win32::System::{Console, IO, LibraryLoader, Threading};
 use windows_sys::Win32::{Foundation, Globalization};
@@ -247,7 +248,7 @@ fn get_console_size() -> Option<Size> {
 /// * `None` if there was an error reading from stdin.
 /// * `Some("")` if the given timeout was reached.
 /// * Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaString<'_>> {
+pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<'_>> {
     let scratch = scratch_arena(Some(arena));
 
     // On startup we're asked to inject a window size so that the UI system can layout the elements.
@@ -344,15 +345,15 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
     let resize_event_len = if resize_event.is_some() { RESIZE_EVENT_FMT_MAX_LEN } else { 0 };
     // +1 to account for a potential `STATE.leading_surrogate`.
     let utf8_max_len = (utf16_buf_len + 1) * 3;
-    let mut text = ArenaString::new_in(arena);
-    text.reserve(utf8_max_len + resize_event_len);
+    let mut text = BString::empty();
+    text.reserve(arena, utf8_max_len + resize_event_len);
 
     // Now prepend our previously extracted resize event.
     if let Some(resize_event) = resize_event {
         // If I read xterm's documentation correctly, CSI 18 t reports the window size in characters.
         // CSI 8 ; height ; width t is the response. Of course, we didn't send the request,
         // but we can use this fake response to trigger the editor to resize itself.
-        _ = write!(text, "\x1b[8;{};{}t", resize_event.height, resize_event.width);
+        arena_write_fmt!(arena, text, "\x1b[8;{};{}t", resize_event.height, resize_event.width);
     }
 
     // If the input ends with a lone lead surrogate, we need to remember it for the next read.
@@ -389,7 +390,6 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
         }
     }
 
-    text.shrink_to_fit();
     Some(text)
 }
 
@@ -575,13 +575,12 @@ pub fn load_icu() -> io::Result<LibIcu> {
 }
 
 /// Returns a list of preferred languages for the current user.
-pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
+pub fn preferred_languages<'a>(arena: &'a Arena) -> BVec<'a, &'a str> {
     // If the GetUserPreferredUILanguages() don't fit into 512 characters,
     // honestly, just give up. How many languages do you realistically need?
     const LEN: usize = 512;
 
     let scratch = scratch_arena(Some(arena));
-    let mut res = Vec::new_in(arena);
 
     // Get the list of preferred languages via `GetUserPreferredUILanguages`.
     let langs = unsafe {
@@ -607,40 +606,12 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
     };
 
     // Convert UTF16 to UTF8.
-    let langs = wide_to_utf8(&scratch, langs);
+    let langs = BString::from_utf16_lossy(arena, langs).leak();
 
     // Split the null-delimited string into individual chunks
     // and copy them into the given arena.
-    res.extend(
-        langs
-            .split_terminator('\0')
-            .filter(|s| !s.is_empty())
-            .map(|s| ArenaString::from_str(arena, s)),
-    );
-    res
-}
-
-fn wide_to_utf8<'a>(arena: &'a Arena, wide: &[u16]) -> ArenaString<'a> {
-    let mut res = ArenaString::new_in(arena);
-    res.reserve(wide.len() * 3);
-
-    let len = unsafe {
-        Globalization::WideCharToMultiByte(
-            Globalization::CP_UTF8,
-            0,
-            wide.as_ptr(),
-            wide.len() as i32,
-            res.as_mut_ptr() as *mut _,
-            res.capacity() as i32,
-            null(),
-            null_mut(),
-        )
-    };
-    if len > 0 {
-        unsafe { res.as_mut_vec().set_len(len as usize) };
-    }
-
-    res.shrink_to_fit();
+    let mut res = BVec::empty();
+    res.extend_sloppy(arena, langs.split_terminator('\0').filter(|s| !s.is_empty()));
     res
 }
 

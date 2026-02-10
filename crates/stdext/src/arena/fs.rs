@@ -4,19 +4,20 @@ use std::mem::MaybeUninit;
 use std::path::Path;
 use std::slice::from_raw_parts_mut;
 
-use super::{Arena, ArenaString};
+use crate::arena::Arena;
+use crate::collections::{BString, BVec};
 
-pub fn read_to_vec<P: AsRef<Path>>(arena: &Arena, path: P) -> io::Result<Vec<u8, &Arena>> {
-    fn inner<'a>(arena: &'a Arena, path: &Path) -> io::Result<Vec<u8, &'a Arena>> {
+pub fn read_to_vec<P: AsRef<Path>>(arena: &'_ Arena, path: P) -> io::Result<BVec<'_, u8>> {
+    fn inner<'a>(arena: &'a Arena, path: &Path) -> io::Result<BVec<'a, u8>> {
         let mut file = File::open(path)?;
-        let mut vec = Vec::new_in(arena);
+        let mut vec = BVec::empty();
 
         const MIN_SIZE: usize = 1024;
         const MAX_SIZE: usize = 128 * 1024;
         let mut buf_size = MIN_SIZE;
 
         loop {
-            vec.reserve(buf_size);
+            vec.reserve(arena, buf_size);
             let spare = vec.spare_capacity_mut();
             let to_read = spare.len().min(buf_size);
 
@@ -36,10 +37,10 @@ pub fn read_to_vec<P: AsRef<Path>>(arena: &Arena, path: P) -> io::Result<Vec<u8,
     inner(arena, path.as_ref())
 }
 
-pub fn read_to_string<P: AsRef<Path>>(arena: &Arena, path: P) -> io::Result<ArenaString<'_>> {
-    fn inner<'a>(arena: &'a Arena, path: &Path) -> io::Result<ArenaString<'a>> {
+pub fn read_to_string<P: AsRef<Path>>(arena: &Arena, path: P) -> io::Result<BString<'_>> {
+    fn inner<'a>(arena: &'a Arena, path: &Path) -> io::Result<BString<'a>> {
         let vec = read_to_vec(arena, path)?;
-        ArenaString::from_utf8(vec).map_err(|_| {
+        BString::from_utf8(vec).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidData, "stream did not contain valid UTF-8")
         })
     }
