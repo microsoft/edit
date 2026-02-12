@@ -127,6 +127,58 @@ pub struct OscTitleFileStatus {
     pub dirty: bool,
 }
 
+/// Direction for split views.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SplitDirection {
+    #[default]
+    None,       // Single pane (no split)
+    Horizontal, // Panes arranged left | right
+    Vertical,   // Panes arranged top / bottom
+}
+
+/// A pane in the split view layout.
+/// Each pane displays a document (via its buffer reference).
+#[derive(Clone)]
+pub struct Pane {
+    /// Index of the document in DocumentManager (for reference).
+    /// Note: This may become stale when documents are closed.
+    pub document_index: usize,
+    /// Reference to the document's text buffer.
+    /// Multiple panes can share the same buffer.
+    pub buffer: edit::buffer::RcTextBuffer,
+    /// The filename to display for this pane.
+    pub filename: String,
+}
+
+/// Manages the split view layout.
+#[derive(Default)]
+pub struct SplitLayout {
+    /// List of panes. When split_direction is None, only panes[0] is used.
+    pub panes: Vec<Pane>,
+    /// Index of the currently active/focused pane.
+    pub active_pane: usize,
+    /// How panes are arranged.
+    pub split_direction: SplitDirection,
+}
+
+impl SplitLayout {
+    /// Returns the number of visible panes.
+    #[inline]
+    pub fn pane_count(&self) -> usize {
+        if self.split_direction == SplitDirection::None {
+            1.min(self.panes.len())
+        } else {
+            self.panes.len()
+        }
+    }
+
+    /// Resets the layout to default state.
+    #[inline]
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 pub struct State {
     pub menubar_color_bg: StraightRgba,
     pub menubar_color_fg: StraightRgba,
@@ -167,6 +219,14 @@ pub struct State {
     pub wants_goto: bool,
     pub goto_target: String,
     pub goto_invalid: bool,
+
+    // Split view state
+    pub split_layout: SplitLayout,
+    pub wants_split_horizontal: bool,
+    pub wants_split_vertical: bool,
+    pub wants_close_pane: bool,
+    pub wants_focus_next_pane: bool,
+    pub wants_focus_prev_pane: bool,
 
     pub osc_title_file_status: OscTitleFileStatus,
     pub osc_clipboard_sync: bool,
@@ -215,6 +275,14 @@ impl State {
             wants_goto: false,
             goto_target: Default::default(),
             goto_invalid: false,
+
+            // Split view state
+            split_layout: Default::default(),
+            wants_split_horizontal: false,
+            wants_split_vertical: false,
+            wants_close_pane: false,
+            wants_focus_next_pane: false,
+            wants_focus_prev_pane: false,
 
             osc_title_file_status: Default::default(),
             osc_clipboard_sync: false,
@@ -271,5 +339,131 @@ pub fn draw_error_log(ctx: &mut Context, state: &mut State) {
     }
     if ctx.modal_end() {
         state.error_log_count = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use edit::buffer::TextBuffer;
+
+    /// Helper to create a test pane with a dummy buffer.
+    fn create_test_pane(filename: &str) -> Pane {
+        Pane {
+            document_index: 0,
+            buffer: TextBuffer::new_rc(true).unwrap(),
+            filename: filename.to_string(),
+        }
+    }
+
+    #[test]
+    fn split_layout_default_is_empty() {
+        let layout = SplitLayout::default();
+        assert!(layout.panes.is_empty());
+        assert_eq!(layout.active_pane, 0);
+        assert_eq!(layout.split_direction, SplitDirection::None);
+    }
+
+    #[test]
+    fn pane_count_returns_zero_when_empty() {
+        let layout = SplitLayout::default();
+        // pane_count returns min(1, 0) = 0 when no panes
+        assert_eq!(layout.pane_count(), 0);
+    }
+
+    #[test]
+    fn pane_count_returns_one_in_single_mode() {
+        let mut layout = SplitLayout::default();
+        layout.panes.push(create_test_pane("test.txt"));
+        layout.split_direction = SplitDirection::None;
+
+        assert_eq!(layout.pane_count(), 1);
+    }
+
+    #[test]
+    fn pane_count_returns_one_even_with_multiple_panes_in_none_mode() {
+        let mut layout = SplitLayout::default();
+        layout.panes.push(create_test_pane("file1.txt"));
+        layout.panes.push(create_test_pane("file2.txt"));
+        layout.split_direction = SplitDirection::None;
+
+        // In None mode, only 1 pane is visible regardless of how many exist
+        assert_eq!(layout.pane_count(), 1);
+    }
+
+    #[test]
+    fn pane_count_returns_actual_count_in_horizontal_split() {
+        let mut layout = SplitLayout::default();
+        layout.panes.push(create_test_pane("file1.txt"));
+        layout.panes.push(create_test_pane("file2.txt"));
+        layout.split_direction = SplitDirection::Horizontal;
+
+        assert_eq!(layout.pane_count(), 2);
+    }
+
+    #[test]
+    fn pane_count_returns_actual_count_in_vertical_split() {
+        let mut layout = SplitLayout::default();
+        layout.panes.push(create_test_pane("file1.txt"));
+        layout.panes.push(create_test_pane("file2.txt"));
+        layout.split_direction = SplitDirection::Vertical;
+
+        assert_eq!(layout.pane_count(), 2);
+    }
+
+    #[test]
+    fn reset_clears_layout() {
+        let mut layout = SplitLayout::default();
+        layout.panes.push(create_test_pane("file1.txt"));
+        layout.panes.push(create_test_pane("file2.txt"));
+        layout.active_pane = 1;
+        layout.split_direction = SplitDirection::Horizontal;
+
+        layout.reset();
+
+        assert!(layout.panes.is_empty());
+        assert_eq!(layout.active_pane, 0);
+        assert_eq!(layout.split_direction, SplitDirection::None);
+    }
+
+    #[test]
+    fn split_direction_default_is_none() {
+        assert_eq!(SplitDirection::default(), SplitDirection::None);
+    }
+
+    #[test]
+    fn focus_next_pane_wraps_around() {
+        let mut layout = SplitLayout::default();
+        layout.panes.push(create_test_pane("file1.txt"));
+        layout.panes.push(create_test_pane("file2.txt"));
+        layout.split_direction = SplitDirection::Horizontal;
+        layout.active_pane = 0;
+
+        // Simulate focus next
+        let count = layout.pane_count();
+        layout.active_pane = (layout.active_pane + 1) % count;
+        assert_eq!(layout.active_pane, 1);
+
+        // Wrap around
+        layout.active_pane = (layout.active_pane + 1) % count;
+        assert_eq!(layout.active_pane, 0);
+    }
+
+    #[test]
+    fn focus_prev_pane_wraps_around() {
+        let mut layout = SplitLayout::default();
+        layout.panes.push(create_test_pane("file1.txt"));
+        layout.panes.push(create_test_pane("file2.txt"));
+        layout.split_direction = SplitDirection::Horizontal;
+        layout.active_pane = 0;
+
+        // Simulate focus prev (wraps to last)
+        let count = layout.pane_count();
+        layout.active_pane = (layout.active_pane + count - 1) % count;
+        assert_eq!(layout.active_pane, 1);
+
+        // Go back to first
+        layout.active_pane = (layout.active_pane + count - 1) % count;
+        assert_eq!(layout.active_pane, 0);
     }
 }
