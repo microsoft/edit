@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use std::fmt::{self};
 use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::slice;

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 use std::fs::File;
 use std::io::{self, Read};
 use std::mem::MaybeUninit;
