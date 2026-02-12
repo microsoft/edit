@@ -160,13 +160,13 @@ impl<'a, T> BVec<'a, T> {
     /// View as a shared slice.
     #[inline]
     pub fn as_slice(&self) -> &[T] {
-        self
+        unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 
     /// View as a mutable slice.
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
-        self
+        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 
     /// Consume the string, returning a `&mut [T]` that lives as long as the borrowed memory.
@@ -440,14 +440,14 @@ impl<T> Deref for BVec<'_, T> {
 
     #[inline]
     fn deref(&self) -> &[T] {
-        unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+        self.as_slice()
     }
 }
 
 impl<T> DerefMut for BVec<'_, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut [T] {
-        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+        self.as_mut_slice()
     }
 }
 
