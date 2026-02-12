@@ -167,11 +167,29 @@ impl Arena {
 
     #[inline]
     #[allow(clippy::mut_from_ref)]
+    pub fn alloc_uninit_array<const N: usize, T>(&self) -> &mut [MaybeUninit<T>; N] {
+        let bytes = mem::size_of::<[MaybeUninit<T>; N]>();
+        let alignment = mem::align_of::<[MaybeUninit<T>; N]>();
+        let ptr = self.alloc_raw(bytes, alignment);
+        unsafe { ptr.cast().as_mut() }
+    }
+
+    #[inline]
+    #[allow(clippy::mut_from_ref)]
     pub fn alloc_uninit_slice<T>(&self, count: usize) -> &mut [MaybeUninit<T>] {
         let bytes = mem::size_of::<T>() * count;
         let alignment = mem::align_of::<T>();
         let ptr = self.alloc_raw(bytes, alignment);
         unsafe { slice::from_raw_parts_mut(ptr.cast().as_ptr(), count) }
+    }
+
+    /// A workaround for `alloc_uninit_slice(count).write_filled()` being unstable (`maybe_uninit_fill`).
+    #[inline]
+    #[allow(clippy::mut_from_ref)]
+    pub fn alloc_slice<T: Copy>(&self, count: usize, value: T) -> &mut [T] {
+        let slice = self.alloc_uninit_slice(count);
+        slice.fill(MaybeUninit::new(value));
+        unsafe { slice.assume_init_mut() }
     }
 }
 

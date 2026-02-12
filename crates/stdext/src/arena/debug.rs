@@ -4,7 +4,7 @@
 #![allow(clippy::missing_safety_doc, clippy::mut_from_ref)]
 
 use std::io;
-use std::mem::MaybeUninit;
+use std::ops::Deref;
 use std::ptr::NonNull;
 
 use super::release;
@@ -94,21 +94,14 @@ impl Arena {
             Self::Owned { arena } => arena,
         }
     }
+}
 
-    pub fn offset(&self) -> usize {
-        self.delegate_target().offset()
-    }
+impl Deref for Arena {
+    type Target = release::Arena;
 
-    pub unsafe fn reset(&self, to: usize) {
-        unsafe { self.delegate_target().reset(to) }
-    }
-
-    pub fn alloc_uninit<T>(&self) -> &mut MaybeUninit<T> {
-        self.delegate_target().alloc_uninit()
-    }
-
-    pub fn alloc_uninit_slice<T>(&self, count: usize) -> &mut [MaybeUninit<T>] {
-        self.delegate_target().alloc_uninit_slice(count)
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.delegate_target()
     }
 }
 

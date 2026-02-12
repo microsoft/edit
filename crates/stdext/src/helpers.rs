@@ -3,6 +3,7 @@
 
 //! Random assortment of helpers I didn't know where to put.
 
+use std::borrow::Cow;
 use std::mem::{self, MaybeUninit};
 use std::ops::{Bound, Range, RangeBounds};
 use std::{fmt, ptr, slice, str};
@@ -148,6 +149,15 @@ pub const fn slice_as_uninit_ref<T>(slice: &[T]) -> &[MaybeUninit<T>] {
 #[inline(always)]
 pub const fn slice_as_uninit_mut<T>(slice: &mut [T]) -> &mut [MaybeUninit<T>] {
     unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut MaybeUninit<T>, slice.len()) }
+}
+
+/// A stable clone of [`String::from_utf8_lossy_owned`] (`string_from_utf8_lossy_owned`).
+pub fn string_from_utf8_lossy_owned(v: Vec<u8>) -> String {
+    if let Cow::Owned(string) = String::from_utf8_lossy(&v) {
+        string
+    } else {
+        unsafe { String::from_utf8_unchecked(v) }
+    }
 }
 
 /// Helpers for ASCII string comparisons.

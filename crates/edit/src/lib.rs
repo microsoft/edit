@@ -1,14 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![feature(
-    breakpoint,
-    cold_path,
-    linked_list_cursors,
-    maybe_uninit_fill,
-    maybe_uninit_slice,
-    maybe_uninit_uninit_array_transpose
-)]
 #![cfg_attr(
     target_arch = "loongarch64",
     feature(stdarch_loongarch, stdarch_loongarch_feature_detection, loongarch_target_feature),

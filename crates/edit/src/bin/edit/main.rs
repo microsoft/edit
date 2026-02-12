@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![feature(linked_list_cursors, string_from_utf8_lossy_owned)]
-
 mod apperr;
 mod documents;
 mod draw_editor;
