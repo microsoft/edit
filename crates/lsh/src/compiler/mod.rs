@@ -19,7 +19,8 @@ use std::fmt::Write as _;
 use std::mem::zeroed;
 use std::path::Path;
 
-use stdext::arena::{Arena, ArenaString};
+use stdext::arena::Arena;
+use stdext::collections::BString;
 
 pub use self::charset::{Charset, SerializedCharset};
 use self::frontend::*;
@@ -568,7 +569,7 @@ impl<'a> IR<'a> {
 }
 
 fn arena_clone_str<'a>(arena: &'a Arena, s: &str) -> &'a str {
-    ArenaString::from_str(arena, s).leak()
+    BString::from_str(arena, s).leak()
 }
 
 trait Intern<'a, T: ?Sized> {

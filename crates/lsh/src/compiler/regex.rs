@@ -43,6 +43,8 @@
 //! - The `parse()` function wires its generated IR into the provided destination nodes.
 //!   Don't pass nodes that are already part of the IR graph.
 
+use stdext::collections::BVec;
+
 use super::*;
 
 // 0xC2-0xF4 are UTF-8 leading bytes for multibyte sequences. Including them lets
@@ -77,7 +79,7 @@ const ASCII_DIGIT_CHARSET: Charset = {
     charset
 };
 
-pub type CaptureList<'a> = Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>;
+pub type CaptureList<'a> = BVec<'a, (IRRegCell<'a>, IRRegCell<'a>)>;
 
 #[derive(Debug, Clone)]
 enum Regex {
@@ -512,7 +514,7 @@ struct CodeGen<'a, 'c> {
 
 impl<'a, 'c> CodeGen<'a, 'c> {
     fn new(compiler: &'c mut Compiler<'a>, dst_good: IRCell<'a>, dst_bad: IRCell<'a>) -> Self {
-        let captures = CaptureList::new_in(compiler.arena);
+        let captures = CaptureList::empty();
         Self { compiler, captures, dst_good, dst_bad }
     }
 
@@ -628,7 +630,7 @@ impl<'a, 'c> CodeGen<'a, 'c> {
                     let inner_node = self.emit(inner, save_end, on_fail)?;
 
                     // Push *after* emit, so nested groups come first in the reversed list.
-                    self.captures.push((start_reg, end_reg));
+                    self.captures.push(self.compiler.arena, (start_reg, end_reg));
 
                     let save_start =
                         self.compiler.alloc_iri(IRI::Mov { dst: start_reg, src: off_reg });

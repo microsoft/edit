@@ -10,8 +10,9 @@ use std::ops::Range;
 use std::ptr::{null, null_mut};
 use std::{fmt, mem};
 
-use stdext::arena::{Arena, ArenaString, scratch_arena};
+use stdext::arena::{Arena, scratch_arena};
 use stdext::arena_format;
+use stdext::collections::{BString, BVec};
 
 use crate::buffer::TextBuffer;
 use crate::sys;
@@ -74,12 +75,12 @@ pub fn get_available_encodings() -> &'static Encodings {
     unsafe {
         if ENCODINGS.all.is_empty() {
             let scratch = scratch_arena(None);
-            let mut preferred = Vec::new_in(&*scratch);
-            let mut alternative = Vec::new_in(&*scratch);
+            let mut preferred = BVec::empty();
+            let mut alternative = BVec::empty();
 
             // These encodings are always available.
-            preferred.push(Encoding { label: "UTF-8", canonical: "UTF-8" });
-            preferred.push(Encoding { label: "UTF-8 BOM", canonical: "UTF-8 BOM" });
+            preferred.push(&*scratch, Encoding { label: "UTF-8", canonical: "UTF-8" });
+            preferred.push(&*scratch, Encoding { label: "UTF-8 BOM", canonical: "UTF-8 BOM" });
 
             if let Ok(f) = init_if_needed() {
                 let mut n = 0;
@@ -107,9 +108,9 @@ pub fn get_available_encodings() -> &'static Encodings {
                     );
                     if !mime.is_null() && status.is_success() {
                         let mime = CStr::from_ptr(mime).to_str().unwrap_unchecked();
-                        preferred.push(Encoding { label: mime, canonical: name });
+                        preferred.push(&*scratch, Encoding { label: mime, canonical: name });
                     } else {
-                        alternative.push(Encoding { label: name, canonical: name });
+                        alternative.push(&*scratch, Encoding { label: name, canonical: name });
                     }
                 }
             }
@@ -187,7 +188,7 @@ impl<'pivot> Converter<'pivot> {
         Ok(Self { source, target, pivot_buffer, pivot_source, pivot_target, reset: true })
     }
 
-    fn append_nul<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
+    fn append_nul<'a>(arena: &'a Arena, input: &str) -> BString<'a> {
         arena_format!(arena, "{}\0", input)
     }
 
@@ -635,10 +636,10 @@ impl Regex {
         let f = init_if_needed()?;
         unsafe {
             let scratch = scratch_arena(None);
-            let mut utf16 = Vec::new_in(&*scratch);
+            let mut utf16 = BVec::empty();
             let mut status = icu_ffi::U_ZERO_ERROR;
 
-            utf16.extend(pattern.encode_utf16());
+            utf16.extend_sloppy(&*scratch, pattern.encode_utf16());
 
             let ptr = (f.uregex_open)(
                 utf16.as_ptr(),
@@ -823,7 +824,7 @@ static mut ROOT_CASEMAP: Option<*mut icu_ffi::UCaseMap> = None;
 ///
 /// Case folding differs from lower case in that the output is primarily useful
 /// to machines for comparisons. It's like applying Unicode normalization.
-pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
+pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> BString<'a> {
     // OnceCell for people that want to put it into a static.
     #[allow(static_mut_refs)]
     let casemap = unsafe {
@@ -841,13 +842,13 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
     if !casemap.is_null() {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
-        let mut output = Vec::new_in(arena);
+        let mut output = BVec::empty();
         let mut output_len;
 
         // First, guess the output length:
         // TODO: What's a good heuristic here?
         {
-            output.reserve_exact(input.len() + 16);
+            output.reserve_exact(arena, input.len() + 16);
             let output = output.spare_capacity_mut();
             output_len = unsafe {
                 (f.ucasemap_utf8FoldCase)(
@@ -863,7 +864,7 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
 
         // If that failed to fit, retry with the correct length.
         if status == icu_ffi::U_BUFFER_OVERFLOW_ERROR && output_len > 0 {
-            output.reserve_exact(output_len as usize);
+            output.reserve_exact(arena, output_len as usize);
             let output = output.spare_capacity_mut();
             output_len = unsafe {
                 (f.ucasemap_utf8FoldCase)(
@@ -881,11 +882,11 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> ArenaString<'a> {
             unsafe {
                 output.set_len(output_len as usize);
             }
-            return unsafe { ArenaString::from_utf8_unchecked(output) };
+            return unsafe { BString::from_utf8_unchecked(output) };
         }
     }
 
-    let mut result = ArenaString::from_str(arena, input);
+    let mut result = BString::from_str(arena, input);
     for b in unsafe { result.as_bytes_mut() } {
         b.make_ascii_lowercase();
     }

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::hint::cold_path;
+use stdext::cold_path;
 
 use super::Utf8Chars;
 use super::tables::*;

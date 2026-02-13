@@ -8,6 +8,7 @@ use edit::helpers::*;
 use edit::icu;
 use edit::input::{kbmod, vk};
 use edit::tui::*;
+use stdext::string_from_utf8_lossy_owned;
 
 use crate::localization::*;
 use crate::state::*;
@@ -58,7 +59,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         // If the selection is empty, focus the search input field.
         // Otherwise, focus the replace input field, if it exists.
         if let Some(selection) = doc.buffer.borrow_mut().extract_user_selection(false) {
-            state.search_needle = String::from_utf8_lossy_owned(selection);
+            state.search_needle = string_from_utf8_lossy_owned(selection);
             focus = state.wants_search.kind;
         }
     }

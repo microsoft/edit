@@ -16,6 +16,7 @@
 use std::ptr;
 
 use stdext::arena::scratch_arena;
+use stdext::collections::BVec;
 
 use super::*;
 
@@ -160,7 +161,7 @@ fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
 /// I like it if the identifiers are sorted and the values contiguous.
 fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
     let scratch = scratch_arena(None);
-    let mut mapping = Vec::new_in(&*scratch);
+    let mut mapping = BVec::empty();
 
     compiler.highlight_kinds.sort_unstable_by(|a, b| {
         let a = a.identifier;
@@ -189,7 +190,7 @@ fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
         a.split('.').cmp(b.split('.'))
     });
 
-    mapping.resize(compiler.highlight_kinds.len(), u32::MAX);
+    mapping.push_repeat(&*scratch, u32::MAX, compiler.highlight_kinds.len());
     for (idx, hk) in compiler.highlight_kinds.iter_mut().enumerate() {
         let idx = idx as u32;
         mapping[hk.value as usize] = idx;

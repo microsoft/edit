@@ -22,9 +22,11 @@
 //! - [`Instruction::address_offset`] returns where, within an instruction, the jump target lives,
 //!   as used by the backend's relocation system.
 
-use std::fmt::{self, Debug, Write as _};
+use std::fmt;
 
-use stdext::arena::{Arena, ArenaString};
+use stdext::arena::Arena;
+use stdext::arena_write_fmt;
+use stdext::collections::{BString, BVec};
 
 /// A compiled language definition with its bytecode entrypoint.
 pub struct Language {
@@ -53,7 +55,7 @@ pub struct Highlight<T> {
     pub kind: T,
 }
 
-impl<T: Debug> Debug for Highlight<T> {
+impl<T: fmt::Debug> fmt::Debug for Highlight<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}, {:?})", self.start, self.kind)
     }
@@ -431,7 +433,7 @@ impl Instruction {
     }
 
     #[allow(clippy::identity_op)]
-    pub fn encode<'a>(&self, arena: &'a Arena) -> Vec<u8, &'a Arena> {
+    pub fn encode<'a>(&self, arena: &'a Arena) -> BVec<'a, u8> {
         fn enc_reg_pair(lo: Register, hi: Register) -> u8 {
             ((hi as u8) << 4) | (lo as u8)
         }
@@ -444,25 +446,25 @@ impl Instruction {
             val.to_le_bytes()
         }
 
-        let mut bytes = Vec::with_capacity_in(16, arena);
+        let mut bytes = BVec::empty();
         #[allow(clippy::missing_transmute_annotations)]
-        bytes.push(unsafe { std::mem::transmute(std::mem::discriminant(self)) });
+        bytes.push(arena, unsafe { std::mem::transmute(std::mem::discriminant(self)) });
 
         match *self {
             Instruction::Mov { dst, src }
             | Instruction::Add { dst, src }
             | Instruction::Sub { dst, src } => {
-                bytes.push(enc_reg_pair(dst, src));
+                bytes.push(arena, enc_reg_pair(dst, src));
             }
             Instruction::MovImm { dst, imm }
             | Instruction::AddImm { dst, imm }
             | Instruction::SubImm { dst, imm } => {
-                bytes.push(enc_reg_single(dst));
-                bytes.extend_from_slice(&enc_u32(imm));
+                bytes.push(arena, enc_reg_single(dst));
+                bytes.extend_from_slice(arena, &enc_u32(imm));
             }
 
             Instruction::Call { tgt } => {
-                bytes.extend_from_slice(&enc_u32(tgt));
+                bytes.extend_from_slice(arena, &enc_u32(tgt));
             }
             Instruction::Return => {}
 
@@ -472,27 +474,27 @@ impl Instruction {
             | Instruction::JumpLE { lhs, rhs, tgt }
             | Instruction::JumpGT { lhs, rhs, tgt }
             | Instruction::JumpGE { lhs, rhs, tgt } => {
-                bytes.push(enc_reg_pair(lhs, rhs));
-                bytes.extend_from_slice(&enc_u32(tgt));
+                bytes.push(arena, enc_reg_pair(lhs, rhs));
+                bytes.extend_from_slice(arena, &enc_u32(tgt));
             }
 
             Instruction::JumpIfEndOfLine { tgt } => {
-                bytes.extend_from_slice(&enc_u32(tgt));
+                bytes.extend_from_slice(arena, &enc_u32(tgt));
             }
             Instruction::JumpIfMatchCharset { idx, min, max, tgt } => {
-                bytes.extend_from_slice(&enc_u32(idx));
-                bytes.extend_from_slice(&enc_u32(min));
-                bytes.extend_from_slice(&enc_u32(max));
-                bytes.extend_from_slice(&enc_u32(tgt));
+                bytes.extend_from_slice(arena, &enc_u32(idx));
+                bytes.extend_from_slice(arena, &enc_u32(min));
+                bytes.extend_from_slice(arena, &enc_u32(max));
+                bytes.extend_from_slice(arena, &enc_u32(tgt));
             }
             Instruction::JumpIfMatchPrefix { idx, tgt }
             | Instruction::JumpIfMatchPrefixInsensitive { idx, tgt } => {
-                bytes.extend_from_slice(&enc_u32(idx));
-                bytes.extend_from_slice(&enc_u32(tgt));
+                bytes.extend_from_slice(arena, &enc_u32(idx));
+                bytes.extend_from_slice(arena, &enc_u32(tgt));
             }
 
             Instruction::FlushHighlight { kind } => {
-                bytes.push(enc_reg_single(kind));
+                bytes.push(arena, enc_reg_single(kind));
             }
             Instruction::AwaitInput => {}
         }
@@ -568,12 +570,8 @@ impl Instruction {
         (Some(instr), pc)
     }
 
-    pub fn mnemonic<'a>(
-        &self,
-        arena: &'a Arena,
-        config: &MnemonicFormattingConfig,
-    ) -> ArenaString<'a> {
-        let mut str = ArenaString::new_in(arena);
+    pub fn mnemonic<'a>(&self, arena: &'a Arena, config: &MnemonicFormattingConfig) -> BString<'a> {
+        let mut str = BString::empty();
         let _i = config.instruction_prefix;
         let i_ = config.instruction_suffix;
         let _r = config.register_prefix;
@@ -585,75 +583,100 @@ impl Instruction {
 
         match *self {
             Instruction::Mov { dst, src } => {
-                _ = write!(str, "{_i}mov{i_}    {_r}{dst}{r_}, {_r}{src}{r_}");
+                arena_write_fmt!(arena, str, "{_i}mov{i_}    {_r}{dst}{r_}, {_r}{src}{r_}");
             }
             Instruction::Add { dst, src } => {
-                _ = write!(str, "{_i}add{i_}    {_r}{dst}{r_}, {_r}{src}{r_}");
+                arena_write_fmt!(arena, str, "{_i}add{i_}    {_r}{dst}{r_}, {_r}{src}{r_}");
             }
             Instruction::Sub { dst, src } => {
-                _ = write!(str, "{_i}sub{i_}    {_r}{dst}{r_}, {_r}{src}{r_}");
+                arena_write_fmt!(arena, str, "{_i}sub{i_}    {_r}{dst}{r_}, {_r}{src}{r_}");
             }
             Instruction::MovImm { dst, imm } => {
                 if dst == Register::ProgramCounter {
-                    _ = write!(str, "{_i}movi{i_}   {_r}{dst}{r_}, {_a}{imm}{a_}");
+                    arena_write_fmt!(arena, str, "{_i}movi{i_}   {_r}{dst}{r_}, {_a}{imm}{a_}");
                 } else {
-                    _ = write!(str, "{_i}movi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
+                    arena_write_fmt!(arena, str, "{_i}movi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
                 }
             }
             Instruction::AddImm { dst, imm } => {
-                _ = write!(str, "{_i}addi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
+                arena_write_fmt!(arena, str, "{_i}addi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
             }
             Instruction::SubImm { dst, imm } => {
-                _ = write!(str, "{_i}subi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
+                arena_write_fmt!(arena, str, "{_i}subi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
             }
 
             Instruction::Call { tgt } => {
-                _ = write!(str, "{_i}call{i_}   {_a}{tgt}{a_}");
+                arena_write_fmt!(arena, str, "{_i}call{i_}   {_a}{tgt}{a_}");
             }
             Instruction::Return => {
-                _ = write!(str, "{_i}ret{i_}");
+                arena_write_fmt!(arena, str, "{_i}ret{i_}");
             }
 
             Instruction::JumpEQ { lhs, rhs, tgt } => {
-                _ = write!(str, "{_i}jeq{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
+                arena_write_fmt!(
+                    arena,
+                    str,
+                    "{_i}jeq{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}"
+                );
             }
             Instruction::JumpNE { lhs, rhs, tgt } => {
-                _ = write!(str, "{_i}jne{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
+                arena_write_fmt!(
+                    arena,
+                    str,
+                    "{_i}jne{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}"
+                );
             }
             Instruction::JumpLT { lhs, rhs, tgt } => {
-                _ = write!(str, "{_i}jlt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
+                arena_write_fmt!(
+                    arena,
+                    str,
+                    "{_i}jlt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}"
+                );
             }
             Instruction::JumpLE { lhs, rhs, tgt } => {
-                _ = write!(str, "{_i}jle{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
+                arena_write_fmt!(
+                    arena,
+                    str,
+                    "{_i}jle{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}"
+                );
             }
             Instruction::JumpGT { lhs, rhs, tgt } => {
-                _ = write!(str, "{_i}jgt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
+                arena_write_fmt!(
+                    arena,
+                    str,
+                    "{_i}jgt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}"
+                );
             }
             Instruction::JumpGE { lhs, rhs, tgt } => {
-                _ = write!(str, "{_i}jge{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}");
+                arena_write_fmt!(
+                    arena,
+                    str,
+                    "{_i}jge{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}"
+                );
             }
 
             Instruction::JumpIfEndOfLine { tgt } => {
-                _ = write!(str, "{_i}jeol{i_}   {_a}{tgt}{a_}");
+                arena_write_fmt!(arena, str, "{_i}jeol{i_}   {_a}{tgt}{a_}");
             }
             Instruction::JumpIfMatchCharset { idx, min, max, tgt } => {
-                _ = write!(
+                arena_write_fmt!(
+                    arena,
                     str,
                     "{_i}jc{i_}     {_n}{idx}{n_}, {_n}{min}{n_}, {_n}{max}{n_}, {_a}{tgt}{a_}"
                 );
             }
             Instruction::JumpIfMatchPrefix { idx, tgt } => {
-                _ = write!(str, "{_i}jp{i_}     {_n}{idx}{n_}, {_a}{tgt}{a_}");
+                arena_write_fmt!(arena, str, "{_i}jp{i_}     {_n}{idx}{n_}, {_a}{tgt}{a_}");
             }
             Instruction::JumpIfMatchPrefixInsensitive { idx, tgt } => {
-                _ = write!(str, "{_i}jpi{i_}    {_n}{idx}{n_}, {_a}{tgt}{a_}");
+                arena_write_fmt!(arena, str, "{_i}jpi{i_}    {_n}{idx}{n_}, {_a}{tgt}{a_}");
             }
 
             Instruction::FlushHighlight { kind } => {
-                _ = write!(str, "{_i}flush{i_}  {_r}{kind}{r_}");
+                arena_write_fmt!(arena, str, "{_i}flush{i_}  {_r}{kind}{r_}");
             }
             Instruction::AwaitInput => {
-                _ = write!(str, "{_i}await{i_}");
+                arena_write_fmt!(arena, str, "{_i}await{i_}");
             }
         }
 

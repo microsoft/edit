@@ -14,6 +14,8 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
+use stdext::collections::BVec;
+
 use super::*;
 
 macro_rules! raise {
@@ -33,13 +35,13 @@ struct RegexSpan<'a> {
     pub src: IRCell<'a>,
     pub dst_good: IRCell<'a>,
     pub dst_bad: IRCell<'a>,
-    pub capture_groups: Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
+    pub capture_groups: BVec<'a, (IRRegCell<'a>, IRRegCell<'a>)>,
 }
 
 struct Context<'a> {
     loop_start: Option<IRCell<'a>>,
     loop_exit: Option<IRCell<'a>>,
-    capture_groups: Vec<(IRRegCell<'a>, IRRegCell<'a>), &'a Arena>,
+    capture_groups: BVec<'a, (IRRegCell<'a>, IRRegCell<'a>)>,
 }
 
 pub struct Parser<'a, 'c, 'src> {
@@ -48,13 +50,13 @@ pub struct Parser<'a, 'c, 'src> {
     src: &'src str,
     pos: usize,
     token_start: usize,
-    context: Vec<Context<'a>, &'a Arena>,
+    context: BVec<'a, Context<'a>>,
     variables: HashMap<&'src str, IRRegCell<'a>>,
 }
 
 impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     pub fn new(compiler: &'c mut Compiler<'a>, path: &'src str, src: &'src str) -> Self {
-        let context = Vec::new_in(compiler.arena);
+        let context = BVec::empty();
         Self { compiler, path, src, pos: 0, token_start: 0, context, variables: Default::default() }
     }
 
@@ -202,11 +204,14 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             src: self.compiler.get_reg(Register::InputOffset),
         });
 
-        self.context.push(Context {
-            loop_start: Some(loop_start),
-            loop_exit: Some(loop_exit),
-            capture_groups: Vec::new_in(self.compiler.arena),
-        });
+        self.context.push(
+            self.compiler.arena,
+            Context {
+                loop_start: Some(loop_start),
+                loop_exit: Some(loop_exit),
+                capture_groups: BVec::empty(),
+            },
+        );
         let block = self.parse_block()?;
         self.context.pop();
 
@@ -331,7 +336,10 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 .last()
                 .map(|ctx| (ctx.loop_start, ctx.loop_exit))
                 .unwrap_or((None, None));
-            self.context.push(Context { loop_start, loop_exit, capture_groups: re.capture_groups });
+            self.context.push(
+                self.compiler.arena,
+                Context { loop_start, loop_exit, capture_groups: re.capture_groups },
+            );
             let bl = self.parse_block()?;
             self.context.pop();
 
