@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::hint::assert_unchecked;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
@@ -109,12 +110,6 @@ impl<'a, T> BVec<'a, T> {
         self.len == 0
     }
 
-    /// True if if the buffer is full.
-    #[inline]
-    pub fn is_full(&self) -> bool {
-        self.len == self.cap
-    }
-
     /// Forcibly sets the length.
     ///
     /// # Safety
@@ -186,28 +181,53 @@ impl<'a, T> BVec<'a, T> {
     /// Ensures space for at least `additional` more elements, with amortized growth.
     #[inline]
     pub fn reserve(&mut self, alloc: &'a dyn Allocator, additional: usize) {
-        if additional > self.cap - self.len {
+        let len = self.len;
+        let cap = self.cap;
+        if additional > cap - len {
             self.grow(alloc, self.cap, additional);
+        }
+        unsafe {
+            // Right now the following asserts are somewhat useless, because they only work
+            // if grow() is inline(never). I don't know why that is either. But I'm leaving
+            // them here, in case we need them in the future - they don't hurt until then.
+            // First, we can tell the compiler that re-fetching self.len after grow() is unnecessary.
+            assert_unchecked(self.len == len);
+            // Next, we can assert that after reserve(4), we have room for 4 more elements.
+            // Naively you'd expect this to be `self.len + additional <= self.cap`, but LLVM doesn't
+            // work very well with `<=` bounds, so we use `<` here. It _must_ be `additional - 1`.
+            assert_unchecked(additional == 0 || self.len.unchecked_add(additional - 1) < self.cap);
         }
     }
 
     /// Ensures space for at least `additional` more elements, without over-allocating.
     #[inline]
     pub fn reserve_exact(&mut self, alloc: &'a dyn Allocator, additional: usize) {
-        if additional > self.cap - self.len {
+        let len = self.len;
+        let cap = self.cap;
+        if additional > cap - len {
             self.grow(alloc, 0, additional);
+        }
+        unsafe {
+            // See reserve().
+            assert_unchecked(self.len == len);
+            assert_unchecked(additional == 0 || self.len.unchecked_add(additional - 1) < self.cap);
         }
     }
 
     #[inline]
     fn reserve_one(&mut self, alloc: &'a dyn Allocator) {
-        if self.is_full() {
-            self.grow(alloc, self.cap, 1);
+        let len = self.len;
+        let cap = self.cap;
+        if len >= cap {
+            self.grow(alloc, cap, 1);
+        }
+        unsafe {
+            // See reserve().
+            assert_unchecked(self.len == len);
+            assert_unchecked(self.len < self.cap);
         }
     }
 
-    // NOTE: I'm using dyn(amic dispatch) to avoid monomorphization bloat and more
-    // importantly because I counter-intuitively found it to boost performance by +20%.
     #[cold]
     fn grow(&mut self, alloc: &'a dyn Allocator, cap: usize, add: usize) {
         debug_assert!(add > 0, "growing by zero makes no sense");
@@ -244,6 +264,22 @@ impl<'a, T> BVec<'a, T> {
             let dst = self.spare_mut_ptr();
             self.len += 1;
             (*dst).write(value)
+        }
+    }
+
+    pub fn pop(&mut self) -> Option<T> {
+        if self.is_empty() {
+            return None;
+        }
+        unsafe {
+            self.len -= 1;
+
+            // See: https://github.com/rust-lang/rust/issues/114334
+            // This assert helps the optimizer understand that
+            // after a pop it can push once without reallocating.
+            assert_unchecked(self.len < self.cap);
+
+            Some(self.as_ptr().add(self.len).read())
         }
     }
 
@@ -400,6 +436,7 @@ impl<'a, T: Copy> BVec<'a, T> {
     }
 }
 
+#[cfg(windows)]
 unsafe extern "system" {
     fn MultiByteToWideChar(
         CodePage: u32,
@@ -413,8 +450,11 @@ unsafe extern "system" {
 
 impl<'a> BVec<'a, u16> {
     pub fn push_encode_utf16(&mut self, alloc: &'a dyn Allocator, utf8: &[u8]) {
+        self.reserve(alloc, utf8.len()); // worst case ASCII: 1 byte per char
+
+        // MultiByteToWideChar is ~2x faster than the UTF8 loop below and saves space.
+        #[cfg(windows)]
         unsafe {
-            self.reserve(alloc, utf8.len()); // worst case ASCII: 1 byte per char
             let dst = self.spare_mut_ptr() as *mut u16;
             let len = MultiByteToWideChar(
                 65001,
@@ -425,6 +465,26 @@ impl<'a> BVec<'a, u16> {
                 utf8.len() as i32,
             );
             self.len += len.max(0) as usize;
+        }
+
+        #[cfg(not(windows))]
+        unsafe {
+            let beg = self.spare_mut_ptr();
+            let mut dst = beg;
+
+            for ch in crate::unicode::Utf8Chars::new(utf8, 0) {
+                if ch <= '\u{FFFF}' {
+                    (*dst).write(ch as u16);
+                    dst = dst.add(1);
+                } else {
+                    let ch = ch as u32 - 0x10000;
+                    (*dst.add(0)).write(0xD800 | ((ch >> 10) as u16));
+                    (*dst.add(1)).write(0xDC00 | ((ch as u16) & 0x3FF));
+                    dst = dst.add(2);
+                }
+            }
+
+            self.len += dst.offset_from_unsigned(beg);
         }
     }
 }

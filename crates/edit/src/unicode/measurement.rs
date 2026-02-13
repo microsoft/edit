@@ -2,8 +2,8 @@
 // Licensed under the MIT License.
 
 use stdext::cold_path;
+use stdext::unicode::Utf8Chars;
 
-use super::Utf8Chars;
 use super::tables::*;
 use crate::document::ReadableDocument;
 use crate::helpers::{CoordType, Point};

@@ -13,10 +13,10 @@ use std::{fmt, mem};
 use stdext::arena::{Arena, scratch_arena};
 use stdext::arena_format;
 use stdext::collections::{BString, BVec};
+use stdext::unicode::Utf8Chars;
 
 use crate::buffer::TextBuffer;
 use crate::sys;
-use crate::unicode::Utf8Chars;
 
 pub(crate) const ILLEGAL_ARGUMENT_ERROR: Error = Error(1); // U_ILLEGAL_ARGUMENT_ERROR
 pub const ICU_MISSING_ERROR: Error = Error(0);

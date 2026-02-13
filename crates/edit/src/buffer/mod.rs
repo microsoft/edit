@@ -36,6 +36,7 @@ use std::str;
 pub use gap_buffer::GapBuffer;
 use stdext::arena::{Arena, scratch_arena};
 use stdext::collections::{BString, BVec};
+use stdext::unicode::Utf8Chars;
 use stdext::{ReplaceRange as _, arena_write_fmt, minmax, slice_as_uninit_mut, slice_copy_safe};
 
 use crate::cell::SemiRefCell;
@@ -45,7 +46,7 @@ use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
 use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
-use crate::unicode::{self, Cursor, MeasurementConfig, Utf8Chars};
+use crate::unicode::{self, Cursor, MeasurementConfig};
 use crate::{icu, simd};
 
 /// The margin template is used for line numbers.
