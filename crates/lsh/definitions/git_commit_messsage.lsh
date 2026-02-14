@@ -1,0 +1,24 @@
+#[display_name = "Git Commit Message"]
+#[path = "**/COMMIT_EDITMSG"]
+#[path = "**/MERGE_MSG"]
+pub fn git_commit_message() {
+    if /#\s*/ {
+        yield comment;
+        if /(?:modified:|renamed:).*/ {
+            yield markup.changed;
+        } else if /deleted:.*/ {
+            yield markup.deleted;
+        } else if /new file:.*/ {
+            yield markup.inserted;
+        }
+    } else if /diff --git.*/ {
+        yield meta.header;
+        loop {
+            await input;
+            diff();
+            // diff() may not have eaten that line.
+            // It doesn't have to. That's our responsibility.
+            if /.*/ {}
+        }
+    }
+}
