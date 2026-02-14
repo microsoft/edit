@@ -743,6 +743,27 @@ pub fn compare_strings(a: &[u8], b: &[u8]) -> Ordering {
             if let Ok(f) = init_if_needed() {
                 let mut status = icu_ffi::U_ZERO_ERROR;
                 coll = (f.ucol_open)(c"".as_ptr(), &mut status);
+                // Turns on Unicode normalization. I'm not 100% sure if it's needed, but it only has a
+                // small-ish performance impact and sounds like it's required for correct filename sorting.
+                (f.ucol_setAttribute)(
+                    coll,
+                    icu_ffi::UCOL_NORMALIZATION_MODE,
+                    icu_ffi::UCOL_ON,
+                    &mut status,
+                );
+                // Ensure that "file2" < "file10", even though '2' > '1'.
+                // NOTE: This has a _huge_ performance impact. It's roughly 5x slower for our purpose of
+                // sorting filenames. If it becomes an issue, we could use `ucol_getSortKey` (only +25%).
+                // (`ucol_strcollUTF8` is faster if `UCOL_NUMERIC_COLLATION` isn't used.)
+                (f.ucol_setAttribute)(
+                    coll,
+                    icu_ffi::UCOL_NUMERIC_COLLATION,
+                    icu_ffi::UCOL_ON,
+                    &mut status,
+                );
+                if status.is_failure() {
+                    coll = null_mut();
+                }
             }
 
             ROOT_COLLATOR = Some(coll);
@@ -921,6 +942,7 @@ struct LibraryFunctions {
 
     // LIBICUI18N_PROC_NAMES
     ucol_open: icu_ffi::ucol_open,
+    ucol_setAttribute: icu_ffi::ucol_setAttribute,
     ucol_strcollUTF8: icu_ffi::ucol_strcollUTF8,
     uregex_open: icu_ffi::uregex_open,
     uregex_close: icu_ffi::uregex_close,
@@ -955,8 +977,9 @@ const LIBICUUC_PROC_NAMES: [*const c_char; 10] = [
 ];
 
 // Found in libicui18n.so on UNIX, icuin.dll/icu.dll on Windows.
-const LIBICUI18N_PROC_NAMES: [*const c_char; 11] = [
+const LIBICUI18N_PROC_NAMES: [*const c_char; 12] = [
     proc_name!("ucol_open"),
+    proc_name!("ucol_setAttribute"),
     proc_name!("ucol_strcollUTF8"),
     proc_name!("uregex_open"),
     proc_name!("uregex_close"),
@@ -1162,6 +1185,13 @@ mod icu_ffi {
 
     pub type ucol_open =
         unsafe extern "C" fn(loc: *const c_char, status: &mut UErrorCode) -> *mut UCollator;
+
+    pub type ucol_setAttribute =
+        unsafe extern "C" fn(coll: *mut UCollator, attr: i32, value: i32, status: &mut UErrorCode);
+
+    pub const UCOL_NORMALIZATION_MODE: i32 = 4;
+    pub const UCOL_NUMERIC_COLLATION: i32 = 7;
+    pub const UCOL_ON: i32 = 17;
 
     pub type ucol_strcollUTF8 = unsafe extern "C" fn(
         coll: *mut UCollator,

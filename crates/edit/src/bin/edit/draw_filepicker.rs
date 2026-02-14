@@ -345,14 +345,7 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
         entries.sort_unstable_by(|a, b| {
             let a = a.as_bytes();
             let b = b.as_bytes();
-
-            let a_is_dir = a.last() == Some(&b'/');
-            let b_is_dir = b.last() == Some(&b'/');
-
-            match b_is_dir.cmp(&a_is_dir) {
-                Ordering::Equal => icu::compare_strings(a, b),
-                other => other,
-            }
+            icu::compare_strings(a, b)
         });
     }
 

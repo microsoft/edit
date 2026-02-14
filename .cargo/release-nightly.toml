@@ -13,4 +13,3 @@ rustflags = [
 [unstable]
 panic-immediate-abort = true
 build-std = ["std", "panic_abort"]
-build-std-features = ["default", "optimize_for_size"]
