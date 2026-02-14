@@ -626,8 +626,19 @@ impl Tui {
                     // On left-mouse-down we change focus.
                     let mut target = 0;
                     if next_state == InputMouseState::Left {
-                        target = focused_node.map_or(0, |n| n.borrow().id);
-                        Self::build_node_path(focused_node, &mut self.focused_node_path);
+                        let mut focus_target = focused_node;
+                        if let Some(node_cell) = focused_node {
+                            let (node_id, node_depth, toggle) = {
+                                let node = node_cell.borrow();
+                                (node.id, node.depth, node.attributes.toggle_focus_on_click)
+                            };
+                            if toggle && self.is_subtree_focused_alt(node_id, node_depth) {
+                                focus_target = None;
+                            } else {
+                                target = node_id;
+                            }
+                        }
+                        Self::build_node_path(focus_target, &mut self.focused_node_path);
                         self.needs_more_settling(); // See `needs_more_settling()`.
                     }
 
@@ -3163,6 +3174,10 @@ impl<'a> Context<'a, '_> {
             ButtonStyle::default().accelerator(accelerator).bracketed(false),
         );
         self.attr_focusable();
+        {
+            let mut last_node = self.tree.last_node.borrow_mut();
+            last_node.attributes.toggle_focus_on_click = true;
+        }
         self.attr_padding(Rect::two(0, 1));
 
         let contains_focus = self.contains_focus();
@@ -3671,6 +3686,7 @@ struct NodeAttributes {
     focusable: bool,
     focus_well: bool, // Prevents focus from leaving via Tab
     focus_void: bool, // Prevents focus from entering via Tab
+    toggle_focus_on_click: bool, // If true, clicking an already focused node removes focus from it
 }
 
 /// NOTE: Must not contain items that require drop().
