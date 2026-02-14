@@ -64,7 +64,7 @@ pub fn switch_modes() -> io::Result<()> {
         // Set STATE.inject_resize to true whenever we get a SIGWINCH.
         let mut sigwinch_action: libc::sigaction = mem::zeroed();
         sigwinch_action.sa_sigaction = sigwinch_handler as *const () as libc::sighandler_t;
-        check_int_return(libc::sigaction(libc::SIGWINCH, &sigwinch_action, null_mut()))?;
+        check_int_return(libc::sigaction(libc::SIGWINCH, &raw const sigwinch_action, null_mut()))?;
 
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
@@ -117,7 +117,7 @@ pub fn switch_modes() -> io::Result<()> {
 
         // Set the terminal to raw mode.
         termios.c_lflag &= !(libc::ICANON | libc::ECHO);
-        check_int_return(libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios))?;
+        check_int_return(libc::tcsetattr(STATE.stdout, libc::TCSANOW, &raw const termios))?;
 
         Ok(())
     }
@@ -131,7 +131,7 @@ impl Drop for Deinit {
             #[allow(static_mut_refs)]
             if let Some(termios) = STATE.stdout_initial_termios.take() {
                 // Restore the original terminal modes.
-                libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios);
+                libc::tcsetattr(STATE.stdout, libc::TCSANOW, &raw const termios);
             }
         }
     }
@@ -207,7 +207,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    ret = libc::poll(&mut pollfd, 1, timeout.as_millis() as libc::c_int);
+                    ret = libc::poll(&raw mut pollfd, 1, timeout.as_millis() as libc::c_int);
                 }
                 if ret < 0 {
                     return None; // Error? Let's assume it's an EOF.
