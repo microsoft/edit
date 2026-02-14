@@ -121,6 +121,12 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
             tb.set_word_wrap(!word_wrap);
             ctx.needs_rerender();
         }
+
+        let virtual_space = tb.is_virtual_space_enabled();
+        if ctx.menubar_menu_checkbox(loc(LocId::ViewVirtualSpace), 'V', vk::NULL, virtual_space) {
+            tb.set_virtual_space_enabled(!virtual_space);
+            ctx.needs_rerender();
+        }
     }
 
     ctx.menubar_menu_end();

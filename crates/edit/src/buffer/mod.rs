@@ -266,6 +266,7 @@ pub struct TextBuffer {
     overtype: bool,
 
     wants_cursor_visibility: bool,
+    virtual_space_enabled: bool,
 }
 
 impl TextBuffer {
@@ -314,6 +315,7 @@ impl TextBuffer {
             overtype: false,
 
             wants_cursor_visibility: false,
+            virtual_space_enabled: false,
         })
     }
 
@@ -463,6 +465,18 @@ impl TextBuffer {
         self.overtype = overtype;
     }
 
+    /// Whether virtual space is enabled.
+    pub fn is_virtual_space_enabled(&self) -> bool {
+        self.virtual_space_enabled
+    }
+
+    /// Enable or disable virtual space.
+    pub fn set_virtual_space_enabled(&mut self, enabled: bool) {
+        self.virtual_space_enabled = enabled;
+        // If disabling, we should probably snap cursor back to valid range?
+        // But for now let's just keep it simple. If user moves, it will snap.
+    }
+
     /// Gets the logical cursor position, that is,
     /// the position in lines and graphemes per line.
     pub fn cursor_logical_pos(&self) -> Point {
@@ -472,7 +486,11 @@ impl TextBuffer {
     /// Gets the visual cursor position, that is,
     /// the position in laid out rows and columns.
     pub fn cursor_visual_pos(&self) -> Point {
-        self.cursor.visual_pos
+        let mut pos = self.cursor.visual_pos;
+        if self.virtual_space_enabled {
+            pos.x += self.cursor.virtual_off;
+        }
+        pos
     }
 
     /// Gets the width of the left margin.
@@ -1587,7 +1605,15 @@ impl TextBuffer {
             }
         }
 
-        self.measurement_config().with_cursor(cursor).goto_visual(pos)
+        let mut cursor = self.measurement_config().with_cursor(cursor).goto_visual(pos);
+
+    if self.virtual_space_enabled && pos.y == cursor.visual_pos.y && pos.x > cursor.visual_pos.x {
+        cursor.virtual_off = pos.x - cursor.visual_pos.x;
+    } else {
+        cursor.virtual_off = 0;
+    }
+
+    cursor
     }
 
     fn cursor_move_delta_internal(
@@ -1602,11 +1628,25 @@ impl TextBuffer {
 
         let sign = if delta > 0 { 1 } else { -1 };
 
-        match granularity {
-            CursorMovement::Grapheme => {
-                let start_x = if delta > 0 { 0 } else { CoordType::MAX };
+    match granularity {
+        CursorMovement::Grapheme => {
+            if self.virtual_space_enabled && cursor.virtual_off > 0 {
+                if delta > 0 {
+                    cursor.virtual_off = cursor.virtual_off.saturating_add(delta);
+                    return cursor;
+                } else {
+                    let remove = (-delta).min(cursor.virtual_off);
+                    cursor.virtual_off -= remove;
+                    delta += remove;
+                    if delta == 0 {
+                        return cursor;
+                    }
+                }
+            }
 
-                loop {
+            let start_x = if delta > 0 { 0 } else { CoordType::MAX };
+
+            loop {
                     let target_x = cursor.logical_pos.x + delta;
 
                     cursor = self.cursor_move_to_logical_internal(
@@ -2028,6 +2068,10 @@ impl TextBuffer {
                 y += 1;
             }
 
+            if self.virtual_space_enabled {
+                x += self.cursor.virtual_off;
+            }
+
             // Move the cursor into screen space.
             x += destination.left - origin.x + self.margin_width;
             y += destination.top - origin.y;
@@ -2107,7 +2151,17 @@ impl TextBuffer {
         self.write(text, self.cursor, true);
     }
 
-    fn write(&mut self, text: &[u8], at: Cursor, raw: bool) {
+    fn write(&mut self, text: &[u8], mut at: Cursor, raw: bool) {
+        if self.virtual_space_enabled && at.virtual_off > 0 {
+            let mut new_text = Vec::with_capacity(at.virtual_off as usize + text.len());
+            for _ in 0..at.virtual_off {
+                new_text.push(b' ');
+            }
+            new_text.extend_from_slice(text);
+            at.virtual_off = 0;
+            return self.write(&new_text, at, raw);
+        }
+
         let history_type = if raw { HistoryType::Other } else { HistoryType::Write };
         let mut edit_begun = false;
 
@@ -2272,6 +2326,16 @@ impl TextBuffer {
     pub fn delete(&mut self, granularity: CursorMovement, delta: CoordType) {
         if delta == 0 {
             return;
+        }
+
+        if self.virtual_space_enabled && delta < 0 && self.cursor.virtual_off > 0 && !self.has_selection() {
+            let remove = (-delta).min(self.cursor.virtual_off);
+            self.cursor.virtual_off -= remove;
+            let remaining = delta + remove;
+            if remaining == 0 {
+                return;
+            }
+            return self.delete(granularity, remaining);
         }
 
         let mut beg;
