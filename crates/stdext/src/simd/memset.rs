@@ -53,7 +53,11 @@ pub fn memset<T: Copy>(dst: &mut [T], val: T) {
 #[inline(always)]
 fn memset_raw(beg: *mut u8, end: *mut u8, val: u64) {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "loongarch64"))]
-    return unsafe { MEMSET_DISPATCH(beg, end, val) };
+    return unsafe {
+        let func = MEMSET_DISPATCH.load(std::sync::atomic::Ordering::Relaxed);
+        let func = mem::transmute::<*mut (), unsafe fn(beg: *mut u8, end: *mut u8, val: u64)>(func);
+        func(beg, end, val)
+    };
 
     #[cfg(target_arch = "aarch64")]
     return unsafe { memset_neon(beg, end, val) };
@@ -88,13 +92,31 @@ unsafe fn memset_fallback(mut beg: *mut u8, end: *mut u8, val: u64) {
     }
 }
 
+// Work around the lack of atomic function pointers in stable Rust by casting to ().
+// See: https://github.com/rust-lang/rfcs/issues/2481
 #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "loongarch64"))]
-static mut MEMSET_DISPATCH: unsafe fn(beg: *mut u8, end: *mut u8, val: u64) = memset_dispatch;
+static MEMSET_DISPATCH: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(memset_neon as *mut _);
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn memset_dispatch(beg: *mut u8, end: *mut u8, val: u64) {
     let func = if is_x86_feature_detected!("avx2") { memset_avx2 } else { memset_sse2 };
-    unsafe { MEMSET_DISPATCH = func };
+    MEMSET_DISPATCH.store(func as *mut _, std::sync::atomic::Ordering::Relaxed);
+    unsafe { func(beg, end, val) }
+}
+
+#[cfg(target_arch = "loongarch64")]
+fn memset_dispatch(beg: *mut u8, end: *mut u8, val: u64) {
+    use std::arch::is_loongarch_feature_detected;
+
+    let func = if is_loongarch_feature_detected!("lasx") {
+        memset_lasx
+    } else if is_loongarch_feature_detected!("lsx") {
+        memset_lsx
+    } else {
+        memset_fallback
+    };
+    MEMSET_DISPATCH.store(func as *mut _, std::sync::atomic::Ordering::Relaxed);
     unsafe { func(beg, end, val) }
 }
 
@@ -213,21 +235,6 @@ fn memset_avx2(mut beg: *mut u8, end: *mut u8, val: u64) {
             beg.write(val as u8);
         }
     }
-}
-
-#[cfg(target_arch = "loongarch64")]
-fn memset_dispatch(beg: *mut u8, end: *mut u8, val: u64) {
-    use std::arch::is_loongarch_feature_detected;
-
-    let func = if is_loongarch_feature_detected!("lasx") {
-        memset_lasx
-    } else if is_loongarch_feature_detected!("lsx") {
-        memset_lsx
-    } else {
-        memset_fallback
-    };
-    unsafe { MEMSET_DISPATCH = func };
-    unsafe { func(beg, end, val) }
 }
 
 #[cfg(target_arch = "loongarch64")]

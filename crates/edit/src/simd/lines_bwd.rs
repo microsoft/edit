@@ -35,7 +35,19 @@ unsafe fn lines_bwd_raw(
     line_stop: CoordType,
 ) -> (*const u8, CoordType) {
     #[cfg(any(target_arch = "x86_64", target_arch = "loongarch64"))]
-    return unsafe { LINES_BWD_DISPATCH(beg, end, line, line_stop) };
+    return unsafe {
+        let func = LINES_BWD_DISPATCH.load(std::sync::atomic::Ordering::Relaxed);
+        let func = std::mem::transmute::<
+            *mut (),
+            unsafe fn(
+                beg: *const u8,
+                end: *const u8,
+                line: CoordType,
+                line_stop: CoordType,
+            ) -> (*const u8, CoordType),
+        >(func);
+        func(beg, end, line, line_stop)
+    };
 
     #[cfg(target_arch = "aarch64")]
     return unsafe { lines_bwd_neon(beg, end, line, line_stop) };
@@ -65,23 +77,41 @@ unsafe fn lines_bwd_fallback(
     }
 }
 
+// Work around the lack of atomic function pointers in stable Rust by casting to ().
+// See: https://github.com/rust-lang/rfcs/issues/2481
 #[cfg(any(target_arch = "x86_64", target_arch = "loongarch64"))]
-static mut LINES_BWD_DISPATCH: unsafe fn(
-    beg: *const u8,
-    end: *const u8,
-    line: CoordType,
-    line_stop: CoordType,
-) -> (*const u8, CoordType) = lines_bwd_dispatch;
+static LINES_BWD_DISPATCH: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(lines_bwd_dispatch as *mut _);
 
 #[cfg(target_arch = "x86_64")]
-unsafe fn lines_bwd_dispatch(
+fn lines_bwd_dispatch(
     beg: *const u8,
     end: *const u8,
     line: CoordType,
     line_stop: CoordType,
 ) -> (*const u8, CoordType) {
     let func = if is_x86_feature_detected!("avx2") { lines_bwd_avx2 } else { lines_bwd_fallback };
-    unsafe { LINES_BWD_DISPATCH = func };
+    LINES_BWD_DISPATCH.store(func as *mut _, std::sync::atomic::Ordering::Relaxed);
+    unsafe { func(beg, end, line, line_stop) }
+}
+
+#[cfg(target_arch = "loongarch64")]
+fn lines_bwd_dispatch(
+    beg: *const u8,
+    end: *const u8,
+    line: CoordType,
+    line_stop: CoordType,
+) -> (*const u8, CoordType) {
+    use std::arch::is_loongarch_feature_detected;
+
+    let func = if is_loongarch_feature_detected!("lasx") {
+        lines_bwd_lasx
+    } else if is_loongarch_feature_detected!("lsx") {
+        lines_bwd_lsx
+    } else {
+        lines_bwd_fallback
+    };
+    LINES_BWD_DISPATCH.store(func as *mut _, std::sync::atomic::Ordering::Relaxed);
     unsafe { func(beg, end, line, line_stop) }
 }
 
@@ -160,26 +190,6 @@ unsafe fn lines_bwd_avx2(
 
         lines_bwd_fallback(beg, end, line, line_stop)
     }
-}
-
-#[cfg(target_arch = "loongarch64")]
-unsafe fn lines_bwd_dispatch(
-    beg: *const u8,
-    end: *const u8,
-    line: CoordType,
-    line_stop: CoordType,
-) -> (*const u8, CoordType) {
-    use std::arch::is_loongarch_feature_detected;
-
-    let func = if is_loongarch_feature_detected!("lasx") {
-        lines_bwd_lasx
-    } else if is_loongarch_feature_detected!("lsx") {
-        lines_bwd_lsx
-    } else {
-        lines_bwd_fallback
-    };
-    unsafe { LINES_BWD_DISPATCH = func };
-    unsafe { func(beg, end, line, line_stop) }
 }
 
 #[cfg(target_arch = "loongarch64")]

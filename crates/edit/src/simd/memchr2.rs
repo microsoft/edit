@@ -22,7 +22,14 @@ pub fn memchr2(needle1: u8, needle2: u8, haystack: &[u8], offset: usize) -> usiz
 
 unsafe fn memchr2_raw(needle1: u8, needle2: u8, beg: *const u8, end: *const u8) -> *const u8 {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "loongarch64"))]
-    return unsafe { MEMCHR2_DISPATCH(needle1, needle2, beg, end) };
+    return unsafe {
+        let func = MEMCHR2_DISPATCH.load(std::sync::atomic::Ordering::Relaxed);
+        let func = std::mem::transmute::<
+            *mut (),
+            unsafe fn(needle1: u8, needle2: u8, beg: *const u8, end: *const u8) -> *const u8,
+        >(func);
+        func(needle1, needle2, beg, end)
+    };
 
     #[cfg(target_arch = "aarch64")]
     return unsafe { memchr2_neon(needle1, needle2, beg, end) };
@@ -49,22 +56,31 @@ unsafe fn memchr2_fallback(
     }
 }
 
-// In order to make `memchr2_raw` slim and fast, we use a function pointer that updates
-// itself to the correct implementation on the first call. This reduces binary size.
-// It would also reduce branches if we had >2 implementations (a jump still needs to be predicted).
-// NOTE that this ONLY works if Control Flow Guard is disabled on Windows.
+// Work around the lack of atomic function pointers in stable Rust by casting to ().
+// See: https://github.com/rust-lang/rfcs/issues/2481
 #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "loongarch64"))]
-static mut MEMCHR2_DISPATCH: unsafe fn(
-    needle1: u8,
-    needle2: u8,
-    beg: *const u8,
-    end: *const u8,
-) -> *const u8 = memchr2_dispatch;
+static MEMCHR2_DISPATCH: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(memchr2_dispatch as *mut _);
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-unsafe fn memchr2_dispatch(needle1: u8, needle2: u8, beg: *const u8, end: *const u8) -> *const u8 {
+fn memchr2_dispatch(needle1: u8, needle2: u8, beg: *const u8, end: *const u8) -> *const u8 {
     let func = if is_x86_feature_detected!("avx2") { memchr2_avx2 } else { memchr2_fallback };
-    unsafe { MEMCHR2_DISPATCH = func };
+    MEMCHR2_DISPATCH.store(func as *mut _, std::sync::atomic::Ordering::Relaxed);
+    unsafe { func(needle1, needle2, beg, end) }
+}
+
+#[cfg(target_arch = "loongarch64")]
+fn memchr2_dispatch(needle1: u8, needle2: u8, beg: *const u8, end: *const u8) -> *const u8 {
+    use std::arch::is_loongarch_feature_detected;
+
+    let func = if is_loongarch_feature_detected!("lasx") {
+        memchr2_lasx
+    } else if is_loongarch_feature_detected!("lsx") {
+        memchr2_lsx
+    } else {
+        memchr2_fallback
+    };
+    MEMCHR2_DISPATCH.store(func as *mut _, std::sync::atomic::Ordering::Relaxed);
     unsafe { func(needle1, needle2, beg, end) }
 }
 
@@ -100,21 +116,6 @@ unsafe fn memchr2_avx2(needle1: u8, needle2: u8, mut beg: *const u8, end: *const
 
         memchr2_fallback(needle1, needle2, beg, end)
     }
-}
-
-#[cfg(target_arch = "loongarch64")]
-unsafe fn memchr2_dispatch(needle1: u8, needle2: u8, beg: *const u8, end: *const u8) -> *const u8 {
-    use std::arch::is_loongarch_feature_detected;
-
-    let func = if is_loongarch_feature_detected!("lasx") {
-        memchr2_lasx
-    } else if is_loongarch_feature_detected!("lsx") {
-        memchr2_lsx
-    } else {
-        memchr2_fallback
-    };
-    unsafe { MEMCHR2_DISPATCH = func };
-    unsafe { func(needle1, needle2, beg, end) }
 }
 
 #[cfg(target_arch = "loongarch64")]

@@ -8,6 +8,7 @@ use std::ffi::{CStr, c_char};
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::ptr::{null, null_mut};
+use std::sync::OnceLock;
 use std::{fmt, mem};
 
 use stdext::arena::{Arena, scratch_arena};
@@ -731,54 +732,41 @@ impl Iterator for Regex {
     }
 }
 
-static mut ROOT_COLLATOR: Option<*mut icu_ffi::UCollator> = None;
+static ROOT_COLLATOR: OnceLock<Option<&'static icu_ffi::UCollator>> = OnceLock::new();
 
 /// Compares two UTF-8 strings for sorting using ICU's collation algorithm.
 pub fn compare_strings(a: &[u8], b: &[u8]) -> Ordering {
-    #[cold]
-    fn init() {
-        unsafe {
-            let mut coll = null_mut();
-
-            if let Ok(f) = init_if_needed() {
-                let mut status = icu_ffi::U_ZERO_ERROR;
-                coll = (f.ucol_open)(c"".as_ptr(), &mut status);
-            }
-
-            ROOT_COLLATOR = Some(coll);
+    let coll = *ROOT_COLLATOR.get_or_init(|| unsafe {
+        if let Ok(f) = init_if_needed() {
+            let mut status = icu_ffi::U_ZERO_ERROR;
+            let ptr = (f.ucol_open)(c"".as_ptr(), &mut status);
+            ptr.as_ref()
+        } else {
+            None
         }
-    }
+    });
 
-    // OnceCell for people that want to put it into a static.
-    #[allow(static_mut_refs)]
-    let coll = unsafe {
-        if ROOT_COLLATOR.is_none() {
-            init();
-        }
-        ROOT_COLLATOR.unwrap_unchecked()
+    let Some(coll) = coll else {
+        return compare_strings_ascii(a, b);
     };
 
-    if coll.is_null() {
-        compare_strings_ascii(a, b)
-    } else {
-        let f = assume_loaded();
-        let mut status = icu_ffi::U_ZERO_ERROR;
-        let res = unsafe {
-            (f.ucol_strcollUTF8)(
-                coll,
-                a.as_ptr(),
-                a.len() as i32,
-                b.as_ptr(),
-                b.len() as i32,
-                &mut status,
-            )
-        };
+    let f = assume_loaded();
+    let mut status = icu_ffi::U_ZERO_ERROR;
+    let res = unsafe {
+        (f.ucol_strcollUTF8)(
+            coll,
+            a.as_ptr(),
+            a.len() as i32,
+            b.as_ptr(),
+            b.len() as i32,
+            &mut status,
+        )
+    };
 
-        match res {
-            icu_ffi::UCollationResult::UCOL_EQUAL => Ordering::Equal,
-            icu_ffi::UCollationResult::UCOL_GREATER => Ordering::Greater,
-            icu_ffi::UCollationResult::UCOL_LESS => Ordering::Less,
-        }
+    match res {
+        icu_ffi::UCollationResult::UCOL_EQUAL => Ordering::Equal,
+        icu_ffi::UCollationResult::UCOL_GREATER => Ordering::Greater,
+        icu_ffi::UCollationResult::UCOL_LESS => Ordering::Less,
     }
 }
 
@@ -818,28 +806,24 @@ fn compare_strings_ascii(a: &[u8], b: &[u8]) -> Ordering {
     a.len().cmp(&b.len())
 }
 
-static mut ROOT_CASEMAP: Option<*mut icu_ffi::UCaseMap> = None;
+static ROOT_CASEMAP: OnceLock<Option<&'static icu_ffi::UCaseMap>> = OnceLock::new();
 
 /// Converts the given UTF-8 string to lower case.
 ///
 /// Case folding differs from lower case in that the output is primarily useful
 /// to machines for comparisons. It's like applying Unicode normalization.
 pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> BString<'a> {
-    // OnceCell for people that want to put it into a static.
-    #[allow(static_mut_refs)]
-    let casemap = unsafe {
-        if ROOT_CASEMAP.is_none() {
-            ROOT_CASEMAP = Some(if let Ok(f) = init_if_needed() {
-                let mut status = icu_ffi::U_ZERO_ERROR;
-                (f.ucasemap_open)(null(), 0, &mut status)
-            } else {
-                null_mut()
-            })
+    let casemap = *ROOT_CASEMAP.get_or_init(|| unsafe {
+        if let Ok(f) = init_if_needed() {
+            let mut status = icu_ffi::U_ZERO_ERROR;
+            let ptr = (f.ucasemap_open)(null(), 0, &mut status);
+            ptr.as_ref()
+        } else {
+            None
         }
-        ROOT_CASEMAP.unwrap_unchecked()
-    };
+    });
 
-    if !casemap.is_null() {
+    if let Some(casemap) = casemap {
         let f = assume_loaded();
         let mut status = icu_ffi::U_ZERO_ERROR;
         let mut output = BVec::empty();
@@ -1164,7 +1148,7 @@ mod icu_ffi {
         unsafe extern "C" fn(loc: *const c_char, status: &mut UErrorCode) -> *mut UCollator;
 
     pub type ucol_strcollUTF8 = unsafe extern "C" fn(
-        coll: *mut UCollator,
+        coll: *const UCollator,
         source: *const u8,
         source_length: i32,
         target: *const u8,
