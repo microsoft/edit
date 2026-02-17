@@ -6,7 +6,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/microsoft/edit"
+repository = "https://github.com/personal/iedit"
 rust-version = "1.93"
 
 # We use `opt-level = "s"` as it significantly reduces binary size.
@@ -27,6 +27,6 @@ codegen-units = 16          # Make compiling criterion faster (16 is the default
 lto = "thin"                # Similarly, speed up linking by a ton
 
 [workspace.dependencies]
-edit = { path = "./crates/edit" }
+ie = { path = "./crates/edit" }
 stdext = { path = "./crates/stdext" }
 unicode-gen = { path = "./crates/unicode-gen" }

@@ -436,38 +436,10 @@ impl<'a, T: Copy> BVec<'a, T> {
     }
 }
 
-#[cfg(windows)]
-unsafe extern "system" {
-    fn MultiByteToWideChar(
-        CodePage: u32,
-        dwFlags: u32,
-        lpMultiByteStr: *const u8,
-        cbMultiByte: i32,
-        lpWideCharStr: *mut u16,
-        cchWideChar: i32,
-    ) -> i32;
-}
-
 impl<'a> BVec<'a, u16> {
     pub fn push_encode_utf16(&mut self, alloc: &'a dyn Allocator, utf8: &[u8]) {
         self.reserve(alloc, utf8.len()); // worst case ASCII: 1 byte per char
 
-        // MultiByteToWideChar is ~2x faster than the UTF8 loop below and saves space.
-        #[cfg(windows)]
-        unsafe {
-            let dst = self.spare_mut_ptr() as *mut u16;
-            let len = MultiByteToWideChar(
-                65001,
-                0,
-                utf8.as_ptr(),
-                utf8.len() as i32,
-                dst,
-                utf8.len() as i32,
-            );
-            self.len += len.max(0) as usize;
-        }
-
-        #[cfg(not(windows))]
         unsafe {
             let beg = self.spare_mut_ptr();
             let mut dst = beg;

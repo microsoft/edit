@@ -31,17 +31,6 @@ pub unsafe fn virtual_reserve(size: usize) -> io::Result<NonNull<u8>> {
     }
 }
 
-#[cfg(target_os = "netbsd")]
-const fn desired_mprotect(flags: c_int) -> c_int {
-    // NetBSD allows an mmap(2) caller to specify what protection flags they
-    // will use later via mprotect. It does not allow a caller to move from
-    // PROT_NONE to PROT_READ | PROT_WRITE.
-    //
-    // see PROT_MPROTECT in man 2 mmap
-    flags << 3
-}
-
-#[cfg(not(target_os = "netbsd"))]
 const fn desired_mprotect(_: c_int) -> c_int {
     libc::PROT_NONE
 }

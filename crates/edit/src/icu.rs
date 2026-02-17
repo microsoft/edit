@@ -1013,21 +1013,11 @@ fn init_if_needed() -> Result<&'static LibraryFunctions> {
             let mut funcs = MaybeUninit::<LibraryFunctions>::uninit();
             let mut ptr = funcs.as_mut_ptr() as *mut TransparentFunction;
 
-            #[cfg(edit_icu_renaming_auto_detect)]
-            let scratch_outer = scratch_arena(None);
-            #[cfg(edit_icu_renaming_auto_detect)]
-            let suffix = sys::icu_detect_renaming_suffix(&scratch_outer, icu.libicuuc);
-
             for (handle, names) in [
                 (icu.libicuuc, &LIBICUUC_PROC_NAMES[..]),
                 (icu.libicui18n, &LIBICUI18N_PROC_NAMES[..]),
             ] {
                 for &name in names {
-                    #[cfg(edit_icu_renaming_auto_detect)]
-                    let scratch = scratch_arena(Some(&scratch_outer));
-                    #[cfg(edit_icu_renaming_auto_detect)]
-                    let name = sys::icu_add_renaming_suffix(&scratch, name, &suffix);
-
                     let Ok(func) = sys::get_proc_address(handle, name) else {
                         debug_assert!(
                             false,

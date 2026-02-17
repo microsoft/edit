@@ -69,18 +69,4 @@ mod tests {
         assert_eq!(norm("//"), "/");
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn test_windows() {
-        assert_eq!(norm(r"C:\a\b\c"), r"C:\a\b\c");
-        assert_eq!(norm(r"C:\a\b\c\"), r"C:\a\b\c");
-        assert_eq!(norm(r"C:\a\.\b"), r"C:\a\b");
-        assert_eq!(norm(r"C:\a\b\..\c"), r"C:\a\c");
-        assert_eq!(norm(r"C:\..\..\a"), r"C:\a");
-        assert_eq!(norm(r"C:\..\"), r"C:\");
-        assert_eq!(norm(r"C:\a\\b\c"), r"C:\a\b\c");
-        assert_eq!(norm(r"C:/a\b/c"), r"C:\a\b\c");
-        assert_eq!(norm(r"C:\a\b\c\..\..\..\..\d"), r"C:\d");
-        assert_eq!(norm(r"\\server\share\path"), r"\\server\share\path");
-    }
 }

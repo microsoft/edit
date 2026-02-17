@@ -19,22 +19,19 @@ use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
 use draw_statusbar::*;
-use edit::framebuffer::{self, IndexedColor};
-use edit::helpers::*;
-use edit::input::{self, kbmod, vk};
-use edit::oklab::StraightRgba;
-use edit::tui::*;
-use edit::vt::{self, Token};
-use edit::{base64, path, sys, unicode};
+use ie::framebuffer::{self, IndexedColor};
+use ie::helpers::*;
+use ie::input::{self, kbmod, vk};
+use ie::oklab::StraightRgba;
+use ie::tui::*;
+use ie::vt::{self, Token};
+use ie::{base64, path, sys, unicode};
 use localization::*;
 use state::*;
 use stdext::arena::{self, Arena, scratch_arena};
 use stdext::arena_format;
 use stdext::collections::{BString, BVec};
 
-#[cfg(target_pointer_width = "32")]
-const SCRATCH_ARENA_CAPACITY: usize = 128 * MEBI;
-#[cfg(target_pointer_width = "64")]
 const SCRATCH_ARENA_CAPACITY: usize = 512 * MEBI;
 
 // NOTE: Before our main() gets called, Rust initializes its stdlib. This pulls in the entire
@@ -245,7 +242,7 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
                 paths.clear();
                 break;
             }
-            if arg == "-h" || arg == "--help" || (cfg!(windows) && arg == "/?") {
+            if arg == "-h" || arg == "--help" {
                 print_help();
                 return Ok(true);
             }
@@ -291,7 +288,7 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
 
 fn print_help() {
     sys::write_stdout(concat!(
-        "Usage: edit [OPTIONS] [FILE[:LINE[:COLUMN]]]\n",
+        "Usage: ie [OPTIONS] [FILE[:LINE[:COLUMN]]]\n",
         "Options:\n",
         "    -h, --help       Print this help message\n",
         "    -v, --version    Print the version number\n",
@@ -302,7 +299,7 @@ fn print_help() {
 }
 
 fn print_version() {
-    sys::write_stdout(concat!("edit version ", env!("CARGO_PKG_VERSION"), "\n"));
+    sys::write_stdout(concat!("ie version ", env!("CARGO_PKG_VERSION"), "\n"));
 }
 
 fn draw(ctx: &mut Context, state: &mut State) {
@@ -414,7 +411,7 @@ fn write_terminal_title<'a>(arena: &'a Arena, output: &mut BString<'a>, state: &
         output.push_str(arena, &sanitize_control_chars(filename));
         output.push_str(arena, " - ");
     }
-    output.push_str(arena, "edit\x1b\\");
+    output.push_str(arena, "ie\x1b\\");
 
     state.osc_title_file_status.filename = filename.to_string();
     state.osc_title_file_status.dirty = dirty;

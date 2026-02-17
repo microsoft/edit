@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use edit::framebuffer::{Attributes, IndexedColor};
-use edit::fuzzy::score_fuzzy;
-use edit::helpers::*;
-use edit::icu;
-use edit::input::vk;
-use edit::tui::*;
+use ie::framebuffer::{Attributes, IndexedColor};
+use ie::fuzzy::score_fuzzy;
+use ie::helpers::*;
+use ie::icu;
+use ie::input::vk;
+use ie::tui::*;
 use stdext::arena::scratch_arena;
 use stdext::arena_format;
 use stdext::collections::BVec;

@@ -89,9 +89,9 @@
 //! # Example
 //!
 //! ```
-//! use edit::helpers::Size;
-//! use edit::input::Input;
-//! use edit::tui::*;
+//! use ie::helpers::Size;
+//! use ie::input::Input;
+//! use ie::tui::*;
 //! use stdext::{arena, arena_format};
 //!
 //! struct State {
@@ -1951,8 +1951,8 @@ impl<'a> Context<'a, '_> {
     ///
     /// # Example
     /// ```
-    /// use edit::framebuffer::IndexedColor;
-    /// use edit::tui::Context;
+    /// use ie::framebuffer::IndexedColor;
+    /// use ie::tui::Context;
     ///
     /// fn draw(ctx: &mut Context) {
     ///     ctx.styled_label_begin("label");

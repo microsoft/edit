@@ -6,8 +6,8 @@ use std::io::Cursor;
 use std::{mem, vec};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use edit::helpers::*;
-use edit::{buffer, glob, hash, json, oklab, simd, unicode};
+use ie::helpers::*;
+use ie::{buffer, glob, hash, json, oklab, simd, unicode};
 use stdext::arena::{self, scratch_arena};
 use stdext::collections::BVec;
 use stdext::unicode::Utf8Chars;

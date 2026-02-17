@@ -1,25 +1,23 @@
-# ![Application Icon for Edit](./assets/edit.svg) Edit
+# iEdit (ie)
 
-A simple editor for simple needs.
+A simple, fast terminal text editor for macOS.
 
-This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/wiki/MS-DOS_Editor), but with a modern interface and input controls similar to VS Code. The goal is to provide an accessible editor that even users largely unfamiliar with terminals can easily use.
+iEdit is a fork of [Microsoft Edit](https://github.com/microsoft/edit), a terminal text editor inspired by the classic MS-DOS Editor. This fork was created due to the slow pace of adding key features like syntax highlighting in the original project, and its primary focus on Windows. iEdit is dedicated to macOS and aims to deliver a lightweight, modern editing experience with features that matter.
 
-![Screenshot of Edit with the About dialog in the foreground](./assets/edit_hero_image.png)
+## Features
+
+- Lightweight and fast — single binary under 500KB
+- Syntax highlighting (YAML, conf/INI, and more coming)
+- Modern keyboard shortcuts (VS Code-like)
+- Mouse support
+- Search and replace with ICU regex
+- Word wrap
+- Large file support
+- macOS native (ARM and Intel)
 
 ## Installation
 
-[![Packaging status](https://repology.org/badge/vertical-allrepos/microsoft-edit.svg?exclude_unsupported=1)](https://repology.org/project/microsoft-edit/versions)
-
-You can also download binaries from [our Releases page](https://github.com/microsoft/edit/releases/latest).
-
-### Windows
-
-You can install the latest version with WinGet:
-```powershell
-winget install Microsoft.Edit
-```
-
-## Build Instructions
+### From source
 
 * [Install Rust](https://www.rust-lang.org/tools/install)
 * Install the nightly toolchain: `rustup install nightly`
@@ -27,55 +25,78 @@ winget install Microsoft.Edit
 * Clone the repository
 * For a release build, run:
   * Rust 1.90 or earlier: `cargo build --config .cargo/release.toml --release`
-  * otherwise: `cargo build --config .cargo/release-nightly.toml --release`
+  * Otherwise: `cargo build --config .cargo/release-nightly.toml --release`
 
-### Build Configuration
+The binary will be at `target/release/ie`.
 
-During compilation you can set various environment variables to configure the build. The following table lists the available configuration options:
+### From GitHub Releases
 
-Environment variable | Description
---- | ---
-`EDIT_CFG_ICU*` | See [ICU library name (SONAME)](#icu-library-name-soname) for details.
-`EDIT_CFG_LANGUAGES` | A comma-separated list of languages to include in the build. See [i18n/edit.toml](i18n/edit.toml) for available languages.
+Download pre-built macOS binaries (ARM and Intel universal binary) from the [Releases page](https://github.com/personal/iedit/releases/latest).
 
-## Notes to Package Maintainers
+## Usage
 
-### Package Naming
+```sh
+ie [OPTIONS] [FILE[:LINE[:COLUMN]]]...
+```
 
-The canonical executable name is "edit" and the alternative name is "msedit".
-We're aware of the potential conflict of "edit" with existing commands and recommend alternatively naming packages and executables "msedit".
-Names such as "ms-edit" should be avoided.
-Assigning an "edit" alias is recommended, if possible.
+### Options
 
-### ICU library name (SONAME)
+| Option | Description |
+| --- | --- |
+| `-h`, `--help` | Print the help message |
+| `-v`, `--version` | Print the version number |
+
+### Keyboard Shortcuts
+
+Press `F10` to access the menu bar. The editor uses standard VS Code-like shortcuts:
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+N` | New file |
+| `Ctrl+O` | Open file |
+| `Ctrl+S` | Save |
+| `Ctrl+W` | Close file |
+| `Ctrl+Q` | Quit |
+| `Ctrl+F` | Find |
+| `Ctrl+R` | Replace |
+| `Ctrl+G` | Go to line |
+| `Ctrl+P` | Go to file |
+| `Alt+Z` | Toggle word wrap |
+
+## Syntax Highlighting
+
+iEdit includes built-in syntax highlighting for the following file types:
+
+| Language | Extensions / Files |
+| --- | --- |
+| YAML | `.yml`, `.yaml` |
+| Conf/INI | `.conf`, `.ini`, `.cfg`, `.cnf`, `.properties`, `.env`, `.toml`, and well-known config files (`config`, `credentials`, `.gitconfig`, `.editorconfig`, etc.) |
+
+More languages are planned: Python, Rust, Go, and HCL/Terraform.
+
+## Build Configuration
+
+During compilation you can set various environment variables to configure the build:
+
+| Environment variable | Description |
+| --- | --- |
+| `EDIT_CFG_ICU*` | See [ICU library name](#icu-library-name) for details. |
+| `EDIT_CFG_LANGUAGES` | A comma-separated list of languages to include in the build. See [i18n/ie.toml](i18n/ie.toml) for available languages. |
+
+### ICU library name
 
 This project _optionally_ depends on the ICU library for its Search and Replace functionality.
-By default, the project will look for a SONAME without version suffix:
-* Windows: `icuuc.dll`
-* macOS: `libicuuc.dylib`
-* UNIX, and other OS: `libicuuc.so`
+On macOS, the project uses `libicucore.dylib` which is bundled with the system.
 
-If your installation uses a different SONAME, please set the following environment variable at build time:
-* `EDIT_CFG_ICUUC_SONAME`:
-  For instance, `libicuuc.so.76`.
-* `EDIT_CFG_ICUI18N_SONAME`:
-  For instance, `libicui18n.so.76`.
-
-Additionally, this project assumes that the ICU exports are exported without `_` prefix and without version suffix, such as `u_errorName`.
-If your installation uses versioned exports, please set:
-* `EDIT_CFG_ICU_CPP_EXPORTS`:
-  If set to `true`, it'll look for C++ symbols such as `_u_errorName`.
-  Enabled by default on macOS.
-* `EDIT_CFG_ICU_RENAMING_VERSION`:
-  If set to a version number, such as `76`, it'll look for symbols such as `u_errorName_76`.
-
-Finally, you can set the following environment variables:
-* `EDIT_CFG_ICU_RENAMING_AUTO_DETECT`:
-  If set to `true`, the executable will try to detect the `EDIT_CFG_ICU_RENAMING_VERSION` value at runtime.
-  The way it does this is not officially supported by ICU and as such is not recommended to be relied upon.
-  Enabled by default on UNIX (excluding macOS) if no other options are set.
-
-To test your settings, run `cargo test` again but with the `--ignored` flag. For instance:
+To test your ICU settings, run:
 ```sh
 cargo test -- --ignored
 ```
+
+## Origin
+
+iEdit is a fork of [Microsoft Edit](https://github.com/microsoft/edit), originally created by Microsoft Corporation under the MIT License. This fork diverges from the original with a macOS-only focus and the addition of features like syntax highlighting that were not prioritized in the upstream project.
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.

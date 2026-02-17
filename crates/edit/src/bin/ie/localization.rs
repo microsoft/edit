@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use edit::sys;
+use ie::sys;
 use stdext::AsciiStringHelpers as _;
 use stdext::arena::scratch_arena;
 
-include!(concat!(env!("OUT_DIR"), "/i18n_edit.rs"));
+include!(concat!(env!("OUT_DIR"), "/i18n_ie.rs"));
 
 static mut S_LANG: LangId = LangId::en;
 

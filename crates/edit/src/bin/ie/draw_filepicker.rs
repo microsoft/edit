@@ -3,13 +3,13 @@
 
 use std::cmp::Ordering;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use edit::framebuffer::IndexedColor;
-use edit::helpers::*;
-use edit::input::{kbmod, vk};
-use edit::tui::*;
-use edit::{icu, path};
+use ie::framebuffer::IndexedColor;
+use ie::helpers::*;
+use ie::input::{kbmod, vk};
+use ie::tui::*;
+use ie::{icu, path};
 use stdext::arena::scratch_arena;
 use stdext::collections::BVec;
 
@@ -273,19 +273,7 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     let path = path::normalize(&path);
 
     let (dir, name) = if path.is_dir() {
-        // If the current path is C:\ and the user selects "..", we want to
-        // navigate to the drive picker. Since `path::normalize` will turn C:\.. into C:\,
-        // we can detect this by checking if the length of the path didn't change.
-        let dir = if cfg!(windows)
-            && state.file_picker_pending_name == Path::new("..")
-            // It's unnecessary to check the contents of the paths.
-            && old_path.as_os_str().len() == path.as_os_str().len()
-        {
-            Path::new("")
-        } else {
-            path.as_path()
-        };
-        (dir, PathBuf::new())
+        (path.as_path(), PathBuf::new())
     } else {
         let dir = path.parent().unwrap_or(&path);
         let name = path.file_name().map_or(Default::default(), |s| s.into());
@@ -307,19 +295,7 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     // ["..", directories, files]
     let mut dirs_files = [Vec::new(), Vec::new(), Vec::new()];
 
-    #[cfg(windows)]
-    if dir.as_os_str().is_empty() {
-        // If the path is empty, we are at the drive picker.
-        // Add all drives as entries.
-        for drive in edit::sys::drives() {
-            dirs_files[1].push(DisplayablePathBuf::from_string(format!("{drive}:\\")));
-        }
-
-        state.file_picker_entries = Some(dirs_files);
-        return;
-    }
-
-    if cfg!(windows) || dir.parent().is_some() {
+    if dir.parent().is_some() {
         dirs_files[0].push(DisplayablePathBuf::from(".."));
     }
 

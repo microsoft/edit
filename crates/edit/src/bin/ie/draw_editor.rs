@@ -3,11 +3,11 @@
 
 use std::num::ParseIntError;
 
-use edit::framebuffer::IndexedColor;
-use edit::helpers::*;
-use edit::icu;
-use edit::input::{kbmod, vk};
-use edit::tui::*;
+use ie::framebuffer::IndexedColor;
+use ie::helpers::*;
+use ie::icu;
+use ie::input::{kbmod, vk};
+use ie::tui::*;
 use stdext::string_from_utf8_lossy_owned;
 
 use crate::localization::*;

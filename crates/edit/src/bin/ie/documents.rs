@@ -6,9 +6,9 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use edit::buffer::{RcTextBuffer, TextBuffer};
-use edit::helpers::{CoordType, Point};
-use edit::{path, sys};
+use ie::buffer::{RcTextBuffer, TextBuffer};
+use ie::helpers::{CoordType, Point};
+use ie::{highlight, path, sys};
 
 use crate::apperr;
 use crate::state::DisplayablePathBuf;
@@ -71,6 +71,10 @@ impl Document {
     fn update_file_mode(&mut self) {
         let mut tb = self.buffer.borrow_mut();
         tb.set_ruler(if self.filename == "COMMIT_EDITMSG" { 72 } else { 0 });
+
+        if let Some(lang) = highlight::detect_language(&self.filename) {
+            tb.enable_highlighting(lang);
+        }
     }
 }
 
@@ -247,7 +251,7 @@ impl DocumentManager {
         let buffer = TextBuffer::new_rc(false)?;
         {
             let mut tb = buffer.borrow_mut();
-            tb.set_insert_final_newline(!cfg!(windows)); // As mandated by POSIX.
+            tb.set_insert_final_newline(true); // As mandated by POSIX.
             tb.set_margin_enabled(true);
             tb.set_line_highlight_enabled(true);
         }

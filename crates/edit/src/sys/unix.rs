@@ -1,10 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Unix-specific platform code.
-//!
-//! Read the `windows` module for reference.
-//! TODO: This reminds me that the sys API should probably be a trait.
+//! macOS-specific platform code.
 
 use std::ffi::{c_char, c_int, c_void};
 use std::fs::File;
@@ -196,19 +193,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
                 let beg = time::Instant::now();
 
                 let mut pollfd = libc::pollfd { fd: STATE.stdin, events: libc::POLLIN, revents: 0 };
-                let ret;
-                #[cfg(target_os = "linux")]
-                {
-                    let ts = libc::timespec {
-                        tv_sec: timeout.as_secs() as libc::time_t,
-                        tv_nsec: timeout.subsec_nanos() as libc::c_long,
-                    };
-                    ret = libc::ppoll(&mut pollfd, 1, &ts, std::ptr::null());
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    ret = libc::poll(&mut pollfd, 1, timeout.as_millis() as libc::c_int);
-                }
+                let ret = libc::poll(&mut pollfd, 1, timeout.as_millis() as libc::c_int);
                 if ret < 0 {
                     return None; // Error? Let's assume it's an EOF.
                 }
@@ -426,94 +411,6 @@ pub fn load_icu() -> io::Result<LibIcu> {
     }
 }
 
-/// ICU, by default, adds the major version as a suffix to each exported symbol.
-/// They also recommend to disable this for system-level installations (`runConfigureICU Linux --disable-renaming`),
-/// but I found that many (most?) Linux distributions don't do this for some reason.
-/// This function returns the suffix, if any.
-#[cfg(edit_icu_renaming_auto_detect)]
-pub fn icu_detect_renaming_suffix(arena: &Arena, handle: NonNull<c_void>) -> BString<'_> {
-    unsafe {
-        type T = *const c_void;
-
-        let mut res = BString::empty();
-
-        // Check if the ICU library is using unversioned symbols.
-        // Return an empty suffix in that case.
-        if get_proc_address::<T>(handle, c"u_errorName".as_ptr()).is_ok() {
-            return res;
-        }
-
-        // In the versions (63-76) and distributions (Arch/Debian) I tested,
-        // this symbol seems to be always present. This allows us to call `dladdr`.
-        // It's the `UCaseMap::~UCaseMap()` destructor which for some reason isn't
-        // in a namespace. Thank you ICU maintainers for this oversight.
-        let proc = match get_proc_address::<T>(handle, c"_ZN8UCaseMapD1Ev".as_ptr()) {
-            Ok(proc) => proc,
-            Err(_) => return res,
-        };
-
-        // `dladdr` is specific to GNU's libc unfortunately.
-        let mut info: libc::Dl_info = mem::zeroed();
-        let ret = libc::dladdr(proc, &mut info);
-        if ret == 0 {
-            return res;
-        }
-
-        // The library path is in `info.dli_fname`.
-        let path = match std::ffi::CStr::from_ptr(info.dli_fname).to_str() {
-            Ok(name) => name,
-            Err(_) => return res,
-        };
-
-        let path = match std::fs::read_link(path) {
-            Ok(path) => path,
-            Err(_) => path.into(),
-        };
-
-        // I'm going to assume it's something like "libicuuc.so.76.1".
-        let path = path.into_os_string();
-        let path = path.to_string_lossy();
-        let suffix_start = match path.rfind(".so.") {
-            Some(pos) => pos + 4,
-            None => return res,
-        };
-        let version = &path[suffix_start..];
-        let version_end = version.find('.').unwrap_or(version.len());
-        let version = &version[..version_end];
-
-        res.push(arena, '_');
-        res.push_str(arena, version);
-        res
-    }
-}
-
-#[cfg(edit_icu_renaming_auto_detect)]
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn icu_add_renaming_suffix<'a, 'b, 'r>(
-    arena: &'a Arena,
-    name: *const c_char,
-    suffix: &str,
-) -> *const c_char
-where
-    'a: 'r,
-    'b: 'r,
-{
-    if suffix.is_empty() {
-        name
-    } else {
-        // SAFETY: In this particular case we know that the string
-        // is valid UTF-8, because it comes from icu.rs.
-        let name = unsafe { std::ffi::CStr::from_ptr(name) };
-        let name = unsafe { name.to_str().unwrap_unchecked() };
-
-        let mut res = BString::empty();
-        res.reserve(arena, name.len() + suffix.len() + 1);
-        res.push_str(arena, name);
-        res.push_str(arena, suffix);
-        res.push(arena, '\0');
-        res.as_ptr() as *const c_char
-    }
-}
 
 pub fn preferred_languages(arena: &Arena) -> BVec<'_, BString<'_>> {
     let mut locales = BVec::empty();

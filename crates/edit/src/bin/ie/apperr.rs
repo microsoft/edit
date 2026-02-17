@@ -3,7 +3,7 @@
 
 use std::io;
 
-use edit::{buffer, icu};
+use ie::{buffer, icu};
 
 #[derive(Debug)]
 pub enum Error {

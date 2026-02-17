@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-13
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly --no-self-update --profile minimal --component rust-src --target ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo +nightly build --config .cargo/release-nightly.toml --release --target ${{ matrix.target }}
+
+      - name: Determine version
+        id: version
+        run: echo "version=$(grep '^version' crates/edit/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        run: |
+          RELEASE_NAME="ie-${{ steps.version.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "${RELEASE_NAME}"
+          cp "target/${{ matrix.target }}/release/ie" "${RELEASE_NAME}/"
+          tar czf "${RELEASE_NAME}.tar.gz" "${RELEASE_NAME}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ie-${{ matrix.target }}
+          path: "*.tar.gz"
+
+  universal:
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: echo "version=$(grep '^version' crates/edit/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create universal binary
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Extract individual binaries
+          tar xzf "artifacts/ie-aarch64-apple-darwin/ie-${VERSION}-aarch64-apple-darwin.tar.gz"
+          tar xzf "artifacts/ie-x86_64-apple-darwin/ie-${VERSION}-x86_64-apple-darwin.tar.gz"
+
+          # Create universal binary with lipo
+          RELEASE_NAME="ie-${VERSION}-universal-apple-darwin"
+          mkdir -p "${RELEASE_NAME}"
+          lipo -create \
+            "ie-${VERSION}-aarch64-apple-darwin/ie" \
+            "ie-${VERSION}-x86_64-apple-darwin/ie" \
+            -output "${RELEASE_NAME}/ie"
+          chmod +x "${RELEASE_NAME}/ie"
+          tar czf "${RELEASE_NAME}.tar.gz" "${RELEASE_NAME}"
+
+      - name: Upload universal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ie-universal-apple-darwin
+          path: "*.tar.gz"
+
+  release:
+    needs: [build, universal]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/**/*.tar.gz

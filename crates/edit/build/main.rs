@@ -8,84 +8,41 @@ use crate::helpers::env_opt;
 mod helpers;
 mod i18n;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TargetOs {
-    Windows,
-    MacOS,
-    Unix,
-}
-
 fn main() {
     stdext::arena::init(128 * 1024 * 1024).unwrap();
 
-    let target_os = match env_opt("CARGO_CFG_TARGET_OS").as_str() {
-        "windows" => TargetOs::Windows,
-        "macos" | "ios" => TargetOs::MacOS,
-        _ => TargetOs::Unix,
-    };
-
     compile_i18n();
-    configure_icu(target_os);
-    #[cfg(windows)]
-    configure_windows_binary(target_os);
+    configure_icu();
 }
 
 fn compile_i18n() {
-    let i18n_path = "../../i18n/edit.toml";
+    let i18n_path = "../../i18n/ie.toml";
 
     let i18n = std::fs::read_to_string(i18n_path).unwrap();
     let contents = i18n::generate(&i18n);
     let out_dir = env_opt("OUT_DIR");
-    let path = format!("{out_dir}/i18n_edit.rs");
+    let path = format!("{out_dir}/i18n_ie.rs");
     std::fs::write(&path, contents).unwrap();
 
     println!("cargo::rerun-if-env-changed=EDIT_CFG_LANGUAGES");
     println!("cargo::rerun-if-changed={i18n_path}");
 }
 
-fn configure_icu(target_os: TargetOs) {
+fn configure_icu() {
     let icuuc_soname = env_opt("EDIT_CFG_ICUUC_SONAME");
     let icui18n_soname = env_opt("EDIT_CFG_ICUI18N_SONAME");
     let cpp_exports = env_opt("EDIT_CFG_ICU_CPP_EXPORTS");
     let renaming_version = env_opt("EDIT_CFG_ICU_RENAMING_VERSION");
-    let renaming_auto_detect = env_opt("EDIT_CFG_ICU_RENAMING_AUTO_DETECT");
-
-    // If none of the `EDIT_CFG_ICU*` environment variables are set,
-    // we default to enabling `EDIT_CFG_ICU_RENAMING_AUTO_DETECT` on UNIX.
-    // This slightly improves portability at least in the cases where the SONAMEs match our defaults.
-    let renaming_auto_detect = if !renaming_auto_detect.is_empty() {
-        renaming_auto_detect.parse::<bool>().unwrap()
-    } else {
-        target_os == TargetOs::Unix
-            && icuuc_soname.is_empty()
-            && icui18n_soname.is_empty()
-            && cpp_exports.is_empty()
-            && renaming_version.is_empty()
-    };
-    if renaming_auto_detect && !renaming_version.is_empty() {
-        // It makes no sense to specify an explicit version and also ask for auto-detection.
-        panic!(
-            "Either `EDIT_CFG_ICU_RENAMING_AUTO_DETECT` or `EDIT_CFG_ICU_RENAMING_VERSION` must be set, but not both"
-        );
-    }
 
     let icuuc_soname = if !icuuc_soname.is_empty() {
         &icuuc_soname
     } else {
-        match target_os {
-            TargetOs::Windows => "icuuc.dll",
-            TargetOs::MacOS => "libicucore.dylib",
-            TargetOs::Unix => "libicuuc.so",
-        }
+        "libicucore.dylib"
     };
     let icui18n_soname = if !icui18n_soname.is_empty() {
         &icui18n_soname
     } else {
-        match target_os {
-            TargetOs::Windows => "icuin.dll",
-            TargetOs::MacOS => "libicucore.dylib",
-            TargetOs::Unix => "libicui18n.so",
-        }
+        "libicucore.dylib"
     };
     let icu_export_prefix =
         if !cpp_exports.is_empty() && cpp_exports.parse::<bool>().unwrap() { "_" } else { "" };
@@ -100,29 +57,4 @@ fn configure_icu(target_os: TargetOs) {
     println!("cargo::rustc-env=EDIT_CFG_ICU_EXPORT_PREFIX={icu_export_prefix}");
     println!("cargo::rerun-if-env-changed=EDIT_CFG_ICU_EXPORT_SUFFIX");
     println!("cargo::rustc-env=EDIT_CFG_ICU_EXPORT_SUFFIX={icu_export_suffix}");
-    println!("cargo::rerun-if-env-changed=EDIT_CFG_ICU_RENAMING_AUTO_DETECT");
-    println!("cargo::rustc-check-cfg=cfg(edit_icu_renaming_auto_detect)");
-    if renaming_auto_detect {
-        println!("cargo::rustc-cfg=edit_icu_renaming_auto_detect");
-    }
-}
-
-#[cfg(windows)]
-fn configure_windows_binary(target_os: TargetOs) {
-    if target_os != TargetOs::Windows {
-        return;
-    }
-
-    let manifest_path = "src/bin/edit/edit.exe.manifest";
-    let icon_path = "../../assets/edit.ico";
-
-    winresource::WindowsResource::new()
-        .set_manifest_file(manifest_path)
-        .set("FileDescription", "Microsoft Edit")
-        .set("LegalCopyright", "© Microsoft Corporation. All rights reserved.")
-        .set_icon(icon_path)
-        .compile()
-        .unwrap();
-
-    println!("cargo::rerun-if-changed={manifest_path}");
 }

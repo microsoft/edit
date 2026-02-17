@@ -6,11 +6,11 @@ use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::{Path, PathBuf};
 
-use edit::framebuffer::IndexedColor;
-use edit::helpers::*;
-use edit::oklab::StraightRgba;
-use edit::tui::*;
-use edit::{buffer, icu};
+use ie::framebuffer::IndexedColor;
+use ie::helpers::*;
+use ie::oklab::StraightRgba;
+use ie::tui::*;
+use ie::{buffer, icu};
 
 use crate::apperr;
 use crate::documents::DocumentManager;
@@ -41,14 +41,6 @@ pub struct DisplayablePathBuf {
 }
 
 impl DisplayablePathBuf {
-    #[allow(dead_code, reason = "only used on Windows")]
-    pub fn from_string(string: String) -> Self {
-        let str = Cow::Borrowed(string.as_str());
-        let str = unsafe { mem::transmute::<Cow<'_, str>, Cow<'_, str>>(str) };
-        let value = PathBuf::from(string);
-        Self { value, str }
-    }
-
     pub fn from_path(value: PathBuf) -> Self {
         let str = value.to_string_lossy();
         let str = unsafe { mem::transmute::<Cow<'_, str>, Cow<'_, str>>(str) };

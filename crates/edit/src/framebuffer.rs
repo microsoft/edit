@@ -18,9 +18,6 @@ use crate::oklab::StraightRgba;
 use crate::unicode::MeasurementConfig;
 
 // Same constants as used in the PCG family of RNGs.
-#[cfg(target_pointer_width = "32")]
-const HASH_MULTIPLIER: usize = 747796405; // https://doi.org/10.1090/S0025-5718-99-00996-5, Table 5
-#[cfg(target_pointer_width = "64")]
 const HASH_MULTIPLIER: usize = 6364136223846793005; // Knuth's MMIX multiplier
 
 /// The size of our cache table. 1<<8 = 256.
@@ -332,6 +329,12 @@ impl Framebuffer {
     #[inline]
     pub fn indexed(&self, index: IndexedColor) -> StraightRgba {
         self.indexed_colors[index as usize]
+    }
+
+    /// Returns the full indexed color palette.
+    #[inline]
+    pub fn indexed_colors(&self) -> &[StraightRgba] {
+        &self.indexed_colors
     }
 
     /// Returns a color from the palette.

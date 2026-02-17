@@ -64,17 +64,6 @@ fn match_path_suffix(path: &[u8], suffix: &[u8]) -> bool {
     }
 
     let path = &path[path.len() - suffix.len()..];
-
-    #[cfg(windows)]
-    {
-        path.iter().zip(suffix.iter()).all(|(a, b)| {
-            let a = if *a == b'\\' { b'/' } else { *a };
-            let b = if *b == b'\\' { b'/' } else { *b };
-            a.eq_ignore_ascii_case(&b)
-        })
-    }
-
-    #[cfg(not(windows))]
     path.eq_ignore_ascii_case(suffix)
 }
 

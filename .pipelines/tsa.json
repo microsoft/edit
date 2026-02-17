@@ -1,7 +1,0 @@
-{
-    "instanceUrl": "https://microsoft.visualstudio.com",
-    "projectName": "OS",
-    "areaPath": "OS\\Windows Client and Services\\WinPD\\DFX-Developer Fundamentals and Experiences\\DEFT\\SHINE\\Commandline Tooling",
-    "notificationAliases": ["condev@microsoft.com", "duhowett@microsoft.com"],
-    "template": "VSTS_Microsoft_OSGS"
-}
