@@ -46,8 +46,32 @@ use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
 use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
-use crate::unicode::{self, Cursor, MeasurementConfig};
+use crate::unicode::{self, LineWrapIterator, MeasurementConfig};
 use crate::{icu, simd};
+
+/// Stores a position inside a [`TextBuffer`].
+///
+/// The cursor tracks the absolute byte-offset, the logical position
+/// (lines and grapheme clusters), the visual position (laid out rows
+/// and columns including word wrap), and the column for tab calculations.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cursor {
+    /// Offset in bytes within the buffer.
+    pub offset: usize,
+    /// Position in the buffer in lines (.y) and grapheme clusters (.x).
+    ///
+    /// Line wrapping has NO influence on this.
+    pub logical_pos: Point,
+    /// Position in the buffer in laid out rows (.y) and columns (.x).
+    ///
+    /// Line wrapping has an influence on this.
+    pub visual_pos: Point,
+    /// Horizontal position in visual columns from the start of the logical line.
+    ///
+    /// Line wrapping has NO influence on this and if word wrap is disabled,
+    /// it's identical to `visual_pos.x`. This is useful for calculating tab widths.
+    pub column: CoordType,
+}
 
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,
@@ -1428,23 +1452,186 @@ impl TextBuffer {
     }
 
     fn measurement_config(&self) -> MeasurementConfig<'_> {
-        MeasurementConfig::new(&self.buffer)
-            .with_word_wrap_column(self.word_wrap_column)
-            .with_tab_size(self.tab_size)
+        MeasurementConfig::new(&self.buffer).with_tab_size(self.tab_size)
+    }
+
+    /// Creates a [`unicode::Cursor`] from a buffer [`Cursor`],
+    /// representing the position within the current logical line.
+    fn unicode_cursor(cursor: &Cursor) -> unicode::Cursor {
+        unicode::Cursor {
+            offset: cursor.offset,
+            logical_pos: cursor.logical_pos,
+            column: cursor.column,
+        }
+    }
+
+    /// Navigates forward by grapheme clusters within the current logical line,
+    /// seeking to the given grapheme position. Returns an updated buffer [`Cursor`].
+    fn goto_pos_on_line(&self, cursor: Cursor, pos: CoordType) -> Cursor {
+        let uc = self.measurement_config().with_cursor(Self::unicode_cursor(&cursor)).goto_pos(pos);
+        let mut result = cursor;
+        result.offset = uc.offset;
+        result.logical_pos.x = uc.logical_pos.x;
+        result.column = uc.column;
+        // visual_pos.x = column when no word wrap, or within a visual line
+        if self.word_wrap_column <= 0 {
+            result.visual_pos.x = uc.column;
+        }
+        result
+    }
+
+    /// Navigates forward by grapheme clusters within the current logical line,
+    /// seeking to the given column. Returns an updated buffer [`Cursor`].
+    fn goto_column_on_line(&self, cursor: Cursor, column: CoordType) -> Cursor {
+        let uc = self
+            .measurement_config()
+            .with_cursor(Self::unicode_cursor(&cursor))
+            .goto_column(column);
+        let mut result = cursor;
+        result.offset = uc.offset;
+        result.logical_pos.x = uc.logical_pos.x;
+        result.column = uc.column;
+        if self.word_wrap_column <= 0 {
+            result.visual_pos.x = uc.column;
+        }
+        result
+    }
+
+    /// Navigates forward by grapheme clusters within the current logical line,
+    /// seeking to the given byte offset. Returns an updated buffer [`Cursor`].
+    fn goto_offset_on_line(&self, cursor: Cursor, offset: usize) -> Cursor {
+        let uc = self
+            .measurement_config()
+            .with_cursor(Self::unicode_cursor(&cursor))
+            .goto_offset(offset);
+        let mut result = cursor;
+        result.offset = uc.offset;
+        result.logical_pos.x = uc.logical_pos.x;
+        result.column = uc.column;
+        if self.word_wrap_column <= 0 {
+            result.visual_pos.x = uc.column;
+        }
+        result
+    }
+
+    /// Counts the number of visual rows a logical line occupies when word wrap is enabled.
+    /// Returns the number of visual rows (always >= 1).
+    fn count_visual_rows_for_line(&self, line_start_offset: usize) -> CoordType {
+        if self.word_wrap_column <= 0 {
+            return 1;
+        }
+        let mut count: CoordType = 1;
+        for _ in LineWrapIterator::new(
+            &self.buffer,
+            self.tab_size,
+            self.word_wrap_column,
+            line_start_offset,
+        ) {
+            count += 1;
+        }
+        count
+    }
+
+    /// Computes the visual_pos for a cursor within its current logical line.
+    /// Requires that `cursor.offset`, `cursor.logical_pos`, and `cursor.column` are already set.
+    /// Also requires that `cursor.visual_pos.y` is set to the visual row of the START
+    /// of this logical line. This function adds the intra-line visual row offset.
+    fn compute_visual_pos(&self, cursor: &mut Cursor, line_start_offset: usize) {
+        if self.word_wrap_column <= 0 {
+            cursor.visual_pos.x = cursor.column;
+            // visual_pos.y already equals logical_pos.y when word wrap is off
+            return;
+        }
+
+        let mut visual_x = cursor.column;
+        let mut sub_row: CoordType = 0;
+
+        for brk in LineWrapIterator::new(
+            &self.buffer,
+            self.tab_size,
+            self.word_wrap_column,
+            line_start_offset,
+        ) {
+            if brk.offset > cursor.offset {
+                break;
+            }
+            sub_row += 1;
+            visual_x = cursor.column - brk.column;
+        }
+
+        cursor.visual_pos.x = visual_x;
+        cursor.visual_pos.y += sub_row;
+    }
+
+    /// Returns which visual sub-row `offset` falls on within the line starting at `line_start_offset`.
+    fn sub_row_of(&self, offset: usize, line_start_offset: usize) -> CoordType {
+        if self.word_wrap_column <= 0 {
+            return 0;
+        }
+        let mut sub_row: CoordType = 0;
+        for brk in LineWrapIterator::new(
+            &self.buffer,
+            self.tab_size,
+            self.word_wrap_column,
+            line_start_offset,
+        ) {
+            if brk.offset > offset {
+                break;
+            }
+            sub_row += 1;
+        }
+        sub_row
+    }
+
+    /// Find the byte offset of the start of a logical line by seeking backward.
+    fn find_line_start_offset(&self, offset_hint: usize, y: CoordType) -> usize {
+        let mut off = offset_hint;
+        let mut line = y;
+
+        loop {
+            let chunk = self.read_backward(off);
+            if chunk.is_empty() {
+                break;
+            }
+
+            let (delta, l) = simd::lines_bwd(chunk, chunk.len(), line, y);
+            off -= chunk.len() - delta;
+            line = l;
+            if delta > 0 {
+                break;
+            }
+        }
+
+        off
     }
 
     fn goto_line_start(&self, cursor: Cursor, y: CoordType) -> Cursor {
         let mut result = cursor;
         let mut seek_to_line_start = true;
 
-        if y > result.logical_pos.y {
+        // When moving forward across lines, accumulate visual row deltas.
+        let forward = y > result.logical_pos.y;
+        let mut visual_y_delta: CoordType = 0;
+
+        if forward {
+            // For each logical line we cross, count its visual rows and accumulate.
             while y > result.logical_pos.y {
+                // First, count the visual rows of the current line (from result.offset to the next line).
+                if self.word_wrap_column > 0 {
+                    visual_y_delta += self.count_visual_rows_for_line(
+                        self.find_line_start_offset(result.offset, result.logical_pos.y),
+                    );
+                } else {
+                    visual_y_delta += 1;
+                }
+
                 let chunk = self.read_forward(result.offset);
                 if chunk.is_empty() {
                     break;
                 }
 
-                let (delta, line) = simd::lines_fwd(chunk, 0, result.logical_pos.y, y);
+                let (delta, line) =
+                    simd::lines_fwd(chunk, 0, result.logical_pos.y, result.logical_pos.y + 1);
                 result.offset += delta;
                 result.logical_pos.y = line;
             }
@@ -1458,6 +1645,9 @@ impl TextBuffer {
         }
 
         if seek_to_line_start {
+            // When moving backward, we need to count visual rows for each line we cross.
+            let _starting_line = result.logical_pos.y;
+
             loop {
                 let chunk = self.read_backward(result.offset);
                 if chunk.is_empty() {
@@ -1465,8 +1655,33 @@ impl TextBuffer {
                 }
 
                 let (delta, line) = simd::lines_bwd(chunk, chunk.len(), result.logical_pos.y, y);
+                let lines_crossed = result.logical_pos.y - line;
                 result.offset -= chunk.len() - delta;
                 result.logical_pos.y = line;
+
+                if !forward && self.word_wrap_column > 0 && lines_crossed > 0 {
+                    // We crossed some lines going backward; count their visual rows.
+                    // Note: We need to count each line we crossed over.
+                    // The SIMD backward seek may cross multiple lines at once.
+                    let mut off = result.offset;
+                    let mut ly = result.logical_pos.y;
+                    for _ in 0..lines_crossed {
+                        // Seek forward to find the start of each crossed line
+                        let chunk_fwd = self.read_forward(off);
+                        if chunk_fwd.is_empty() {
+                            break;
+                        }
+                        let (d, l) = simd::lines_fwd(chunk_fwd, 0, ly, ly + 1);
+                        if self.word_wrap_column > 0 {
+                            visual_y_delta += self.count_visual_rows_for_line(off);
+                        } else {
+                            visual_y_delta += 1;
+                        }
+                        off += d;
+                        ly = l;
+                    }
+                }
+
                 if delta > 0 {
                     break;
                 }
@@ -1478,39 +1693,55 @@ impl TextBuffer {
         }
 
         result.logical_pos.x = 0;
-        result.visual_pos.x = 0;
-        result.visual_pos.y = result.logical_pos.y;
         result.column = 0;
-        result.wrap_opp = false;
 
-        if self.word_wrap_column > 0 {
-            let upward = result.offset < cursor.offset;
-            let (top, bottom) = if upward { (result, cursor) } else { (cursor, result) };
-
-            let mut bottom_remeasured =
-                self.measurement_config().with_cursor(top).goto_logical(bottom.logical_pos);
-
-            // The second problem is that visual positions can be ambiguous. A single logical position
-            // can map to two visual positions: One at the end of the preceding line in front of
-            // a word wrap, and another at the start of the next line after the same word wrap.
-            //
-            // This, however, only applies if we go upwards, because only then `bottom ≅ cursor`,
-            // and thus only then this `bottom` is ambiguous. Otherwise, `bottom ≅ result`
-            // and `result` is at a line start which is never ambiguous.
-            if upward {
-                let a = bottom_remeasured.visual_pos.x;
-                let b = bottom.visual_pos.x;
-                bottom_remeasured.visual_pos.y = bottom_remeasured.visual_pos.y
-                    + (a != 0 && b == 0) as CoordType
-                    - (a == 0 && b != 0) as CoordType;
+        if self.word_wrap_column <= 0 {
+            // Without word wrap, visual_pos matches logical_pos.
+            result.visual_pos = Point { x: 0, y: result.logical_pos.y };
+        } else if forward {
+            // We accumulated visual_y_delta = total visual rows of all lines we crossed.
+            // The cursor was on some sub-row of its line. We need to compute the visual row
+            // of the start of the original cursor's line, then add the delta.
+            // The original cursor's visual_pos.y already accounts for its sub-row offset,
+            // so we need the visual_pos.y of the start of its line.
+            let cursor_line_start =
+                self.find_line_start_offset(cursor.offset, cursor.logical_pos.y);
+            let mut cursor_sub_row: CoordType = 0;
+            if self.word_wrap_column > 0 {
+                for brk in LineWrapIterator::new(
+                    &self.buffer,
+                    self.tab_size,
+                    self.word_wrap_column,
+                    cursor_line_start,
+                ) {
+                    if brk.offset > cursor.offset {
+                        break;
+                    }
+                    cursor_sub_row += 1;
+                }
             }
-
-            let mut delta = bottom_remeasured.visual_pos.y - top.visual_pos.y;
-            if upward {
-                delta = -delta;
+            let cursor_line_visual_y = cursor.visual_pos.y - cursor_sub_row;
+            result.visual_pos = Point { x: 0, y: cursor_line_visual_y + visual_y_delta };
+        } else {
+            // Backward: subtract the visual rows of the lines we crossed.
+            let cursor_line_start =
+                self.find_line_start_offset(cursor.offset, cursor.logical_pos.y);
+            let mut cursor_sub_row: CoordType = 0;
+            if self.word_wrap_column > 0 {
+                for brk in LineWrapIterator::new(
+                    &self.buffer,
+                    self.tab_size,
+                    self.word_wrap_column,
+                    cursor_line_start,
+                ) {
+                    if brk.offset > cursor.offset {
+                        break;
+                    }
+                    cursor_sub_row += 1;
+                }
             }
-
-            result.visual_pos.y = cursor.visual_pos.y + delta;
+            let cursor_line_visual_y = cursor.visual_pos.y - cursor_sub_row;
+            result.visual_pos = Point { x: 0, y: cursor_line_visual_y - visual_y_delta };
         }
 
         result
@@ -1543,7 +1774,14 @@ impl TextBuffer {
             cursor = self.goto_line_start(cursor, cursor.logical_pos.y - 1);
         }
 
-        self.measurement_config().with_cursor(cursor).goto_offset(offset)
+        let line_start_offset = if cursor.logical_pos.x == 0 {
+            cursor.offset
+        } else {
+            self.find_line_start_offset(cursor.offset, cursor.logical_pos.y)
+        };
+        cursor = self.goto_offset_on_line(cursor, offset);
+        self.compute_visual_pos(&mut cursor, line_start_offset);
+        cursor
     }
 
     fn cursor_move_to_logical_internal(&self, mut cursor: Cursor, pos: Point) -> Cursor {
@@ -1555,12 +1793,19 @@ impl TextBuffer {
 
         // goto_line_start() is the fastest way for seeking across lines. As such we always
         // use it if the requested `.y` position is different. We still need to use it if the
-        // `.x` position is smaller, but only because `goto_logical()` cannot seek backwards.
+        // `.x` position is smaller, but only because `goto_pos()` cannot seek backwards.
         if pos.y != cursor.logical_pos.y || pos.x < cursor.logical_pos.x {
             cursor = self.goto_line_start(cursor, pos.y);
         }
 
-        self.measurement_config().with_cursor(cursor).goto_logical(pos)
+        let line_start_offset = if cursor.logical_pos.x == 0 {
+            cursor.offset
+        } else {
+            self.find_line_start_offset(cursor.offset, cursor.logical_pos.y)
+        };
+        cursor = self.goto_pos_on_line(cursor, pos.x);
+        self.compute_visual_pos(&mut cursor, line_start_offset);
+        cursor
     }
 
     fn cursor_move_to_visual_internal(&self, mut cursor: Cursor, pos: Point) -> Cursor {
@@ -1571,23 +1816,140 @@ impl TextBuffer {
         }
 
         if self.word_wrap_column <= 0 {
-            // Identical to the fast-pass in `cursor_move_to_logical_internal()`.
+            // Without word wrap, visual and logical positions are equivalent
+            // (visual_pos.x = column, visual_pos.y = logical_pos.y).
             if pos.y != cursor.visual_pos.y || pos.x < cursor.visual_pos.x {
                 cursor = self.goto_line_start(cursor, pos.y);
             }
+            cursor = self.goto_column_on_line(cursor, pos.x);
+            cursor.visual_pos = Point { x: cursor.column, y: cursor.logical_pos.y };
+            cursor
         } else {
-            // `goto_visual()` can only seek forward, so we need to seek backward here if needed.
-            // NOTE that this intentionally doesn't use the `Eq` trait of `Point`, because if
-            // `pos.y == cursor.visual_pos.y` we don't need to go to `cursor.logical_pos.y - 1`.
+            // With word wrap: we need to find which logical line and which visual sub-row
+            // corresponds to the target visual row `pos.y`, then position within it.
+
+            // First, seek backward if needed.
             while pos.y < cursor.visual_pos.y {
                 cursor = self.goto_line_start(cursor, cursor.logical_pos.y - 1);
             }
             if pos.y == cursor.visual_pos.y && pos.x < cursor.visual_pos.x {
                 cursor = self.goto_line_start(cursor, cursor.logical_pos.y);
             }
-        }
 
-        self.measurement_config().with_cursor(cursor).goto_visual(pos)
+            // Now seek forward through visual rows.
+            // cursor.visual_pos.y <= pos.y at this point.
+            while cursor.visual_pos.y < pos.y {
+                // Find how many visual rows are left in the current logical line.
+                let line_start = if cursor.logical_pos.x == 0 {
+                    cursor.offset
+                } else {
+                    self.find_line_start_offset(cursor.offset, cursor.logical_pos.y)
+                };
+                let total_rows = self.count_visual_rows_for_line(line_start);
+                let line_visual_start =
+                    cursor.visual_pos.y - self.sub_row_of(cursor.offset, line_start);
+                let rows_remaining_in_line = total_rows - (cursor.visual_pos.y - line_visual_start);
+
+                if cursor.visual_pos.y + rows_remaining_in_line <= pos.y {
+                    // The target is past the end of this logical line. Move to next line.
+                    cursor = self.goto_line_start(cursor, cursor.logical_pos.y + 1);
+                } else {
+                    // The target is within this logical line.
+                    // Find the visual sub-row we need.
+                    let target_sub_row = pos.y - line_visual_start;
+                    let mut sub_row: CoordType = 0;
+                    let mut visual_line_start_column: CoordType = 0;
+
+                    for brk in LineWrapIterator::new(
+                        &self.buffer,
+                        self.tab_size,
+                        self.word_wrap_column,
+                        line_start,
+                    ) {
+                        sub_row += 1;
+                        if sub_row > target_sub_row {
+                            break;
+                        }
+                        visual_line_start_column = brk.column;
+                        cursor.offset = brk.offset;
+                        cursor.logical_pos.x = brk.pos;
+                        cursor.column = brk.column;
+                    }
+
+                    // Now navigate within this visual sub-row by column.
+                    cursor = self.goto_column_on_line(cursor, visual_line_start_column + pos.x);
+                    cursor.visual_pos =
+                        Point { x: cursor.column - visual_line_start_column, y: pos.y };
+                    return cursor;
+                }
+            }
+
+            // We're on the right visual row. Position within it.
+            let line_start = if cursor.logical_pos.x == 0 {
+                cursor.offset
+            } else {
+                self.find_line_start_offset(cursor.offset, cursor.logical_pos.y)
+            };
+            let mut visual_line_start_column: CoordType = 0;
+            let sub_row = self.sub_row_of(cursor.offset, line_start);
+            let line_visual_start = cursor.visual_pos.y - sub_row;
+
+            // Find the column offset for the current visual sub-row
+            let target_sub_row = pos.y - line_visual_start;
+            if target_sub_row > 0 {
+                let mut current_sub_row: CoordType = 0;
+                for brk in LineWrapIterator::new(
+                    &self.buffer,
+                    self.tab_size,
+                    self.word_wrap_column,
+                    line_start,
+                ) {
+                    current_sub_row += 1;
+                    if current_sub_row > target_sub_row {
+                        break;
+                    }
+                    visual_line_start_column = brk.column;
+                    cursor.offset = brk.offset;
+                    cursor.logical_pos.x = brk.pos;
+                    cursor.column = brk.column;
+                }
+            }
+
+            cursor = self.goto_column_on_line(cursor, visual_line_start_column + pos.x);
+            // Clamp: don't overshoot into the next visual sub-row
+            self.compute_visual_pos(&mut cursor, line_start);
+            // Ensure visual_pos.y matches the target row
+            if cursor.visual_pos.y > pos.y {
+                // We went past the end of this visual sub-row. Clamp back.
+                // Find the end of the target visual sub-row.
+                let target_sub_row = pos.y - line_visual_start;
+                let mut sub_row: CoordType = 0;
+                let mut next_brk_column = CoordType::MAX;
+                for brk in LineWrapIterator::new(
+                    &self.buffer,
+                    self.tab_size,
+                    self.word_wrap_column,
+                    line_start,
+                ) {
+                    sub_row += 1;
+                    if sub_row > target_sub_row {
+                        next_brk_column = brk.column;
+                        break;
+                    }
+                }
+                // Re-navigate to just before the next break
+                let line_start_cursor = Cursor {
+                    offset: line_start,
+                    logical_pos: Point { x: 0, y: cursor.logical_pos.y },
+                    visual_pos: Point { x: 0, y: line_visual_start },
+                    column: 0,
+                };
+                cursor = self.goto_column_on_line(line_start_cursor, next_brk_column);
+                cursor.visual_pos = Point { x: cursor.column - visual_line_start_column, y: pos.y };
+            }
+
+            cursor
+        }
     }
 
     fn cursor_move_delta_internal(

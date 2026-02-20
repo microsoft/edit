@@ -1073,21 +1073,21 @@ impl Tui {
             match overflow {
                 Overflow::Clip => unreachable!(),
                 Overflow::TruncateHead => {
-                    let beg = cfg.goto_visual(Point { x: actual_width - target_width + 1, y: 0 });
+                    let beg = cfg.goto_column(actual_width - target_width + 1);
                     skipped = 0..beg.offset;
-                    skipped_cols = beg.visual_pos.x - 1;
+                    skipped_cols = beg.column - 1;
                 }
                 Overflow::TruncateMiddle => {
                     let mid_beg_x = (target_width - 1) / 2;
                     let mid_end_x = actual_width - target_width / 2;
-                    let beg = cfg.goto_visual(Point { x: mid_beg_x, y: 0 });
-                    let end = cfg.goto_visual(Point { x: mid_end_x, y: 0 });
+                    let beg = cfg.goto_column(mid_beg_x);
+                    let end = cfg.goto_column(mid_end_x);
                     skipped = beg.offset..end.offset;
-                    skipped_cols = end.visual_pos.x - beg.visual_pos.x - 1;
+                    skipped_cols = end.column - beg.column - 1;
                 }
                 Overflow::TruncateTail => {
-                    let end = cfg.goto_visual(Point { x: target_width - 1, y: 0 });
-                    skipped_cols = actual_width - end.visual_pos.x - 1;
+                    let end = cfg.goto_column(target_width - 1);
+                    skipped_cols = actual_width - end.column - 1;
                     skipped = end.offset..text.len();
                 }
             }
@@ -1105,10 +1105,8 @@ impl Tui {
 
         if !chunks.is_empty() {
             let bytes = text.as_bytes();
-            let mut cfg = unicode::MeasurementConfig::new(&bytes).with_cursor(unicode::Cursor {
-                visual_pos: Point { x: target.left, y: 0 },
-                ..Default::default()
-            });
+            let mut cfg = unicode::MeasurementConfig::new(&bytes)
+                .with_cursor(unicode::Cursor { column: target.left, ..Default::default() });
 
             let mut iter = chunks.iter().peekable();
 
@@ -1123,8 +1121,8 @@ impl Tui {
                 }
 
                 if beg < skipped.start {
-                    let beg = cfg.goto_offset(beg).visual_pos.x;
-                    let end = cfg.goto_offset(end.min(skipped.start)).visual_pos.x;
+                    let beg = cfg.goto_offset(beg).column;
+                    let end = cfg.goto_offset(end.min(skipped.start)).column;
                     let rect =
                         Rect { left: beg, top: target.top, right: end, bottom: target.bottom };
                     self.framebuffer.blend_fg(rect, chunk.fg);
@@ -1132,8 +1130,8 @@ impl Tui {
                 }
 
                 if end > skipped.end {
-                    let beg = cfg.goto_offset(beg.max(skipped.end)).visual_pos.x - skipped_cols;
-                    let end = cfg.goto_offset(end).visual_pos.x - skipped_cols;
+                    let beg = cfg.goto_offset(beg.max(skipped.end)).column - skipped_cols;
+                    let end = cfg.goto_offset(end).column - skipped_cols;
                     let rect =
                         Rect { left: beg, top: target.top, right: end, bottom: target.bottom };
                     self.framebuffer.blend_fg(rect, chunk.fg);
@@ -2023,8 +2021,8 @@ impl<'a> Context<'a, '_> {
             };
 
             let cursor = unicode::MeasurementConfig::new(&content.text.as_bytes())
-                .goto_visual(Point { x: CoordType::MAX, y: 0 });
-            last_node.intrinsic_size.width = cursor.visual_pos.x;
+                .goto_column(CoordType::MAX);
+            last_node.intrinsic_size.width = cursor.column;
             last_node.intrinsic_size.height = 1;
             last_node.intrinsic_size_set = true;
         }

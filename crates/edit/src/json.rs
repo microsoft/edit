@@ -499,7 +499,7 @@ impl<'a, 'i> Parser<'a, 'i> {
     #[cold]
     fn fail(&self, pos: usize, kind: ParseErrorKind) -> ParseError {
         let mut cfg = MeasurementConfig::new(&self.bytes);
-        let pos = cfg.goto_offset(pos);
+        let pos = cfg.goto_offset_multiline(pos);
         let line = pos.logical_pos.y.max(0) as usize + 1;
         let column = pos.logical_pos.x.max(0) as usize + 1;
         ParseError { kind, line, column }

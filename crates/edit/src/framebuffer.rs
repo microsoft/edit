@@ -527,7 +527,7 @@ impl Framebuffer {
                 }
 
                 let beg = cfg.cursor().offset;
-                let end = cfg.goto_visual(Point { x: chunk_end as CoordType, y: 0 }).offset;
+                let end = cfg.goto_column(chunk_end as CoordType).offset;
                 result.push_str(arena, &back_line[beg..end]);
 
                 chunk_end < back_bg.len()
@@ -661,15 +661,15 @@ impl LineBuffer {
         // and figure out the parts that are inside.
         let mut left = origin_x;
         if left < 0 {
-            let mut cursor = cfg.goto_visual(Point { x: -left, y: 0 });
+            let mut cursor = cfg.goto_column(-left);
 
-            if left + cursor.visual_pos.x < 0 && cursor.offset < text.len() {
-                // `-left` must've intersected a wide glyph and since goto_visual stops _before_ reaching the target,
+            if left + cursor.column < 0 && cursor.offset < text.len() {
+                // `-left` must've intersected a wide glyph and since goto_column stops _before_ reaching the target,
                 // we stopped before the wide glyph and thus must step forward to the next glyph.
-                cursor = cfg.goto_logical(Point { x: cursor.logical_pos.x + 1, y: 0 });
+                cursor = cfg.goto_pos(cursor.logical_pos.x + 1);
             }
 
-            left += cursor.visual_pos.x;
+            left += cursor.column;
         }
 
         // If the text still starts outside the framebuffer, we must've ran out of text above.
@@ -680,25 +680,25 @@ impl LineBuffer {
 
         // Measure the width of the new text (= `res_new.visual_target.x`).
         let beg_off = cfg.cursor().offset;
-        let end = cfg.goto_visual(Point { x: layout_width, y: 0 });
+        let end = cfg.goto_column(layout_width);
 
         // Figure out at which byte offset the new text gets inserted.
-        let right = left + end.visual_pos.x;
+        let right = left + end.column;
         let line_bytes = line.as_bytes();
         let mut cfg_old = MeasurementConfig::new(&line_bytes);
-        let res_old_beg = cfg_old.goto_visual(Point { x: left, y: 0 });
-        let mut res_old_end = cfg_old.goto_visual(Point { x: right, y: 0 });
+        let res_old_beg = cfg_old.goto_column(left);
+        let mut res_old_end = cfg_old.goto_column(right);
 
         // Since the goto functions will always stop short of the target position,
         // we need to manually step beyond it if we intersect with a wide glyph.
-        if res_old_end.visual_pos.x < right {
-            res_old_end = cfg_old.goto_logical(Point { x: res_old_end.logical_pos.x + 1, y: 0 });
+        if res_old_end.column < right {
+            res_old_end = cfg_old.goto_pos(res_old_end.logical_pos.x + 1);
         }
 
         // If we intersect a wide glyph, we need to pad the new text with spaces.
         let src = &text[beg_off..end.offset];
-        let overlap_beg = (left - res_old_beg.visual_pos.x).max(0) as usize;
-        let overlap_end = (res_old_end.visual_pos.x - right).max(0) as usize;
+        let overlap_beg = (left - res_old_beg.column).max(0) as usize;
+        let overlap_end = (res_old_end.column - right).max(0) as usize;
         let total_add = src.len() + overlap_beg + overlap_end;
         let total_del = res_old_end.offset - res_old_beg.offset;
 

@@ -257,16 +257,17 @@ fn bench_unicode(c: &mut Criterion) {
     let buffer = reference.repeat(10);
     let bytes = buffer.as_bytes();
 
-    c.benchmark_group("unicode::MeasurementConfig::goto_logical")
+    c.benchmark_group("unicode::MeasurementConfig::goto_pos")
         .throughput(Throughput::Bytes(bytes.len() as u64))
         .bench_function("basic", |b| {
-            b.iter(|| unicode::MeasurementConfig::new(&bytes).goto_logical(Point::MAX))
-        })
+            b.iter(|| unicode::MeasurementConfig::new(&bytes).goto_pos(CoordType::MAX))
+        });
+
+    c.benchmark_group("unicode::LineWrapIterator")
+        .throughput(Throughput::Bytes(bytes.len() as u64))
         .bench_function("word_wrap", |b| {
             b.iter(|| {
-                unicode::MeasurementConfig::new(black_box(&bytes))
-                    .with_word_wrap_column(50)
-                    .goto_logical(Point::MAX)
+                unicode::LineWrapIterator::new(black_box(&bytes), 8, 50, 0).count()
             })
         });
 
