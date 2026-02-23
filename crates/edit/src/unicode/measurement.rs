@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::ops::Range;
+
 use stdext::cold_path;
 use stdext::unicode::Utf8Chars;
 
@@ -36,15 +38,18 @@ fn ambiguous_width() -> usize {
 pub struct Cursor {
     /// Offset in bytes within the buffer.
     pub offset: usize,
-    /// Logical position: `.y` = line number, `.x` = grapheme cluster index within the line.
+    /// Position in the buffer in lines (.y) and grapheme clusters (.x).
     ///
-    /// Single-line methods only update `.x` and leave `.y` unchanged.
-    /// Multi-line methods (e.g. [`MeasurementConfig::goto_offset_multiline`]) update both.
+    /// Line wrapping has NO influence on this.
     pub logical_pos: Point,
+    /// Position in the buffer in laid out rows (.y) and columns (.x).
+    ///
+    /// Line wrapping has an influence on this.
+    pub visual_pos: Point,
     /// Horizontal position in visual columns from the start of the logical line.
     ///
-    /// This differs from `logical_pos.x` because grapheme clusters can be wider
-    /// than 1 column (e.g. wide CJK characters = 2 columns, tabs = variable).
+    /// Line wrapping has NO influence on this and if word wrap is disabled,
+    /// it's identical to `visual_pos.x`. This is useful for calculating tab widths.
     pub column: CoordType,
 }
 
@@ -59,13 +64,14 @@ pub struct Cursor {
 pub struct MeasurementConfig<'doc> {
     cursor: Cursor,
     tab_size: CoordType,
+    word_wrap_column: CoordType,
     buffer: &'doc dyn ReadableDocument,
 }
 
 impl<'doc> MeasurementConfig<'doc> {
     /// Creates a new [`MeasurementConfig`] for the given document.
     pub fn new(buffer: &'doc dyn ReadableDocument) -> Self {
-        Self { cursor: Default::default(), tab_size: 8, buffer }
+        Self { cursor: Default::default(), tab_size: 8, word_wrap_column: 0, buffer }
     }
 
     /// Sets the initial cursor to the given position.
@@ -82,6 +88,14 @@ impl<'doc> MeasurementConfig<'doc> {
     /// Defaults to 8, because that's what a tab in terminals evaluates to.
     pub fn with_tab_size(mut self, tab_size: CoordType) -> Self {
         self.tab_size = tab_size.max(1);
+        self
+    }
+
+    /// Sets the word wrap column.
+    ///
+    /// A value of 0 (the default) disables word wrap.
+    pub fn with_word_wrap_column(mut self, word_wrap_column: CoordType) -> Self {
+        self.word_wrap_column = word_wrap_column;
         self
     }
 
@@ -180,14 +194,511 @@ impl<'doc> MeasurementConfig<'doc> {
         };
 
         // Measure graphemes on the final line from its start to the target offset.
-        self.cursor =
-            Cursor { offset: line_start, logical_pos: Point { x: 0, y: line }, column: 0 };
+        self.cursor = Cursor {
+            offset: line_start,
+            logical_pos: Point { x: 0, y: line },
+            visual_pos: Point { x: 0, y: 0 },
+            column: 0,
+        };
         self.measure_forward(target, CoordType::MAX, CoordType::MAX)
     }
 
     /// Returns the current cursor position.
     pub fn cursor(&self) -> Cursor {
         self.cursor
+    }
+
+    // ---- Single-line navigation with visual_pos update ----
+
+    /// Navigates forward by grapheme clusters within the current logical line,
+    /// seeking to the given grapheme position. Updates `visual_pos.x` when word wrap is off.
+    pub fn goto_pos_on_line(&mut self, pos: CoordType) -> Cursor {
+        self.measure_forward(usize::MAX, pos, CoordType::MAX);
+        if self.word_wrap_column <= 0 {
+            self.cursor.visual_pos.x = self.cursor.column;
+        }
+        self.cursor
+    }
+
+    /// Navigates forward by grapheme clusters within the current logical line,
+    /// seeking to the given column. Updates `visual_pos.x` when word wrap is off.
+    pub fn goto_column_on_line(&mut self, column: CoordType) -> Cursor {
+        self.measure_forward(usize::MAX, CoordType::MAX, column);
+        if self.word_wrap_column <= 0 {
+            self.cursor.visual_pos.x = self.cursor.column;
+        }
+        self.cursor
+    }
+
+    /// Navigates forward by grapheme clusters within the current logical line,
+    /// seeking to the given byte offset. Updates `visual_pos.x` when word wrap is off.
+    pub fn goto_offset_on_line(&mut self, offset: usize) -> Cursor {
+        self.measure_forward(offset, CoordType::MAX, CoordType::MAX);
+        if self.word_wrap_column <= 0 {
+            self.cursor.visual_pos.x = self.cursor.column;
+        }
+        self.cursor
+    }
+
+    // ---- Multi-line helpers ----
+
+    /// Counts the number of visual rows a logical line occupies when word wrap is enabled.
+    /// Returns 1 if word wrap is disabled.
+    pub fn count_visual_rows_for_line(&self, line_start_offset: usize) -> CoordType {
+        if self.word_wrap_column <= 0 {
+            return 1;
+        }
+        let mut count: CoordType = 1;
+        for _ in LineWrapIterator::new(
+            self.buffer,
+            self.tab_size,
+            self.word_wrap_column,
+            line_start_offset,
+        ) {
+            count += 1;
+        }
+        count
+    }
+
+    /// Computes and sets `visual_pos` for the current cursor within its logical line.
+    ///
+    /// Requires that `cursor.visual_pos.y` is set to the visual row of the START
+    /// of this logical line. This function adds the intra-line visual row offset.
+    pub fn compute_visual_pos(&mut self, line_start_offset: usize) {
+        if self.word_wrap_column <= 0 {
+            self.cursor.visual_pos.x = self.cursor.column;
+            return;
+        }
+
+        let mut visual_x = self.cursor.column;
+        let mut sub_row: CoordType = 0;
+
+        for brk in LineWrapIterator::new(
+            self.buffer,
+            self.tab_size,
+            self.word_wrap_column,
+            line_start_offset,
+        ) {
+            if brk.offset > self.cursor.offset {
+                break;
+            }
+            sub_row += 1;
+            visual_x = self.cursor.column - brk.column;
+        }
+
+        self.cursor.visual_pos.x = visual_x;
+        self.cursor.visual_pos.y += sub_row;
+    }
+
+    /// Returns which visual sub-row `offset` falls on within the line starting at `line_start_offset`.
+    pub fn sub_row_of(&self, offset: usize, line_start_offset: usize) -> CoordType {
+        if self.word_wrap_column <= 0 {
+            return 0;
+        }
+        let mut sub_row: CoordType = 0;
+        for brk in LineWrapIterator::new(
+            self.buffer,
+            self.tab_size,
+            self.word_wrap_column,
+            line_start_offset,
+        ) {
+            if brk.offset > offset {
+                break;
+            }
+            sub_row += 1;
+        }
+        sub_row
+    }
+
+    /// Find the byte offset of the start of a logical line by seeking backward.
+    pub fn find_line_start_offset(&self, offset_hint: usize, y: CoordType) -> usize {
+        let mut off = offset_hint;
+        let mut line = y;
+
+        loop {
+            let chunk = self.buffer.read_backward(off);
+            if chunk.is_empty() {
+                break;
+            }
+
+            let (delta, l) = simd::lines_bwd(chunk, chunk.len(), line, y);
+            off -= chunk.len() - delta;
+            line = l;
+            if delta > 0 {
+                break;
+            }
+        }
+
+        off
+    }
+
+    /// Seeks the cursor to the start of logical line `y`.
+    ///
+    /// Handles both forward and backward seeking, counting visual rows
+    /// for proper `visual_pos.y` tracking when word wrap is enabled.
+    pub fn goto_line_start(&mut self, y: CoordType) -> Cursor {
+        let original = self.cursor;
+        let mut seek_to_line_start = true;
+
+        let forward = y > self.cursor.logical_pos.y;
+        let mut visual_y_delta: CoordType = 0;
+
+        if forward {
+            while y > self.cursor.logical_pos.y {
+                if self.word_wrap_column > 0 {
+                    visual_y_delta += self.count_visual_rows_for_line(
+                        self.find_line_start_offset(self.cursor.offset, self.cursor.logical_pos.y),
+                    );
+                } else {
+                    visual_y_delta += 1;
+                }
+
+                let chunk = self.buffer.read_forward(self.cursor.offset);
+                if chunk.is_empty() {
+                    break;
+                }
+
+                let (delta, line) = simd::lines_fwd(
+                    chunk,
+                    0,
+                    self.cursor.logical_pos.y,
+                    self.cursor.logical_pos.y + 1,
+                );
+                self.cursor.offset += delta;
+                self.cursor.logical_pos.y = line;
+            }
+
+            seek_to_line_start =
+                self.cursor.offset == self.buffer.len() && self.cursor.offset != original.offset;
+        }
+
+        if seek_to_line_start {
+            loop {
+                let chunk = self.buffer.read_backward(self.cursor.offset);
+                if chunk.is_empty() {
+                    break;
+                }
+
+                let (delta, line) =
+                    simd::lines_bwd(chunk, chunk.len(), self.cursor.logical_pos.y, y);
+                let lines_crossed = self.cursor.logical_pos.y - line;
+                self.cursor.offset -= chunk.len() - delta;
+                self.cursor.logical_pos.y = line;
+
+                if !forward && self.word_wrap_column > 0 && lines_crossed > 0 {
+                    let mut off = self.cursor.offset;
+                    let mut ly = self.cursor.logical_pos.y;
+                    for _ in 0..lines_crossed {
+                        let chunk_fwd = self.buffer.read_forward(off);
+                        if chunk_fwd.is_empty() {
+                            break;
+                        }
+                        let (d, l) = simd::lines_fwd(chunk_fwd, 0, ly, ly + 1);
+                        if self.word_wrap_column > 0 {
+                            visual_y_delta += self.count_visual_rows_for_line(off);
+                        } else {
+                            visual_y_delta += 1;
+                        }
+                        off += d;
+                        ly = l;
+                    }
+                }
+
+                if delta > 0 {
+                    break;
+                }
+            }
+        }
+
+        if self.cursor.offset == original.offset {
+            return self.cursor;
+        }
+
+        self.cursor.logical_pos.x = 0;
+        self.cursor.column = 0;
+
+        if self.word_wrap_column <= 0 {
+            self.cursor.visual_pos = Point { x: 0, y: self.cursor.logical_pos.y };
+        } else if forward {
+            let cursor_line_start =
+                self.find_line_start_offset(original.offset, original.logical_pos.y);
+            let mut cursor_sub_row: CoordType = 0;
+            for brk in LineWrapIterator::new(
+                self.buffer,
+                self.tab_size,
+                self.word_wrap_column,
+                cursor_line_start,
+            ) {
+                if brk.offset > original.offset {
+                    break;
+                }
+                cursor_sub_row += 1;
+            }
+            let cursor_line_visual_y = original.visual_pos.y - cursor_sub_row;
+            self.cursor.visual_pos = Point { x: 0, y: cursor_line_visual_y + visual_y_delta };
+        } else {
+            let cursor_line_start =
+                self.find_line_start_offset(original.offset, original.logical_pos.y);
+            let mut cursor_sub_row: CoordType = 0;
+            for brk in LineWrapIterator::new(
+                self.buffer,
+                self.tab_size,
+                self.word_wrap_column,
+                cursor_line_start,
+            ) {
+                if brk.offset > original.offset {
+                    break;
+                }
+                cursor_sub_row += 1;
+            }
+            let cursor_line_visual_y = original.visual_pos.y - cursor_sub_row;
+            self.cursor.visual_pos = Point { x: 0, y: cursor_line_visual_y - visual_y_delta };
+        }
+
+        self.cursor
+    }
+
+    // ---- Full cursor movement ----
+
+    /// Moves the cursor to the given byte offset, potentially crossing lines.
+    pub fn cursor_move_to_offset(&mut self, offset: usize) -> Cursor {
+        if offset == self.cursor.offset {
+            return self.cursor;
+        }
+
+        if self.word_wrap_column <= 0 && offset.saturating_sub(self.cursor.offset) > 1024 {
+            loop {
+                let prev_offset = self.cursor.offset;
+                self.goto_line_start(self.cursor.logical_pos.y + 1);
+                if self.cursor.offset > offset || self.cursor.offset <= prev_offset {
+                    break;
+                }
+            }
+        }
+
+        while offset < self.cursor.offset {
+            self.goto_line_start(self.cursor.logical_pos.y - 1);
+        }
+
+        let line_start_offset = if self.cursor.logical_pos.x == 0 {
+            self.cursor.offset
+        } else {
+            self.find_line_start_offset(self.cursor.offset, self.cursor.logical_pos.y)
+        };
+        self.goto_offset_on_line(offset);
+        self.compute_visual_pos(line_start_offset);
+        self.cursor
+    }
+
+    /// Moves the cursor to the given logical position.
+    pub fn cursor_move_to_logical(&mut self, pos: Point) -> Cursor {
+        let pos = Point { x: pos.x.max(0), y: pos.y.max(0) };
+
+        if pos == self.cursor.logical_pos {
+            return self.cursor;
+        }
+
+        if pos.y != self.cursor.logical_pos.y || pos.x < self.cursor.logical_pos.x {
+            self.goto_line_start(pos.y);
+        }
+
+        let line_start_offset = if self.cursor.logical_pos.x == 0 {
+            self.cursor.offset
+        } else {
+            self.find_line_start_offset(self.cursor.offset, self.cursor.logical_pos.y)
+        };
+        self.goto_pos_on_line(pos.x);
+        self.compute_visual_pos(line_start_offset);
+        self.cursor
+    }
+
+    /// Moves the cursor to the given visual position.
+    pub fn cursor_move_to_visual(&mut self, pos: Point) -> Cursor {
+        let pos = Point { x: pos.x.max(0), y: pos.y.max(0) };
+
+        if pos == self.cursor.visual_pos {
+            return self.cursor;
+        }
+
+        if self.word_wrap_column <= 0 {
+            if pos.y != self.cursor.visual_pos.y || pos.x < self.cursor.visual_pos.x {
+                self.goto_line_start(pos.y);
+            }
+            self.goto_column_on_line(pos.x);
+            self.cursor.visual_pos = Point { x: self.cursor.column, y: self.cursor.logical_pos.y };
+            self.cursor
+        } else {
+            // First, seek backward if needed.
+            while pos.y < self.cursor.visual_pos.y {
+                self.goto_line_start(self.cursor.logical_pos.y - 1);
+            }
+            if pos.y == self.cursor.visual_pos.y && pos.x < self.cursor.visual_pos.x {
+                self.goto_line_start(self.cursor.logical_pos.y);
+            }
+
+            // Now seek forward through visual rows.
+            while self.cursor.visual_pos.y < pos.y {
+                let line_start = if self.cursor.logical_pos.x == 0 {
+                    self.cursor.offset
+                } else {
+                    self.find_line_start_offset(self.cursor.offset, self.cursor.logical_pos.y)
+                };
+                let total_rows = self.count_visual_rows_for_line(line_start);
+                let line_visual_start =
+                    self.cursor.visual_pos.y - self.sub_row_of(self.cursor.offset, line_start);
+                let rows_remaining_in_line =
+                    total_rows - (self.cursor.visual_pos.y - line_visual_start);
+
+                if self.cursor.visual_pos.y + rows_remaining_in_line <= pos.y {
+                    self.goto_line_start(self.cursor.logical_pos.y + 1);
+                } else {
+                    let target_sub_row = pos.y - line_visual_start;
+                    let mut sub_row: CoordType = 0;
+                    let mut visual_line_start_column: CoordType = 0;
+
+                    for brk in LineWrapIterator::new(
+                        self.buffer,
+                        self.tab_size,
+                        self.word_wrap_column,
+                        line_start,
+                    ) {
+                        sub_row += 1;
+                        if sub_row > target_sub_row {
+                            break;
+                        }
+                        visual_line_start_column = brk.column;
+                        self.cursor.offset = brk.offset;
+                        self.cursor.logical_pos.x = brk.pos;
+                        self.cursor.column = brk.column;
+                    }
+
+                    self.goto_column_on_line(visual_line_start_column + pos.x);
+                    self.cursor.visual_pos =
+                        Point { x: self.cursor.column - visual_line_start_column, y: pos.y };
+                    return self.cursor;
+                }
+            }
+
+            // We're on the right visual row. Position within it.
+            let line_start = if self.cursor.logical_pos.x == 0 {
+                self.cursor.offset
+            } else {
+                self.find_line_start_offset(self.cursor.offset, self.cursor.logical_pos.y)
+            };
+            let mut visual_line_start_column: CoordType = 0;
+            let sub_row = self.sub_row_of(self.cursor.offset, line_start);
+            let line_visual_start = self.cursor.visual_pos.y - sub_row;
+
+            let target_sub_row = pos.y - line_visual_start;
+            if target_sub_row > 0 {
+                let mut current_sub_row: CoordType = 0;
+                for brk in LineWrapIterator::new(
+                    self.buffer,
+                    self.tab_size,
+                    self.word_wrap_column,
+                    line_start,
+                ) {
+                    current_sub_row += 1;
+                    if current_sub_row > target_sub_row {
+                        break;
+                    }
+                    visual_line_start_column = brk.column;
+                    self.cursor.offset = brk.offset;
+                    self.cursor.logical_pos.x = brk.pos;
+                    self.cursor.column = brk.column;
+                }
+            }
+
+            self.goto_column_on_line(visual_line_start_column + pos.x);
+            self.compute_visual_pos(line_start);
+            if self.cursor.visual_pos.y > pos.y {
+                // Clamping: we went past the end of this visual sub-row.
+                let target_sub_row = pos.y - line_visual_start;
+                let mut sub_row: CoordType = 0;
+                let mut next_brk_column = CoordType::MAX;
+                for brk in LineWrapIterator::new(
+                    self.buffer,
+                    self.tab_size,
+                    self.word_wrap_column,
+                    line_start,
+                ) {
+                    sub_row += 1;
+                    if sub_row > target_sub_row {
+                        next_brk_column = brk.column;
+                        break;
+                    }
+                }
+                self.cursor = Cursor {
+                    offset: line_start,
+                    logical_pos: Point { x: 0, y: self.cursor.logical_pos.y },
+                    visual_pos: Point { x: 0, y: line_visual_start },
+                    column: 0,
+                };
+                self.goto_column_on_line(next_brk_column);
+                self.cursor.visual_pos =
+                    Point { x: self.cursor.column - visual_line_start_column, y: pos.y };
+            }
+
+            self.cursor
+        }
+    }
+
+    /// Moves the cursor by a delta number of grapheme clusters, crossing line boundaries.
+    pub fn cursor_move_delta_grapheme(&mut self, mut delta: CoordType) -> Cursor {
+        if delta == 0 {
+            return self.cursor;
+        }
+
+        let sign = if delta > 0 { 1 } else { -1 };
+        let start_x = if delta > 0 { 0 } else { CoordType::MAX };
+        let text_length = self.buffer.len();
+
+        loop {
+            let target_x = self.cursor.logical_pos.x + delta;
+
+            self.cursor_move_to_logical(Point { x: target_x, y: self.cursor.logical_pos.y });
+
+            delta = target_x - self.cursor.logical_pos.x;
+            if delta.signum() != sign
+                || (delta < 0 && self.cursor.offset == 0)
+                || (delta > 0 && self.cursor.offset >= text_length)
+            {
+                break;
+            }
+
+            self.cursor_move_to_logical(Point { x: start_x, y: self.cursor.logical_pos.y + sign });
+
+            delta -= sign;
+            if delta.signum() != sign
+                || self.cursor.offset == 0
+                || self.cursor.offset >= text_length
+            {
+                break;
+            }
+        }
+
+        self.cursor
+    }
+
+    /// Moves the cursor by a delta number of words, crossing line boundaries.
+    pub fn cursor_move_delta_word(&mut self, mut delta: CoordType) -> Cursor {
+        if delta == 0 {
+            return self.cursor;
+        }
+
+        let sign = if delta > 0 { 1 } else { -1 };
+        let mut offset = self.cursor.offset;
+
+        while delta != 0 {
+            if delta < 0 {
+                offset = word_backward(self.buffer, offset);
+            } else {
+                offset = word_forward(self.buffer, offset);
+            }
+            delta -= sign;
+        }
+
+        self.cursor_move_to_offset(offset)
     }
 
     fn measure_forward(
@@ -381,6 +892,7 @@ impl<'doc> LineWrapIterator<'doc> {
         Cursor {
             offset: self.offset,
             logical_pos: Point { x: self.pos, y: 0 },
+            visual_pos: Point { x: 0, y: 0 },
             column: self.column,
         }
     }
@@ -543,6 +1055,261 @@ pub fn strip_newline(mut text: &[u8]) -> &[u8] {
     text
 }
 
+// ---- Word navigation ----
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CharClass {
+    Whitespace,
+    Newline,
+    Separator,
+    Word,
+}
+
+const fn construct_classifier(separators: &[u8]) -> [CharClass; 256] {
+    let mut classifier = [CharClass::Word; 256];
+
+    classifier[b' ' as usize] = CharClass::Whitespace;
+    classifier[b'\t' as usize] = CharClass::Whitespace;
+    classifier[b'\n' as usize] = CharClass::Newline;
+    classifier[b'\r' as usize] = CharClass::Newline;
+
+    let mut i = 0;
+    let len = separators.len();
+    while i < len {
+        let ch = separators[i];
+        assert!(ch < 128, "Only ASCII separators are supported.");
+        classifier[ch as usize] = CharClass::Separator;
+        i += 1;
+    }
+
+    classifier
+}
+
+const WORD_CLASSIFIER: [CharClass; 256] =
+    construct_classifier(br#"`~!@#$%^&*()-=+[{]}\|;:'",.<>/?"#);
+
+/// Finds the next word boundary given a document cursor offset.
+/// Returns the offset of the next word boundary.
+pub fn word_forward(doc: &dyn ReadableDocument, offset: usize) -> usize {
+    word_navigation(WordForward { doc, offset, chunk: &[], chunk_off: 0 })
+}
+
+/// The backward version of `word_forward`.
+pub fn word_backward(doc: &dyn ReadableDocument, offset: usize) -> usize {
+    word_navigation(WordBackward { doc, offset, chunk: &[], chunk_off: 0 })
+}
+
+/// Word navigation implementation. Matches the behavior of VS Code.
+fn word_navigation<T: WordNavigation>(mut nav: T) -> usize {
+    // First, fill `self.chunk` with at least 1 grapheme.
+    nav.read();
+
+    // Skip one newline, if any.
+    nav.skip_newline();
+
+    // Skip any whitespace.
+    nav.skip_class(CharClass::Whitespace);
+
+    // Skip one word or separator and take note of the class.
+    let class = nav.peek(CharClass::Whitespace);
+    if matches!(class, CharClass::Separator | CharClass::Word) {
+        nav.next();
+
+        let off = nav.offset();
+
+        // Continue skipping the same class.
+        nav.skip_class(class);
+
+        // If the class was a separator and we only moved one character,
+        // continue skipping characters of the word class.
+        if off == nav.offset() && class == CharClass::Separator {
+            nav.skip_class(CharClass::Word);
+        }
+    }
+
+    nav.offset()
+}
+
+trait WordNavigation {
+    fn read(&mut self);
+    fn skip_newline(&mut self);
+    fn skip_class(&mut self, class: CharClass);
+    fn peek(&self, default: CharClass) -> CharClass;
+    fn next(&mut self);
+    fn offset(&self) -> usize;
+}
+
+struct WordForward<'a> {
+    doc: &'a dyn ReadableDocument,
+    offset: usize,
+    chunk: &'a [u8],
+    chunk_off: usize,
+}
+
+impl WordNavigation for WordForward<'_> {
+    fn read(&mut self) {
+        self.chunk = self.doc.read_forward(self.offset);
+        self.chunk_off = 0;
+    }
+
+    fn skip_newline(&mut self) {
+        self.chunk_off += match self.chunk.get(self.chunk_off) {
+            Some(&b'\n') => 1,
+            Some(&b'\r') if self.chunk.get(self.chunk_off + 1) == Some(&b'\n') => 2,
+            _ => 0,
+        }
+    }
+
+    fn skip_class(&mut self, class: CharClass) {
+        while !self.chunk.is_empty() {
+            while self.chunk_off < self.chunk.len() {
+                if WORD_CLASSIFIER[self.chunk[self.chunk_off] as usize] != class {
+                    return;
+                }
+                self.chunk_off += 1;
+            }
+
+            self.offset += self.chunk.len();
+            self.chunk = self.doc.read_forward(self.offset);
+            self.chunk_off = 0;
+        }
+    }
+
+    fn peek(&self, default: CharClass) -> CharClass {
+        if self.chunk_off < self.chunk.len() {
+            WORD_CLASSIFIER[self.chunk[self.chunk_off] as usize]
+        } else {
+            default
+        }
+    }
+
+    fn next(&mut self) {
+        self.chunk_off += 1;
+    }
+
+    fn offset(&self) -> usize {
+        self.offset + self.chunk_off
+    }
+}
+
+struct WordBackward<'a> {
+    doc: &'a dyn ReadableDocument,
+    offset: usize,
+    chunk: &'a [u8],
+    chunk_off: usize,
+}
+
+impl WordNavigation for WordBackward<'_> {
+    fn read(&mut self) {
+        self.chunk = self.doc.read_backward(self.offset);
+        self.chunk_off = self.chunk.len();
+    }
+
+    fn skip_newline(&mut self) {
+        if self.chunk_off > 0 && self.chunk[self.chunk_off - 1] == b'\n' {
+            self.chunk_off -= 1;
+        }
+        if self.chunk_off > 0 && self.chunk[self.chunk_off - 1] == b'\r' {
+            self.chunk_off -= 1;
+        }
+    }
+
+    fn skip_class(&mut self, class: CharClass) {
+        while !self.chunk.is_empty() {
+            while self.chunk_off > 0 {
+                if WORD_CLASSIFIER[self.chunk[self.chunk_off - 1] as usize] != class {
+                    return;
+                }
+                self.chunk_off -= 1;
+            }
+
+            self.offset -= self.chunk.len();
+            self.chunk = self.doc.read_backward(self.offset);
+            self.chunk_off = self.chunk.len();
+        }
+    }
+
+    fn peek(&self, default: CharClass) -> CharClass {
+        if self.chunk_off > 0 {
+            WORD_CLASSIFIER[self.chunk[self.chunk_off - 1] as usize]
+        } else {
+            default
+        }
+    }
+
+    fn next(&mut self) {
+        self.chunk_off -= 1;
+    }
+
+    fn offset(&self) -> usize {
+        self.offset - self.chunk.len() + self.chunk_off
+    }
+}
+
+/// Returns the offset range of the "word" at the given offset.
+/// Does not cross newlines. Works similar to VS Code.
+pub fn word_select(doc: &dyn ReadableDocument, offset: usize) -> Range<usize> {
+    let mut beg = offset;
+    let mut end = offset;
+    let mut class = CharClass::Newline;
+
+    let mut chunk = doc.read_forward(end);
+    if !chunk.is_empty() {
+        class = WORD_CLASSIFIER[chunk[0] as usize];
+
+        let mut chunk_off = 0;
+
+        if class != CharClass::Newline {
+            loop {
+                chunk_off += 1;
+                end += 1;
+
+                if chunk_off >= chunk.len() {
+                    chunk = doc.read_forward(end);
+                    chunk_off = 0;
+                    if chunk.is_empty() {
+                        break;
+                    }
+                }
+
+                if WORD_CLASSIFIER[chunk[chunk_off] as usize] != class {
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut chunk = doc.read_backward(beg);
+    if !chunk.is_empty() {
+        let mut chunk_off = chunk.len();
+
+        if class == CharClass::Newline {
+            class = WORD_CLASSIFIER[chunk[chunk_off - 1] as usize];
+        }
+
+        if class != CharClass::Newline {
+            loop {
+                if WORD_CLASSIFIER[chunk[chunk_off - 1] as usize] != class {
+                    break;
+                }
+
+                chunk_off -= 1;
+                beg -= 1;
+
+                if chunk_off == 0 {
+                    chunk = doc.read_backward(beg);
+                    chunk_off = chunk.len();
+                    if chunk.is_empty() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    beg..end
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -550,6 +1317,10 @@ mod test {
     struct ChunkedDoc<'a>(&'a [&'a [u8]]);
 
     impl ReadableDocument for ChunkedDoc<'_> {
+        fn len(&self) -> usize {
+            self.0.iter().map(|c| c.len()).sum()
+        }
+
         fn read_forward(&self, mut off: usize) -> &[u8] {
             for chunk in self.0 {
                 if off < chunk.len() {
@@ -574,20 +1345,44 @@ mod test {
     #[test]
     fn test_measure_forward_to_end_of_line() {
         let cursor = MeasurementConfig::new(&"foo\nbar".as_bytes()).goto_column(CoordType::MAX);
-        assert_eq!(cursor, Cursor { offset: 3, logical_pos: Point { x: 3, y: 0 }, column: 3 });
+        assert_eq!(
+            cursor,
+            Cursor {
+                offset: 3,
+                logical_pos: Point { x: 3, y: 0 },
+                column: 3,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]
     fn test_measure_forward_clipped_wide_char() {
         let cursor = MeasurementConfig::new(&"a😶‍🌫️b".as_bytes()).goto_column(2);
-        assert_eq!(cursor, Cursor { offset: 1, logical_pos: Point { x: 1, y: 0 }, column: 1 });
+        assert_eq!(
+            cursor,
+            Cursor {
+                offset: 1,
+                logical_pos: Point { x: 1, y: 0 },
+                column: 1,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]
     fn test_measure_forward_tabs() {
         let text = "a\tb\tc".as_bytes();
         let cursor = MeasurementConfig::new(&text).with_tab_size(4).goto_column(4);
-        assert_eq!(cursor, Cursor { offset: 2, logical_pos: Point { x: 2, y: 0 }, column: 4 });
+        assert_eq!(
+            cursor,
+            Cursor {
+                offset: 2,
+                logical_pos: Point { x: 2, y: 0 },
+                column: 4,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]
@@ -608,18 +1403,42 @@ mod test {
         // Should stop at the LF and not cross it.
         let text = "abc\ndef".as_bytes();
         let cursor = MeasurementConfig::new(&text).goto_column(CoordType::MAX);
-        assert_eq!(cursor, Cursor { offset: 3, logical_pos: Point { x: 3, y: 0 }, column: 3 });
+        assert_eq!(
+            cursor,
+            Cursor {
+                offset: 3,
+                logical_pos: Point { x: 3, y: 0 },
+                column: 3,
+                ..Default::default()
+            }
+        );
 
         // goto_offset past newline should also stop at the newline.
         let cursor = MeasurementConfig::new(&text).goto_offset(5);
-        assert_eq!(cursor, Cursor { offset: 3, logical_pos: Point { x: 3, y: 0 }, column: 3 });
+        assert_eq!(
+            cursor,
+            Cursor {
+                offset: 3,
+                logical_pos: Point { x: 3, y: 0 },
+                column: 3,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]
     fn test_crlf_stops() {
         let text = "ab\r\ncd".as_bytes();
         let cursor = MeasurementConfig::new(&text).goto_column(CoordType::MAX);
-        assert_eq!(cursor, Cursor { offset: 2, logical_pos: Point { x: 2, y: 0 }, column: 2 });
+        assert_eq!(
+            cursor,
+            Cursor {
+                offset: 2,
+                logical_pos: Point { x: 2, y: 0 },
+                column: 2,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]
@@ -687,5 +1506,18 @@ mod test {
         assert_eq!(strip_newline(b"hello\n"), b"hello");
         assert_eq!(strip_newline(b"hello\r\n"), b"hello");
         assert_eq!(strip_newline(b"hello"), b"hello");
+    }
+
+    #[test]
+    fn test_word_navigation() {
+        assert_eq!(word_forward(&"Hello World".as_bytes(), 0), 5);
+        assert_eq!(word_forward(&"Hello,World".as_bytes(), 0), 5);
+        assert_eq!(word_forward(&"   Hello".as_bytes(), 0), 8);
+        assert_eq!(word_forward(&"\n\nHello".as_bytes(), 0), 1);
+
+        assert_eq!(word_backward(&"Hello World".as_bytes(), 11), 6);
+        assert_eq!(word_backward(&"Hello,World".as_bytes(), 10), 6);
+        assert_eq!(word_backward(&"Hello   ".as_bytes(), 7), 0);
+        assert_eq!(word_backward(&"Hello\n\n".as_bytes(), 7), 6);
     }
 }

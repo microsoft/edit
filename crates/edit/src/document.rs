@@ -12,6 +12,14 @@ use stdext::ReplaceRange as _;
 
 /// An abstraction over reading from text containers.
 pub trait ReadableDocument {
+    /// Returns the total length of the document in bytes.
+    fn len(&self) -> usize;
+
+    /// Returns `true` if the document is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Read some bytes starting at (including) the given absolute offset.
     ///
     /// # Warning
@@ -49,6 +57,10 @@ pub trait WriteableDocument: ReadableDocument {
 }
 
 impl ReadableDocument for &[u8] {
+    fn len(&self) -> usize {
+        (*self).len()
+    }
+
     fn read_forward(&self, off: usize) -> &[u8] {
         let s = *self;
         &s[off.min(s.len())..]
@@ -61,6 +73,10 @@ impl ReadableDocument for &[u8] {
 }
 
 impl ReadableDocument for String {
+    fn len(&self) -> usize {
+        self.len()
+    }
+
     fn read_forward(&self, off: usize) -> &[u8] {
         let s = self.as_bytes();
         &s[off.min(s.len())..]
@@ -82,6 +98,10 @@ impl WriteableDocument for String {
 }
 
 impl ReadableDocument for PathBuf {
+    fn len(&self) -> usize {
+        self.as_os_str().as_encoded_bytes().len()
+    }
+
     fn read_forward(&self, off: usize) -> &[u8] {
         let s = self.as_os_str().as_encoded_bytes();
         &s[off.min(s.len())..]

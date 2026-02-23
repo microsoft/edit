@@ -331,6 +331,10 @@ impl GapBuffer {
 }
 
 impl ReadableDocument for GapBuffer {
+    fn len(&self) -> usize {
+        self.text_length
+    }
+
     fn read_forward(&self, off: usize) -> &[u8] {
         let off = off.min(self.text_length);
         let beg;
