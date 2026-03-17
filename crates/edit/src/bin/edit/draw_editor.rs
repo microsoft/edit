@@ -124,21 +124,42 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 
             ctx.table_next_row();
 
-            change |= ctx.checkbox(
+            if ctx.checkbox(
                 "match-case",
                 loc(LocId::SearchMatchCase),
                 &mut state.search_options.match_case,
-            );
-            change |= ctx.checkbox(
+            ) {
+                change = true;
+                state.accessibility_announcements.push(format!(
+                    "{}: {}",
+                    loc(LocId::SearchMatchCase),
+                    if state.search_options.match_case { "On" } else { "Off" }
+                ));
+            }
+            if ctx.checkbox(
                 "whole-word",
                 loc(LocId::SearchWholeWord),
                 &mut state.search_options.whole_word,
-            );
-            change |= ctx.checkbox(
+            ) {
+                change = true;
+                state.accessibility_announcements.push(format!(
+                    "{}: {}",
+                    loc(LocId::SearchWholeWord),
+                    if state.search_options.whole_word { "On" } else { "Off" }
+                ));
+            }
+            if ctx.checkbox(
                 "use-regex",
                 loc(LocId::SearchUseRegex),
                 &mut state.search_options.use_regex,
-            );
+            ) {
+                change = true;
+                state.accessibility_announcements.push(format!(
+                    "{}: {}",
+                    loc(LocId::SearchUseRegex),
+                    if state.search_options.use_regex { "On" } else { "Off" }
+                ));
+            }
             if state.wants_search.kind == StateSearchKind::Replace
                 && ctx.button("replace-all", loc(LocId::SearchReplaceAll), ButtonStyle::default())
             {
@@ -175,7 +196,7 @@ pub fn search_execute(ctx: &mut Context, state: &mut State, action: SearchAction
         return;
     };
 
-    state.search_success = match action {
+    let icu_ok = match action {
         SearchAction::Search => {
             doc.buffer.borrow_mut().find_and_select(&state.search_needle, state.search_options)
         }
@@ -192,18 +213,66 @@ pub fn search_execute(ctx: &mut Context, state: &mut State, action: SearchAction
     }
     .is_ok();
 
+    // has_selection() tells us whether a match was found (or a next match
+    // exists after a replace). ReplaceAll clears the selection when done,
+    // so we treat icu_ok as success for that case.
+    let has_match = icu_ok && doc.buffer.borrow().has_selection();
+    state.search_success = has_match || (icu_ok && matches!(action, SearchAction::ReplaceAll));
+
+    let announcement = match action {
+        SearchAction::ReplaceAll => {
+            loc(LocId::AccessibilityAllReplaced).to_string()
+        }
+        SearchAction::Replace => {
+            if has_match {
+                format!(
+                    "{}, {}",
+                    loc(LocId::AccessibilityReplaced),
+                    search_match_location(doc)
+                )
+            } else {
+                format!(
+                    "{}, {}",
+                    loc(LocId::AccessibilityReplaced),
+                    loc(LocId::AccessibilityNoMatchesFound)
+                )
+            }
+        }
+        SearchAction::Search => {
+            if has_match {
+                search_match_location(doc)
+            } else {
+                loc(LocId::AccessibilityNoMatchesFound).to_string()
+            }
+        }
+    };
+
+    state.accessibility_announcements.push(announcement);
     ctx.needs_rerender();
+}
+
+fn search_match_location(doc: &crate::documents::Document) -> String {
+    let pos = doc.buffer.borrow().cursor_logical_pos();
+    format!("{}, {} {}", loc(LocId::AccessibilityMatchFound), loc(LocId::AccessibilityLine), pos.y + 1)
 }
 
 pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
     if let Some(doc) = state.documents.active_mut() {
         if doc.path.is_some() {
-            if let Err(err) = doc.save(None) {
-                error_log_add(ctx, state, err);
+            match doc.save(None) {
+                Ok(()) => {
+                    state.accessibility_announcements.push(format!(
+                        "{}: {}",
+                        loc(LocId::AccessibilityFileSaved),
+                        &doc.filename
+                    ));
+                }
+                Err(err) => error_log_add(ctx, state, err),
             }
         } else {
             // No path? Show the file picker.
             state.wants_file_picker = StateFilePicker::SaveAs;
+            state.announce(loc(LocId::FileSaveAs).to_string());
             state.wants_save = false;
             ctx.needs_rerender();
         }
@@ -215,14 +284,25 @@ pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
 pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     let Some(doc) = state.documents.active() else {
         state.wants_close = false;
+        state.unsaved_changes_announced = false;
         return;
     };
 
     if !doc.buffer.borrow().is_dirty() {
         state.documents.remove_active();
         state.wants_close = false;
+        state.unsaved_changes_announced = false;
         ctx.needs_rerender();
         return;
+    }
+
+    if !state.unsaved_changes_announced {
+        state.unsaved_changes_announced = true;
+        state.announce(format!(
+            "{}: {}",
+            loc(LocId::UnsavedChangesDialogTitle),
+            loc(LocId::UnsavedChangesDialogDescription)
+        ));
     }
 
     enum Action {
@@ -293,10 +373,12 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
         Action::Discard => {
             state.documents.remove_active();
             state.wants_close = false;
+            state.unsaved_changes_announced = false;
         }
         Action::Cancel => {
             state.wants_exit = false;
             state.wants_close = false;
+            state.unsaved_changes_announced = false;
         }
     }
 
@@ -323,9 +405,16 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
             if ctx.consume_shortcut(vk::RETURN) {
                 match validate_goto_point(&state.goto_target) {
                     Ok(point) => {
-                        let mut buf = doc.buffer.borrow_mut();
-                        buf.cursor_move_to_logical(point);
-                        buf.make_cursor_visible();
+                        {
+                            let mut buf = doc.buffer.borrow_mut();
+                            buf.cursor_move_to_logical(point);
+                            buf.make_cursor_visible();
+                        }
+                        state.accessibility_announcements.push(format!(
+                            "{}:{}",
+                            point.y + 1,
+                            point.x + 1
+                        ));
                         done = true;
                     }
                     Err(_) => state.goto_invalid = true,

@@ -172,6 +172,13 @@ pub struct State {
     pub osc_clipboard_sync: bool,
     pub osc_clipboard_always_send: bool,
     pub exit: bool,
+
+    pub accessibility_announcements: Vec<String>,
+    pub launch_announced: bool,
+    pub unsaved_changes_announced: bool,
+    pub clipboard_warning_announced: bool,
+    pub file_picker_announced: bool,
+    pub file_picker_last_dir_revision: u64,
 }
 
 impl State {
@@ -220,7 +227,18 @@ impl State {
             osc_clipboard_sync: false,
             osc_clipboard_always_send: false,
             exit: false,
+
+            accessibility_announcements: Vec::new(),
+            launch_announced: false,
+            unsaved_changes_announced: false,
+            clipboard_warning_announced: false,
+            file_picker_announced: false,
+            file_picker_last_dir_revision: 0,
         })
+    }
+
+    pub fn announce(&mut self, msg: String) {
+        self.accessibility_announcements.push(msg);
     }
 }
 
@@ -233,6 +251,7 @@ pub fn draw_add_untitled_document(ctx: &mut Context, state: &mut State) {
 pub fn error_log_add(ctx: &mut Context, state: &mut State, err: apperr::Error) {
     let msg = format!("{}", FormatApperr::from(err));
     if !msg.is_empty() {
+        state.announce(format!("{}: {}", loc(LocId::ErrorDialogTitle), &msg));
         state.error_log[state.error_log_index] = msg;
         state.error_log_index = (state.error_log_index + 1) % state.error_log.len();
         state.error_log_count = state.error_log.len().min(state.error_log_count + 1);

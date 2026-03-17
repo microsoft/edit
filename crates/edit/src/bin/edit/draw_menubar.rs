@@ -43,6 +43,7 @@ fn draw_menu_file(ctx: &mut Context, state: &mut State) {
     }
     if ctx.menubar_menu_button(loc(LocId::FileOpen), 'O', kbmod::CTRL | vk::O) {
         state.wants_file_picker = StateFilePicker::Open;
+        state.announce(loc(LocId::FileOpen).to_string());
     }
     if state.documents.active().is_some() {
         if ctx.menubar_menu_button(loc(LocId::FileSave), 'S', kbmod::CTRL | vk::S) {
@@ -50,6 +51,7 @@ fn draw_menu_file(ctx: &mut Context, state: &mut State) {
         }
         if ctx.menubar_menu_button(loc(LocId::FileSaveAs), 'A', vk::NULL) {
             state.wants_file_picker = StateFilePicker::SaveAs;
+            state.announce(loc(LocId::FileSaveAs).to_string());
         }
         if ctx.menubar_menu_button(loc(LocId::FileClose), 'C', kbmod::CTRL | vk::W) {
             state.wants_close = true;
@@ -89,10 +91,12 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
         if ctx.menubar_menu_button(loc(LocId::EditFind), 'F', kbmod::CTRL | vk::F) {
             state.wants_search.kind = StateSearchKind::Search;
             state.wants_search.focus = true;
+            state.accessibility_announcements.push(loc(LocId::EditFind).to_string());
         }
         if ctx.menubar_menu_button(loc(LocId::EditReplace), 'L', kbmod::CTRL | vk::R) {
             state.wants_search.kind = StateSearchKind::Replace;
             state.wants_search.focus = true;
+            state.accessibility_announcements.push(loc(LocId::EditReplace).to_string());
         }
     }
     if ctx.menubar_menu_button(loc(LocId::EditSelectAll), 'A', kbmod::CTRL | vk::A) {
@@ -113,12 +117,19 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
         }
         if ctx.menubar_menu_button(loc(LocId::ViewGoToFile), 'F', kbmod::CTRL | vk::P) {
             state.wants_go_to_file = true;
+            state.accessibility_announcements.push(loc(LocId::ViewGoToFile).to_string());
         }
         if ctx.menubar_menu_button(loc(LocId::FileGoto), 'G', kbmod::CTRL | vk::G) {
             state.wants_goto = true;
+            state.accessibility_announcements.push(loc(LocId::FileGoto).to_string());
         }
         if ctx.menubar_menu_checkbox(loc(LocId::ViewWordWrap), 'W', kbmod::ALT | vk::Z, word_wrap) {
             tb.set_word_wrap(!word_wrap);
+            state.accessibility_announcements.push(format!(
+                "{}: {}",
+                loc(LocId::ViewWordWrap),
+                if !word_wrap { "On" } else { "Off" }
+            ));
             ctx.needs_rerender();
         }
     }
@@ -129,6 +140,11 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
 fn draw_menu_help(ctx: &mut Context, state: &mut State) {
     if ctx.menubar_menu_button(loc(LocId::HelpAbout), 'A', vk::NULL) {
         state.wants_about = true;
+        state.announce(format!(
+            "Microsoft Edit {}{}",
+            loc(LocId::AboutDialogVersion),
+            env!("CARGO_PKG_VERSION")
+        ));
     }
     ctx.menubar_menu_end();
 }

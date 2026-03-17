@@ -177,6 +177,23 @@ fn run() -> apperr::Result<()> {
                 write_osc_clipboard(&scratch, &mut output, &mut tui, &mut state);
             }
 
+            // Announce the editor context on first frame, similar to how Notepad
+            // announces the filename and application when it opens.
+            if !state.launch_announced {
+                state.launch_announced = true;
+                let filename = state
+                    .documents
+                    .active()
+                    .map_or_else(|| loc(LocId::FileNew).to_string(), |d| d.filename.clone());
+                state.accessibility_announcements.push(format!("{} - Edit", filename));
+            }
+
+            // OSC 200: Accessibility - suppress terminal auto-announcing, emit any
+            // queued announcements, then immediately re-enable announcing. This
+            // per-frame approach ensures the terminal is left in the "announcing"
+            // state between frames, so a crash never permanently silences the reader.
+            write_accessibility_announcements(&scratch, &mut output, &mut state);
+
             #[cfg(feature = "debug-latency")]
             {
                 use stdext::arena_write_fmt;
@@ -348,26 +365,32 @@ fn draw(ctx: &mut Context, state: &mut State) {
             draw_add_untitled_document(ctx, state);
         } else if key == kbmod::CTRL | vk::O {
             state.wants_file_picker = StateFilePicker::Open;
+            state.announce(loc(LocId::FileOpen).to_string());
         } else if key == kbmod::CTRL | vk::S {
             state.wants_save = true;
         } else if key == kbmod::CTRL_SHIFT | vk::S {
             state.wants_file_picker = StateFilePicker::SaveAs;
+            state.announce(loc(LocId::FileSaveAs).to_string());
         } else if key == kbmod::CTRL | vk::W {
             state.wants_close = true;
         } else if key == kbmod::CTRL | vk::P {
             state.wants_go_to_file = true;
+            state.announce(loc(LocId::ViewGoToFile).to_string());
         } else if key == kbmod::CTRL | vk::Q {
             state.wants_exit = true;
         } else if key == kbmod::CTRL | vk::G {
             state.wants_goto = true;
+            state.announce(loc(LocId::FileGoto).to_string());
         } else if key == kbmod::CTRL | vk::F && state.wants_search.kind != StateSearchKind::Disabled
         {
             state.wants_search.kind = StateSearchKind::Search;
             state.wants_search.focus = true;
+            state.announce(loc(LocId::EditFind).to_string());
         } else if key == kbmod::CTRL | vk::R && state.wants_search.kind != StateSearchKind::Disabled
         {
             state.wants_search.kind = StateSearchKind::Replace;
             state.wants_search.focus = true;
+            state.announce(loc(LocId::EditReplace).to_string());
         } else if key == vk::F3 {
             search_execute(ctx, state, SearchAction::Search);
         } else {
@@ -433,6 +456,15 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
 
     let over_limit = data_len >= SCRATCH_ARENA_CAPACITY / 4;
     let mut done = None;
+
+    if !state.clipboard_warning_announced {
+        state.clipboard_warning_announced = true;
+        state.announce(format!(
+            "{}: {}",
+            loc(LocId::WarningDialogTitle),
+            loc(LocId::LargeClipboardWarningLine1)
+        ));
+    }
 
     ctx.modal_begin("warning", loc(LocId::WarningDialogTitle));
     {
@@ -508,6 +540,7 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
 
     if let Some(sync) = done {
         state.osc_clipboard_sync = sync;
+        state.clipboard_warning_announced = false;
         ctx.clipboard_mut().mark_as_synchronized();
         ctx.needs_rerender();
     }
@@ -537,6 +570,24 @@ fn write_osc_clipboard<'a>(
     state.osc_clipboard_sync = false;
 }
 
+fn write_accessibility_announcements<'a>(
+    arena: &'a Arena,
+    output: &mut BString<'a>,
+    state: &mut State,
+) {
+    // Suppress terminal auto-announcing while the TUI frame is written.
+    output.push_str(arena, "\x1b]200;0\x07");
+
+    for announcement in state.accessibility_announcements.drain(..) {
+        output.push_str(arena, "\x1b]200;2;");
+        output.push_str(arena, &announcement);
+        output.push_str(arena, "\x07");
+    }
+
+    // Re-enable terminal auto-announcing immediately after the frame.
+    output.push_str(arena, "\x1b]200;1\x07");
+}
+
 struct RestoreModes;
 
 impl Drop for RestoreModes {
@@ -544,7 +595,9 @@ impl Drop for RestoreModes {
         // Same as in the beginning but in the reverse order.
         // It also includes DECSCUSR 0 to reset the cursor style and DECTCEM to show the cursor.
         // We specifically don't reset mode 1036, because most applications expect it to be set nowadays.
-        sys::write_stdout("\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1002;1006;2004l\x1b[?1049l");
+        sys::write_stdout(concat!(
+            "\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1002;1006;2004l\x1b[?1049l",
+        ));
     }
 }
 

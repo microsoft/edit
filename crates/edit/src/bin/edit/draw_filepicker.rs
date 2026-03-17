@@ -27,6 +27,41 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         }
     }
 
+    // Announce the file picker dialog context on first appearance.
+    if !state.file_picker_announced {
+        state.file_picker_announced = true;
+        let title = if state.wants_file_picker == StateFilePicker::Open {
+            loc(LocId::FileOpen)
+        } else {
+            loc(LocId::FileSaveAs)
+        };
+        let dir = state.file_picker_pending_dir.as_str();
+        let name_label = loc(LocId::SaveAsDialogNameLabel);
+        let name = state.file_picker_pending_name.to_string_lossy();
+        state.accessibility_announcements.push(format!(
+            "{}, {}: {}, {} {}",
+            title,
+            loc(LocId::SaveAsDialogPathLabel),
+            if dir.is_empty() { "Drives" } else { dir },
+            name_label,
+            name
+        ));
+    }
+
+    // Announce folder navigation when the directory changes.
+    if state.file_picker_last_dir_revision != state.file_picker_pending_dir_revision {
+        state.file_picker_last_dir_revision = state.file_picker_pending_dir_revision;
+        // Skip the initial sync (handled by the open announcement above).
+        if state.file_picker_announced {
+            let dir = state.file_picker_pending_dir.as_str();
+            state.accessibility_announcements.push(format!(
+                "{}: {}",
+                loc(LocId::SaveAsDialogPathLabel),
+                if dir.is_empty() { "Drives" } else { dir }
+            ));
+        }
+    }
+
     let width = (ctx.size().width - 20).max(10);
     let height = (ctx.size().height - 10).max(10);
     let mut doit = None;
@@ -96,6 +131,13 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                         let sel = ctx.list_item(false, suggestion.as_str());
                         if sel != ListSelection::Unchanged {
                             state.file_picker_pending_name = suggestion.as_path().into();
+                            if sel == ListSelection::Selected {
+                                state.accessibility_announcements.push(format!(
+                                    "{}, {}",
+                                    suggestion.as_str(),
+                                    loc(LocId::AccessibilitySelected)
+                                ));
+                            }
                         }
                         if sel == ListSelection::Activated {
                             autocomplete_done = true;
@@ -158,7 +200,12 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                     match ctx.list_item(false, entry.as_str()) {
                         ListSelection::Unchanged => {}
                         ListSelection::Selected => {
-                            state.file_picker_pending_name = entry.as_path().into()
+                            state.file_picker_pending_name = entry.as_path().into();
+                            state.accessibility_announcements.push(format!(
+                                "{}, {}",
+                                entry.as_str(),
+                                loc(LocId::AccessibilitySelected)
+                            ));
                         }
                         ListSelection::Activated => activated = true,
                     }
@@ -186,6 +233,11 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 && path.exists()
             {
                 state.file_picker_overwrite_warning = doit.take();
+                state.announce(format!(
+                    "{}: {}",
+                    loc(LocId::FileOverwriteWarning),
+                    loc(LocId::FileOverwriteWarningDescription)
+                ));
             }
         }
     }
@@ -241,7 +293,8 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     }
 
     if let Some(path) = doit {
-        let res = if state.wants_file_picker == StateFilePicker::Open {
+        let is_open = state.wants_file_picker == StateFilePicker::Open;
+        let res = if is_open {
             state.documents.add_file_path(&path).map(|_| ())
         } else if let Some(doc) = state.documents.active_mut() {
             doc.save(Some(path))
@@ -250,6 +303,18 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         };
         match res {
             Ok(..) => {
+                if let Some(doc) = state.documents.active() {
+                    let label = if is_open {
+                        loc(LocId::FileOpen)
+                    } else {
+                        loc(LocId::AccessibilityFileSaved)
+                    };
+                    state.accessibility_announcements.push(format!(
+                        "{}: {}",
+                        label,
+                        &doc.filename
+                    ));
+                }
                 ctx.needs_rerender();
                 done = true;
             }
@@ -263,6 +328,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         state.file_picker_entries = Default::default();
         state.file_picker_overwrite_warning = Default::default();
         state.file_picker_autocomplete = Default::default();
+        state.file_picker_announced = false;
     }
 }
 

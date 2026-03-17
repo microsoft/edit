@@ -1932,3 +1932,31 @@ uk = "Файл вже існує. Перезаписати?"
 vi = "Tệp đã tồn tại. Bạn có muốn ghi đè không?"
 zh_hans = "文件已存在。要覆盖它吗？"
 zh_hant = "檔案已存在。要覆蓋它嗎？"
+
+# Accessibility announcement when a search match is found
+[AccessibilityMatchFound]
+en = "Match found"
+
+# Accessibility announcement when a search finds no matches
+[AccessibilityNoMatchesFound]
+en = "No matches found"
+
+# Accessibility announcement when all matches are replaced
+[AccessibilityAllReplaced]
+en = "All replaced"
+
+# Accessibility announcement when a single replacement is made
+[AccessibilityReplaced]
+en = "Replaced"
+
+# Accessibility announcement prefix for line number
+[AccessibilityLine]
+en = "Line"
+
+# Accessibility announcement suffix for selected items
+[AccessibilitySelected]
+en = "selected"
+
+# Accessibility announcement when a file is saved
+[AccessibilityFileSaved]
+en = "Saved"

@@ -31,6 +31,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
         if ctx.button("newline", if tb.is_crlf() { "CRLF" } else { "LF" }, ButtonStyle::default()) {
             let is_crlf = tb.is_crlf();
             tb.normalize_newlines(!is_crlf);
+            state.accessibility_announcements.push(if is_crlf { "LF" } else { "CRLF" }.to_string());
         }
         if state.wants_statusbar_focus {
             state.wants_statusbar_focus = false;
@@ -167,6 +168,7 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
 
         if tb.is_overtype() && ctx.button("overtype", "OVR", ButtonStyle::default()) {
             tb.set_overtype(false);
+            state.accessibility_announcements.push("Insert".to_string());
             ctx.needs_rerender();
         }
 
@@ -186,7 +188,10 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 filename = &filename_buf;
             }
 
-            state.wants_go_to_file |= ctx.button("filename", filename, ButtonStyle::default());
+            if ctx.button("filename", filename, ButtonStyle::default()) {
+                state.wants_go_to_file = true;
+                state.accessibility_announcements.push(loc(LocId::ViewGoToFile).to_string());
+            }
             ctx.inherit_focus();
             ctx.attr_overflow(Overflow::TruncateMiddle);
             ctx.attr_position(Position::Right);
@@ -268,9 +273,12 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
             }
             if let Err(err) = res {
                 error_log_add(ctx, state, err);
+            } else {
+                state.accessibility_announcements.push(encoding.to_string());
             }
         } else {
             doc.buffer.borrow_mut().set_encoding(encoding);
+            state.accessibility_announcements.push(encoding.to_string());
         }
     }
 
@@ -320,6 +328,7 @@ pub fn draw_go_to_file(ctx: &mut Context, state: &mut State) {
             ctx.list_begin("documents");
             ctx.inherit_focus();
 
+            let mut selected_filename = None;
             if state.documents.update_active(|doc| {
                 let tb = doc.buffer.borrow();
 
@@ -334,10 +343,24 @@ pub fn draw_go_to_file(ctx: &mut Context, state: &mut State) {
                     ctx.styled_label_add_text(path.as_str());
                 }
 
-                ctx.styled_list_item_end(false) == ListSelection::Activated
+                let sel = ctx.styled_list_item_end(false);
+                if sel == ListSelection::Selected {
+                    selected_filename = Some(doc.filename.clone());
+                }
+                sel == ListSelection::Activated
             }) {
+                if let Some(doc) = state.documents.active() {
+                    state.accessibility_announcements.push(doc.filename.clone());
+                }
                 state.wants_go_to_file = false;
                 ctx.needs_rerender();
+            }
+            if let Some(name) = selected_filename {
+                state.accessibility_announcements.push(format!(
+                    "{}, {}",
+                    name,
+                    loc(LocId::AccessibilitySelected)
+                ));
             }
 
             ctx.list_end();
