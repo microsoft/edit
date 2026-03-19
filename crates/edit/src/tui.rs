@@ -973,15 +973,14 @@ impl Tui {
         }
 
         match &mut node.content {
-            NodeContent::Modal(title)
-                if !title.is_empty() => {
-                    self.framebuffer.replace_text(
-                        node.outer.top,
-                        node.outer.left + 2,
-                        node.outer.right - 1,
-                        title,
-                    );
-                }
+            NodeContent::Modal(title) if !title.is_empty() => {
+                self.framebuffer.replace_text(
+                    node.outer.top,
+                    node.outer.left + 2,
+                    node.outer.right - 1,
+                    title,
+                );
+            }
             NodeContent::Text(content) => self.render_styled_text(
                 inner,
                 node.intrinsic_size.width,
@@ -2863,40 +2862,38 @@ impl<'a> Context<'a, '_> {
                 self.set_input_consumed();
             } else if self.tui.mouse_state != InputMouseState::None {
                 match self.tui.mouse_state {
-                    InputMouseState::Left
-                        if self.tui.mouse_is_drag => {
-                            // We don't need to look up the previous track node,
-                            // since it has a fixed size based on the container size.
-                            let track_rect = Rect {
-                                left: container_rect.right,
-                                top: container_rect.top,
-                                right: container_rect.right + 1,
-                                bottom: container_rect.bottom,
-                            };
-                            if track_rect.contains(self.tui.mouse_down_position) {
-                                if sc.scroll_offset_y_drag_start == CoordType::MIN {
-                                    sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
-                                }
-
-                                let content = prev_container.children.first.unwrap().borrow();
-                                let content_rect = content.inner;
-                                let content_height = content_rect.height();
-                                let track_height = track_rect.height();
-                                let scrollable_height = content_height - track_height;
-
-                                if scrollable_height > 0 {
-                                    let trackable = track_height - sc.thumb_height;
-                                    let delta_y =
-                                        self.tui.mouse_position.y - self.tui.mouse_down_position.y;
-                                    sc.scroll_offset.y = sc.scroll_offset_y_drag_start
-                                        + (delta_y as i64 * scrollable_height as i64
-                                            / trackable as i64)
-                                            as CoordType;
-                                }
-
-                                self.set_input_consumed();
+                    InputMouseState::Left if self.tui.mouse_is_drag => {
+                        // We don't need to look up the previous track node,
+                        // since it has a fixed size based on the container size.
+                        let track_rect = Rect {
+                            left: container_rect.right,
+                            top: container_rect.top,
+                            right: container_rect.right + 1,
+                            bottom: container_rect.bottom,
+                        };
+                        if track_rect.contains(self.tui.mouse_down_position) {
+                            if sc.scroll_offset_y_drag_start == CoordType::MIN {
+                                sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
                             }
+
+                            let content = prev_container.children.first.unwrap().borrow();
+                            let content_rect = content.inner;
+                            let content_height = content_rect.height();
+                            let track_height = track_rect.height();
+                            let scrollable_height = content_height - track_height;
+
+                            if scrollable_height > 0 {
+                                let trackable = track_height - sc.thumb_height;
+                                let delta_y =
+                                    self.tui.mouse_position.y - self.tui.mouse_down_position.y;
+                                sc.scroll_offset.y = sc.scroll_offset_y_drag_start
+                                    + (delta_y as i64 * scrollable_height as i64 / trackable as i64)
+                                        as CoordType;
+                            }
+
+                            self.set_input_consumed();
                         }
+                    }
                     InputMouseState::Release => {
                         sc.scroll_offset_y_drag_start = CoordType::MIN;
                     }
