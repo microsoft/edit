@@ -350,6 +350,8 @@ impl<'a> Backend<'a> {
 
                 ir = next.borrow_mut();
 
+                // If the next instruction was already serialized (e.g. this is some form of loop),
+                // simply jump to the already serialized code. We're done here. Nothing new will come after this.
                 if ir.offset != usize::MAX {
                     self.push_instruction(MovImm {
                         dst: Register::ProgramCounter,

@@ -157,7 +157,7 @@ fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
     optimize_noop(compiler);
 }
 
-/// This isn't an optimization for the VM, it's one for my autistic side.
+/// This isn't an optimization for the VM, it's one for my pedantic side.
 /// I like it if the identifiers are sorted and the values contiguous.
 fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
     let scratch = scratch_arena(None);

@@ -412,8 +412,10 @@ impl<'a> RegexParser<'a> {
         let mut charset = Charset::no();
 
         // First char can be ] or - literally
-        if self.peek() == Some(']') {
-            charset.set(b']', true);
+        if let Some(ch) = self.peek()
+            && matches!(ch, ']' | '-')
+        {
+            charset.set(ch as u8, true);
             self.advance();
         }
 

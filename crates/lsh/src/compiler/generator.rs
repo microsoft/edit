@@ -5,7 +5,7 @@
 //!
 //! ## TODO
 //!
-//! - The label lookup (with a `HashMap`) is just plain dumb.
+//! - The label lookup (with a `HashMap`) is $NOT_GREAT.
 //!   The backend should emit metadata, I think.
 
 use std::collections::HashMap;

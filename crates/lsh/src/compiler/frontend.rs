@@ -643,7 +643,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             lhs_span.last.borrow_mut().set_next(add_ir);
             Ok((IRSpan { first: lhs_span.first, last: add_ir }, lhs_vreg))
         } else if lhs_vreg.borrow().physical.is_some() {
-            // For expressions of type `var virtual = phyiscal;`, we need to ensure
+            // For expressions of type `var virtual = physical;`, we need to ensure
             // that we actually copy the physical register into a new virtual one.
             // The remaining code assumes single assignment form, while physical registers are permanent.
             let dst = self.compiler.alloc_vreg();
