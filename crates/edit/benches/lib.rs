@@ -10,6 +10,7 @@ use edit::helpers::*;
 use edit::{buffer, glob, hash, json, oklab, simd, unicode};
 use stdext::arena::{self, scratch_arena};
 use stdext::collections::BVec;
+use stdext::unicode::Utf8Chars;
 
 struct EditingTracePatch<'a>(usize, usize, &'a str);
 
@@ -272,9 +273,7 @@ fn bench_unicode(c: &mut Criterion) {
     c.benchmark_group("unicode::Utf8Chars")
         .throughput(Throughput::Bytes(bytes.len() as u64))
         .bench_function("next", |b| {
-            b.iter(|| {
-                unicode::Utf8Chars::new(bytes, 0).fold(0u32, |acc, ch| acc.wrapping_add(ch as u32))
-            })
+            b.iter(|| Utf8Chars::new(bytes, 0).fold(0u32, |acc, ch| acc.wrapping_add(ch as u32)))
         });
 }
 

@@ -112,12 +112,6 @@ impl<'a> BString<'a> {
         self.vec.is_empty()
     }
 
-    /// True if if the buffer is full.
-    #[inline]
-    pub fn is_full(&self) -> bool {
-        self.vec.is_full()
-    }
-
     /// The raw UTF-8 bytes.
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
