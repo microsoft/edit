@@ -1707,16 +1707,14 @@ impl TextBuffer {
     }
 
     fn set_cursor_internal(&mut self, cursor: Cursor) {
-        debug_assert!(
-            cursor.offset <= self.text_length()
-                && cursor.logical_pos.x >= 0
-                && cursor.logical_pos.y >= 0
-                && cursor.logical_pos.y <= self.stats.logical_lines
-                && cursor.visual_pos.x >= 0
-                && (self.word_wrap_column <= 0 || cursor.visual_pos.x <= self.word_wrap_column)
-                && cursor.visual_pos.y >= 0
-                && cursor.visual_pos.y <= self.stats.visual_lines
-        );
+        debug_assert!(cursor.offset <= self.text_length());
+        debug_assert!(cursor.logical_pos.x >= 0);
+        debug_assert!(cursor.logical_pos.y >= 0);
+        debug_assert!(cursor.logical_pos.y <= self.stats.logical_lines);
+        debug_assert!(cursor.visual_pos.x >= 0);
+        debug_assert!(self.word_wrap_column <= 0 || cursor.visual_pos.x <= self.word_wrap_column);
+        debug_assert!(cursor.visual_pos.y >= 0);
+        debug_assert!(cursor.visual_pos.y <= self.stats.visual_lines);
         self.cursor = cursor;
     }
 
@@ -2258,7 +2256,8 @@ impl TextBuffer {
         {
             let cursor = self.cursor;
             self.edit_write(if self.newlines_are_crlf { b"\r\n" } else { b"\n" });
-            self.set_cursor_internal(cursor);
+            // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
+            self.cursor = cursor;
         }
 
         self.edit_end();
