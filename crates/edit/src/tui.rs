@@ -973,8 +973,8 @@ impl Tui {
         }
 
         match &mut node.content {
-            NodeContent::Modal(title) => {
-                if !title.is_empty() {
+            NodeContent::Modal(title)
+                if !title.is_empty() => {
                     self.framebuffer.replace_text(
                         node.outer.top,
                         node.outer.left + 2,
@@ -982,7 +982,6 @@ impl Tui {
                         title,
                     );
                 }
-            }
             NodeContent::Text(content) => self.render_styled_text(
                 inner,
                 node.intrinsic_size.width,
@@ -2864,8 +2863,8 @@ impl<'a> Context<'a, '_> {
                 self.set_input_consumed();
             } else if self.tui.mouse_state != InputMouseState::None {
                 match self.tui.mouse_state {
-                    InputMouseState::Left => {
-                        if self.tui.mouse_is_drag {
+                    InputMouseState::Left
+                        if self.tui.mouse_is_drag => {
                             // We don't need to look up the previous track node,
                             // since it has a fixed size based on the container size.
                             let track_rect = Rect {
@@ -2898,7 +2897,6 @@ impl<'a> Context<'a, '_> {
                                 self.set_input_consumed();
                             }
                         }
-                    }
                     InputMouseState::Release => {
                         sc.scroll_offset_y_drag_start = CoordType::MIN;
                     }
