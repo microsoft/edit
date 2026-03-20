@@ -22,7 +22,8 @@
 //! - [`Instruction::address_offset`] returns where, within an instruction, the jump target lives,
 //!   as used by the backend's relocation system.
 
-use std::fmt;
+use std::fmt::{self, Debug};
+use std::mem;
 
 use stdext::arena::Arena;
 use stdext::arena_write_fmt;
@@ -55,9 +56,300 @@ pub struct Highlight<T> {
     pub kind: T,
 }
 
-impl<T: fmt::Debug> fmt::Debug for Highlight<T> {
+impl<T: Debug> Debug for Highlight<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}, {:?})", self.start, self.kind)
+    }
+}
+
+/// The bytecode interpreter for syntax highlighting.
+#[derive(Clone)]
+pub struct Runtime<'pa, 'ps, 'pc> {
+    assembly: &'pa [u8],
+    strings: &'ps [&'ps str],
+    charsets: &'pc [[u16; 16]],
+    entrypoint: u32,
+    stack: Vec<u32>,
+    registers: Registers,
+}
+
+/// Snapshot of the runtime state for incremental re-highlighting.
+#[derive(Clone)]
+pub struct RuntimeState {
+    stack: Vec<u32>,
+    registers: Registers,
+}
+
+impl<'pa, 'ps, 'pc> Runtime<'pa, 'ps, 'pc> {
+    pub fn new(
+        assembly: &'pa [u8],
+        strings: &'ps [&'ps str],
+        charsets: &'pc [[u16; 16]],
+        entrypoint: u32,
+    ) -> Self {
+        Runtime {
+            assembly,
+            strings,
+            charsets,
+            entrypoint,
+            stack: Default::default(),
+            registers: Registers { pc: entrypoint, ..Default::default() },
+        }
+    }
+
+    pub fn snapshot(&self) -> RuntimeState {
+        RuntimeState { stack: self.stack.clone(), registers: self.registers }
+    }
+
+    pub fn restore(&mut self, state: &RuntimeState) {
+        self.stack = state.stack.clone();
+        self.registers = state.registers;
+    }
+
+    /// Parse a single line and return highlight spans.
+    ///
+    /// Executes bytecode until the line is fully consumed or a `Return` resets the VM.
+    /// The returned spans partition the line into highlighted regions.
+    ///
+    /// # Returns
+    /// A vector of [`Highlight`] spans. Always contains at least two spans:
+    /// one at offset 0 and one at `line.len()` as a sentinel.
+    pub fn parse_next_line<'a, T: PartialEq + TryFrom<u32>>(
+        &mut self,
+        arena: &'a Arena,
+        line: &[u8],
+    ) -> BVec<'a, Highlight<T>> {
+        let mut res: BVec<'a, Highlight<T>> = BVec::empty();
+
+        self.registers.off = 0;
+        self.registers.hs = 0;
+
+        // By default, any line starts with HighlightKind::Other.
+        // If the DSL yields anything, this will be overwritten.
+        res.push(arena, Highlight { start: 0, kind: unsafe { mem::zeroed() } });
+
+        loop {
+            instruction_decode!(self.assembly, self.registers.pc, {
+                Mov { dst, src } => {
+                    let s = self.registers.get(src);
+                    self.registers.set(dst, s);
+                }
+                Add { dst, src } => {
+                    let d = self.registers.get(dst);
+                    let s = self.registers.get(src);
+                    self.registers.set(dst, d.saturating_add(s));
+                }
+                Sub { dst, src } => {
+                    let d = self.registers.get(dst);
+                    let s = self.registers.get(src);
+                    self.registers.set(dst, d.saturating_sub(s));
+                }
+                MovImm { dst, imm } => {
+                    self.registers.set(dst, imm);
+                }
+                AddImm { dst, imm } => {
+                    let d = self.registers.get(dst);
+                    self.registers.set(dst, d.saturating_add(imm));
+                }
+                SubImm { dst, imm } => {
+                    let d = self.registers.get(dst);
+                    self.registers.set(dst, d.saturating_sub(imm));
+                }
+
+                Call { tgt } => {
+                    // PC already points to the next instruction (= return address)
+                    self.registers.save_registers(&mut self.stack);
+                    self.registers.pc = tgt;
+                }
+                Return => {
+                    if !self.registers.load_registers(&mut self.stack) {
+                        self.registers = Registers { pc: self.entrypoint, ..Default::default() };
+                        break;
+                    }
+                }
+
+                JumpEQ { lhs, rhs, tgt } => {
+                    if self.registers.get(lhs) == self.registers.get(rhs) {
+                        self.registers.pc = tgt;
+                    }
+                }
+                JumpNE { lhs, rhs, tgt } => {
+                    if self.registers.get(lhs) != self.registers.get(rhs) {
+                        self.registers.pc = tgt;
+                    }
+                }
+                JumpLT { lhs, rhs, tgt } => {
+                    if self.registers.get(lhs) < self.registers.get(rhs) {
+                        self.registers.pc = tgt;
+                    }
+                }
+                JumpLE { lhs, rhs, tgt } => {
+                    if self.registers.get(lhs) <= self.registers.get(rhs) {
+                        self.registers.pc = tgt;
+                    }
+                }
+                JumpGT { lhs, rhs, tgt } => {
+                    if self.registers.get(lhs) > self.registers.get(rhs) {
+                        self.registers.pc = tgt;
+                    }
+                }
+                JumpGE { lhs, rhs, tgt } => {
+                    if self.registers.get(lhs) >= self.registers.get(rhs) {
+                        self.registers.pc = tgt;
+                    }
+                }
+
+                JumpIfEndOfLine { tgt } => {
+                    if (self.registers.off as usize) >= line.len() {
+                        self.registers.pc = tgt;
+                    }
+                }
+
+                JumpIfMatchCharset { idx, min, max, tgt } => {
+                    let off = self.registers.off as usize;
+                    let cs = &self.charsets[idx as usize];
+                    let min = min as usize;
+                    let max = max as usize;
+
+                    if let Some(off) = Self::charset_gobble(line, off, cs, min, max) {
+                        self.registers.off = off as u32;
+                        self.registers.pc = tgt;
+                    }
+                }
+                JumpIfMatchPrefix { idx, tgt } => {
+                    let off = self.registers.off as usize;
+                    let str = self.strings[idx as usize].as_bytes();
+
+                    if Self::inlined_memcmp(line, off, str) {
+                        self.registers.off = (off + str.len()) as u32;
+                        self.registers.pc = tgt;
+                    }
+                }
+                JumpIfMatchPrefixInsensitive { idx, tgt } => {
+                    let off = self.registers.off as usize;
+                    let str = self.strings[idx as usize].as_bytes();
+
+                    if Self::inlined_memicmp(line, off, str) {
+                        self.registers.off = (off + str.len()) as u32;
+                        self.registers.pc = tgt;
+                    }
+                }
+
+                FlushHighlight { kind } => {
+                    let kind = self.registers.get(kind);
+                    let kind = unsafe { kind.try_into().unwrap_unchecked() };
+                    let start = (self.registers.hs as usize).min(line.len());
+
+                    if let Some(last) = res.last_mut()
+                        && (last.start == start || last.kind == kind)
+                    {
+                        last.kind = kind;
+                    } else {
+                        res.push(arena, Highlight { start, kind });
+                    }
+
+                    self.registers.hs = self.registers.off;
+                }
+                AwaitInput => {
+                    let off = self.registers.off as usize;
+                    if off >= line.len() {
+                        break;
+                    }
+                }
+
+                _ => unreachable!(),
+            });
+        }
+
+        // Ensure that there's a past-the-end highlight.
+        if res.last().is_none_or(|last| last.start < line.len()) {
+            res.push(arena, Highlight { start: line.len(), kind: unsafe { mem::zeroed() } });
+        }
+
+        res
+    }
+
+    // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
+    #[inline]
+    fn charset_gobble(
+        haystack: &[u8],
+        off: usize,
+        cs: &[u16; 16],
+        min: usize,
+        max: usize,
+    ) -> Option<usize> {
+        let mut i = 0usize;
+        while i < max {
+            let idx = off + i;
+            if idx >= haystack.len() || !Self::in_set(cs, haystack[idx]) {
+                break;
+            }
+            i += 1;
+        }
+        if i >= min { Some(off + i) } else { None }
+    }
+
+    /// A mini-memcmp implementation for short needles.
+    /// Compares the `haystack` at `off` with the `needle`.
+    #[inline]
+    fn inlined_memcmp(haystack: &[u8], off: usize, needle: &[u8]) -> bool {
+        unsafe {
+            if off >= haystack.len() || haystack.len() - off < needle.len() {
+                return false;
+            }
+
+            let a = haystack.as_ptr().add(off);
+            let b = needle.as_ptr();
+            let mut i = 0;
+
+            while i < needle.len() {
+                let a = *a.add(i);
+                let b = *b.add(i);
+                i += 1;
+                if a != b {
+                    return false;
+                }
+            }
+
+            true
+        }
+    }
+
+    /// Like `inlined_memcmp`, but case-insensitive.
+    #[inline]
+    fn inlined_memicmp(haystack: &[u8], off: usize, needle: &[u8]) -> bool {
+        unsafe {
+            if off >= haystack.len() || haystack.len() - off < needle.len() {
+                return false;
+            }
+
+            let a = haystack.as_ptr().add(off);
+            let b = needle.as_ptr();
+            let mut i = 0;
+
+            while i < needle.len() {
+                // str in PrefixInsensitive(str) is expected to be lowercase, printable ASCII.
+                let a = a.add(i).read().to_ascii_lowercase();
+                let b = b.add(i).read();
+                i += 1;
+                if a != b {
+                    return false;
+                }
+            }
+
+            true
+        }
+    }
+
+    #[inline]
+    fn in_set(bitmap: &[u16; 16], byte: u8) -> bool {
+        let lo_nibble = byte & 0xf;
+        let hi_nibble = byte >> 4;
+
+        let bitset = bitmap[lo_nibble as usize];
+        let bitmask = 1u16 << hi_nibble;
+
+        (bitset & bitmask) != 0
     }
 }
 
@@ -152,6 +444,26 @@ impl Registers {
     #[inline(always)]
     pub fn set(&mut self, reg: Register, val: u32) {
         unsafe { self.as_mut_ptr().add(reg as usize).write(val) }
+    }
+
+    #[inline(always)]
+    fn save_registers(&self, vec: &mut Vec<u32>) {
+        unsafe { vec.extend_from_slice(std::slice::from_raw_parts(self.as_ptr().add(2), 14)) };
+    }
+
+    #[inline(always)]
+    fn load_registers(&mut self, vec: &mut Vec<u32>) -> bool {
+        unsafe {
+            if vec.len() < 14 {
+                return false;
+            }
+
+            let src = vec.as_ptr().add(vec.len() - 14);
+            let dst = self.as_mut_ptr().add(2);
+            std::ptr::copy_nonoverlapping(src, dst, 14);
+            vec.truncate(vec.len() - 14);
+            true
+        }
     }
 
     #[inline(always)]
@@ -402,6 +714,8 @@ macro_rules! instruction_decode {
         }
     }};
 }
+
+use instruction_decode;
 
 impl Instruction {
     // JumpIfMatchCharset, etc., are 1 byte opcode + 4 u32 parameters.

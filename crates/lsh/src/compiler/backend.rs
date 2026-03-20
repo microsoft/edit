@@ -522,6 +522,7 @@ impl<'a> LivenessAnalysis<'a> {
 
         let ir = cell.borrow();
 
+        #[allow(clippy::collapsible_match)]
         match ir.instr {
             IRI::Mov { dst, src } => {
                 if dst.borrow().physical.is_none() {
