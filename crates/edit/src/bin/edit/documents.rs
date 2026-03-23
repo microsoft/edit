@@ -8,6 +8,7 @@ use std::{fs, io};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
+use edit::lsh::{FILE_ASSOCIATIONS, Language, process_file_associations};
 use edit::{path, sys};
 
 use crate::apperr;
@@ -20,6 +21,7 @@ pub struct Document {
     pub filename: String,
     pub file_id: Option<sys::FileId>,
     pub new_file_counter: usize,
+    pub language_override: Option<Option<&'static Language>>,
 }
 
 impl Document {
@@ -62,15 +64,41 @@ impl Document {
     fn set_path(&mut self, path: PathBuf) {
         let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let dir = path.parent().map(ToOwned::to_owned).unwrap_or_default();
+
         self.filename = filename;
         self.dir = Some(DisplayablePathBuf::from_path(dir));
         self.path = Some(path);
-        self.update_file_mode();
+
+        self.buffer.borrow_mut().set_ruler(if self.filename == "COMMIT_EDITMSG" { 72 } else { 0 });
+        self.update_language();
     }
 
-    fn update_file_mode(&mut self) {
-        let mut tb = self.buffer.borrow_mut();
-        tb.set_ruler(if self.filename == "COMMIT_EDITMSG" { 72 } else { 0 });
+    pub fn auto_detect_language(&mut self) {
+        self.language_override = None;
+        self.update_language();
+    }
+
+    pub fn override_language(&mut self, lang: Option<&'static Language>) {
+        self.language_override = Some(lang);
+        self.update_language();
+    }
+
+    fn update_language(&mut self) {
+        self.buffer.borrow_mut().set_language(self.get_language());
+    }
+
+    fn get_language(&self) -> Option<&'static Language> {
+        if let Some(lang) = self.language_override {
+            return lang;
+        }
+
+        if let Some(path) = &self.path
+            && let Some(lang) = process_file_associations(FILE_ASSOCIATIONS, path)
+        {
+            return Some(lang);
+        }
+
+        None
     }
 }
 
@@ -140,6 +168,7 @@ impl DocumentManager {
             filename: Default::default(),
             file_id: None,
             new_file_counter: 0,
+            language_override: None,
         };
         self.gen_untitled_name(&mut doc);
 
@@ -201,6 +230,7 @@ impl DocumentManager {
             filename: Default::default(),
             file_id,
             new_file_counter: 0,
+            language_override: None,
         };
         doc.set_path(path);
 

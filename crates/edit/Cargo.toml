@@ -19,6 +19,7 @@ harness = false
 debug-latency = []
 
 [dependencies]
+lsh.workspace = true
 stdext.workspace = true
 
 [target.'cfg(unix)'.dependencies]
@@ -26,6 +27,7 @@ libc = "0.2"
 
 [build-dependencies]
 stdext.workspace = true
+lsh.workspace = true
 # The default toml crate bundles its dependencies with bad compile times. Thanks.
 # Thankfully toml-span exists. FWIW the alternative is yaml-rust (without the 2 suffix).
 toml-span = { version = "0.6", default-features = false }
