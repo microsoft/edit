@@ -14,7 +14,7 @@ use stdext::arena::scratch_arena;
 use stdext::glob::glob_match;
 
 #[derive(FromArgs, PartialEq, Debug)]
-#[argh(description = "Debug and test frontend for Leonard's Shitty Highlighter")]
+#[argh(description = "Debug and test frontend for LSH")]
 struct Command {
     #[argh(subcommand)]
     sub: SubCommands,
