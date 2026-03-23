@@ -7,6 +7,7 @@ use stdext::unicode::Utf8Chars;
 use super::tables::*;
 use crate::document::ReadableDocument;
 use crate::helpers::{CoordType, Point};
+use crate::simd;
 
 // On one hand it's disgusting that I wrote this as a global variable, but on the
 // other hand, this isn't a public library API, and it makes the code a lot cleaner,
@@ -21,7 +22,7 @@ pub fn setup_ambiguous_width(ambiguous_width: CoordType) {
 }
 
 #[inline]
-fn ambiguous_width() -> usize {
+pub(super) fn ambiguous_width() -> usize {
     // SAFETY: This is a global variable that is set once per process.
     // It is never changed after that, so this is safe to call.
     unsafe { AMBIGUOUS_WIDTH }
@@ -48,11 +49,6 @@ pub struct Cursor {
     /// Line wrapping has NO influence on this and if word wrap is disabled,
     /// it's identical to `visual_pos.x`. This is useful for calculating tab widths.
     pub column: CoordType,
-    /// When `measure_forward` hits the `word_wrap_column`, the question is:
-    /// Was there a wrap opportunity on this line? Because if there wasn't,
-    /// a hard-wrap is required; otherwise, the word that is being laid-out is
-    /// moved to the next line. This boolean carries this state between calls.
-    pub wrap_opp: bool,
 }
 
 /// Your entrypoint to navigating inside a [`ReadableDocument`].
@@ -95,13 +91,33 @@ impl<'doc> MeasurementConfig<'doc> {
         self
     }
 
+    /// Returns the current cursor position.
+    pub fn cursor(&self) -> Cursor {
+        self.cursor
+    }
+
     /// Navigates **forward** to the given absolute offset.
     ///
     /// # Returns
     ///
     /// The cursor position after the navigation.
     pub fn goto_offset(&mut self, offset: usize) -> Cursor {
-        self.measure_forward(offset, Point::MAX, Point::MAX)
+        if offset == self.cursor.offset {
+            return self.cursor;
+        }
+
+        if self.word_wrap_column <= 0 && offset.saturating_sub(self.cursor.offset) > 1024 {
+            loop {
+                let prev_offset = self.cursor.offset;
+                self.goto_logical(Point { x: 0, y: self.cursor.logical_pos.y + 1 });
+                if self.cursor.offset > offset || self.cursor.offset <= prev_offset {
+                    break;
+                }
+            }
+        }
+
+        self.measure_forward(offset, Point::MAX, Point::MAX);
+        self.cursor
     }
 
     /// Navigates **forward** to the given logical position.
@@ -112,7 +128,56 @@ impl<'doc> MeasurementConfig<'doc> {
     ///
     /// The cursor position after the navigation.
     pub fn goto_logical(&mut self, logical_target: Point) -> Cursor {
-        self.measure_forward(usize::MAX, logical_target, Point::MAX)
+        let pos = Point { x: logical_target.x.max(0), y: logical_target.y.max(0) };
+
+        if pos == self.cursor.logical_pos {
+            return self.cursor;
+        }
+
+        if pos.y != self.cursor.logical_pos.y || pos.x < self.cursor.logical_pos.x {
+            // Seek backward to the requested line.
+            while pos.y <= self.cursor.logical_pos.y {
+                let chunk = self.buffer.read_backward(self.cursor.offset);
+                if chunk.is_empty() {
+                    break;
+                }
+
+                let (off, y) =
+                    simd::lines_bwd(chunk, chunk.len(), self.cursor.logical_pos.y, pos.y);
+                self.cursor.offset -= chunk.len() - off;
+                self.cursor.logical_pos.y = y;
+
+                if off > 0 {
+                    // The only way we wouldn't have consumed the entire chunk is if we found the target.
+                    break;
+                }
+            }
+
+            // Seek forward to the requested line if needed.
+            while pos.y > self.cursor.logical_pos.y {
+                let chunk = self.buffer.read_forward(self.cursor.offset);
+                if chunk.is_empty() {
+                    break;
+                }
+
+                let (off, y) = simd::lines_fwd(chunk, 0, self.cursor.logical_pos.y, pos.y);
+                self.cursor.offset += off;
+                self.cursor.logical_pos.y = y;
+
+                if off < chunk.len() {
+                    // The only way we wouldn't have consumed the entire chunk is if we found the target.
+                    break;
+                }
+            }
+        }
+
+        self.measure_forward(usize::MAX, pos, Point::MAX);
+
+        if self.word_wrap_column > 0 {
+            // TODO
+        }
+
+        self.cursor
     }
 
     /// Navigates **forward** to the given visual position.
@@ -123,12 +188,79 @@ impl<'doc> MeasurementConfig<'doc> {
     ///
     /// The cursor position after the navigation.
     pub fn goto_visual(&mut self, visual_target: Point) -> Cursor {
-        self.measure_forward(usize::MAX, Point::MAX, visual_target)
+        let pos = Point { x: visual_target.x.max(0), y: visual_target.y.max(0) };
+
+        if pos == self.cursor.visual_pos {
+            return self.cursor;
+        }
+
+        if self.word_wrap_column <= 0 {
+            // No word wrap: Simply seek to the right logical line.
+            if pos.y != self.cursor.visual_pos.y || pos.x < self.cursor.visual_pos.x {
+                self.goto_logical(Point { x: 0, y: pos.y });
+            }
+
+            self.measure_forward(usize::MAX, Point::MAX, pos);
+            self.cursor.visual_pos.x = self.cursor.column;
+            self.cursor.visual_pos.y = self.cursor.logical_pos.y;
+            self.cursor
+        } else {
+            // TODO
+
+            self.cursor
+        }
     }
 
-    /// Returns the current cursor position.
-    pub fn cursor(&self) -> Cursor {
+    /// Moves the cursor by a delta number of grapheme clusters, crossing line boundaries.
+    pub fn cursor_move_delta_grapheme(&mut self, mut delta: CoordType) -> Cursor {
+        if delta == 0 {
+            return self.cursor;
+        }
+
+        let sign = if delta > 0 { 1 } else { -1 };
+        let start_x = if delta > 0 { 0 } else { CoordType::MAX };
+
+        loop {
+            let offset = self.cursor.offset;
+            let target_x = self.cursor.logical_pos.x + delta;
+            self.goto_logical(Point { x: target_x, y: self.cursor.logical_pos.y });
+
+            delta = target_x - self.cursor.logical_pos.x;
+            if delta.signum() != sign || self.cursor.offset == offset {
+                break;
+            }
+
+            let offset = self.cursor.offset;
+            self.goto_logical(Point { x: start_x, y: self.cursor.logical_pos.y + sign });
+
+            delta -= sign;
+            if delta.signum() != sign || self.cursor.offset == offset {
+                break;
+            }
+        }
+
         self.cursor
+    }
+
+    /// Moves the cursor by a delta number of words, crossing line boundaries.
+    pub fn cursor_move_delta_word(&mut self, mut delta: CoordType) -> Cursor {
+        if delta == 0 {
+            return self.cursor;
+        }
+
+        let sign = if delta > 0 { 1 } else { -1 };
+        let mut offset = self.cursor.offset;
+
+        while delta != 0 {
+            if delta < 0 {
+                offset = super::word_backward(self.buffer, offset);
+            } else {
+                offset = super::word_forward(self.buffer, offset);
+            }
+            delta -= sign;
+        }
+
+        self.goto_offset(offset)
     }
 
     // NOTE that going to a visual target can result in ambiguous results,
@@ -162,15 +294,6 @@ impl<'doc> MeasurementConfig<'doc> {
         let mut logical_target_x = Self::calc_target_x(logical_target, logical_pos_y);
         let mut visual_target_x = Self::calc_target_x(visual_target, visual_pos_y);
 
-        // wrap_opp = Wrap Opportunity
-        // These store the position and column of the last wrap opportunity. If `word_wrap_column` is
-        // zero (word wrap disabled), all grapheme clusters are a wrap opportunity, because none are.
-        let mut wrap_opp = self.cursor.wrap_opp;
-        let mut wrap_opp_offset = offset;
-        let mut wrap_opp_logical_pos_x = logical_pos_x;
-        let mut wrap_opp_visual_pos_x = visual_pos_x;
-        let mut wrap_opp_column = column;
-
         let mut chunk_iter = Utf8Chars::new(b"", 0);
         let mut chunk_range = offset..offset;
         let mut props_next_cluster = ucd_start_of_text_properties();
@@ -184,7 +307,6 @@ impl<'doc> MeasurementConfig<'doc> {
                 break;
             }
 
-            let props_current_cluster = props_next_cluster;
             let mut props_last_char;
             let mut offset_next_cluster;
             let mut state = 0;
@@ -251,8 +373,6 @@ impl<'doc> MeasurementConfig<'doc> {
             if props_last_char == ucd_linefeed_properties() {
                 cold_path();
 
-                wrap_opp = false;
-
                 // Don't cross the newline if the target is on this line but we haven't reached it.
                 // E.g. if the callers asks for column 100 on a 10 column line,
                 // we'll return with the cursor set to column 10.
@@ -277,193 +397,16 @@ impl<'doc> MeasurementConfig<'doc> {
                 break;
             }
 
-            // Since this code above may need to revert to a previous `wrap_opp_*`,
-            // it must be done before advancing / checking for `ucd_line_break_joins`.
-            if self.word_wrap_column > 0 && visual_pos_x + width > self.word_wrap_column {
-                if !wrap_opp {
-                    // Otherwise, the lack of a wrap opportunity means that a single word
-                    // is wider than the word wrap column. We need to force-break the word.
-                    // This is similar to the above, but "bar" gets written at column 0.
-                    wrap_opp_offset = offset;
-                    wrap_opp_logical_pos_x = logical_pos_x;
-                    wrap_opp_visual_pos_x = visual_pos_x;
-                    wrap_opp_column = column;
-                    visual_pos_x = 0;
-                } else {
-                    // If we had a wrap opportunity on this line, we can move all
-                    // characters since then to the next line without stopping this loop:
-                    //   +---------+      +---------+      +---------+
-                    //   |      foo|  ->  |         |  ->  |         |
-                    //   |         |      |foo      |      |foobar   |
-                    //   +---------+      +---------+      +---------+
-                    // We don't actually move "foo", but rather just change where "bar" goes.
-                    // Since this function doesn't copy text, the end result is the same.
-                    visual_pos_x -= wrap_opp_visual_pos_x;
-                }
-
-                wrap_opp = false;
-                visual_pos_y += 1;
-                visual_target_x = Self::calc_target_x(visual_target, visual_pos_y);
-
-                if visual_pos_x == visual_target_x {
-                    break;
-                }
-
-                // Imagine the word is "hello" and on the "o" we notice it wraps.
-                // If the target however was the "e", then we must revert back to "h" and search for it.
-                if visual_pos_x > visual_target_x {
-                    cold_path();
-
-                    offset = wrap_opp_offset;
-                    logical_pos_x = wrap_opp_logical_pos_x;
-                    visual_pos_x = 0;
-                    column = wrap_opp_column;
-
-                    chunk_iter.seek(chunk_iter.len());
-                    chunk_range = offset..offset;
-                    props_next_cluster = ucd_start_of_text_properties();
-                    continue;
-                }
-            }
-
             offset = offset_next_cluster;
             logical_pos_x += 1;
             visual_pos_x += width;
             column += width;
-
-            if self.word_wrap_column > 0
-                && !ucd_line_break_joins(props_current_cluster, props_next_cluster)
-            {
-                wrap_opp = true;
-                wrap_opp_offset = offset;
-                wrap_opp_logical_pos_x = logical_pos_x;
-                wrap_opp_visual_pos_x = visual_pos_x;
-                wrap_opp_column = column;
-            }
-        }
-
-        // If we're here, we hit our target. Now the only question is:
-        // Is the word we're currently on so wide that it will be wrapped further down the document?
-        if self.word_wrap_column > 0 {
-            if !wrap_opp {
-                // If the current laid-out line had no wrap opportunities, it means we had an input
-                // such as "fooooooooooooooooooooo" at a `word_wrap_column` of e.g. 10. The word
-                // didn't fit and the lack of a `wrap_opp` indicates we must force a hard wrap.
-                // Thankfully, if we reach this point, that was already done by the code above.
-            } else if wrap_opp_logical_pos_x != logical_pos_x && visual_pos_y <= visual_target.y {
-                // Imagine the string "foo bar" with a word wrap column of 6. If I ask for the cursor at
-                // `logical_pos={5,0}`, then the code above exited while reaching the target.
-                // At this point, this function doesn't know yet that after the "b" there's "ar"
-                // which causes a word wrap, and causes the final visual position to be {1,1}.
-                // This code thus seeks ahead and checks if the current word will wrap or not.
-                // Of course we only need to do this if the cursor isn't on a wrap opportunity already.
-
-                // The loop below should not modify the target we already found.
-                let mut visual_pos_x_lookahead = visual_pos_x;
-
-                loop {
-                    let props_current_cluster = props_next_cluster;
-                    let mut props_last_char;
-                    let mut offset_next_cluster;
-                    let mut state = 0;
-                    let mut width = 0;
-
-                    // Since we want to measure the width of the current cluster,
-                    // by necessity we need to seek to the next cluster.
-                    // We'll then reuse the offset and properties of the next cluster in
-                    // the next iteration of the this (outer) loop (`props_next_cluster`).
-                    loop {
-                        if !chunk_iter.has_next() {
-                            cold_path();
-                            chunk_iter =
-                                Utf8Chars::new(self.buffer.read_forward(chunk_range.end), 0);
-                            chunk_range = chunk_range.end..chunk_range.end + chunk_iter.len();
-                        }
-
-                        // Since this loop seeks ahead to the next cluster, and since `chunk_iter`
-                        // records the offset of the next character after the returned one, we need
-                        // to save the offset of the previous `chunk_iter` before calling `next()`.
-                        // Similar applies to the width.
-                        props_last_char = props_next_cluster;
-                        offset_next_cluster = chunk_range.start + chunk_iter.offset();
-                        width += ucd_grapheme_cluster_character_width(
-                            props_next_cluster,
-                            ambiguous_width(),
-                        ) as CoordType;
-
-                        // The `Document::read_forward` interface promises us that it will not split
-                        // grapheme clusters across chunks. Therefore, we can safely break here.
-                        let ch = match chunk_iter.next() {
-                            Some(ch) => ch,
-                            None => break,
-                        };
-
-                        // Get the properties of the next cluster.
-                        props_next_cluster = ucd_grapheme_cluster_lookup(ch);
-                        state =
-                            ucd_grapheme_cluster_joins(state, props_last_char, props_next_cluster);
-
-                        // Stop if the next character does not join.
-                        if ucd_grapheme_cluster_joins_done(state) {
-                            break;
-                        }
-                    }
-
-                    if offset_next_cluster == offset {
-                        // No advance and the iterator is empty? End of text reached.
-                        if chunk_iter.is_empty() {
-                            break;
-                        }
-                        // Ignore the first iteration when processing the start-of-text.
-                        continue;
-                    }
-
-                    // The max. width of a terminal cell is 2.
-                    width = width.min(2);
-
-                    // Tabs require special handling because they can have a variable width.
-                    if props_last_char == ucd_tab_properties() {
-                        // SAFETY: `self.tab_size` is clamped to >= 1 in `with_tab_size`.
-                        // This assert ensures that Rust doesn't insert panicking null checks.
-                        unsafe { std::hint::assert_unchecked(self.tab_size >= 1) };
-                        width = self.tab_size - (column % self.tab_size);
-                    }
-
-                    // Hard wrap: Both the logical and visual position advance by one line.
-                    if props_last_char == ucd_linefeed_properties() {
-                        break;
-                    }
-
-                    visual_pos_x_lookahead += width;
-
-                    if visual_pos_x_lookahead > self.word_wrap_column {
-                        visual_pos_x -= wrap_opp_visual_pos_x;
-                        visual_pos_y += 1;
-                        break;
-                    } else if !ucd_line_break_joins(props_current_cluster, props_next_cluster) {
-                        break;
-                    }
-                }
-            }
-
-            if visual_pos_y > visual_target.y {
-                // Imagine the string "foo bar" with a word wrap column of 6. If I ask for the cursor at
-                // `visual_pos={100,0}`, the code above exited early after wrapping without reaching the target.
-                // Since I asked for the last character on the first line, we must wrap back up the last wrap
-                offset = wrap_opp_offset;
-                logical_pos_x = wrap_opp_logical_pos_x;
-                visual_pos_x = wrap_opp_visual_pos_x;
-                visual_pos_y = visual_target.y;
-                column = wrap_opp_column;
-                wrap_opp = true;
-            }
         }
 
         self.cursor.offset = offset;
         self.cursor.logical_pos = Point { x: logical_pos_x, y: logical_pos_y };
         self.cursor.visual_pos = Point { x: visual_pos_x, y: visual_pos_y };
         self.cursor.column = column;
-        self.cursor.wrap_opp = wrap_opp;
         self.cursor
     }
 
@@ -548,7 +491,6 @@ mod test {
                 logical_pos: Point { x: 0, y: 1 },
                 visual_pos: Point { x: 0, y: 1 },
                 column: 0,
-                wrap_opp: false,
             }
         );
     }
@@ -563,7 +505,6 @@ mod test {
                 logical_pos: Point { x: 1, y: 0 },
                 visual_pos: Point { x: 1, y: 0 },
                 column: 1,
-                wrap_opp: false,
             }
         );
     }
@@ -585,7 +526,6 @@ mod test {
                 logical_pos: Point { x: 5, y: 0 },
                 visual_pos: Point { x: 1, y: 1 },
                 column: 5,
-                wrap_opp: true,
             }
         );
 
@@ -599,7 +539,6 @@ mod test {
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
                 column: 4,
-                wrap_opp: true,
             }
         );
 
@@ -609,7 +548,6 @@ mod test {
             logical_pos: Point { x: 1, y: 0 },
             visual_pos: Point { x: 1, y: 0 },
             column: 1,
-            wrap_opp: false,
         });
         let cursor = cfg.goto_visual(Point { x: 5, y: 0 });
         assert_eq!(
@@ -619,7 +557,6 @@ mod test {
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
                 column: 4,
-                wrap_opp: true,
             }
         );
 
@@ -631,7 +568,6 @@ mod test {
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 0, y: 1 },
                 column: 4,
-                wrap_opp: false,
             }
         );
 
@@ -643,7 +579,6 @@ mod test {
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 4, y: 1 },
                 column: 8,
-                wrap_opp: false,
             }
         );
 
@@ -655,7 +590,6 @@ mod test {
                 logical_pos: Point { x: 0, y: 1 },
                 visual_pos: Point { x: 0, y: 2 },
                 column: 0,
-                wrap_opp: false,
             }
         );
 
@@ -667,7 +601,6 @@ mod test {
                 logical_pos: Point { x: 3, y: 1 },
                 visual_pos: Point { x: 3, y: 2 },
                 column: 3,
-                wrap_opp: false,
             }
         );
     }
@@ -684,7 +617,6 @@ mod test {
                 logical_pos: Point { x: 2, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
                 column: 4,
-                wrap_opp: false,
             }
         );
     }
@@ -720,7 +652,6 @@ mod test {
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
                 column: 4,
-                wrap_opp: true,
             }
         );
 
@@ -732,7 +663,6 @@ mod test {
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 0, y: 1 },
                 column: 4,
-                wrap_opp: false,
             }
         );
 
@@ -744,7 +674,6 @@ mod test {
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 4, y: 1 },
                 column: 8,
-                wrap_opp: false,
             }
         );
 
@@ -756,7 +685,6 @@ mod test {
                 logical_pos: Point { x: 0, y: 1 },
                 visual_pos: Point { x: 0, y: 2 },
                 column: 0,
-                wrap_opp: false,
             }
         );
 
@@ -768,7 +696,6 @@ mod test {
                 logical_pos: Point { x: 3, y: 1 },
                 visual_pos: Point { x: 3, y: 2 },
                 column: 3,
-                wrap_opp: false,
             }
         );
     }
@@ -791,7 +718,6 @@ mod test {
                 logical_pos: Point { x: 3, y: 0 },
                 visual_pos: Point { x: 3, y: 0 },
                 column: 3,
-                wrap_opp: true,
             }
         );
 
@@ -804,7 +730,6 @@ mod test {
                 logical_pos: Point { x: 3, y: 0 },
                 visual_pos: Point { x: 0, y: 1 },
                 column: 3,
-                wrap_opp: false,
             }
         );
 
@@ -820,7 +745,6 @@ mod test {
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 1, y: 1 },
                 column: 4,
-                wrap_opp: false,
             }
         );
 
@@ -833,7 +757,6 @@ mod test {
                 logical_pos: Point { x: 11, y: 0 },
                 visual_pos: Point { x: 8, y: 1 },
                 column: 11,
-                wrap_opp: true,
             }
         );
 
@@ -846,7 +769,6 @@ mod test {
                 logical_pos: Point { x: 15, y: 0 },
                 visual_pos: Point { x: 4, y: 2 },
                 column: 15,
-                wrap_opp: false,
             }
         );
     }
@@ -890,7 +812,6 @@ mod test {
                 logical_pos: Point { x: 3, y: 0 },
                 visual_pos: Point { x: 3, y: 0 },
                 column: 3,
-                wrap_opp: true,
             }
         );
 
@@ -902,7 +823,6 @@ mod test {
                 logical_pos: Point { x: 6, y: 0 },
                 visual_pos: Point { x: 3, y: 1 },
                 column: 6,
-                wrap_opp: false,
             }
         );
 
@@ -914,7 +834,6 @@ mod test {
                 logical_pos: Point { x: 14, y: 0 },
                 visual_pos: Point { x: 3, y: 2 },
                 column: 14,
-                wrap_opp: false,
             }
         );
     }
@@ -935,7 +854,6 @@ mod test {
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 8, y: 0 },
                 column: 8,
-                wrap_opp: true,
             }
         );
 
@@ -947,7 +865,6 @@ mod test {
                 logical_pos: Point { x: 15, y: 0 },
                 visual_pos: Point { x: 7, y: 1 },
                 column: 15,
-                wrap_opp: true,
             }
         );
     }
@@ -988,7 +905,6 @@ mod test {
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 4, y: 0 },
                 column: 4,
-                wrap_opp: true,
             },
         );
 
@@ -1000,7 +916,6 @@ mod test {
                 logical_pos: Point { x: 4, y: 0 },
                 visual_pos: Point { x: 0, y: 1 },
                 column: 4,
-                wrap_opp: false,
             },
         );
 
@@ -1012,7 +927,6 @@ mod test {
                 logical_pos: Point { x: 7, y: 0 },
                 visual_pos: Point { x: 6, y: 1 },
                 column: 10,
-                wrap_opp: true,
             },
         );
     }
@@ -1028,7 +942,6 @@ mod test {
                 logical_pos: Point { x: 3, y: 1 },
                 visual_pos: Point { x: 3, y: 1 },
                 column: 3,
-                wrap_opp: false,
             }
         );
     }
@@ -1048,7 +961,6 @@ mod test {
                 logical_pos: Point { x: 8, y: 0 },
                 visual_pos: Point { x: 2, y: 1 },
                 column: 8,
-                wrap_opp: false,
             }
         );
     }

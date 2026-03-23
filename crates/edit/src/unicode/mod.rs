@@ -5,5 +5,8 @@
 
 mod measurement;
 mod tables;
+mod word;
+mod word_wrap;
 
 pub use measurement::*;
+pub use word::*;

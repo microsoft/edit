@@ -21,7 +21,6 @@
 //! There's no solution for the latter. However, there's a chance that the performance will still be sufficient.
 
 mod gap_buffer;
-mod navigation;
 
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
@@ -46,8 +45,13 @@ use crate::framebuffer::{Framebuffer, IndexedColor};
 use crate::helpers::*;
 use crate::oklab::StraightRgba;
 use crate::simd::memchr2;
-use crate::unicode::{self, Cursor, MeasurementConfig};
+use crate::unicode::{self, MeasurementConfig, word_select};
 use crate::{icu, simd};
+
+/// Stores a position inside a [`TextBuffer`].
+///
+/// Re-exported from [`unicode::Cursor`].
+pub type Cursor = unicode::Cursor;
 
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,
@@ -639,7 +643,8 @@ impl TextBuffer {
                 if self.word_wrap_column > 0 {
                     Default::default()
                 } else {
-                    self.goto_line_start(self.cursor, self.cursor.logical_pos.y)
+                    self.measurement_config(self.cursor)
+                        .goto_logical(Point { x: 0, y: self.cursor.logical_pos.y })
                 },
                 self.cursor.logical_pos,
             );
@@ -1043,7 +1048,7 @@ impl TextBuffer {
 
     /// Select the current word.
     pub fn select_word(&mut self) {
-        let Range { start, end } = navigation::word_select(&self.buffer, self.cursor.offset);
+        let Range { start, end } = word_select(&self.buffer, self.cursor.offset);
         let beg = self.cursor_move_to_offset_internal(self.cursor, start);
         let end = self.cursor_move_to_offset_internal(beg, end);
         unsafe { self.set_cursor(end) };
@@ -1427,238 +1432,37 @@ impl TextBuffer {
         }
     }
 
-    fn measurement_config(&self) -> MeasurementConfig<'_> {
+    fn measurement_config(&self, cursor: Cursor) -> MeasurementConfig<'_> {
         MeasurementConfig::new(&self.buffer)
             .with_word_wrap_column(self.word_wrap_column)
             .with_tab_size(self.tab_size)
+            .with_cursor(cursor)
     }
 
-    fn goto_line_start(&self, cursor: Cursor, y: CoordType) -> Cursor {
-        let mut result = cursor;
-        let mut seek_to_line_start = true;
-
-        if y > result.logical_pos.y {
-            while y > result.logical_pos.y {
-                let chunk = self.read_forward(result.offset);
-                if chunk.is_empty() {
-                    break;
-                }
-
-                let (delta, line) = simd::lines_fwd(chunk, 0, result.logical_pos.y, y);
-                result.offset += delta;
-                result.logical_pos.y = line;
-            }
-
-            // If we're at the end of the buffer, we could either be there because the last
-            // character in the buffer is genuinely a newline, or because the buffer ends in a
-            // line of text without trailing newline. The only way to make sure is to seek
-            // backwards to the line start again. But otherwise we can skip that.
-            seek_to_line_start =
-                result.offset == self.text_length() && result.offset != cursor.offset;
-        }
-
-        if seek_to_line_start {
-            loop {
-                let chunk = self.read_backward(result.offset);
-                if chunk.is_empty() {
-                    break;
-                }
-
-                let (delta, line) = simd::lines_bwd(chunk, chunk.len(), result.logical_pos.y, y);
-                result.offset -= chunk.len() - delta;
-                result.logical_pos.y = line;
-                if delta > 0 {
-                    break;
-                }
-            }
-        }
-
-        if result.offset == cursor.offset {
-            return result;
-        }
-
-        result.logical_pos.x = 0;
-        result.visual_pos.x = 0;
-        result.visual_pos.y = result.logical_pos.y;
-        result.column = 0;
-        result.wrap_opp = false;
-
-        if self.word_wrap_column > 0 {
-            let upward = result.offset < cursor.offset;
-            let (top, bottom) = if upward { (result, cursor) } else { (cursor, result) };
-
-            let mut bottom_remeasured =
-                self.measurement_config().with_cursor(top).goto_logical(bottom.logical_pos);
-
-            // The second problem is that visual positions can be ambiguous. A single logical position
-            // can map to two visual positions: One at the end of the preceding line in front of
-            // a word wrap, and another at the start of the next line after the same word wrap.
-            //
-            // This, however, only applies if we go upwards, because only then `bottom ≅ cursor`,
-            // and thus only then this `bottom` is ambiguous. Otherwise, `bottom ≅ result`
-            // and `result` is at a line start which is never ambiguous.
-            if upward {
-                let a = bottom_remeasured.visual_pos.x;
-                let b = bottom.visual_pos.x;
-                bottom_remeasured.visual_pos.y = bottom_remeasured.visual_pos.y
-                    + (a != 0 && b == 0) as CoordType
-                    - (a == 0 && b != 0) as CoordType;
-            }
-
-            let mut delta = bottom_remeasured.visual_pos.y - top.visual_pos.y;
-            if upward {
-                delta = -delta;
-            }
-
-            result.visual_pos.y = cursor.visual_pos.y + delta;
-        }
-
-        result
+    fn cursor_move_to_offset_internal(&self, cursor: Cursor, offset: usize) -> Cursor {
+        self.measurement_config(cursor).goto_offset(offset)
     }
 
-    fn cursor_move_to_offset_internal(&self, mut cursor: Cursor, offset: usize) -> Cursor {
-        if offset == cursor.offset {
-            return cursor;
-        }
-
-        // goto_line_start() is fast for seeking across lines _if_ line wrapping is disabled.
-        // For backward seeking we have to use it either way, so we're covered there.
-        // This implements the forward seeking portion, if it's approx. worth doing so.
-        if self.word_wrap_column <= 0 && offset.saturating_sub(cursor.offset) > 1024 {
-            // Replacing this with a more optimal, direct memchr() loop appears
-            // to improve performance only marginally by another 2% or so.
-            // Still, it's kind of "meh" looking at how poorly this is implemented...
-            loop {
-                let next = self.goto_line_start(cursor, cursor.logical_pos.y + 1);
-                // Stop when we either ran past the target offset,
-                // or when we hit the end of the buffer and `goto_line_start` backtracked to the line start.
-                if next.offset > offset || next.offset <= cursor.offset {
-                    break;
-                }
-                cursor = next;
-            }
-        }
-
-        while offset < cursor.offset {
-            cursor = self.goto_line_start(cursor, cursor.logical_pos.y - 1);
-        }
-
-        self.measurement_config().with_cursor(cursor).goto_offset(offset)
+    fn cursor_move_to_logical_internal(&self, cursor: Cursor, pos: Point) -> Cursor {
+        self.measurement_config(cursor).goto_logical(pos)
     }
 
-    fn cursor_move_to_logical_internal(&self, mut cursor: Cursor, pos: Point) -> Cursor {
-        let pos = Point { x: pos.x.max(0), y: pos.y.max(0) };
-
-        if pos == cursor.logical_pos {
-            return cursor;
-        }
-
-        // goto_line_start() is the fastest way for seeking across lines. As such we always
-        // use it if the requested `.y` position is different. We still need to use it if the
-        // `.x` position is smaller, but only because `goto_logical()` cannot seek backwards.
-        if pos.y != cursor.logical_pos.y || pos.x < cursor.logical_pos.x {
-            cursor = self.goto_line_start(cursor, pos.y);
-        }
-
-        self.measurement_config().with_cursor(cursor).goto_logical(pos)
-    }
-
-    fn cursor_move_to_visual_internal(&self, mut cursor: Cursor, pos: Point) -> Cursor {
-        let pos = Point { x: pos.x.max(0), y: pos.y.max(0) };
-
-        if pos == cursor.visual_pos {
-            return cursor;
-        }
-
-        if self.word_wrap_column <= 0 {
-            // Identical to the fast-pass in `cursor_move_to_logical_internal()`.
-            if pos.y != cursor.visual_pos.y || pos.x < cursor.visual_pos.x {
-                cursor = self.goto_line_start(cursor, pos.y);
-            }
-        } else {
-            // `goto_visual()` can only seek forward, so we need to seek backward here if needed.
-            // NOTE that this intentionally doesn't use the `Eq` trait of `Point`, because if
-            // `pos.y == cursor.visual_pos.y` we don't need to go to `cursor.logical_pos.y - 1`.
-            while pos.y < cursor.visual_pos.y {
-                cursor = self.goto_line_start(cursor, cursor.logical_pos.y - 1);
-            }
-            if pos.y == cursor.visual_pos.y && pos.x < cursor.visual_pos.x {
-                cursor = self.goto_line_start(cursor, cursor.logical_pos.y);
-            }
-        }
-
-        self.measurement_config().with_cursor(cursor).goto_visual(pos)
+    fn cursor_move_to_visual_internal(&self, cursor: Cursor, pos: Point) -> Cursor {
+        self.measurement_config(cursor).goto_visual(pos)
     }
 
     fn cursor_move_delta_internal(
         &self,
-        mut cursor: Cursor,
+        cursor: Cursor,
         granularity: CursorMovement,
-        mut delta: CoordType,
+        delta: CoordType,
     ) -> Cursor {
-        if delta == 0 {
-            return cursor;
-        }
-
-        let sign = if delta > 0 { 1 } else { -1 };
-
         match granularity {
             CursorMovement::Grapheme => {
-                let start_x = if delta > 0 { 0 } else { CoordType::MAX };
-
-                loop {
-                    let target_x = cursor.logical_pos.x + delta;
-
-                    cursor = self.cursor_move_to_logical_internal(
-                        cursor,
-                        Point { x: target_x, y: cursor.logical_pos.y },
-                    );
-
-                    // We can stop if we ran out of remaining delta
-                    // (or perhaps ran past the goal; in either case the sign would've changed),
-                    // or if we hit the beginning or end of the buffer.
-                    delta = target_x - cursor.logical_pos.x;
-                    if delta.signum() != sign
-                        || (delta < 0 && cursor.offset == 0)
-                        || (delta > 0 && cursor.offset >= self.text_length())
-                    {
-                        break;
-                    }
-
-                    cursor = self.cursor_move_to_logical_internal(
-                        cursor,
-                        Point { x: start_x, y: cursor.logical_pos.y + sign },
-                    );
-
-                    // We crossed a newline which counts for 1 grapheme cluster.
-                    // So, we also need to run the same check again.
-                    delta -= sign;
-                    if delta.signum() != sign
-                        || cursor.offset == 0
-                        || cursor.offset >= self.text_length()
-                    {
-                        break;
-                    }
-                }
+                self.measurement_config(cursor).cursor_move_delta_grapheme(delta)
             }
-            CursorMovement::Word => {
-                let doc = &self.buffer as &dyn ReadableDocument;
-                let mut offset = self.cursor.offset;
-
-                while delta != 0 {
-                    if delta < 0 {
-                        offset = navigation::word_backward(doc, offset);
-                    } else {
-                        offset = navigation::word_forward(doc, offset);
-                    }
-                    delta -= sign;
-                }
-
-                cursor = self.cursor_move_to_offset_internal(cursor, offset);
-            }
+            CursorMovement::Word => self.measurement_config(cursor).cursor_move_delta_word(delta),
         }
-
-        cursor
     }
 
     /// Moves the cursor to the given offset.
@@ -2081,7 +1885,7 @@ impl TextBuffer {
 
         let pos = self.cursor_logical_pos();
         let at = if clipboard.is_line_copy() {
-            self.goto_line_start(self.cursor, pos.y)
+            self.measurement_config(self.cursor).goto_logical(Point { x: 0, y: pos.y })
         } else {
             self.cursor
         };
@@ -2189,7 +1993,9 @@ impl TextBuffer {
                 // because "  a\n  a\n" should give the 3rd line a total indentation of 4.
                 // Assuming your terminal has bracketed paste, this won't be a concern though.
                 // (If it doesn't, use a different terminal.)
-                let line_beg = self.goto_line_start(self.cursor, self.cursor.logical_pos.y);
+                let line_beg = self
+                    .measurement_config(self.cursor)
+                    .goto_logical(Point { x: 0, y: self.cursor.logical_pos.y });
                 let limit = self.cursor.offset;
                 let mut off = line_beg.offset;
                 let mut newline_indentation = 0;
@@ -2306,7 +2112,9 @@ impl TextBuffer {
     /// Returns the logical position of the first character on this line.
     /// Return `.x == 0` if there are no non-whitespace characters.
     pub fn indent_end_logical_pos(&self) -> Point {
-        let cursor = self.goto_line_start(self.cursor, self.cursor.logical_pos.y);
+        let cursor = self
+            .measurement_config(self.cursor)
+            .goto_logical(Point { x: 0, y: self.cursor.logical_pos.y });
         let (chars, _) = self.measure_indent_internal(cursor.offset, CoordType::MAX);
         Point { x: chars, y: cursor.logical_pos.y }
     }
@@ -2619,7 +2427,9 @@ impl TextBuffer {
         // start, because this write may have joined with a word before the initial cursor.
         // See other uses of `word_wrap_cursor_next_line` in this function.
         if self.word_wrap_column > 0 {
-            let safe_start = self.goto_line_start(cursor, cursor.logical_pos.y);
+            let safe_start = self
+                .measurement_config(cursor)
+                .goto_logical(Point { x: 0, y: cursor.logical_pos.y });
             let next_line = self.cursor_move_to_logical_internal(
                 cursor,
                 Point { x: 0, y: cursor.logical_pos.y + 1 },
@@ -2780,7 +2590,8 @@ impl TextBuffer {
             let safe_cursor = if self.word_wrap_column > 0 {
                 // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
                 // This is because the undo/redo operation may have changed the visual position of the cursor.
-                self.goto_line_start(cursor, cursor.logical_pos.y)
+                self.measurement_config(cursor)
+                    .goto_logical(Point { x: 0, y: cursor.logical_pos.y })
             } else {
                 cursor
             };
