@@ -7,6 +7,7 @@ use edit::{buffer, icu};
 
 #[derive(Debug)]
 pub enum Error {
+    SettingsInvalid(&'static str),
     Io(io::Error),
     Icu(icu::Error),
 }

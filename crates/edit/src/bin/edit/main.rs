@@ -8,6 +8,7 @@ mod draw_filepicker;
 mod draw_menubar;
 mod draw_statusbar;
 mod localization;
+mod settings;
 mod state;
 
 use std::borrow::Cow;
@@ -31,6 +32,8 @@ use state::*;
 use stdext::arena::{self, Arena, scratch_arena};
 use stdext::arena_format;
 use stdext::collections::{BString, BVec};
+
+use crate::settings::Settings;
 
 #[cfg(target_pointer_width = "32")]
 const SCRATCH_ARENA_CAPACITY: usize = 128 * MEBI;
@@ -70,6 +73,10 @@ fn run() -> apperr::Result<()> {
     let mut state = State::new()?;
     if handle_args(&mut state)? {
         return Ok(());
+    }
+
+    if let Err(err) = Settings::reload() {
+        state.add_error(err);
     }
 
     // This will reopen stdin if it's redirected (which may fail) and switch

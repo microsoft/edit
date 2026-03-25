@@ -28,6 +28,9 @@ impl From<apperr::Error> for FormatApperr {
 impl std::fmt::Display for FormatApperr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
+            apperr::Error::SettingsInvalid(what) => {
+                write!(f, "{}{}", loc(LocId::SettingsInvalid), what)
+            }
             apperr::Error::Icu(icu::ICU_MISSING_ERROR) => f.write_str(loc(LocId::ErrorIcuMissing)),
             apperr::Error::Icu(ref err) => err.fmt(f),
             apperr::Error::Io(ref err) => err.fmt(f),
@@ -226,6 +229,18 @@ impl State {
             exit: false,
         })
     }
+
+    pub fn add_error(&mut self, err: apperr::Error) -> bool {
+        let msg = format!("{}", FormatApperr::from(err));
+        if msg.is_empty() {
+            return false;
+        }
+
+        self.error_log[self.error_log_index] = msg;
+        self.error_log_index = (self.error_log_index + 1) % self.error_log.len();
+        self.error_log_count = self.error_log.len().min(self.error_log_count + 1);
+        true
+    }
 }
 
 pub fn draw_add_untitled_document(ctx: &mut Context, state: &mut State) {
@@ -235,11 +250,7 @@ pub fn draw_add_untitled_document(ctx: &mut Context, state: &mut State) {
 }
 
 pub fn error_log_add(ctx: &mut Context, state: &mut State, err: apperr::Error) {
-    let msg = format!("{}", FormatApperr::from(err));
-    if !msg.is_empty() {
-        state.error_log[state.error_log_index] = msg;
-        state.error_log_index = (state.error_log_index + 1) % state.error_log.len();
-        state.error_log_count = state.error_log.len().min(state.error_log_count + 1);
+    if state.add_error(err) {
         ctx.needs_rerender();
     }
 }

@@ -352,12 +352,14 @@ impl TextBuffer {
         self.buffer.generation()
     }
 
-    /// Force the buffer to be dirty.
+    /// Force the buffer to be dirty (needs to be saved to disk).
     pub fn mark_as_dirty(&mut self) {
         self.last_save_generation = self.buffer.generation().wrapping_sub(1);
     }
 
-    fn mark_as_clean(&mut self) {
+    /// Force the buffer to be clean (has been saved to disk).
+    /// Use this with caution. It's called automatically on write().
+    pub fn mark_as_clean(&mut self) {
         self.last_save_generation = self.buffer.generation();
     }
 

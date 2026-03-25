@@ -12,6 +12,7 @@ use edit::lsh::{FILE_ASSOCIATIONS, Language, process_file_associations};
 use edit::{path, sys};
 
 use crate::apperr;
+use crate::settings::Settings;
 use crate::state::DisplayablePathBuf;
 
 pub struct Document {
@@ -92,10 +93,14 @@ impl Document {
             return lang;
         }
 
-        if let Some(path) = &self.path
-            && let Some(lang) = process_file_associations(FILE_ASSOCIATIONS, path)
-        {
-            return Some(lang);
+        if let Some(path) = &self.path {
+            let settings = Settings::borrow();
+            if let Some(lang) = process_file_associations(&settings.file_associations, path) {
+                return Some(lang);
+            }
+            if let Some(lang) = process_file_associations(FILE_ASSOCIATIONS, path) {
+                return Some(lang);
+            }
         }
 
         None
