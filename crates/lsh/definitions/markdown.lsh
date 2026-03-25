@@ -1,0 +1,204 @@
+#[display_name = "Markdown"]
+#[path = "**/*.md"]
+pub fn markdown() {
+    // Gobble any leading whitespace on the line.
+    if /\s+/ {
+        yield other;
+    }
+
+    if /#+\s+.*/ {
+        yield markup.heading;
+    } else if />.*/ {
+        yield comment;
+    } else if /```/ {
+        // NOTE: These checks are sorted alphabetically.
+        if /(?i:diff)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    diff();
+                    // diff() may not have eaten that line.
+                    // It doesn't have to. That's our responsibility.
+                    if /.*/ {}
+                }
+            }
+        } else if /(?i:json)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    json();
+                    if /.*/ {}
+                }
+            }
+        } else if /(?i:yaml)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    yaml();
+                    if /.*/ {}
+                }
+            }
+        } else if /(?i:pwsh|powershell)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    powershell();
+                    if /.*/ {}
+                }
+            }
+        } else {
+            loop {
+                await input;
+                if /\s*```.*/ {
+                    return;
+                } else if /.*/ {
+                    // Gobble the rest of the line with no highlighting.
+                }
+            }
+        }
+    } else {
+        if /[\*-]\s+/ {
+            yield markup.list;
+        }
+
+        // The structure of inline emphasis, etc., matchers is
+        // awfully wrong, but parsing Markdown is also awful in general.
+        // In fact I think it's categorically impossible to implement like this,
+        // because it requires lookahead across potentially infinite lines:
+        // The Markdown spec describes its "parsing strategy" as "two phase"
+        // where the first phase segments the document into block structures.
+        // For instance, a `comment` may span multiple lines, _unless_
+        // there's a paragraph break inbetween, e.g. due to a ">" comment.
+        until /$/ {
+            yield other;
+
+            if /\[/ {
+                // Anything inside [...] is a link text and is colored like a string.
+                yield other;
+                if /[^\]]*/ {
+                    yield string;
+
+                    // Now look for the link target in parentheses.
+                    if /\]\(/ {
+                        yield other;
+                        if /[^\s\)]+/ {
+                            yield markup.link;
+                        }
+
+                        if /\s+/ {
+                        }
+
+                        // The link may have a title in quotes.
+                        yield other;
+                        if /"/ {
+                            if /[^"]+/ {
+                            }
+                            if /"/ {
+                                yield string;
+                            }
+                        }
+                    }
+
+                }
+            } else if /__/ {
+                if /_+/ {
+                    // "_____" = no hit
+                } else if /\s+/ {
+                    // "__ foo __" = no hit
+                } else {
+                    until /$/ {
+                        if /\\./ {
+                            // gobble escape char
+                        } else if /[^\s_]+__/ {
+                            yield markup.bold;
+                            break;
+                        } else if /__/ {
+                            break;
+                        }
+                    }
+                }
+            } else if /\*\*/ {
+                if /\s+/ {
+                    // "** foo **" = no hit
+                } else {
+                    until /$/ {
+                        if /\\./ {
+                            // gobble escape char
+                        } else if /[^\s*]+\*\*/ {
+                            yield markup.bold;
+                            break;
+                        } else if /\*\*/ {
+                            break;
+                        }
+                    }
+                }
+            } else if /_/ {
+                if /\s+/ {
+                    // "_ foo _" = no hit
+                } else {
+                    until /$/ {
+                        if /\\./ {
+                            // gobble escape char
+                        } else if /[^\s_]+_/ {
+                            yield markup.italic;
+                            break;
+                        } else if /_/ {
+                            break;
+                        }
+                    }
+                }
+            } else if /\*/ {
+                if /\s+/ {
+                    // "* foo *" = no hit
+                } else {
+                    until /$/ {
+                        if /\\./ {
+                            // gobble escape char
+                        } else if /[^\s*]+\*/ {
+                            yield markup.italic;
+                            break;
+                        } else if /\*/ {
+                            break;
+                        }
+                    }
+                }
+            } else if /~~/ {
+                if /\s+/ {
+                    // "~~ foo ~~" = no hit
+                } else {
+                    until /$/ {
+                        if /\\./ {
+                            // gobble escape char
+                        } else if /[^\s~]+~~/ {
+                            yield markup.strikethrough;
+                            break;
+                        } else if /~~/ {
+                            break;
+                        }
+                    }
+                }
+            } else if /```/ {
+                until /$/ { if /```/ { break; } }
+                yield string;
+            } else if /``/ {
+                until /$/ { if /``/ { break; } }
+                yield string;
+            } else if /`/ {
+                until /$/ { if /`/ { break; } }
+                yield string;
+            } else if /\\./ {
+                // Gobble escape char
+            }
+
+            yield other;
+        }
+    }
+}
