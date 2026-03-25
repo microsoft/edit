@@ -37,7 +37,7 @@ impl HighlighterCache {
     ) -> BVec<'a, Highlight<HighlightKind>> {
         // Do we need to random seek?
         if line != highlighter.logical_pos_y() {
-            // If so, restore the nearest, preceeding checkpoint...
+            // If so, restore the nearest, preceding checkpoint...
             if !self.checkpoints.is_empty() {
                 let n = Self::floor_line_to_offset(line);
                 let n = n.min(self.checkpoints.len() - 1);

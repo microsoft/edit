@@ -60,7 +60,7 @@ impl<'doc> Highlighter<'doc> {
 
     pub fn parse_next_line<'a>(&mut self, arena: &'a Arena) -> BVec<'a, Highlight<HighlightKind>> {
         let scratch = scratch_arena(Some(arena));
-        let (line_beg, line) = self.read_next_line(&scratch);
+        let (line_off, line) = self.read_next_line(&scratch);
 
         // Empty lines can be somewhat common.
         //
@@ -75,7 +75,7 @@ impl<'doc> Highlighter<'doc> {
 
         // Adjust the range to account for the line offset.
         for h in res.iter_mut() {
-            h.start = line_beg + h.start.min(line.len());
+            h.start = line_off + h.start.min(line.len());
         }
 
         res
