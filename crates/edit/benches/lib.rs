@@ -10,6 +10,7 @@ use edit::helpers::*;
 use edit::{buffer, hash, json, oklab, simd, unicode};
 use stdext::arena::{self, scratch_arena};
 use stdext::collections::BVec;
+use stdext::float::parse_f64_approx;
 use stdext::glob;
 use stdext::unicode::Utf8Chars;
 
@@ -134,6 +135,13 @@ fn bench_buffer(c: &mut Criterion) {
         .bench_function(BenchmarkId::new("TextBuffer", "rustcode"), |b| {
             b.iter(bench_text_buffer);
         });
+}
+
+fn bench_float(c: &mut Criterion) {
+    c.benchmark_group("float::parse_f64_approx")
+        .bench_function("123", |b| b.iter(|| parse_f64_approx(black_box(b"123"))))
+        .bench_function("123.456", |b| b.iter(|| parse_f64_approx(black_box(b"123.456"))))
+        .bench_function("123.456e3", |b| b.iter(|| parse_f64_approx(black_box(b"123.456e3"))));
 }
 
 fn bench_glob(c: &mut Criterion) {
@@ -282,6 +290,7 @@ fn bench(c: &mut Criterion) {
     arena::init(128 * MEBI).unwrap();
 
     bench_buffer(c);
+    bench_float(c);
     bench_glob(c);
     bench_hash(c);
     bench_json(c);

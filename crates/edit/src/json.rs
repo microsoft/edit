@@ -213,7 +213,7 @@ impl<'a, 'i> Parser<'a, 'i> {
             self.pos += 1;
         }
 
-        if let Ok(num) = self.input[start..self.pos].parse::<f64>()
+        if let Some(num) = stdext::float::parse_f64_approx(&self.bytes[start..self.pos])
             && num.is_finite()
         {
             Ok(Value::Number(num))
