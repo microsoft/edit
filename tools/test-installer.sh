@@ -37,10 +37,14 @@ run_unit_tests() {
 
   actual="$(cd "$repo_root" && find_local_edit_checkout)"
   assert_eq "$actual" "$repo_root" "find_local_edit_checkout should detect the repository root"
+  is_edit_source_tree "$repo_root" || fail "is_edit_source_tree should accept the repository root"
 
   tmp="$(mktemp -d)"
   if (cd "$tmp" && find_local_edit_checkout >/dev/null 2>&1); then
     fail "find_local_edit_checkout should reject unrelated repositories"
+  fi
+  if is_edit_source_tree "$tmp"; then
+    fail "is_edit_source_tree should reject unrelated repositories"
   fi
   rm -rf "$tmp"
 

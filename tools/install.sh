@@ -133,14 +133,20 @@ try_install_pkgs() {
   return "$rc"
 }
 
-find_local_edit_checkout() {
-  local root
-  root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+is_edit_source_tree() {
+  local root="$1"
   [ -n "$root" ] || return 1
   [ -f "$root/Cargo.toml" ] || return 1
   [ -f "$root/crates/edit/Cargo.toml" ] || return 1
   [ -f "$root/i18n/edit.toml" ] || return 1
-  grep -q '^name = "edit"$' "$root/crates/edit/Cargo.toml" || return 1
+  grep -q '^name = "edit"$' "$root/crates/edit/Cargo.toml"
+}
+
+find_local_edit_checkout() {
+  local root
+  root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$root" ] || return 1
+  is_edit_source_tree "$root" || return 1
   printf '%s' "$root"
 }
 
@@ -424,6 +430,7 @@ install_rust() {
 # -------- Build & install --------
 build_and_install() {
   : "${EDIT_FORCE_WRAPPER:=0}"          # 1 = force user wrapper even with sudo
+  : "${EDIT_SOURCE_DIR:=}"              # trusted local source tree override
   : "${EDIT_SOURCE_URL:=https://github.com/microsoft/edit.git}"  # allow testing forks
   : "${EDIT_SOURCE_REF:=}"
 
@@ -442,8 +449,18 @@ build_and_install() {
   }
   trap _cleanup EXIT
 
-  LOCAL_CHECKOUT="$(find_local_edit_checkout || true)"
+  LOCAL_CHECKOUT="${EDIT_SOURCE_DIR:-}"
   if [ -n "$LOCAL_CHECKOUT" ]; then
+    is_edit_source_tree "$LOCAL_CHECKOUT" || die "EDIT_SOURCE_DIR is not a valid edit source tree: $LOCAL_CHECKOUT"
+    SRC_DIR="$LOCAL_CHECKOUT"
+    log "Using explicit edit source tree at $SRC_DIR"
+  else
+    LOCAL_CHECKOUT="$(find_local_edit_checkout || true)"
+  fi
+
+  if [ -n "${SRC_DIR:-}" ]; then
+    :
+  elif [ -n "$LOCAL_CHECKOUT" ]; then
     SRC_DIR="$LOCAL_CHECKOUT"
     log "Using existing edit checkout at $SRC_DIR"
   else

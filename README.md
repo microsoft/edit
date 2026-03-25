@@ -29,31 +29,9 @@ You can uninstall via:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/microsoft/edit/main/tools/uninstall.sh | bash
 ```
-To target a specific branch, tag, or commit instead, set `EDIT_SOURCE_REF`.
-<!-- 
+<!-- To target a specific branch, tag, or commit instead, set `EDIT_SOURCE_REF`. -->
 
-Before this becomes live, these can be used instead.
-
-
-To to this directory:
-```sh
-git clone git@github.com:microsoft/edit.git
-cd edit
-```
-
-Then from there:
-
-To install:
-```sh
-curl -fsSL file://"$PWD/tools/install.sh" | bash
-``` 
-
-To uninstall:
-```sh
-sudo ./tools/uninstall.sh
-```
-
--->
+The source installer is continuously tested on Ubuntu, Fedora, Arch Linux, and openSUSE Tumbleweed. Other Linux distributions are best-effort and may require manual dependency installation.
 
 ## Build Instructions
 
