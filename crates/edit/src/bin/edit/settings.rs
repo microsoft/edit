@@ -104,7 +104,7 @@ fn config_dir() -> Option<PathBuf> {
 
     #[cfg(target_os = "windows")]
     {
-        var_path("APPDATA").map(|p| push(p, "Microsoft/Edit"))
+        var_path("APPDATA").map(|p| push(p, "Microsoft\\Edit"))
     }
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
