@@ -46,3 +46,22 @@ jobs:
         run: cargo test --all-features --all-targets
       - name: Run clippy
         run: cargo clippy --all-features --all-targets -- --no-deps --deny warnings
+
+  installer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install Rust
+        run: rustup toolchain install nightly --no-self-update --profile minimal --component rust-src
+      - name: Run installer tests
+        run: bash tools/test-installer.sh

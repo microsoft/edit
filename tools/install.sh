@@ -152,6 +152,47 @@ git_latest_release_tag() {
     | tail -n1
 }
 
+is_local_git_source() {
+  local source_url="$1"
+  case "$source_url" in
+    file://*) return 0 ;;
+  esac
+  [ -e "$source_url" ]
+}
+
+looks_like_commit_ref() {
+  [[ "$1" =~ ^[0-9a-fA-F]{7,40}$ ]]
+}
+
+git_clone_source() {
+  local source_url="$1" source_ref="$2" dest="$3"
+  export GIT_TERMINAL_PROMPT=0
+
+  if looks_like_commit_ref "$source_ref"; then
+    git clone "$source_url" "$dest"
+    (cd "$dest" && git checkout --detach "$source_ref")
+    return 0
+  fi
+
+  if is_local_git_source "$source_url"; then
+    if [ -n "$source_ref" ]; then
+      git clone --branch "$source_ref" "$source_url" "$dest"
+    else
+      git clone "$source_url" "$dest"
+    fi
+    return 0
+  fi
+
+  if [ -n "$source_ref" ]; then
+    git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
+      clone --filter=blob:none --depth=1 --branch "$source_ref" \
+      "$source_url" "$dest"
+  else
+    git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
+      clone --filter=blob:none --depth=1 "$source_url" "$dest"
+  fi
+}
+
 nightly_uses_real_immediate_abort() {
   local cargo_bin="$1"
   local version major rest minor
@@ -237,10 +278,20 @@ find_icu_libdir_for() {
     p="$(ldconfig -p 2>/dev/null | awk '/'"$stem"'\.so\./{print $NF}' | sort -V | tail -1 || true)"
     [ -n "$p" ] && { dirname -- "$p"; return 0; }
   fi
-  local d
+  local d latest candidate
+  local -a matches=()
+  shopt -s nullglob
   for d in /usr/local/lib /usr/local/lib64 /usr/lib /usr/lib64 /lib /lib64 /usr/lib/*-linux-gnu /lib/*-linux-gnu /usr/lib32; do
-    ls "$d/$stem.so."* >/dev/null 2>&1 && { printf '%s' "$d"; return 0; }
+    for candidate in "$d/$stem.so."*; do
+      matches+=("$candidate")
+    done
   done
+  shopt -u nullglob
+  if [ "${#matches[@]}" -ne 0 ]; then
+    latest="$(printf '%s\n' "${matches[@]}" | sort -V | tail -1)"
+    dirname -- "$latest"
+    return 0
+  fi
   printf ''
 }
 
@@ -256,17 +307,54 @@ build_icu_ldpath() {
 }
 
 # Create unversioned symlinks system-wide if allowed; return 0 on success, 1 otherwise.
+find_latest_icu_lib_in_dirs() {
+  local lib="$1" search_dirs="$2" latest candidate dir
+  local -a matches=()
+  [ -n "$search_dirs" ] || return 1
+  local old_ifs="$IFS"
+  IFS=:
+  for dir in $search_dirs; do
+    [ -n "$dir" ] || continue
+    shopt -s nullglob
+    for candidate in "$dir/$lib.so."*; do
+      matches+=("$candidate")
+    done
+    shopt -u nullglob
+  done
+  IFS="$old_ifs"
+  [ "${#matches[@]}" -ne 0 ] || return 1
+  latest="$(printf '%s\n' "${matches[@]}" | sort -V | tail -1)"
+  printf '%s' "$latest"
+}
+
+icu_has_unversioned_lib_in_dirs() {
+  local lib="$1" search_dirs="$2" dir
+  [ -e "/usr/local/lib/$lib.so" ] && return 0
+  [ -n "$search_dirs" ] || return 1
+  local old_ifs="$IFS"
+  IFS=:
+  for dir in $search_dirs; do
+    if [ -e "$dir/$lib.so" ]; then
+      IFS="$old_ifs"
+      return 0
+    fi
+  done
+  IFS="$old_ifs"
+  return 1
+}
+
+# Create unversioned symlinks system-wide if allowed; return 0 on success, 1 otherwise.
 ensure_system_icu_symlinks() {
-  local icudir="$1" ok_all=0
-  [ -n "$icudir" ] || return 1
+  local icu_dirs="$1" ok_all=0
+  [ -n "$icu_dirs" ] || return 1
   for lib in libicuuc libicui18n libicudata; do
     # Already present?
-    if [ -e "$icudir/$lib.so" ] || [ -e "/usr/local/lib/$lib.so" ]; then
+    if icu_has_unversioned_lib_in_dirs "$lib" "$icu_dirs"; then
       continue
     fi
     # Find latest version
     local latest target
-    latest="$(ls "$icudir/$lib.so."* 2>/dev/null | sort -V | tail -1 || true)"
+    latest="$(find_latest_icu_lib_in_dirs "$lib" "$icu_dirs" || true)"
     if [ -n "$latest" ]; then
       if [ "$HAVE_ROOT" -eq 1 ]; then
         log "Creating unversioned symlink for $lib → $latest"
@@ -373,20 +461,7 @@ build_and_install() {
       fi
     fi
     log "Cloning $EDIT_SOURCE_URL into $SRC_DIR"
-    export GIT_TERMINAL_PROMPT=0
-    if [ -n "$SOURCE_REF" ]; then
-      git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
-        clone --filter=blob:none --depth=1 --branch "$SOURCE_REF" \
-        "$EDIT_SOURCE_URL" "$SRC_DIR" || {
-          log "Ref not a branch/tag; doing full clone to fetch commit"
-          git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
-            clone --filter=blob:none "$EDIT_SOURCE_URL" "$SRC_DIR"
-          (cd "$SRC_DIR" && git checkout --detach "$SOURCE_REF")
-        }
-    else
-      git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
-        clone --filter=blob:none --depth=1 "$EDIT_SOURCE_URL" "$SRC_DIR"
-    fi
+    git_clone_source "$EDIT_SOURCE_URL" "$SOURCE_REF" "$SRC_DIR"
   fi
 
   check_build_tools
@@ -419,7 +494,7 @@ build_and_install() {
   local DEST_USER="${EDIT_USER_PREFIX:-$HOME/.local}/bin"
   local SYSTEM_MANIFEST="${EDIT_PREFIX:-/usr/local}/share/edit/install-manifest"
   local USER_MANIFEST="${EDIT_USER_PREFIX:-$HOME/.local}/share/edit/install-manifest"
-  local OUT_BIN="" WRAPPER_NEEDED=0 ICU_DIR="" ICU_DIR_FIRST=""
+  local OUT_BIN="" WRAPPER_NEEDED=0 ICU_DIR=""
   local -a MANIFEST_ENTRIES=()
 
   # Prefer build.rs artifact if present, else fall back to shell discovery
@@ -435,15 +510,12 @@ build_and_install() {
 
   if [ -z "$ICU_DIR" ]; then
     warn "ICU libraries not found; install ICU dev/runtime packages. Proceeding; wrapper will not help."
-  else
-    # First dir for symlink shim; keep full list for LD_LIBRARY_PATH wrappers
-    ICU_DIR_FIRST="${ICU_DIR%%:*}"
   fi
 
 
   # Try to make system-wide ICU symlinks if we can
-  if [ "$HAVE_ROOT" -eq 1 ] && [ -n "$ICU_DIR_FIRST" ]; then
-    if ensure_system_icu_symlinks "$ICU_DIR_FIRST"; then
+  if [ "$HAVE_ROOT" -eq 1 ] && [ -n "$ICU_DIR" ]; then
+    if ensure_system_icu_symlinks "$ICU_DIR"; then
       log "System ICU symlinks OK."
     else
       warn "Could not create system ICU symlinks; will use user wrapper if installing locally."
@@ -458,7 +530,7 @@ build_and_install() {
   fi
 
   local DEST_SYS_DIR; DEST_SYS_DIR="$(dirname "$DEST_SYS")"
-  if [ "$HAVE_ROOT" -eq 1 ] && run_root sh -lc "test -w '$DEST_SYS_DIR' -a -d '$DEST_SYS_DIR'"; then
+  if [ "$HAVE_ROOT" -eq 1 ] && run_root test -w "$DEST_SYS_DIR" -a -d "$DEST_SYS_DIR"; then
     log "Installing to $DEST_SYS"
     if [ "$WRAPPER_NEEDED" -eq 1 ] && [ -n "$ICU_DIR" ]; then
       # Could not install the system-wide ICU shim; use a system-wide wrapper
@@ -542,4 +614,7 @@ main() {
   build_and_install
   log "Done. Run:  edit    (alias: msedit)"
 }
-main "$@"
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
