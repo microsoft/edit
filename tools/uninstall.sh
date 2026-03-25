@@ -5,6 +5,8 @@ umask 022
 log(){ printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn(){ printf '\033[1;33m!!\033[0m %s\n' "$*"; }
 is_root(){ [ "${EUID:-$(id -u)}" -eq 0 ]; }
+: "${EDIT_PREFIX:=/usr/local}"
+: "${EDIT_USER_PREFIX:=$HOME/.local}"
 
 # ----- args -----
 MODE="all"   # all | user | system
@@ -60,12 +62,35 @@ run_rm_root() {
   fi
 }
 
+remove_manifest_entries() {
+  local manifest="$1" use_root="$2"
+  [ -f "$manifest" ] || return 1
+
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if [ "$use_root" -eq 1 ]; then
+      run_rm_root "$path"
+    else
+      run_rm "$path"
+    fi
+  done < "$manifest"
+
+  if [ "$use_root" -eq 1 ]; then
+    run_rm_root "$manifest"
+  else
+    run_rm "$manifest"
+  fi
+}
+
 # ----- user-local -----
 if [ "$MODE" = "all" ] || [ "$MODE" = "user" ]; then
   log "Removing user-local binaries"
-  run_rm "$HOME/.local/bin/edit" \
-         "$HOME/.local/bin/msedit" \
-         "$HOME/.local/bin/.edit-real"
+  if ! remove_manifest_entries "$EDIT_USER_PREFIX/share/edit/install-manifest" 0; then
+    warn "No user install manifest found; falling back to legacy path cleanup"
+    run_rm "$EDIT_USER_PREFIX/bin/edit" \
+           "$EDIT_USER_PREFIX/bin/msedit" \
+           "$EDIT_USER_PREFIX/bin/.edit-real"
+  fi
 fi
 
 # ----- system-wide -----
@@ -74,15 +99,11 @@ if [ "$MODE" = "all" ] || [ "$MODE" = "system" ]; then
     warn "Skipping system-wide removal: need root, sudo, or doas"
   else
     log "Removing system-wide binaries"
-    run_rm_root /usr/local/bin/edit /usr/local/bin/msedit
-    run_rm_root /usr/local/libexec/edit-real
-
-    log "Removing ICU helper symlinks (if we created them)"
-    for lib in libicuuc libicui18n libicudata; do
-      if [ -L "/usr/local/lib/$lib.so" ]; then
-        run_rm_root "/usr/local/lib/$lib.so"
-      fi
-    done
+    if ! remove_manifest_entries "$EDIT_PREFIX/share/edit/install-manifest" 1; then
+      warn "No system install manifest found; falling back to legacy binary cleanup only"
+      run_rm_root "$EDIT_PREFIX/bin/edit" "$EDIT_PREFIX/bin/msedit"
+      run_rm_root "$EDIT_PREFIX/libexec/edit-real"
+    fi
 
     if command -v ldconfig >/dev/null 2>&1; then
       if [ "$DRYRUN" -eq 1 ]; then

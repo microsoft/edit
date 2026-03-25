@@ -21,7 +21,7 @@ winget install Microsoft.Edit
 
 ### Linux
 
-You can install the latest version by pasting this into the linux terminal:
+You can install the latest tagged release by pasting this into the Linux terminal:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/microsoft/edit/main/tools/install.sh | bash
 ```
@@ -29,6 +29,7 @@ You can uninstall via:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/microsoft/edit/main/tools/uninstall.sh | bash
 ```
+To target a specific branch, tag, or commit instead, set `EDIT_SOURCE_REF`.
 <!-- 
 
 Before this becomes live, these can be used instead.

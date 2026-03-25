@@ -33,8 +33,11 @@ run_root() {
   fi
 }
 
+: "${EDIT_ALLOW_ELEVATION:=1}"
+declare -a CREATED_ICU_LINKS=()
+
 SUDO=""
-if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+if [ "${EDIT_ALLOW_ELEVATION}" = "1" ] && [ "${EUID:-$(id -u)}" -ne 0 ]; then
   if need_cmd sudo; then SUDO="sudo"
   elif need_cmd doas; then SUDO="doas"
   else SUDO=""
@@ -122,6 +125,108 @@ install_pkgs() {
   esac
 }
 
+try_install_pkgs() {
+  set +e
+  install_pkgs
+  local rc=$?
+  set -e
+  return "$rc"
+}
+
+find_local_edit_checkout() {
+  local root
+  root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$root" ] || return 1
+  [ -f "$root/Cargo.toml" ] || return 1
+  [ -f "$root/crates/edit/Cargo.toml" ] || return 1
+  [ -f "$root/i18n/edit.toml" ] || return 1
+  grep -q '^name = "edit"$' "$root/crates/edit/Cargo.toml" || return 1
+  printf '%s' "$root"
+}
+
+git_latest_release_tag() {
+  local source_url="$1"
+  git ls-remote --tags --refs "$source_url" 'v*' 2>/dev/null \
+    | awk '{sub("refs/tags/", "", $2); print $2}' \
+    | sort -V \
+    | tail -n1
+}
+
+nightly_uses_real_immediate_abort() {
+  local cargo_bin="$1"
+  local version major rest minor
+  version="$("$cargo_bin" +nightly -V 2>/dev/null | awk '{print $2}')"
+  major="${version%%.*}"
+  rest="${version#*.}"
+  minor="${rest%%.*}"
+
+  case "$major:$minor" in
+    ''|*[!0-9:]*)
+      return 0
+      ;;
+    *)
+      if [ "$major" -gt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -ge 91 ]; }; then
+        return 0
+      else
+        return 1
+      fi
+      ;;
+  esac
+}
+
+write_release_nightly_compat_config() {
+  local path="$1"
+  cat > "$path" <<'EOF'
+[profile.release]
+panic = "immediate-abort"
+
+[unstable]
+panic-immediate-abort = true
+build-std = ["std", "panic_abort"]
+EOF
+}
+
+select_release_config() {
+  local src_dir="$1" cargo_bin="$2" compat_path="$3"
+  if nightly_uses_real_immediate_abort "$cargo_bin"; then
+    if [ -f "$src_dir/.cargo/release-nightly.toml" ]; then
+      printf '%s' ".cargo/release-nightly.toml"
+    else
+      write_release_nightly_compat_config "$compat_path"
+      printf '%s' "$compat_path"
+    fi
+  else
+    printf '%s' ".cargo/release.toml"
+  fi
+}
+
+check_build_tools() {
+  local missing=()
+  if ! need_cmd cc && ! need_cmd gcc; then
+    missing+=("cc/gcc")
+  fi
+  if ! need_cmd pkg-config && ! need_cmd pkgconf; then
+    missing+=("pkg-config/pkgconf")
+  fi
+  if [ "${#missing[@]}" -ne 0 ]; then
+    die "Missing build prerequisites: ${missing[*]}. Install dependencies first or rerun without EDIT_SKIP_DEPS=1."
+  fi
+}
+
+write_manifest() {
+  local manifest_path="$1" use_root="$2"
+  shift 2
+  local tmp
+  tmp="$(mktemp)"
+  printf '%s\n' "$@" > "$tmp"
+  if [ "$use_root" -eq 1 ]; then
+    run_root install -Dm644 "$tmp" "$manifest_path"
+  else
+    install -Dm644 "$tmp" "$manifest_path"
+  fi
+  rm -f "$tmp"
+}
+
 
 # -------- ICU discovery helpers --------
 # Return the directory containing the newest versioned lib for a given stem, or empty.
@@ -160,7 +265,7 @@ ensure_system_icu_symlinks() {
       continue
     fi
     # Find latest version
-    local latest
+    local latest target
     latest="$(ls "$icudir/$lib.so."* 2>/dev/null | sort -V | tail -1 || true)"
     if [ -n "$latest" ]; then
       if [ "$HAVE_ROOT" -eq 1 ]; then
@@ -168,6 +273,7 @@ ensure_system_icu_symlinks() {
         target="$(readlink -f "$latest" 2>/dev/null || echo "$latest")"
         run_root install -d -m 0755 /usr/local/lib
         run_root ln -sf "$target" "/usr/local/lib/$lib.so"
+        CREATED_ICU_LINKS+=("/usr/local/lib/$lib.so")
         if need_cmd ldconfig && [ -z "${_EDIT_LDCONFIG_DONE:-}" ]; then
           run_root ldconfig; _EDIT_LDCONFIG_DONE=1
         fi
@@ -201,6 +307,7 @@ install_rust() {
   export CARGO_HOME RUSTUP_HOME
   export RUSTUP_INIT_SKIP_PATH_CHECK=yes
   if ! need_cmd rustup; then
+    need_cmd curl || die "curl is required to install rustup"
     log "Installing Rust (rustup)"
     curl --proto '=https' --tlsv1.2 --retry 5 --retry-delay 2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
   fi
@@ -218,9 +325,6 @@ install_rust() {
     rustup toolchain install nightly --no-self-update --profile minimal --component rust-src
   fi
 
-  # Keep stable default (optional)
-  rustup default stable >/dev/null 2>&1 || true
-
   # final check: ensure '+nightly' actually resolves
   if ! "$HOME/.cargo/bin/cargo" +nightly -V >/dev/null 2>&1; then
     warn "cargo (+nightly) resolution failed; diagnostics:"
@@ -233,33 +337,51 @@ install_rust() {
 build_and_install() {
   : "${EDIT_FORCE_WRAPPER:=0}"          # 1 = force user wrapper even with sudo
   : "${EDIT_SOURCE_URL:=https://github.com/microsoft/edit.git}"  # allow testing forks
+  : "${EDIT_SOURCE_REF:=}"
 
   local SRC_DIR
   local CLEANUP=0
+  local LOCAL_CHECKOUT=""
+  local TEMP_RELEASE_CONFIG=""
   _cleanup() {
     # safe under `set -u`
     if [ "${CLEANUP:-0}" -eq 1 ] && [ -n "${SRC_DIR:-}" ]; then
       rm -rf "$SRC_DIR"
     fi
+    if [ -n "${TEMP_RELEASE_CONFIG:-}" ] && [ -f "${TEMP_RELEASE_CONFIG:-}" ]; then
+      rm -f "$TEMP_RELEASE_CONFIG"
+    fi
   }
   trap _cleanup EXIT
 
-  if [ -d .git ] && [ -f Cargo.toml ]; then
-    SRC_DIR="$(pwd)"
+  LOCAL_CHECKOUT="$(find_local_edit_checkout || true)"
+  if [ -n "$LOCAL_CHECKOUT" ]; then
+    SRC_DIR="$LOCAL_CHECKOUT"
+    log "Using existing edit checkout at $SRC_DIR"
   else
+    local SOURCE_REF="${EDIT_SOURCE_REF:-}"
+    need_cmd git || die "git is required to clone the source"
     SRC_DIR="$(mktemp -d)"
     CLEANUP=1
-    log "Cloning microsoft/edit into $SRC_DIR"
-    : "${EDIT_SOURCE_REF:=}"   # can be a tag, branch, or commit SHA
+    if [ -z "$SOURCE_REF" ]; then
+      SOURCE_REF="$(git_latest_release_tag "$EDIT_SOURCE_URL" || true)"
+      if [ -n "$SOURCE_REF" ]; then
+        log "Using latest release tag: $SOURCE_REF"
+      else
+        SOURCE_REF="main"
+        warn "Could not determine the latest release tag; falling back to $SOURCE_REF"
+      fi
+    fi
+    log "Cloning $EDIT_SOURCE_URL into $SRC_DIR"
     export GIT_TERMINAL_PROMPT=0
-    if [ -n "${EDIT_SOURCE_REF:-}" ]; then
+    if [ -n "$SOURCE_REF" ]; then
       git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
-        clone --filter=blob:none --depth=1 --branch "$EDIT_SOURCE_REF" \
+        clone --filter=blob:none --depth=1 --branch "$SOURCE_REF" \
         "$EDIT_SOURCE_URL" "$SRC_DIR" || {
           log "Ref not a branch/tag; doing full clone to fetch commit"
           git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
             clone --filter=blob:none "$EDIT_SOURCE_URL" "$SRC_DIR"
-          (cd "$SRC_DIR" && git checkout --detach "$EDIT_SOURCE_REF")
+          (cd "$SRC_DIR" && git checkout --detach "$SOURCE_REF")
         }
     else
       git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 \
@@ -267,19 +389,38 @@ build_and_install() {
     fi
   fi
 
+  check_build_tools
+
   log "Building Edit (release)"
   local CARGO_BIN="${HOME}/.cargo/bin/cargo"
   [ -x "$CARGO_BIN" ] || CARGO_BIN="$(command -v cargo || true)"
   [ -x "$CARGO_BIN" ] || die "cargo not found"
+  TEMP_RELEASE_CONFIG="$(mktemp)"
+  local RELEASE_CONFIG
+  RELEASE_CONFIG="$(select_release_config "$SRC_DIR" "$CARGO_BIN" "$TEMP_RELEASE_CONFIG")"
+  if [ "$RELEASE_CONFIG" = "$TEMP_RELEASE_CONFIG" ]; then
+    log "Using compatibility release config for current nightly"
+  else
+    rm -f "$TEMP_RELEASE_CONFIG"
+    TEMP_RELEASE_CONFIG=""
+    log "Using release config: $RELEASE_CONFIG"
+  fi
+  local -a BUILD_ARGS=()
+  if [ -f "$SRC_DIR/crates/edit/Cargo.toml" ]; then
+    BUILD_ARGS=(-p edit)
+  fi
   (cd "$SRC_DIR" && RUSTC_BOOTSTRAP=1 "$CARGO_BIN" +nightly \
-    build --config .cargo/release.toml --release ${EDIT_CARGO_ARGS:-})
+    build "${BUILD_ARGS[@]}" --config "$RELEASE_CONFIG" --release ${EDIT_CARGO_ARGS:-})
 
   local BIN="$SRC_DIR/target/release/edit"
   [ -x "$BIN" ] || die "Build failed: $BIN not found"
 
   local DEST_SYS="${EDIT_PREFIX:-/usr/local}/bin"
   local DEST_USER="${EDIT_USER_PREFIX:-$HOME/.local}/bin"
+  local SYSTEM_MANIFEST="${EDIT_PREFIX:-/usr/local}/share/edit/install-manifest"
+  local USER_MANIFEST="${EDIT_USER_PREFIX:-$HOME/.local}/share/edit/install-manifest"
   local OUT_BIN="" WRAPPER_NEEDED=0 ICU_DIR="" ICU_DIR_FIRST=""
+  local -a MANIFEST_ENTRIES=()
 
   # Prefer build.rs artifact if present, else fall back to shell discovery
   local LDPATH_FILE=""
@@ -332,12 +473,18 @@ EOF
 chmod +x '$DEST_SYS/edit'"
       run_root ln -sf "$DEST_SYS/edit" "$DEST_SYS/msedit"
       OUT_BIN="$DEST_SYS/edit"
+      MANIFEST_ENTRIES+=("${EDIT_PREFIX:-/usr/local}/libexec/edit-real")
     else
       # Normal case: direct binary install (symlink shim present or not needed)
       run_root install -Dm755 "$BIN" "$DEST_SYS/edit"
       run_root ln -sf "$DEST_SYS/edit" "$DEST_SYS/msedit"
       OUT_BIN="$DEST_SYS/edit"
     fi
+    MANIFEST_ENTRIES+=("$DEST_SYS/edit" "$DEST_SYS/msedit")
+    if [ "${#CREATED_ICU_LINKS[@]}" -ne 0 ]; then
+      MANIFEST_ENTRIES+=("${CREATED_ICU_LINKS[@]}")
+    fi
+    write_manifest "$SYSTEM_MANIFEST" 1 "${MANIFEST_ENTRIES[@]}"
   else
     mkdir -p "$DEST_USER"
     if [ "$WRAPPER_NEEDED" -eq 1 ] && [ -n "$ICU_DIR" ]; then
@@ -346,12 +493,15 @@ chmod +x '$DEST_SYS/edit'"
       install_user_wrapper "$DEST_USER/.edit-real" "$ICU_DIR" "$DEST_USER/edit"
       ln -sf "$DEST_USER/edit" "$DEST_USER/msedit"
       OUT_BIN="$DEST_USER/edit"
+      MANIFEST_ENTRIES+=("$DEST_USER/.edit-real")
     else
       log "Installing to $DEST_USER (no sudo)"
       install -Dm755 "$BIN" "$DEST_USER/edit"
       ln -sf "$DEST_USER/edit" "$DEST_USER/msedit"
       OUT_BIN="$DEST_USER/edit"
     fi
+    MANIFEST_ENTRIES+=("$DEST_USER/edit" "$DEST_USER/msedit")
+    write_manifest "$USER_MANIFEST" 0 "${MANIFEST_ENTRIES[@]}"
     if ! printf '%s' "$PATH" | tr ':' '\n' | grep -qx "$DEST_USER"; then
       warn "Add $DEST_USER to your PATH to run 'edit' globally."
     fi
@@ -361,11 +511,7 @@ chmod +x '$DEST_SYS/edit'"
   trap - EXIT
 
   log "Installed: $OUT_BIN"
-  if [ -n "$OUT_BIN" ]; then
-    log "Version: $("$OUT_BIN" --version 2>/dev/null || true)"
-  else
-    log "Version: $(edit --version 2>/dev/null || true)"
-  fi
+  log "Launch it in a terminal with: ${OUT_BIN:-edit}"
 
   # PATH check hint
   if [ -n "$OUT_BIN" ]; then
@@ -379,11 +525,14 @@ chmod +x '$DEST_SYS/edit'"
 main() {
   if [ "${EDIT_SKIP_DEPS:-0}" != "1" ]; then
     log "Installing dependencies"
-    install_pkgs
+    if ! try_install_pkgs; then
+      warn "Dependency installation failed or was skipped."
+      warn "Continuing with existing tools; the build will fail if prerequisites are still missing."
+    fi
   else
     log "Skipping dependency installation (EDIT_SKIP_DEPS=1)"
     need_cmd curl || die "curl is required when EDIT_SKIP_DEPS=1"
-    if [ ! -d .git ] || [ ! -f Cargo.toml ]; then
+    if [ -z "$(find_local_edit_checkout || true)" ]; then
       need_cmd git || die "git is required to clone the source when EDIT_SKIP_DEPS=1"
     fi
   fi
