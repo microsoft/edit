@@ -1,6 +1,12 @@
 #[display_name = "Markdown"]
 #[path = "**/*.md"]
 pub fn markdown() {
+    // Any lines that start with a tab or 4+ spaces are code blocks.
+    if /(?:\t|    ).*/ {
+        yield other;
+        return;
+    }
+
     // Gobble any leading whitespace on the line.
     if /\s+/ {
         yield other;
