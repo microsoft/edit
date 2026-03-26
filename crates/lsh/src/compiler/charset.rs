@@ -62,6 +62,11 @@ impl Charset {
         let end_word = end / WORD_BITS;
         let end_bit = end % WORD_BITS;
 
+        // Save the bits above end_bit in the last word before we overwrite it
+        let shift = end_bit + 1;
+        let tail_mask = if shift < WORD_BITS { usize::MAX << shift } else { 0 };
+        let saved_tail = self.bits[end_word] & tail_mask;
+
         // Write the starting bits of the first word
         let mask = usize::MAX << start_bit;
         self.bits[start_word] =
@@ -74,11 +79,8 @@ impl Charset {
             word += 1;
         }
 
-        // Fix the trailing bits of the last word we wrote above
-        let shift = end_bit + 1;
-        let mask = if shift < WORD_BITS { usize::MAX << shift } else { 0 };
-        self.bits[end_word] =
-            if value { self.bits[end_word] & !mask } else { self.bits[end_word] | mask };
+        // Restore the trailing bits of the last word
+        self.bits[end_word] = (self.bits[end_word] & !tail_mask) | saved_tail;
     }
 
     pub fn merge(&mut self, other: &Charset) {
@@ -196,6 +198,26 @@ mod tests {
             for i in 0u8..=255 {
                 assert_eq!(cs.get(i), range.contains(&i), "range {range:?}, bit {i}");
             }
+        }
+    }
+
+    #[test]
+    fn set_range_overlapping() {
+        // Two single-bit ranges in the same word must not clobber each other.
+        let mut cs = Charset::no();
+        cs.set_range(b'e'..=b'e', true);
+        cs.set_range(b'E'..=b'E', true);
+        for i in 0u8..=255 {
+            assert_eq!(cs.get(i), i == b'e' || i == b'E', "bit {i}");
+        }
+
+        // A wide range must not destroy bits set earlier outside it.
+        let mut cs = Charset::no();
+        cs.set_range(0..=0, true);
+        cs.set_range(255..=255, true);
+        cs.set_range(10..=245, true);
+        for i in 0u8..=255 {
+            assert_eq!(cs.get(i), i == 0 || (10..=245).contains(&i) || i == 255, "bit {i}");
         }
     }
 }
