@@ -109,6 +109,14 @@ enum Regex {
     Dot,
 }
 
+enum Atom {
+    Empty,
+    Meta(char),
+    Char(char),
+    WordEnd,
+    Class(Charset),
+}
+
 struct RegexParser<'a> {
     input: &'a str,
     pos: usize,
@@ -132,8 +140,12 @@ impl<'a> RegexParser<'a> {
         Ok(result)
     }
 
+    fn rest(&self) -> &'a str {
+        &self.input[self.pos..]
+    }
+
     fn peek(&self) -> Option<char> {
-        self.input[self.pos..].chars().next()
+        self.rest().chars().next()
     }
 
     fn advance(&mut self) -> Option<char> {
@@ -186,7 +198,7 @@ impl<'a> RegexParser<'a> {
 
     /// a?, a*, a+, a{n,m}
     fn parse_quantified(&mut self) -> Result<Regex, String> {
-        let base = self.parse_atom()?;
+        let base = self.parse_primary()?;
 
         let (min, max) = match self.peek() {
             Some('?') => {
@@ -237,7 +249,7 @@ impl<'a> RegexParser<'a> {
     }
 
     /// Parse a single atom (literal, class, group, anchor)
-    fn parse_atom(&mut self) -> Result<Regex, String> {
+    fn parse_primary(&mut self) -> Result<Regex, String> {
         match self.peek() {
             None => Ok(Regex::Empty),
             Some('(') => self.parse_group(),
@@ -260,67 +272,38 @@ impl<'a> RegexParser<'a> {
     /// metacharacters into a single literal. For example, `\+\+\+` becomes `Literal("+++")`.
     fn parse_literal(&mut self) -> Result<Regex, String> {
         let mut lit = String::new();
+        let mut prev_atom_lit_len = 0;
+        let mut prev_atom_pos = self.pos;
 
         loop {
-            match self.peek() {
-                Some('\\') => {
-                    let escape_char = self.input[self.pos + 1..].chars().next();
-                    match escape_char {
-                        // Character classes
-                        Some('w' | 'W' | 'd' | 'D' | 's' | 'S') => {
-                            if lit.is_empty() {
-                                // Start with the class
-                                self.advance(); // consume '\'
-                                return self.parse_escape_as_regex();
-                            } else {
-                                // Return accumulated literal, leave escape for next parse
-                                break;
-                            }
-                        }
-                        // Word boundary
-                        Some('>') => {
-                            if lit.is_empty() {
-                                self.advance(); // consume '\'
-                                self.advance(); // consume '>'
-                                return Ok(Regex::WordEnd);
-                            } else {
-                                break;
-                            }
-                        }
-                        // Simple escape
-                        Some(c) if !c.is_ascii_alphanumeric() => {
-                            // Check if this char would be quantified
-                            let after_escape = self.pos + 1 + c.len_utf8();
-                            if after_escape < self.input.len() && !lit.is_empty() {
-                                let next = self.input[after_escape..].chars().next();
-                                if matches!(next, Some('?' | '*' | '+' | '{')) {
-                                    break;
-                                }
-                            }
-                            self.advance(); // consume '\'
-                            self.advance(); // consume escaped char
-                            lit.push(c);
-                        }
-                        Some(c) => {
-                            return Err(format!("unknown escape sequence '\\{}'", c));
-                        }
-                        None => {
-                            return Err("unexpected end of pattern after backslash".to_string());
-                        }
+            let start = self.pos;
+            match self.parse_atom()? {
+                Atom::Meta('?' | '*' | '+' | '{') => {
+                    // Quantifiers apply to the preceding atom, so we need to pop
+                    // the last atom (= char / escape char) and stop parsing.
+                    if prev_atom_lit_len == 0 {
+                        self.pos = start;
+                    } else {
+                        lit.truncate(prev_atom_lit_len);
+                        self.pos = prev_atom_pos;
                     }
+                    break;
                 }
-                Some(c) if !is_meta_char(c) => {
-                    let next_pos = self.pos + c.len_utf8();
-                    if next_pos < self.input.len() && !lit.is_empty() {
-                        let next = self.input[next_pos..].chars().next();
-                        if matches!(next, Some('?' | '*' | '+' | '{')) {
-                            break;
-                        }
-                    }
+                Atom::Char(c) => {
+                    prev_atom_lit_len = lit.len();
+                    prev_atom_pos = start;
                     lit.push(c);
-                    self.advance();
                 }
-                _ => break,
+                Atom::WordEnd if lit.is_empty() => {
+                    return Ok(Regex::WordEnd);
+                }
+                Atom::Class(cs) if lit.is_empty() => {
+                    return Ok(Regex::CharClass(cs));
+                }
+                _ => {
+                    self.pos = start;
+                    break;
+                }
             }
         }
 
@@ -334,32 +317,6 @@ impl<'a> RegexParser<'a> {
         }
 
         Ok(Regex::Literal(lit, self.case_insensitive))
-    }
-
-    /// \w, \d, etc.
-    fn parse_escape_as_regex(&mut self) -> Result<Regex, String> {
-        match self.advance() {
-            Some('w') => Ok(Regex::CharClass(ASCII_WORD_CHARSET)),
-            Some('W') => {
-                let mut cs = ASCII_WORD_CHARSET;
-                cs.invert();
-                Ok(Regex::CharClass(cs))
-            }
-            Some('d') => Ok(Regex::CharClass(ASCII_DIGIT_CHARSET)),
-            Some('D') => {
-                let mut cs = ASCII_DIGIT_CHARSET;
-                cs.invert();
-                Ok(Regex::CharClass(cs))
-            }
-            Some('s') => Ok(Regex::CharClass(ASCII_WHITESPACE_CHARSET)),
-            Some('S') => {
-                let mut cs = ASCII_WHITESPACE_CHARSET;
-                cs.invert();
-                Ok(Regex::CharClass(cs))
-            }
-            Some(c) => Err(format!("unknown escape sequence '\\{}'", c)),
-            None => Err("unexpected end of pattern after backslash".to_string()),
-        }
     }
 
     /// (foo), (?:foo), (?i:foo)
@@ -400,6 +357,19 @@ impl<'a> RegexParser<'a> {
 
     /// [a-z], [^a-z], etc.
     fn parse_char_class(&mut self) -> Result<Regex, String> {
+        fn unexpected_end() -> Result<Regex, String> {
+            Err("unexpected end of pattern in character class".to_string())
+        }
+        fn unexpected_unicode(c: char) -> Result<Regex, String> {
+            Err(format!("non-ASCII character '{c:?}' not supported in character class"))
+        }
+        fn unexpected_class() -> Result<Regex, String> {
+            Err("cannot use character class in character class range".to_string())
+        }
+        fn invalid_range(start: u8, end: u8) -> Result<Regex, String> {
+            Err(format!("invalid character range {:?}-{:?}", start as char, end as char))
+        }
+
         self.expect('[')?;
 
         let negated = if self.peek() == Some('^') {
@@ -419,47 +389,52 @@ impl<'a> RegexParser<'a> {
             self.advance();
         }
 
-        while let Some(c) = self.peek() {
-            if c == ']' {
-                self.advance();
-                break;
-            }
-
-            if c == '\\' {
-                self.advance();
-                let escaped = self.parse_escape_char()?;
-                match escaped {
-                    EscapedChar::Char(b) => charset.set(b, true),
-                    EscapedChar::Class(cs) => charset.merge(&cs),
+        loop {
+            match self.parse_atom()? {
+                Atom::Empty => return unexpected_end(),
+                Atom::Class(cs) => {
+                    charset.merge(&cs);
                 }
-            } else {
-                let start = c as u8;
-                self.advance();
+                Atom::WordEnd => {
+                    charset.set(b'>', true);
+                }
+                Atom::Meta(']') => break,
+                Atom::Meta(c) | Atom::Char(c) => {
+                    if !c.is_ascii() {
+                        return unexpected_unicode(c);
+                    }
 
-                // Check for range
-                if self.peek() == Some('-') && !self.input[self.pos + 1..].starts_with(']') {
-                    self.advance(); // consume -
-                    let end = match self.peek() {
-                        Some('\\') => {
-                            self.advance();
-                            match self.parse_escape_char()? {
-                                EscapedChar::Char(b) => b,
-                                EscapedChar::Class(_) => {
-                                    return Err("cannot use character class in range".to_string());
+                    let start = c as u8;
+                    let mut end = start;
+
+                    // Check for ranges, e.g. [a-z].
+                    // We exclude patterns like [a-], because this implicitly sets 'a'..='a' in this iteration,
+                    // and then '-'..='-' in the next iteration, which is the exact behavior we need.
+                    if let rest = self.rest()
+                        && rest.starts_with("-")
+                        && !rest.starts_with("-]")
+                    {
+                        self.advance(); // consume -
+
+                        match self.parse_atom()? {
+                            Atom::Empty => return unexpected_end(),
+                            Atom::Class(_) => return unexpected_class(),
+                            Atom::WordEnd => {
+                                end = b'>';
+                            }
+                            Atom::Meta(c) | Atom::Char(c) => {
+                                if !c.is_ascii() {
+                                    return unexpected_unicode(c);
                                 }
+                                end = c as u8;
                             }
                         }
-                        Some(c) => {
-                            self.advance();
-                            c as u8
-                        }
-                        None => {
-                            return Err("unexpected end of pattern in character class".to_string());
-                        }
-                    };
+                    }
+
+                    if start > end {
+                        return invalid_range(start, end);
+                    }
                     charset.set_range(start..=end, true);
-                } else {
-                    charset.set(start, true);
                 }
             }
         }
@@ -471,40 +446,48 @@ impl<'a> RegexParser<'a> {
         Ok(Regex::CharClass(charset))
     }
 
-    fn parse_escape_char(&mut self) -> Result<EscapedChar, String> {
-        match self.advance() {
-            Some('w') => Ok(EscapedChar::Class(ASCII_WORD_CHARSET)),
-            Some('W') => {
-                let mut cs = ASCII_WORD_CHARSET;
-                cs.invert();
-                Ok(EscapedChar::Class(cs))
+    fn parse_atom(&mut self) -> Result<Atom, String> {
+        let Some(c) = self.advance() else {
+            return Ok(Atom::Empty);
+        };
+
+        match c {
+            '(' | ')' | '[' | ']' | '{' | '}' | '|' | '?' | '*' | '+' | '.' | '^' | '$' => {
+                Ok(Atom::Meta(c))
             }
-            Some('d') => Ok(EscapedChar::Class(ASCII_DIGIT_CHARSET)),
-            Some('D') => {
-                let mut cs = ASCII_DIGIT_CHARSET;
-                cs.invert();
-                Ok(EscapedChar::Class(cs))
+            '\\' => {
+                let Some(ce) = self.advance() else {
+                    return Err("unexpected end of pattern after backslash".to_string());
+                };
+
+                match ce {
+                    '>' => Ok(Atom::WordEnd),
+                    'w' => Ok(Atom::Class(ASCII_WORD_CHARSET)),
+                    'W' => {
+                        let mut cs = ASCII_WORD_CHARSET;
+                        cs.invert();
+                        Ok(Atom::Class(cs))
+                    }
+                    'd' => Ok(Atom::Class(ASCII_DIGIT_CHARSET)),
+                    'D' => {
+                        let mut cs = ASCII_DIGIT_CHARSET;
+                        cs.invert();
+                        Ok(Atom::Class(cs))
+                    }
+                    's' => Ok(Atom::Class(ASCII_WHITESPACE_CHARSET)),
+                    'S' => {
+                        let mut cs = ASCII_WHITESPACE_CHARSET;
+                        cs.invert();
+                        Ok(Atom::Class(cs))
+                    }
+                    't' => Ok(Atom::Char('\t')),
+                    c if !c.is_ascii_alphanumeric() => Ok(Atom::Char(c)),
+                    c => Err(format!("unknown escape sequence '\\{c}'")),
+                }
             }
-            Some('s') => Ok(EscapedChar::Class(ASCII_WHITESPACE_CHARSET)),
-            Some('S') => {
-                let mut cs = ASCII_WHITESPACE_CHARSET;
-                cs.invert();
-                Ok(EscapedChar::Class(cs))
-            }
-            Some(c) if !c.is_ascii_alphanumeric() => Ok(EscapedChar::Char(c as u8)),
-            Some(c) => Err(format!("unknown escape sequence '\\{}'", c)),
-            None => Err("unexpected end of pattern after backslash".to_string()),
+            _ => Ok(Atom::Char(c)),
         }
     }
-}
-
-enum EscapedChar {
-    Char(u8),
-    Class(Charset),
-}
-
-fn is_meta_char(c: char) -> bool {
-    matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '|' | '?' | '*' | '+' | '.' | '^' | '$')
 }
 
 struct CodeGen<'a, 'c> {
