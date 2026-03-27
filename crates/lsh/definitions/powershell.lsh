@@ -41,7 +41,7 @@ pub fn powershell() {
             } else {
                 yield keyword.other;
             }
-        } else if /(?i:elseif|else|if|for(each)?|switch|default|throw|try|catch|finally)/ {
+        } else if /(?i:elseif|else|if|for(each)?|switch|default|throw|try|catch|finally|return)/ {
             if /\w+/ {
                 yield other;
             } else {
