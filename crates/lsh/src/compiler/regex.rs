@@ -660,10 +660,18 @@ impl<'a, 'c> CodeGen<'a, 'c> {
             return self.emit_charset(cs, min, max, on_match, on_fail);
         }
 
-        // Single-char literal like `#+`: convert to charset for efficient handling.
+        // Single-char literal like `#+`
         if let Regex::Literal(ref s, case_insensitive) = *inner
             && s.len() == 1
         {
+            // Optional single char: `a?`
+            // It can be trivially translated to a Prefix/PrefixInsensitive check
+            // where even on_fail is a success and is thus connected to on_match.
+            if min == 0 && max == 1 {
+                return self.emit(inner, on_match, on_match);
+            }
+
+            // Otherwise, we must translate to a Charset match.
             let b = s.as_bytes()[0];
             let mut cs = Charset::no();
             if case_insensitive {
