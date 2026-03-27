@@ -547,12 +547,10 @@ impl<'a, 'c> CodeGen<'a, 'c> {
             }
 
             Regex::Dot => {
-                let cs = Charset::yes();
-                let cs = self.compiler.intern_charset(&cs);
-                let condition = Condition::Charset { cs, min: 1, max: 1 };
-                let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
-                if_node.borrow_mut().next = Some(on_fail);
-                Ok(if_node)
+                let dst = self.compiler.get_reg(Register::InputOffset);
+                let node = self.compiler.alloc_iri(IRI::AddImm { dst, imm: 1 });
+                node.borrow_mut().next = Some(on_match);
+                Ok(node)
             }
 
             Regex::EndOfLine => {
