@@ -303,6 +303,7 @@ impl<'pa, 'ps, 'pc> Runtime<'pa, 'ps, 'pc> {
             let mut i = 0;
 
             while i < needle.len() {
+                debug_assert!(off + i < haystack.len());
                 let a = *a.add(i);
                 let b = *b.add(i);
                 i += 1;
@@ -323,11 +324,14 @@ impl<'pa, 'ps, 'pc> Runtime<'pa, 'ps, 'pc> {
                 return false;
             }
 
+            debug_assert!(off.checked_add(needle.len()).is_some_and(|end| end <= haystack.len()));
+
             let a = haystack.as_ptr().add(off);
             let b = needle.as_ptr();
             let mut i = 0;
 
             while i < needle.len() {
+                debug_assert!(off + i < haystack.len());
                 // str in PrefixInsensitive(str) is expected to be lowercase, printable ASCII.
                 let a = a.add(i).read().to_ascii_lowercase();
                 let b = b.add(i).read();
@@ -438,16 +442,19 @@ pub struct Registers {
 impl Registers {
     #[inline(always)]
     pub fn get(&self, reg: Register) -> u32 {
+        debug_assert!((reg as usize) < Register::COUNT);
         unsafe { self.as_ptr().add(reg as usize).read() }
     }
 
     #[inline(always)]
     pub fn set(&mut self, reg: Register, val: u32) {
+        debug_assert!((reg as usize) < Register::COUNT);
         unsafe { self.as_mut_ptr().add(reg as usize).write(val) }
     }
 
     #[inline(always)]
     fn save_registers(&self, vec: &mut Vec<u32>) {
+        const _: () = assert!(2 + 14 <= Register::COUNT);
         unsafe { vec.extend_from_slice(std::slice::from_raw_parts(self.as_ptr().add(2), 14)) };
     }
 
@@ -546,12 +553,14 @@ macro_rules! instruction_decode {
     }) => {{
         #[inline(always)]
         fn dec_reg_single(bytes: &[u8], off: usize) -> Register {
+            debug_assert!(off < bytes.len());
             let b = unsafe { *bytes.as_ptr().add(off) as usize };
             Register::from_usize(b & 0xf)
         }
 
         #[inline(always)]
         fn dec_reg_pair(bytes: &[u8], off: usize) -> (Register, Register) {
+            debug_assert!(off < bytes.len());
             let b = unsafe { *bytes.as_ptr().add(off) as usize };
             let dst = Register::from_usize(b & 0xf);
             let src = Register::from_usize(b >> 4);
@@ -560,6 +569,7 @@ macro_rules! instruction_decode {
 
         #[inline(always)]
         fn dec_u32(bytes: &[u8], off: usize) -> u32 {
+            debug_assert!(off + 4 <= bytes.len());
             unsafe { (bytes.as_ptr().add(off) as *const u32).read_unaligned() }
         }
 

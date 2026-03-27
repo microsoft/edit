@@ -35,10 +35,18 @@ pub fn powershell() {
                 else if /"/ { yield string; break; }
                 await input;
             }
-        } else if /function|param/ {
-            yield keyword.other;
-        } else if /elseif|else|if|for|switch|default|throw|try|catch|finally/ {
-            yield keyword.control;
+        } else if /(?i:function|param|class|enum|cmdletbinding|static)/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield keyword.other;
+            }
+        } else if /(?i:elseif|else|if|for(each)?|switch|default|throw|try|catch|finally|return)/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield keyword.control;
+            }
         } else if /-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/ {
             if /[\w\-]+/ {
                 yield method;
