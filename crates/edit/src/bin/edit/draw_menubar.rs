@@ -53,6 +53,7 @@ fn draw_menu_file(ctx: &mut Context, state: &mut State) {
             state.wants_file_picker = StateFilePicker::SaveAs;
         }
     }
+    #[allow(irrefutable_let_patterns)]
     if let path = Settings::borrow().path.as_path()
         && !path.as_os_str().is_empty()
         && ctx.menubar_menu_button(loc(LocId::FilePreferences), 'P', vk::NULL)
