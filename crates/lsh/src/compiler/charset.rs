@@ -35,6 +35,17 @@ impl Charset {
         (self.bits[hi] & (1 << lo)) != 0
     }
 
+    pub fn get_and_reset_lowest(&mut self) -> Option<u8> {
+        for (hi, bits) in self.bits.iter_mut().enumerate() {
+            if *bits != 0 {
+                let lo = bits.trailing_zeros() as usize;
+                *bits &= !(1 << lo);
+                return Some((hi * WORD_BITS + lo) as u8);
+            }
+        }
+        None
+    }
+
     pub fn covers_none(&self) -> bool {
         self.bits.iter().all(|&b| b == usize::MIN)
     }

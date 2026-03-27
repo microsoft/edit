@@ -43,6 +43,8 @@
 //! - The `parse()` function wires its generated IR into the provided destination nodes.
 //!   Don't pass nodes that are already part of the IR graph.
 
+use std::slice;
+
 use stdext::collections::BVec;
 
 use super::*;
@@ -524,27 +526,10 @@ impl<'a, 'c> CodeGen<'a, 'c> {
             Regex::Empty => Ok(on_match),
 
             Regex::Literal(s, case_insensitive) => {
-                if s.is_empty() {
-                    return Ok(on_match);
-                }
-                let s = self.compiler.intern_string(s);
-                let condition = if *case_insensitive {
-                    Condition::PrefixInsensitive(s)
-                } else {
-                    Condition::Prefix(s)
-                };
-                let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
-                if_node.borrow_mut().next = Some(on_fail);
-                Ok(if_node)
+                self.emit_literal(s, *case_insensitive, on_match, on_fail)
             }
 
-            Regex::CharClass(cs) => {
-                let cs = self.compiler.intern_charset(cs);
-                let condition = Condition::Charset { cs, min: 1, max: u32::MAX };
-                let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
-                if_node.borrow_mut().next = Some(on_fail);
-                Ok(if_node)
-            }
+            Regex::CharClass(cs) => self.emit_charset(cs, 1, 1, on_match, on_fail),
 
             Regex::Dot => {
                 let dst = self.compiler.get_reg(Register::InputOffset);
@@ -564,11 +549,7 @@ impl<'a, 'c> CodeGen<'a, 'c> {
             Regex::WordEnd => {
                 // \> is a zero-width assertion: succeeds if NOT followed by a word char.
                 // We invert the logic: check for word char, swap success/failure branches.
-                let cs = self.compiler.intern_charset(&ASCII_WORD_CHARSET);
-                let condition = Condition::Charset { cs, min: 1, max: 1 };
-                let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_fail });
-                if_node.borrow_mut().next = Some(on_match);
-                Ok(if_node)
+                self.emit_charset(&ASCII_WORD_CHARSET, 1, 1, on_fail, on_match)
             }
 
             Regex::Concat(parts) => {
@@ -706,6 +687,24 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         Ok(current)
     }
 
+    fn emit_literal(
+        &mut self,
+        s: &str,
+        case_insensitive: bool,
+        on_match: IRCell<'a>,
+        on_fail: IRCell<'a>,
+    ) -> Result<IRCell<'a>, String> {
+        if s.is_empty() {
+            return Ok(on_match);
+        }
+        let s = self.compiler.intern_string(s);
+        let condition =
+            if case_insensitive { Condition::PrefixInsensitive(s) } else { Condition::Prefix(s) };
+        let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
+        if_node.borrow_mut().next = Some(on_fail);
+        Ok(if_node)
+    }
+
     fn emit_charset(
         &mut self,
         cs: &Charset,
@@ -714,12 +713,44 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         on_match: IRCell<'a>,
         on_fail: IRCell<'a>,
     ) -> Result<IRCell<'a>, String> {
+        let mut next = if min == 0 { on_match } else { on_fail };
+
+        // If the expression is of form [a], [ab], [aA], or [aAbB] it is
+        // worth translating it to a Prefix/PrefixInsensitive check.
+        // The [a] and [aA] cases are an obvious improvement, but even the other
+        // two cases are worth it due to the shorter instruction encoding.
+        if max == 1 {
+            let mut cs = cs.clone();
+            let mut chars = [(0u8, false); 2];
+            let mut count = 0;
+
+            for slot in &mut chars {
+                let Some(mut idx) = cs.get_and_reset_lowest() else { break };
+                let case_insensitive = idx.is_ascii_uppercase() && cs.get(idx.to_ascii_lowercase());
+                if case_insensitive {
+                    idx = idx.to_ascii_lowercase();
+                    cs.set(idx, false);
+                }
+                *slot = (idx, case_insensitive);
+                count += 1;
+            }
+
+            if count > 0 && cs.covers_none() {
+                for &(ch, insensitive) in chars[..count].iter().rev() {
+                    let s = unsafe { str::from_utf8_unchecked(slice::from_ref(&ch)) };
+                    let node = self.emit_literal(s, insensitive, on_match, next)?;
+                    next = node;
+                }
+                return Ok(next);
+            }
+        }
+
         let cs = self.compiler.intern_charset(cs);
         let condition = Condition::Charset { cs, min, max };
         let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
 
         // min=0 implies that it cannot fail. Remove `on_fail` to allow for later optimizations.
-        if_node.borrow_mut().next = Some(if min == 0 { on_match } else { on_fail });
+        if_node.borrow_mut().next = Some(next);
 
         Ok(if_node)
     }
