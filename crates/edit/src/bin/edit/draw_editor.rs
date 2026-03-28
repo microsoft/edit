@@ -12,7 +12,6 @@ use stdext::string_from_utf8_lossy_owned;
 
 use crate::localization::*;
 use crate::state::*;
-
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------
