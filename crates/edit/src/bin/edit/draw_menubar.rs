@@ -34,9 +34,16 @@ pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
         if ctx.menubar_menu_begin(loc(LocId::Help), 'H') {
             draw_menu_help(ctx, state);
         }
+        if ctx.menubar_menu_begin(" AI ", 'I'){
+            draw_menu_ai(ctx, state);
+        }
     }
     ctx.menubar_end();
 }
+
+/* AI Tab */
+
+
 
 fn draw_menu_file(ctx: &mut Context, state: &mut State) {
     if ctx.menubar_menu_button(loc(LocId::FileNew), 'N', kbmod::CTRL | vk::N) {
@@ -140,6 +147,10 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
             ctx.needs_rerender();
         }
     }
+    if ctx.menubar_menu_button("Toggle Explorer", 'E', kbmod::CTRL | vk::B) {
+        state.wants_file_explorer = !state.wants_file_explorer;
+        ctx.needs_rerender();
+    }
 
     ctx.menubar_menu_end();
 }
@@ -195,4 +206,15 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
     if ctx.modal_end() {
         state.wants_about = false;
     }
+}
+
+
+// Paste this at the bottom of draw_menubar.rs
+fn draw_menu_ai(ctx: &mut Context, state: &mut State) {
+    // Inside draw_menu_ai
+if ctx.menubar_menu_button("Toggle AI Assistant", 'T', kbmod::CTRL | vk::I) {
+    state.wants_ai_tab = !state.wants_ai_tab;
+    ctx.needs_rerender();
+}
+    ctx.menubar_menu_end();
 }

@@ -345,6 +345,20 @@ impl DocumentManager {
         let path = Path::new(path);
         (path, Some(goto))
     }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Document> {
+        self.list.iter()
+    }
+
+    /// Moves a document at a specific index to the end, making it active
+    pub fn make_active_by_index(&mut self, target_idx: usize) {
+        let mut current_idx = 0;
+        self.update_active(|_| {
+            let is_match = current_idx == target_idx;
+            current_idx += 1;
+            is_match
+        });
+    }
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@ use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::{Path, PathBuf};
+use std::collections::HashSet;
 
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
@@ -167,6 +168,10 @@ pub struct State {
     pub wants_indentation_picker: bool,
     pub wants_go_to_file: bool,
     pub wants_about: bool,
+    pub wants_ai_tab: bool, // Add this!
+    pub wants_file_explorer: bool,
+    pub explorer_root: PathBuf,
+    pub explorer_expanded_dirs: HashSet<PathBuf>,
     pub wants_close: bool,
     pub wants_exit: bool,
     pub wants_goto: bool,
@@ -217,9 +222,13 @@ impl State {
             wants_indentation_picker: false,
             wants_go_to_file: false,
             wants_about: false,
+            wants_ai_tab: false,
             wants_close: false,
             wants_exit: false,
             wants_goto: false,
+            wants_file_explorer: false,
+            explorer_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            explorer_expanded_dirs: HashSet::new(),
             goto_target: Default::default(),
             goto_invalid: false,
 

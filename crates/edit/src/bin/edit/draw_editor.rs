@@ -13,19 +13,47 @@ use stdext::string_from_utf8_lossy_owned;
 use crate::localization::*;
 use crate::state::*;
 
+use std::path::{Path, PathBuf};
+
+// ---------------------------------------------------------
+// 1. THE MAIN LAYOUT ENGINE
+// ---------------------------------------------------------
 pub fn draw_editor(ctx: &mut Context, state: &mut State) {
     if !matches!(state.wants_search.kind, StateSearchKind::Hidden | StateSearchKind::Disabled) {
         draw_search(ctx, state);
     }
 
     let size = ctx.size();
-    // TODO: The layout code should be able to just figure out the height on its own.
     let height_reduction = match state.wants_search.kind {
         StateSearchKind::Search => 4,
         StateSearchKind::Replace => 5,
         _ => 2,
     };
 
+    // Determine dynamic column widths: Explorer(30) | Editor(auto) | AI Tab(40)
+    let mut columns = Vec::new();
+    if state.wants_file_explorer { columns.push(30); } 
+    columns.push(-1); 
+    if state.wants_ai_tab { columns.push(40); } 
+    
+    ctx.table_begin("main_split");
+    ctx.table_set_columns(&columns);
+    ctx.table_next_row();
+
+    // -- LEFT PANEL: FILE EXPLORER --
+    if state.wants_file_explorer {
+        ctx.block_begin("explorer_col");
+        ctx.attr_position(Position::Stretch); // Force full height
+        draw_file_explorer(ctx, state);
+        ctx.block_end();
+    }
+
+    // -- CENTER PANEL: TEXT EDITOR --
+    ctx.block_begin("editor_col");
+    ctx.attr_position(Position::Stretch); // Force full height
+    
+    draw_tab_bar(ctx, state); 
+    
     if let Some(doc) = state.documents.active() {
         ctx.textarea("textarea", doc.buffer.clone());
         ctx.inherit_focus();
@@ -33,10 +61,152 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         ctx.block_begin("empty");
         ctx.block_end();
     }
+    ctx.block_end(); 
+
+    // -- RIGHT PANEL: AI SIDEBAR --
+    if state.wants_ai_tab {
+        ctx.block_begin("ai_col");
+        ctx.attr_position(Position::Stretch); // Force full height
+        draw_ai_sidebar(ctx, state);
+        ctx.block_end();
+    }
+
+    ctx.table_end(); // Close the 3-way split
 
     ctx.attr_intrinsic_size(Size { width: 0, height: size.height - height_reduction });
 }
 
+// ---------------------------------------------------------
+// 2. THE AI SIDEBAR (Right Panel)
+// ---------------------------------------------------------
+pub fn draw_ai_sidebar(ctx: &mut Context, state: &mut State) {
+    // Width/Height 0 allows the parent column to dictate the stretch limits
+    ctx.scrollarea_begin("ai_sidebar_scroll", Size { width: 0, height: 0 });
+    
+    ctx.attr_position(Position::Stretch);
+    ctx.attr_border(); 
+
+    ctx.block_begin("ai_content");
+    ctx.attr_padding(Rect::three(1, 2, 1));
+    {
+        ctx.label("ai_title", " AI Assistant ");
+        ctx.attr_position(Position::Center);
+        ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightBlue));
+        
+        ctx.label("ai_desc", "I am ready to assist.");
+        ctx.attr_padding(Rect::three(1, 0, 1));
+
+        ctx.label("ai_placeholder", "[ Chat UI goes here ]");
+        ctx.attr_foreground_rgba(ctx.indexed_alpha(IndexedColor::Foreground, 1, 2));
+        
+        ctx.block_begin("ai_close_btn");
+        ctx.attr_position(Position::Center);
+        ctx.attr_padding(Rect::three(2, 0, 0));
+        
+        // This button toggles the state, closing the sidebar
+        if ctx.button("close_ai", " Close Panel ", ButtonStyle::default()) {
+            state.wants_ai_tab = false;
+            ctx.needs_rerender();
+        }
+        ctx.block_end();
+    }
+    ctx.block_end(); 
+
+    ctx.scrollarea_end();
+}
+
+// ---------------------------------------------------------
+// 3. THE FILE EXPLORER (Left Panel)
+// ---------------------------------------------------------
+pub fn draw_file_explorer(ctx: &mut Context, state: &mut State) {
+    ctx.scrollarea_begin("explorer_scroll", Size { width: 0, height: 0 });
+    ctx.attr_position(Position::Stretch);
+    ctx.attr_border();
+
+    let mut to_toggle = None;
+    let mut to_open = None;
+    let mut node_id_counter = 0u64;
+
+    fn draw_node(
+        ctx: &mut Context,
+        path: &Path,
+        depth: usize,
+        expanded_dirs: &std::collections::HashSet<PathBuf>,
+        to_toggle: &mut Option<PathBuf>,
+        to_open: &mut Option<PathBuf>,
+        id_counter: &mut u64,
+    ) {
+        let name = path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Workspace".to_string());
+            
+        let is_dir = path.is_dir();
+        let is_expanded = expanded_dirs.contains(path);
+
+        let indent = " ".repeat(depth * 2);
+        let prefix = if is_dir {
+            if is_expanded { "▼ " } else { "▶ " }
+        } else {
+            "  "
+        };
+
+        let mut label = format!("{}{}{}", indent, prefix, name);
+
+        // --- UNDERFLOW/OVERFLOW FIX ---
+        // Strictly cap the label length so it never forces the table column to stretch
+        // beyond the 30 characters we assigned to it.
+        let max_chars = 26; 
+        if label.chars().count() > max_chars {
+            label = label.chars().take(max_chars - 1).collect::<String>() + "…";
+        }
+
+        *id_counter += 1;
+        ctx.next_block_id_mixin(*id_counter);
+        
+        if ctx.button("file_node", &label, ButtonStyle::default().bracketed(false)) {
+            if is_dir {
+                *to_toggle = Some(path.to_path_buf());
+            } else {
+                *to_open = Some(path.to_path_buf());
+            }
+        }
+
+        if is_dir && is_expanded {
+            if let Ok(entries) = std::fs::read_dir(path) {
+                let mut children: Vec<_> = entries.filter_map(Result::ok).collect();
+                children.sort_by_key(|e| {
+                    let is_d = e.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                    (!is_d, e.file_name()) 
+                });
+
+                for child in children {
+                    draw_node(ctx, &child.path(), depth + 1, expanded_dirs, to_toggle, to_open, id_counter);
+                }
+            }
+        }
+    }
+
+    draw_node(ctx, &state.explorer_root.clone(), 0, &state.explorer_expanded_dirs, &mut to_toggle, &mut to_open, &mut node_id_counter);
+
+    ctx.scrollarea_end();
+
+    if let Some(dir) = to_toggle {
+        if state.explorer_expanded_dirs.contains(&dir) {
+            state.explorer_expanded_dirs.remove(&dir);
+        } else {
+            state.explorer_expanded_dirs.insert(dir);
+        }
+        ctx.needs_rerender();
+    }
+
+    if let Some(file) = to_open {
+        match state.documents.add_file_path(&file) {
+            Ok(_) => {},
+            Err(err) => error_log_add(ctx, state, err.into()),
+        }
+        ctx.needs_rerender();
+    }
+}
 fn draw_search(ctx: &mut Context, state: &mut State) {
     if let Err(err) = icu::init() {
         error_log_add(ctx, state, err.into());
@@ -113,6 +283,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                     }
                 }
             }
+            
         }
         ctx.table_end();
 
@@ -355,4 +526,57 @@ fn validate_goto_point(line: &str) -> Result<Point, ParseIntError> {
         coords[i] = s.parse::<CoordType>()?.saturating_sub(1);
     }
     Ok(Point { x: coords[0], y: coords[1] })
+}
+
+
+pub fn draw_tab_bar(ctx: &mut Context, state: &mut State) {
+    let doc_count = state.documents.len();
+    if doc_count < 2 {
+        // Don't waste screen space if only 0 or 1 file is open
+        return; 
+    }
+
+    ctx.table_begin("tab_bar");
+    
+    // Create flexible columns for each tab
+    let mut columns = Vec::new();
+    for _ in 0..doc_count {
+        columns.push(-1); // -1 means distribute space evenly
+    }
+    ctx.table_set_columns(&columns);
+    ctx.table_next_row();
+
+    let mut clicked_idx = None;
+
+    // Draw a tab for each document
+    for (idx, doc) in state.documents.iter().enumerate() {
+        let is_active = idx == doc_count - 1; // The last doc is always the active one
+        
+        let tb = doc.buffer.borrow();
+        let dirty_marker = if tb.is_dirty() { "*" } else { "" };
+        let label = format!(" {}{} ", doc.filename, dirty_marker);
+
+        // Highlight the active tab
+        if is_active {
+            ctx.attr_background_rgba(ctx.indexed(IndexedColor::BrightBlue));
+            ctx.attr_foreground_rgba(ctx.contrasted(ctx.indexed(IndexedColor::BrightBlue)));
+        } else {
+            ctx.attr_background_rgba(ctx.indexed(IndexedColor::Background));
+            ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Foreground));
+        }
+
+        // We use next_block_id_mixin so each button gets a unique IMGUI hash
+        ctx.next_block_id_mixin(idx as u64);
+        if ctx.button("tab_button", &label, ButtonStyle::default().bracketed(false)) {
+            clicked_idx = Some(idx);
+        }
+    }
+
+    ctx.table_end();
+
+    // If a tab was clicked, make it active
+    if let Some(idx) = clicked_idx {
+        state.documents.make_active_by_index(idx);
+        ctx.needs_rerender();
+    }
 }

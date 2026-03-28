@@ -380,7 +380,14 @@ fn draw(ctx: &mut Context, state: &mut State) {
             state.wants_search.focus = true;
         } else if key == vk::F3 {
             search_execute(ctx, state, SearchAction::Search);
-        } else {
+        
+    } else if key == kbmod::CTRL | vk::B {
+        state.wants_file_explorer = !state.wants_file_explorer;
+    } else if key == kbmod::CTRL | vk::I {
+        state.wants_ai_tab = !state.wants_ai_tab;
+    // --------------------------
+    
+    } else {
             return;
         }
 
