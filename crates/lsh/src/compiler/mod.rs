@@ -21,6 +21,7 @@ use std::path::Path;
 
 use stdext::arena::Arena;
 use stdext::collections::BString;
+use stdext::opt_ptr_eq;
 
 pub use self::charset::{Charset, SerializedCharset};
 use self::frontend::*;
@@ -163,7 +164,8 @@ impl<'a> Compiler<'a> {
                 break;
             };
 
-            if let IRI::If { condition, then } = node.borrow().instr {
+            let node = node.borrow();
+            if let IRI::If { condition, then } = node.instr {
                 // For the purpose of computing fast-skips the contents of if conditions are irrelevant,
                 // so skip the subtree. This is actually quite important. This this as an example:
                 //   loop {
@@ -176,7 +178,19 @@ impl<'a> Compiler<'a> {
                 //   }
                 // The inverted charset of the inner /b/ includes "a". If we merge that into the outer
                 // loop's charset we get one that covers all characters, making fast-skips impossible.
-                iter.skip_node(then);
+                // --> Skip the "then" subtree.
+                //
+                // HOWEVER, imagine a condition like this:
+                //   if /a?b/ {}
+                // This compiles to something like:
+                //   if "a"
+                //     .then -> if "b" {}
+                //     .else -> if "b" {}      (aka: .next)
+                // In other words, "then" and "next" point to the same thing.
+                // --> Only skip "then" if it's not the same as "next".
+                if !opt_ptr_eq(Some(then), node.next) {
+                    iter.skip_node(then);
+                }
 
                 match condition {
                     Condition::Cmp { .. } => {}

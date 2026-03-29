@@ -3,11 +3,12 @@
 
 use std::hint::black_box;
 use std::io::Cursor;
+use std::path::Path;
 use std::{mem, vec};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
-use edit::{buffer, hash, json, oklab, simd, unicode};
+use edit::{buffer, hash, json, lsh, oklab, simd, unicode};
 use stdext::arena::{self, scratch_arena};
 use stdext::collections::BVec;
 use stdext::float::parse_f64_approx;
@@ -187,6 +188,34 @@ fn bench_json(c: &mut Criterion) {
     );
 }
 
+fn bench_lsh(c: &mut Criterion) {
+    let bytes = include_bytes!("../../../assets/highlighting-tests/markdown.md");
+    let bytes = &bytes[..];
+    let lang = lsh::LANGUAGES.iter().find(|lang| lang.id == "markdown").unwrap();
+    let highlighter = lsh::Highlighter::new(black_box(&bytes), lang);
+
+    c.benchmark_group("lsh").throughput(Throughput::Bytes(bytes.len() as u64)).bench_function(
+        "markdown",
+        |b| {
+            b.iter(|| {
+                let mut h = highlighter.clone();
+                loop {
+                    let scratch = scratch_arena(None);
+                    let res = h.parse_next_line(&scratch);
+                    if res.is_empty() {
+                        break;
+                    }
+                }
+            })
+        },
+    );
+
+    c.benchmark_group("lsh").bench_function("process_file_associations", |b| {
+        let path = Path::new("/some/long/path/to/file/foo.bar.foo.bar.foo.bar");
+        b.iter(|| lsh::process_file_associations(lsh::FILE_ASSOCIATIONS, black_box(path)))
+    });
+}
+
 fn bench_oklab(c: &mut Criterion) {
     c.benchmark_group("oklab")
         .bench_function("StraightRgba::as_oklab", |b| {
@@ -294,6 +323,7 @@ fn bench(c: &mut Criterion) {
     bench_glob(c);
     bench_hash(c);
     bench_json(c);
+    bench_lsh(c);
     bench_oklab(c);
     bench_simd_lines_fwd(c);
     bench_simd_memchr2(c);

@@ -1,0 +1,22 @@
+[package]
+name = "edit-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+edit = { path = "../crates/edit" }
+stdext = { path = "../crates/stdext" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "highlighter"
+path = "fuzz_targets/highlighter.rs"
+test = false
+doc = false
+bench = false
