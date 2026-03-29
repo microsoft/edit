@@ -79,39 +79,199 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
 // 2. THE AI SIDEBAR (Right Panel)
 // ---------------------------------------------------------
 pub fn draw_ai_sidebar(ctx: &mut Context, state: &mut State) {
-    // Width/Height 0 allows the parent column to dictate the stretch limits
+    if let Some(rx) = &state.ai_receiver {
+        if let Ok(response) = rx.try_recv() {
+            state.ai_history.push(("AI".to_string(), response));
+            state.is_ai_thinking = false;
+            state.ai_receiver = None;
+            ctx.needs_rerender();
+        }
+    }
+
     ctx.scrollarea_begin("ai_sidebar_scroll", Size { width: 0, height: 0 });
-    
     ctx.attr_position(Position::Stretch);
     ctx.attr_border(); 
 
-    ctx.block_begin("ai_content");
-    ctx.attr_padding(Rect::three(1, 2, 1));
-    {
-        ctx.label("ai_title", " AI Assistant ");
-        ctx.attr_position(Position::Center);
-        ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightBlue));
-        
-        ctx.label("ai_desc", "I am ready to assist.");
-        ctx.attr_padding(Rect::three(1, 0, 1));
+    ctx.table_begin("ai_layout");
+    ctx.attr_position(Position::Stretch); 
+    ctx.table_set_columns(&[-1]); 
 
-        ctx.label("ai_placeholder", "[ Chat UI goes here ]");
-        ctx.attr_foreground_rgba(ctx.indexed_alpha(IndexedColor::Foreground, 1, 2));
-        
-        ctx.block_begin("ai_close_btn");
+    // --- TOP: CHAT HISTORY & WELCOME SCREEN ---
+    ctx.table_next_row();
+    ctx.block_begin("ai_history");
+    ctx.attr_position(Position::Stretch); 
+    ctx.attr_padding(Rect::three(1, 2, 1));
+
+    if state.ai_history.is_empty() {
+        ctx.block_begin("ai_welcome");
         ctx.attr_position(Position::Center);
-        ctx.attr_padding(Rect::three(2, 0, 0));
-        
-        // This button toggles the state, closing the sidebar
-        if ctx.button("close_ai", " Close Panel ", ButtonStyle::default()) {
-            state.wants_ai_tab = false;
-            ctx.needs_rerender();
+
+        let ascii_logo = [
+            "       =+++++++++++==:.:::  ",          
+            "       ==============:::::::-  ",        
+            "      ==============::::-----    ",      
+            "     ==============-::--------   ",      
+            "    *==============:    =++++++++++= ",  
+            "    ===============    ============== ", 
+            "    ++++++++++++++=    ==============  ",
+            "   +++++++++++++++    ===============  ",
+            "   +++++********* -==============  ", 
+            "   ************** ++++===========   ",
+            "    ************ -+++++++++++===+   ",
+            "          ***++++====++++++++++++++    ",
+            "           *+++++===***+++++++++++    ", 
+            "            +++===-*********+++++    ",  
+            "             ===--************** ",  
+        ];
+
+        for (i, &line) in ascii_logo.iter().enumerate() {
+            if i < 9 {
+                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightBlue));
+            } else if i < 18 {
+                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightCyan));
+            } else {
+                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightGreen));
+            }
+            ctx.next_block_id_mixin(i as u64);
+            ctx.label("logo_line", line);
         }
-        ctx.block_end();
+
+        ctx.attr_padding(Rect::three(0, 0, 1));
+        ctx.label("ai_title", "Edit Copilot");
+        ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+        ctx.label("ai_desc", "How can I help you code today?");
+        ctx.attr_foreground_rgba(ctx.indexed_alpha(IndexedColor::Foreground, 1, 2));
+        ctx.block_end(); 
+    } else {
+        for (i, (role, msg)) in state.ai_history.iter().enumerate() {
+            ctx.next_block_id_mixin(i as u64);
+            ctx.block_begin("msg_block");
+            ctx.attr_padding(Rect::three(0, 0, 1));
+            
+            if role == "User" {
+                ctx.label("role_user", " You:");
+                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightCyan));
+            } else {
+                ctx.label("role_ai", " Copilot:");
+                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightGreen));
+            }
+            
+            for (j, line) in msg.lines().enumerate() {
+                ctx.next_block_id_mixin((i * 1000 + j) as u64);
+                ctx.label("msg_line", &format!("  {}", line));
+                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Foreground));
+            }
+            ctx.block_end();
+        }
+
+        if state.is_ai_thinking {
+            ctx.label("thinking", " Copilot is typing...");
+            ctx.attr_foreground_rgba(ctx.indexed_alpha(IndexedColor::Foreground, 1, 2));
+        }
     }
+
     ctx.block_end(); 
 
+    // --- BOTTOM: INPUT AREA ---
+    ctx.table_next_row();
+    ctx.block_begin("ai_input_container");
+    ctx.attr_border();
+    ctx.attr_padding(Rect::three(1, 1, 0));
+
+    ctx.label("ai_input_lbl", "Ask anything:");
+    ctx.attr_foreground_rgba(ctx.indexed_alpha(IndexedColor::Foreground, 1, 2));
+
+    ctx.editline("ai_prompt_input", &mut state.ai_prompt);
+    ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 2 }); 
+
+    ctx.table_begin("ai_actions");
+    ctx.table_set_columns(&[-1, 10, 10]); 
+    ctx.table_next_row();
+    
+    ctx.block_begin("spacer"); 
+    ctx.block_end(); 
+
+    let can_send = !state.ai_prompt.trim().is_empty() && !state.is_ai_thinking;
+    
+    if ctx.button("send_btn", "  Send  ", ButtonStyle::default()) && can_send {
+        // Intercept logic for API Key Modal
+        if state.ai_api_key.trim().is_empty() {
+            state.wants_api_key_modal = true;
+            ctx.needs_rerender();
+        } else {
+            let prompt_text = state.ai_prompt.clone();
+            state.ai_history.push(("User".to_string(), prompt_text.clone()));
+            state.ai_prompt.clear();
+            state.is_ai_thinking = true;
+
+            let (tx, rx) = std::sync::mpsc::channel();
+            state.ai_receiver = Some(rx);
+            let api_key = state.ai_api_key.clone();
+
+            std::thread::spawn(move || {
+                // OpenAI compatible endpoint setup
+                let endpoint = "https://api.openai.com/v1/chat/completions";
+                let model = "gpt-3.5-turbo"; 
+
+                let response = ai_plugin::fetch_ai_response(endpoint, &api_key, model, &prompt_text);
+                
+                let final_msg = response.unwrap_or_else(|err| format!("Copilot Error: {}", err));
+                let _ = tx.send(final_msg);
+            });
+
+            ctx.needs_rerender();
+        }
+    }
+
+    if ctx.button("close_btn", "  Close ", ButtonStyle::default()) {
+        state.wants_ai_tab = false;
+        ctx.needs_rerender();
+    }
+
+    ctx.table_end(); 
+    ctx.block_end(); 
+
+    ctx.table_end(); 
     ctx.scrollarea_end();
+
+    // --- API KEY POPUP MODAL ---
+    if state.wants_api_key_modal {
+        ctx.modal_begin("api_key_modal", " API Key Required ");
+        
+        ctx.block_begin("modal_content");
+        ctx.attr_padding(Rect::three(1, 2, 1));
+        
+        ctx.label("api_key_desc", "Please enter your OpenAI/Compatible API Key:");
+        ctx.attr_padding(Rect::three(0, 0, 1));
+        
+        ctx.editline("api_key_input", &mut state.api_key_input);
+        ctx.attr_intrinsic_size(Size { width: 45, height: 1 });
+        ctx.steal_focus(); // Automatically focus the text box
+
+        ctx.table_begin("modal_actions");
+        ctx.table_set_columns(&[-1, 10, 10]);
+        ctx.table_next_row();
+        ctx.block_begin("modal_spacer"); 
+        ctx.block_end();
+        
+        if ctx.button("save_key_btn", "  Save  ", ButtonStyle::default()) {
+            state.ai_api_key = state.api_key_input.clone();
+            state.wants_api_key_modal = false;
+            ctx.needs_rerender();
+        }
+        
+        if ctx.button("cancel_key_btn", " Cancel ", ButtonStyle::default()) {
+            state.wants_api_key_modal = false;
+            ctx.needs_rerender();
+        }
+        
+        ctx.table_end();
+        ctx.block_end();
+        
+        if ctx.modal_end() {
+            state.wants_api_key_modal = false;
+        }
+    }
 }
 
 // ---------------------------------------------------------

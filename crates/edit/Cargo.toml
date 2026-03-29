@@ -21,6 +21,7 @@ debug-latency = []
 [dependencies]
 lsh.workspace = true
 stdext.workspace = true
+ai_plugin = { version = "0.1.0", path = "../ai_plugin" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -50,3 +51,4 @@ features = [
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 zstd = { version = "0.13", default-features = false }
+ai_plugin = { path = "../ai_plugin" }

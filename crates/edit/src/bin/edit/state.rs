@@ -182,6 +182,14 @@ pub struct State {
     pub osc_clipboard_sync: bool,
     pub osc_clipboard_always_send: bool,
     pub exit: bool,
+
+    pub ai_prompt: String,
+    pub ai_history: Vec<(String, String)>, // Stores (Role, Message)
+    pub is_ai_thinking: bool,
+    pub ai_receiver: Option<std::sync::mpsc::Receiver<String>>,
+    pub ai_api_key: String,
+    pub wants_api_key_modal: bool,
+    pub api_key_input: String,
 }
 
 impl State {
@@ -236,6 +244,15 @@ impl State {
             osc_clipboard_sync: false,
             osc_clipboard_always_send: false,
             exit: false,
+
+            ai_prompt: String::new(),
+            ai_history: Vec::new(),
+            is_ai_thinking: false,
+            ai_receiver: None,
+            ai_api_key: String::new(),
+            wants_api_key_modal: false,
+            api_key_input: String::new(),
+           
         })
     }
 

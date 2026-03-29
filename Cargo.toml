@@ -1,6 +1,6 @@
 [workspace]
 default-members = ["crates/edit"]
-members = ["crates/*"]
+members = ["crates/*", "crates/ai_plugin"]
 resolver = "2"
 
 [workspace.package]
