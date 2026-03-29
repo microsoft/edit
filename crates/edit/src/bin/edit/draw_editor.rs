@@ -29,18 +29,31 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         _ => 2,
     };
 
-    // --- DYNAMIC COLUMNS SETUP ---
-    // Explicitly define this as Vec<CoordType> so it matches the UI engine
+    // --- 1. THE LAYOUT FIX: Calculate exact center width ---
+    let total_width = size.width as i32;
+    let mut center_width = total_width;
+
     let mut columns: Vec<CoordType> = Vec::new();
+
     if state.wants_file_explorer { 
         columns.push(state.explorer_width as CoordType); 
-        columns.push(1);                    
+        columns.push(1); // Splitter             
+        center_width -= state.explorer_width + 1;
     } 
-    columns.push(-1);                       
+    
+    // Push a placeholder for the center column so we can replace it later
+    let center_idx = columns.len();
+    columns.push(0);                       
+    
     if state.wants_ai_tab { 
-        columns.push(1);                    
+        columns.push(1); // Splitter                    
         columns.push(state.ai_width as CoordType);       
+        center_width -= state.ai_width + 1;
     } 
+    
+    // Ensure the center width never breaks if the terminal shrinks too much
+    center_width = center_width.max(10);
+    columns[center_idx] = center_width as CoordType;
     
     ctx.table_begin("main_split");
     ctx.attr_position(Position::Stretch); 
@@ -60,14 +73,13 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         ctx.attr_focusable(); 
         ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Foreground, 1, 6)); 
 
+        // THE DRAG FIX: Sync start width ONLY on the exact frame the mouse clicks down
         if let Some(delta) = ctx.drag_delta() {
-            // Cast delta.x to i32 to safely add it to the state tracker
+            if delta.x == 0 && delta.y == 0 {
+                state.explorer_drag_start = state.explorer_width;
+            }
             state.explorer_width = (state.explorer_drag_start + delta.x as i32).clamp(10, 80);
             ctx.needs_rerender();
-        } else if ctx.drag_released() {
-            state.explorer_drag_start = state.explorer_width; 
-        } else if !ctx.was_mouse_down() {
-            state.explorer_drag_start = state.explorer_width; 
         }
         ctx.block_end();
     }
@@ -96,14 +108,14 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         ctx.attr_focusable();
         ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Foreground, 1, 6));
 
+        // THE DRAG FIX: Sync start width ONLY on the exact frame the mouse clicks down
         if let Some(delta) = ctx.drag_delta() {
-            // Cast delta.x to i32 to safely subtract it from the state tracker
+            if delta.x == 0 && delta.y == 0 {
+                state.ai_drag_start = state.ai_width;
+            }
+            // Dragging left means negative delta.x, which increases AI width
             state.ai_width = (state.ai_drag_start - delta.x as i32).clamp(20, 120);
             ctx.needs_rerender();
-        } else if ctx.drag_released() {
-            state.ai_drag_start = state.ai_width;
-        } else if !ctx.was_mouse_down() {
-            state.ai_drag_start = state.ai_width;
         }
         ctx.block_end();
 
@@ -150,37 +162,45 @@ pub fn draw_ai_sidebar(ctx: &mut Context, state: &mut State) {
         ctx.block_begin("ai_welcome");
         ctx.attr_position(Position::Center);
 
-        let ascii_logo = [
-            "       =+++++++++++==:.:::  ",          
-            "       ==============:::::::-  ",        
-            "      ==============::::-----    ",      
-            "     ==============-::--------   ",      
-            "    *==============:    =++++++++++= ",  
-            "    ===============    ============== ", 
-            "    ++++++++++++++=    ==============  ",
-            "   +++++++++++++++    ===============  ",
-            "   +++++********* -==============  ", 
-            "   ************** ++++===========   ",
-            "    ************ -+++++++++++===+   ",
-            "          ***++++====++++++++++++++    ",
-            "           *+++++===***+++++++++++    ", 
-            "            +++===-*********+++++    ",  
-            "             ===--************** ",  
-        ];
+        // --- THE RESPONSIVE FIX ---
+        // Only draw the big ASCII art if the panel is wide enough!
+        if state.ai_width > 35 {
+            let ascii_logo = [
+                "       ++++++++++++++:...           ",
+                "     ==============:.:::::          ",
+                "    ==============-:::::---         ",
+                "   ===============::::------        ",
+                "  ===============:::---------       ",
+                "  ===============:     +++++======= ",
+                " ================     ==============",
+                "++++++++++++++++     ===============",
+                "+++++++++++++++      ===============",
+                "+++++++********     ================",
+                "**************     ++++============ ",
+                " ************     -+++++++++======  ",
+                "       ****++++====+++++++++++++++  ",
+                "         *+++++==-*++++++++++++++   ",
+                "         +++++===*******++++++++    ",
+                "          ++===-=**************     ",
+                "            =-=**************       ",
+            ];
 
-        for (i, &line) in ascii_logo.iter().enumerate() {
-            if i < 9 {
-                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightBlue));
-            } else if i < 18 {
-                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightCyan));
-            } else {
-                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightGreen));
+            for (i, &line) in ascii_logo.iter().enumerate() {
+                let color = if i < 7 {
+                    IndexedColor::BrightBlue
+                } else if i < 12 {
+                    IndexedColor::BrightCyan
+                } else {
+                    IndexedColor::BrightGreen
+                };
+                ctx.attr_foreground_rgba(ctx.indexed(color));
+                ctx.next_block_id_mixin(i as u64);
+                ctx.label("logo_line", line);
             }
-            ctx.next_block_id_mixin(i as u64);
-            ctx.label("logo_line", line);
+            ctx.attr_padding(Rect::three(0, 0, 1));
         }
 
-        ctx.attr_padding(Rect::three(0, 0, 1));
+        // The title and description will ALWAYS render
         ctx.label("ai_title", "Edit Copilot");
         ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
         ctx.label("ai_desc", "How can I help you code today?");
@@ -355,9 +375,6 @@ pub fn draw_file_explorer(ctx: &mut Context, state: &mut State) {
 
         let mut label = format!("{}{}{}", indent, prefix, name);
 
-        // --- UNDERFLOW/OVERFLOW FIX ---
-        // Strictly cap the label length so it never forces the table column to stretch
-        // beyond the 30 characters we assigned to it.
         let max_chars = 26; 
         if label.chars().count() > max_chars {
             label = label.chars().take(max_chars - 1).collect::<String>() + "…";
@@ -402,10 +419,29 @@ pub fn draw_file_explorer(ctx: &mut Context, state: &mut State) {
         ctx.needs_rerender();
     }
 
+    // --- THE FIX: Prevent Duplicate Tabs ---
     if let Some(file) = to_open {
-        match state.documents.add_file_path(&file) {
-            Ok(_) => {},
-            Err(err) => error_log_add(ctx, state, err.into()),
+        let mut found_idx = None;
+        
+        // Check if the file is already open
+        for (idx, doc) in state.documents.iter().enumerate() {
+            if let Some(p) = &doc.path {
+                if p == &file {
+                    found_idx = Some(idx);
+                    break;
+                }
+            }
+        }
+
+        if let Some(idx) = found_idx {
+            // Already open, just focus it
+            state.documents.make_active_by_index(idx);
+        } else {
+            // Not open, add it
+            match state.documents.add_file_path(&file) {
+                Ok(_) => {},
+                Err(err) => error_log_add(ctx, state, err.into()),
+            }
         }
         ctx.needs_rerender();
     }
@@ -732,34 +768,44 @@ fn validate_goto_point(line: &str) -> Result<Point, ParseIntError> {
 }
 
 
+// ---------------------------------------------------------
+// 4. THE MULTI-TAB BAR
+// ---------------------------------------------------------
 pub fn draw_tab_bar(ctx: &mut Context, state: &mut State) {
     let doc_count = state.documents.len();
     if doc_count < 2 {
-        // Don't waste screen space if only 0 or 1 file is open
         return; 
     }
 
     ctx.table_begin("tab_bar");
-    
-    // Create flexible columns for each tab
-    let mut columns = Vec::new();
-    for _ in 0..doc_count {
-        columns.push(-1); // -1 means distribute space evenly
-    }
-    ctx.table_set_columns(&columns);
     ctx.table_next_row();
+
+    // --- THE FIX: Disambiguate Same-Name Tabs ---
+    // Count occurrences of each filename
+    let mut name_counts = std::collections::HashMap::new();
+    for doc in state.documents.iter() {
+        *name_counts.entry(doc.filename.as_str()).or_insert(0) += 1;
+    }
 
     let mut clicked_idx = None;
 
-    // Draw a tab for each document
     for (idx, doc) in state.documents.iter().enumerate() {
-        let is_active = idx == doc_count - 1; // The last doc is always the active one
+        let is_active = idx == doc_count - 1; 
         
         let tb = doc.buffer.borrow();
         let dirty_marker = if tb.is_dirty() { "*" } else { "" };
-        let label = format!(" {}{} ", doc.filename, dirty_marker);
+        
+        // If multiple files share this name, append the parent folder to the tab
+        let is_duplicate_name = name_counts[doc.filename.as_str()] > 1;
+        let display_name = if is_duplicate_name && doc.path.is_some() {
+            let parent_dir = doc.path.as_ref().unwrap().parent().and_then(|p| p.file_name()).unwrap_or_default();
+            format!("{} - {}", doc.filename, parent_dir.to_string_lossy())
+        } else {
+            doc.filename.clone()
+        };
 
-        // Highlight the active tab
+        let label = format!(" {}{} ", display_name, dirty_marker);
+
         if is_active {
             ctx.attr_background_rgba(ctx.indexed(IndexedColor::BrightBlue));
             ctx.attr_foreground_rgba(ctx.contrasted(ctx.indexed(IndexedColor::BrightBlue)));
@@ -768,7 +814,6 @@ pub fn draw_tab_bar(ctx: &mut Context, state: &mut State) {
             ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Foreground));
         }
 
-        // We use next_block_id_mixin so each button gets a unique IMGUI hash
         ctx.next_block_id_mixin(idx as u64);
         if ctx.button("tab_button", &label, ButtonStyle::default().bracketed(false)) {
             clicked_idx = Some(idx);
@@ -777,7 +822,6 @@ pub fn draw_tab_bar(ctx: &mut Context, state: &mut State) {
 
     ctx.table_end();
 
-    // If a tab was clicked, make it active
     if let Some(idx) = clicked_idx {
         state.documents.make_active_by_index(idx);
         ctx.needs_rerender();

@@ -261,8 +261,8 @@ impl State {
             // --- LAYOUT WIDTHS ---
             explorer_width: 30,
             explorer_drag_start: 30,
-            ai_width: 40,
-            ai_drag_start: 40,
+            ai_width: 45,
+            ai_drag_start: 45,
            
         })
     }
