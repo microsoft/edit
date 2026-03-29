@@ -190,6 +190,11 @@ pub struct State {
     pub ai_api_key: String,
     pub wants_api_key_modal: bool,
     pub api_key_input: String,
+
+    pub explorer_width: i32,
+    pub explorer_drag_start: i32,
+    pub ai_width: i32,
+    pub ai_drag_start: i32,
 }
 
 impl State {
@@ -252,6 +257,12 @@ impl State {
             ai_api_key: String::new(),
             wants_api_key_modal: false,
             api_key_input: String::new(),
+
+            // --- LAYOUT WIDTHS ---
+            explorer_width: 30,
+            explorer_drag_start: 30,
+            ai_width: 40,
+            ai_drag_start: 40,
            
         })
     }

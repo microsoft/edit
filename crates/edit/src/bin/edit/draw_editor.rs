@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-
+extern crate ai_plugin;
 use std::num::ParseIntError;
 
 use edit::framebuffer::IndexedColor;
@@ -29,27 +29,52 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         _ => 2,
     };
 
-    // Determine dynamic column widths: Explorer(30) | Editor(auto) | AI Tab(40)
-    let mut columns = Vec::new();
-    if state.wants_file_explorer { columns.push(30); } 
-    columns.push(-1); 
-    if state.wants_ai_tab { columns.push(40); } 
+    // --- DYNAMIC COLUMNS SETUP ---
+    // Explicitly define this as Vec<CoordType> so it matches the UI engine
+    let mut columns: Vec<CoordType> = Vec::new();
+    if state.wants_file_explorer { 
+        columns.push(state.explorer_width as CoordType); 
+        columns.push(1);                    
+    } 
+    columns.push(-1);                       
+    if state.wants_ai_tab { 
+        columns.push(1);                    
+        columns.push(state.ai_width as CoordType);       
+    } 
     
     ctx.table_begin("main_split");
+    ctx.attr_position(Position::Stretch); 
     ctx.table_set_columns(&columns);
     ctx.table_next_row();
 
     // -- LEFT PANEL: FILE EXPLORER --
     if state.wants_file_explorer {
         ctx.block_begin("explorer_col");
-        ctx.attr_position(Position::Stretch); // Force full height
+        ctx.attr_position(Position::Stretch); 
         draw_file_explorer(ctx, state);
+        ctx.block_end();
+
+        // -- EXPLORER SPLITTER --
+        ctx.block_begin("explorer_splitter");
+        ctx.attr_position(Position::Stretch);
+        ctx.attr_focusable(); 
+        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Foreground, 1, 6)); 
+
+        if let Some(delta) = ctx.drag_delta() {
+            // Cast delta.x to i32 to safely add it to the state tracker
+            state.explorer_width = (state.explorer_drag_start + delta.x as i32).clamp(10, 80);
+            ctx.needs_rerender();
+        } else if ctx.drag_released() {
+            state.explorer_drag_start = state.explorer_width; 
+        } else if !ctx.was_mouse_down() {
+            state.explorer_drag_start = state.explorer_width; 
+        }
         ctx.block_end();
     }
 
     // -- CENTER PANEL: TEXT EDITOR --
     ctx.block_begin("editor_col");
-    ctx.attr_position(Position::Stretch); // Force full height
+    ctx.attr_position(Position::Stretch); 
     
     draw_tab_bar(ctx, state); 
     
@@ -58,19 +83,38 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         ctx.inherit_focus();
     } else {
         ctx.block_begin("empty");
+        ctx.attr_position(Position::Stretch);
         ctx.block_end();
     }
     ctx.block_end(); 
 
     // -- RIGHT PANEL: AI SIDEBAR --
     if state.wants_ai_tab {
+        // -- AI SPLITTER --
+        ctx.block_begin("ai_splitter");
+        ctx.attr_position(Position::Stretch);
+        ctx.attr_focusable();
+        ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Foreground, 1, 6));
+
+        if let Some(delta) = ctx.drag_delta() {
+            // Cast delta.x to i32 to safely subtract it from the state tracker
+            state.ai_width = (state.ai_drag_start - delta.x as i32).clamp(20, 120);
+            ctx.needs_rerender();
+        } else if ctx.drag_released() {
+            state.ai_drag_start = state.ai_width;
+        } else if !ctx.was_mouse_down() {
+            state.ai_drag_start = state.ai_width;
+        }
+        ctx.block_end();
+
+        // -- AI CONTENT --
         ctx.block_begin("ai_col");
-        ctx.attr_position(Position::Stretch); // Force full height
+        ctx.attr_position(Position::Stretch); 
         draw_ai_sidebar(ctx, state);
         ctx.block_end();
     }
 
-    ctx.table_end(); // Close the 3-way split
+    ctx.table_end(); // Close the split
 
     ctx.attr_intrinsic_size(Size { width: 0, height: size.height - height_reduction });
 }
@@ -213,7 +257,7 @@ pub fn draw_ai_sidebar(ctx: &mut Context, state: &mut State) {
                 let endpoint = "https://api.openai.com/v1/chat/completions";
                 let model = "gpt-3.5-turbo"; 
 
-                let response = ai_plugin::fetch_ai_response(endpoint, &api_key, model, &prompt_text);
+                let response = ::ai_plugin::fetch_ai_response(endpoint, &api_key, model, &prompt_text);
                 
                 let final_msg = response.unwrap_or_else(|err| format!("Copilot Error: {}", err));
                 let _ = tx.send(final_msg);

@@ -1555,9 +1555,10 @@ impl<'a> Context<'a, '_> {
         self.next_block_id_mixin = id;
     }
 
-    fn attr_focusable(&mut self) {
-        let mut last_node = self.tree.last_node.borrow_mut();
-        last_node.attributes.focusable = true;
+   // TO THIS:
+    pub fn attr_focusable(&mut self) {
+    let mut last_node = self.tree.last_node.borrow_mut();
+    last_node.attributes.focusable = true;
     }
 
     /// If this is the first time the current node is being drawn,
@@ -1736,6 +1737,22 @@ impl<'a> Context<'a, '_> {
     pub fn was_mouse_down(&mut self) -> bool {
         let last_node = self.tree.last_node.borrow();
         self.tui.was_mouse_down_on_node(last_node.id)
+    }
+    /// Returns the X and Y distance the mouse has dragged if this node is being dragged.
+    pub fn drag_delta(&mut self) -> Option<Point> {
+        if self.was_mouse_down() && self.tui.mouse_state == InputMouseState::Left && self.tui.mouse_is_drag {
+            Some(Point {
+                x: self.tui.mouse_position.x - self.tui.mouse_down_position.x,
+                y: self.tui.mouse_position.y - self.tui.mouse_down_position.y,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Returns true if a drag or click was just released over this node.
+    pub fn drag_released(&mut self) -> bool {
+        self.was_mouse_down() && self.tui.mouse_state == InputMouseState::Release
     }
 
     /// Returns whether the mouse was pressed down on the current node's subtree.
