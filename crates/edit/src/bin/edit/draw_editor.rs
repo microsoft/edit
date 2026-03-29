@@ -144,26 +144,35 @@ pub fn draw_ai_sidebar(ctx: &mut Context, state: &mut State) {
         }
     }
 
+    // THE FIX: Wrap the ENTIRE sidebar in a flex column
+    ctx.block_begin("ai_sidebar_main");
+    ctx.attr_position(Position::Stretch);
+
+    // --- 1. HEADER (Top) ---
+    ctx.table_begin("ai_header");
+    ctx.table_set_columns(&[-1, 5]);
+    ctx.table_next_row();
+    ctx.label("ai_title_lbl", " Edit Copilot");
+    
+    // THE FIX: Move close button to the top right so it never gets clipped
+    if ctx.button("close_ai_btn", " [X] ", ButtonStyle::default()) {
+        state.wants_ai_tab = false;
+        ctx.needs_rerender();
+    }
+    ctx.table_end();
+
+    // --- 2. CHAT HISTORY (Middle Flex Region) ---
+    // THE FIX: The scroll area now ONLY wraps the history. 
+    // Position::Stretch forces it to push the input box down to the screen floor!
     ctx.scrollarea_begin("ai_sidebar_scroll", Size { width: 0, height: 0 });
     ctx.attr_position(Position::Stretch);
     ctx.attr_border(); 
-
-    ctx.table_begin("ai_layout");
-    ctx.attr_position(Position::Stretch); 
-    ctx.table_set_columns(&[-1]); 
-
-    // --- TOP: CHAT HISTORY & WELCOME SCREEN ---
-    ctx.table_next_row();
-    ctx.block_begin("ai_history");
-    ctx.attr_position(Position::Stretch); 
-    ctx.attr_padding(Rect::three(1, 2, 1));
+    ctx.attr_padding(Rect::three(1, 1, 1));
 
     if state.ai_history.is_empty() {
         ctx.block_begin("ai_welcome");
         ctx.attr_position(Position::Center);
 
-        // --- THE RESPONSIVE FIX ---
-        // Only draw the big ASCII art if the panel is wide enough!
         if state.ai_width > 35 {
             let ascii_logo = [
                 "       ++++++++++++++:...           ",
@@ -186,27 +195,25 @@ pub fn draw_ai_sidebar(ctx: &mut Context, state: &mut State) {
             ];
 
             for (i, &line) in ascii_logo.iter().enumerate() {
-                let color = if i < 7 {
-                    IndexedColor::BrightBlue
-                } else if i < 12 {
-                    IndexedColor::BrightCyan
+                if i < 9 {
+                    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightBlue));
+                } else if i < 18 {
+                    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightCyan));
                 } else {
-                    IndexedColor::BrightGreen
-                };
-                ctx.attr_foreground_rgba(ctx.indexed(color));
+                    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightGreen));
+                }
                 ctx.next_block_id_mixin(i as u64);
                 ctx.label("logo_line", line);
             }
             ctx.attr_padding(Rect::three(0, 0, 1));
         }
 
-        // The title and description will ALWAYS render
-        ctx.label("ai_title", "Edit Copilot");
-        ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
         ctx.label("ai_desc", "How can I help you code today?");
         ctx.attr_foreground_rgba(ctx.indexed_alpha(IndexedColor::Foreground, 1, 2));
         ctx.block_end(); 
     } else {
+        let max_text_width = (state.ai_width - 6).max(10) as usize;
+
         for (i, (role, msg)) in state.ai_history.iter().enumerate() {
             ctx.next_block_id_mixin(i as u64);
             ctx.block_begin("msg_block");
@@ -221,9 +228,24 @@ pub fn draw_ai_sidebar(ctx: &mut Context, state: &mut State) {
             }
             
             for (j, line) in msg.lines().enumerate() {
-                ctx.next_block_id_mixin((i * 1000 + j) as u64);
-                ctx.label("msg_line", &format!("  {}", line));
-                ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Foreground));
+                let mut chars: Vec<char> = line.chars().collect();
+                let mut sub_line_idx = 0;
+                
+                if chars.is_empty() {
+                    ctx.next_block_id_mixin((i * 10000 + j * 100) as u64);
+                    ctx.label("msg_line", "");
+                    continue;
+                }
+
+                while !chars.is_empty() {
+                    let chunk_size = chars.len().min(max_text_width);
+                    let chunk: String = chars.drain(0..chunk_size).collect();
+                    
+                    ctx.next_block_id_mixin((i * 10000 + j * 100 + sub_line_idx) as u64);
+                    ctx.label("msg_line", &format!("  {}", chunk));
+                    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Foreground));
+                    sub_line_idx += 1;
+                }
             }
             ctx.block_end();
         }
@@ -233,13 +255,10 @@ pub fn draw_ai_sidebar(ctx: &mut Context, state: &mut State) {
             ctx.attr_foreground_rgba(ctx.indexed_alpha(IndexedColor::Foreground, 1, 2));
         }
     }
+    ctx.scrollarea_end();
 
-    ctx.block_end(); 
-
-    // --- BOTTOM: INPUT AREA ---
-    ctx.table_next_row();
+    // --- 3. INPUT AREA & ACTIONS (Bottom Floor) ---
     ctx.block_begin("ai_input_container");
-    ctx.attr_border();
     ctx.attr_padding(Rect::three(1, 1, 0));
 
     ctx.label("ai_input_lbl", "Ask anything:");
@@ -249,16 +268,19 @@ pub fn draw_ai_sidebar(ctx: &mut Context, state: &mut State) {
     ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 2 }); 
 
     ctx.table_begin("ai_actions");
-    ctx.table_set_columns(&[-1, 10, 10]); 
+    ctx.table_set_columns(&[-1, 7, 8]); // Compact spacing
     ctx.table_next_row();
-    
-    ctx.block_begin("spacer"); 
-    ctx.block_end(); 
+    ctx.block_begin("spacer"); ctx.block_end(); 
+
+    if ctx.button("key_btn", " Key ", ButtonStyle::default()) {
+        state.api_key_input = state.ai_api_key.clone(); 
+        state.wants_api_key_modal = true;
+        ctx.needs_rerender();
+    }
 
     let can_send = !state.ai_prompt.trim().is_empty() && !state.is_ai_thinking;
     
-    if ctx.button("send_btn", "  Send  ", ButtonStyle::default()) && can_send {
-        // Intercept logic for API Key Modal
+    if ctx.button("send_btn", " Send ", ButtonStyle::default()) && can_send {
         if state.ai_api_key.trim().is_empty() {
             state.wants_api_key_modal = true;
             ctx.needs_rerender();
@@ -273,9 +295,11 @@ pub fn draw_ai_sidebar(ctx: &mut Context, state: &mut State) {
             let api_key = state.ai_api_key.clone();
 
             std::thread::spawn(move || {
-                // OpenAI compatible endpoint setup
-                let endpoint = "https://api.openai.com/v1/chat/completions";
-                let model = "gpt-3.5-turbo"; 
+                let endpoint = "https://api.groq.com/openai/v1/chat/completions";
+                
+                // Use one of Groq's blazing fast open-source models
+                // Options: "llama3-8b-8192", "llama3-70b-8192", "mixtral-8x7b-32768"
+                let model = "llama3-70b-8192";
 
                 let response = ::ai_plugin::fetch_ai_response(endpoint, &api_key, model, &prompt_text);
                 
@@ -286,54 +310,57 @@ pub fn draw_ai_sidebar(ctx: &mut Context, state: &mut State) {
             ctx.needs_rerender();
         }
     }
-
-    if ctx.button("close_btn", "  Close ", ButtonStyle::default()) {
-        state.wants_ai_tab = false;
-        ctx.needs_rerender();
-    }
-
     ctx.table_end(); 
     ctx.block_end(); 
 
-    ctx.table_end(); 
-    ctx.scrollarea_end();
+    ctx.block_end(); // Close the main sidebar column
 
-    // --- API KEY POPUP MODAL ---
+    // --- 4. API KEY POPUP MODAL ---
     if state.wants_api_key_modal {
-        ctx.modal_begin("api_key_modal", " API Key Required ");
+        ctx.modal_begin("api_key_modal", " API Key Setup ");
         
         ctx.block_begin("modal_content");
         ctx.attr_padding(Rect::three(1, 2, 1));
         
-        ctx.label("api_key_desc", "Please enter your OpenAI/Compatible API Key:");
+        ctx.label("api_key_desc", "Please enter your API Key (Ctrl+V to paste):");
         ctx.attr_padding(Rect::three(0, 0, 1));
         
         ctx.editline("api_key_input", &mut state.api_key_input);
         ctx.attr_intrinsic_size(Size { width: 45, height: 1 });
-        ctx.steal_focus(); // Automatically focus the text box
+        
+        // THE FIX: Removed steal_focus() so the mouse and clipboard work naturally.
+        
+        let mut save_triggered = false;
+        if ctx.consume_shortcut(vk::RETURN) {
+            save_triggered = true;
+        }
 
         ctx.table_begin("modal_actions");
         ctx.table_set_columns(&[-1, 10, 10]);
         ctx.table_next_row();
-        ctx.block_begin("modal_spacer"); 
-        ctx.block_end();
+        ctx.block_begin("modal_spacer"); ctx.block_end();
         
         if ctx.button("save_key_btn", "  Save  ", ButtonStyle::default()) {
-            state.ai_api_key = state.api_key_input.clone();
-            state.wants_api_key_modal = false;
-            ctx.needs_rerender();
+            save_triggered = true;
         }
         
         if ctx.button("cancel_key_btn", " Cancel ", ButtonStyle::default()) {
             state.wants_api_key_modal = false;
             ctx.needs_rerender();
         }
-        
         ctx.table_end();
         ctx.block_end();
         
-        if ctx.modal_end() {
+        let modal_closed = ctx.modal_end();
+
+        // THE FIX: Handle the save or close properly
+        if save_triggered {
+            state.ai_api_key = state.api_key_input.clone();
             state.wants_api_key_modal = false;
+            ctx.needs_rerender();
+        } else if modal_closed {
+            state.wants_api_key_modal = false;
+            ctx.needs_rerender();
         }
     }
 }

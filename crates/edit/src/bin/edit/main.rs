@@ -383,7 +383,7 @@ fn draw(ctx: &mut Context, state: &mut State) {
         
     } else if key == kbmod::CTRL | vk::B {
         state.wants_file_explorer = !state.wants_file_explorer;
-    } else if key == kbmod::CTRL | vk::I {
+    } else if key == kbmod::CTRL | vk::E {
         state.wants_ai_tab = !state.wants_ai_tab;
     // --------------------------
     
