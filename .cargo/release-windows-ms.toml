@@ -1,3 +1,22 @@
+# vvv The following parts are specific to official Windows builds. vvv
+# (The use of internal registries, security features, etc., are mandatory.)
+
+global-credential-providers = [
+    "artifacts-cargo-credprovider",
+    "cargo:token",
+    "cargo:wincred",
+]
+
+[registries.Edit_PublicPackages]
+index = "sparse+https://pkgs.dev.azure.com/microsoft/Dart/_packaging/Edit_PublicPackages/Cargo/index/"
+
+[source.crates-io]
+replace-with = "Edit_PublicPackages"
+
+# Enable shadow stacks: https://learn.microsoft.com/en-us/cpp/build/reference/cetcompat
+[target.'cfg(all(target_os = "windows", any(target_arch = "x86", target_arch = "x86_64")))']
+rustflags = ["-Clink-args=/DYNAMICBASE", "-Clink-args=/CETCOMPAT"]
+
 # vvv The following parts are identical to release.toml vvv
 
 # Avoid linking with vcruntime140.dll by statically linking everything,
@@ -14,22 +33,6 @@ rustflags = [
 
 # The backtrace code for panics in Rust is almost as large as the entire editor.
 # = Huge reduction in binary size by removing all that.
-[profile.release]
-panic = "immediate-abort"
-
 [unstable]
-panic-immediate-abort = true
+build-std-features = ["panic_immediate_abort"]
 build-std = ["std", "panic_abort"]
-
-# vvv The following parts are specific to official Windows builds. vvv
-# (The use of internal registries, security features, etc., are mandatory.)
-
-# Enable shadow stacks: https://learn.microsoft.com/en-us/cpp/build/reference/cetcompat
-[target.'cfg(all(target_os = "windows", any(target_arch = "x86", target_arch = "x86_64")))']
-rustflags = ["-Clink-args=/DYNAMICBASE", "-Clink-args=/CETCOMPAT"]
-
-[registries.Edit_PublicPackages]
-index = "sparse+https://pkgs.dev.azure.com/microsoft/Dart/_packaging/Edit_PublicPackages/Cargo/index/"
-
-[source.crates-io]
-replace-with = "Edit_PublicPackages"
