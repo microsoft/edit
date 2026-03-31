@@ -32,9 +32,8 @@ pub fn powershell() {
                         break;
                     }
                 }
-            } else if /.*/ {
+            } else if /.*$/ {
                 yield invalid;
-                return;
             }
         } else if /@"/ {
             if /\s*$/ { // HereStrings must start at the end of the line
@@ -48,9 +47,8 @@ pub fn powershell() {
                         break;
                     }
                 }
-            } else if /.*/ {
+            } else if /.*$/ {
                 yield invalid;
-                return;
             }
         } else if /"/ {
             loop {
