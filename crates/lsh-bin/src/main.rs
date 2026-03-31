@@ -126,6 +126,8 @@ fn run_render(generator: lsh::compiler::Generator, path: &Path) -> anyhow::Resul
             "markup.strikethrough" => "\x1b[9m", // Strikethrough
             "meta.header" => "\x1b[94m",         // Bright Blue
 
+            "invalid" => "\x1b[41;97m",          // White on Red
+
             _ => {
                 unknown_kinds.push(hk.identifier.to_string());
                 ""
