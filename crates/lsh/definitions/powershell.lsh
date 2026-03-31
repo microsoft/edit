@@ -20,27 +20,35 @@ pub fn powershell() {
                 if /'/ { yield string; break; }
                 await input;
             }
-        } else if /@'\s*$/ {
-            yield string;
-            loop {
-                if /.*/ {}
+        } else if /@'/ {
+            if /\s*$/ { // HereStrings must start at the end of the line
                 yield string;
-                await input;
-                if /'@/ {
+                loop {
+                    if /.*/ {}
                     yield string;
-                    break;
+                    await input;
+                    if /'@/ {
+                        yield string;
+                        break;
+                    }
                 }
+            } else if /.*$/ {
+                yield invalid;
             }
-        } else if /@"\s*$/ {
-            yield string;
-            loop {
-                if /.*/ {}
+        } else if /@"/ {
+            if /\s*$/ { // HereStrings must start at the end of the line
                 yield string;
-                await input;
-                if /"@/ {
+                loop {
+                    if /.*/ {}
                     yield string;
-                    break;
+                    await input;
+                    if /"@/ {
+                        yield string;
+                        break;
+                    }
                 }
+            } else if /.*$/ {
+                yield invalid;
             }
         } else if /"/ {
             loop {
