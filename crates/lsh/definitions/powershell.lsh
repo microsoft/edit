@@ -17,21 +17,35 @@ pub fn powershell() {
         } else if /'/ {
             loop {
                 yield string;
-                if /\\./ {}
-                else if /'/ { yield string; break; }
+                if /'/ { yield string; break; }
                 await input;
             }
-        } else if /@"/ {
+        } else if /@'\s*$/ {
+            yield string;
             loop {
+                if /.*/ {}
                 yield string;
-                if /\\./ {}
-                else if /"@/ { yield string; break; }
                 await input;
+                if /'@/ {
+                    yield string;
+                    break;
+                }
+            }
+        } else if /@"\s*$/ {
+            yield string;
+            loop {
+                if /.*/ {}
+                yield string;
+                await input;
+                if /"@/ {
+                    yield string;
+                    break;
+                }
             }
         } else if /"/ {
             loop {
                 yield string;
-                if /\\./ {}
+                if /`./ {}
                 else if /"/ { yield string; break; }
                 await input;
             }
