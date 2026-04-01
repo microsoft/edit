@@ -1,0 +1,68 @@
+#[display_name = "Batch"]
+#[path = "**/*.bat"]
+#[path = "**/*.cmd"]
+pub fn batch() {
+    if /@/ {}
+    if /\s+/ {}
+
+    // Comments and labels only make sense at line start.
+    if /(?i:rem)\>.*/ {
+        yield comment;
+        return;
+    } else if /::.*/ {
+        yield comment;
+        return;
+    } else if /:\w+/ {
+        yield meta.header;
+        return;
+    }
+
+    var state = 0;
+    var ground = 0;
+    var string = 1;
+    var echo = 2;
+
+    until /$/ {
+        if state == string {
+            yield string;
+        } else {
+            yield other;
+        }
+
+        if /%(?:~?[a-zA-Z]|~[a-zA-Z]*\d|(?:\*|\d|\w+)%)|!\w+!/ {
+            yield variable;
+            continue;
+        }
+        if /"/ {
+            yield string;
+            if state == string {
+                state = ground;
+            } else {
+                state = string;
+            }
+            continue;
+        }
+
+        if state == ground {
+            if /(?i:echo)\>/ {
+                yield keyword.other;
+                state = echo;
+                continue;
+            }
+
+            if /(?i:if|else|for|do|in|goto|call|exit|not|exist|defined|errorlevel|equ|neq|lss|leq|gtr|geq)\>/ {
+                yield keyword.control;
+            } else if /(?i:set|setlocal|endlocal)\>/ {
+                yield keyword.other;
+            } else if /\w+[\w.:\/\\-]*/ {
+                // Gobble other word-like tokens without highlighting.
+            }
+        }
+
+        if state == string {
+            yield string;
+        } else {
+            yield other;
+        }
+    }
+}

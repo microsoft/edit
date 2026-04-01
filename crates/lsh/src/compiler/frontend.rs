@@ -5,10 +5,8 @@
 //!
 //! ## Gotchas
 //!
-//! - Variables are in SSA-ish form: `var x = off; x = x + 1;` creates a new vreg for the
-//!   second `x`. But the variable *name* still maps to the new vreg, so later reads see it.
-//! - Physical registers (off, etc.) don't follow SSA. Reading them doesn't create a vreg;
-//!   the `parse_expression` function handles this by copying to a fresh vreg.
+//! - Variables use dedicated virtual registers. Expressions emit directly into a
+//!   caller-specified destination register (destination-driven codegen, à la Lua 5).
 //! - The `raise!` macro captures token_start position at call time. Don't advance before raising.
 
 use std::collections::HashMap;
@@ -566,15 +564,16 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         let name = self.read_identifier()?;
         self.expect('=')?;
-        let (expr, vreg) = self.parse_expression()?;
+        let var_vreg = self.compiler.alloc_vreg();
+        let span = self.parse_expression_into(var_vreg)?;
         self.expect(';')?;
 
         match self.variables.entry(name) {
-            Entry::Vacant(e) => _ = e.insert(vreg),
+            Entry::Vacant(e) => _ = e.insert(var_vreg),
             Entry::Occupied(_) => raise!(self, "variable '{}' already declared", name),
         }
 
-        Ok(expr)
+        Ok(span)
     }
 
     fn parse_identifier_stmt(&mut self) -> CompileResult<IRSpan<'a>> {
@@ -592,10 +591,10 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             // foo = expr;
             Some('=') if !self.is_str("==") => {
                 self.pos += 1;
-                let (expr, vreg) = self.parse_expression()?;
+                let dst = self.get_variable(name)?;
+                let span = self.parse_expression_into(dst)?;
                 self.expect(';')?;
-                self.variables.insert(name, vreg);
-                Ok(expr)
+                Ok(span)
             }
             // foo += expr;
             Some('+') if self.is_str("+=") => {
@@ -616,19 +615,23 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         }
     }
 
-    fn parse_expression(&mut self) -> CompileResult<(IRSpan<'a>, IRRegCell<'a>)> {
+    /// Destination-driven expression codegen: emits code that places the
+    /// expression result directly into `dst`, avoiding redundant copies.
+    fn parse_expression_into(&mut self, dst: IRRegCell<'a>) -> CompileResult<IRSpan<'a>> {
         self.mark();
-        let (lhs_span, lhs_vreg) = match self.peek() {
+        let span = match self.peek() {
             Some('0'..='9') => {
                 let val = self.read_integer()?;
-                let vreg = self.compiler.alloc_vreg();
-                let ir = self.compiler.alloc_iri(IRI::MovImm { dst: vreg, imm: val });
-                (IRSpan::single(ir), vreg)
+                IRSpan::single(self.compiler.alloc_iri(IRI::MovImm { dst, imm: val }))
             }
             Some(c) if Self::is_ident_start(c) => {
                 let name = self.read_identifier()?;
-                let vreg = self.get_variable(name)?;
-                (IRSpan::single(self.compiler.alloc_noop()), vreg)
+                let src = self.get_variable(name)?;
+                if std::ptr::eq(src, dst) {
+                    IRSpan::single(self.compiler.alloc_noop())
+                } else {
+                    IRSpan::single(self.compiler.alloc_iri(IRI::Mov { dst, src }))
+                }
             }
             _ => raise!(self, "expected integer or identifier in expression"),
         };
@@ -636,21 +639,12 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         // Check for binary operator
         if self.peek() == Some('+') && !self.is_str("+=") {
             self.pos += 1;
-
-            // Parse right-hand side - only integer literals supported
             let val = self.read_integer()?;
-            let add_ir = self.compiler.alloc_iri(IRI::AddImm { dst: lhs_vreg, imm: val });
-            lhs_span.last.borrow_mut().set_next(add_ir);
-            Ok((IRSpan { first: lhs_span.first, last: add_ir }, lhs_vreg))
-        } else if lhs_vreg.borrow().physical.is_some() {
-            // For expressions of type `var virtual = physical;`, we need to ensure
-            // that we actually copy the physical register into a new virtual one.
-            // The remaining code assumes single assignment form, while physical registers are permanent.
-            let dst = self.compiler.alloc_vreg();
-            let node = self.compiler.alloc_iri(IRI::Mov { dst, src: lhs_vreg });
-            Ok((IRSpan::single(node), dst))
+            let add_ir = self.compiler.alloc_iri(IRI::AddImm { dst, imm: val });
+            span.last.borrow_mut().set_next(add_ir);
+            Ok(IRSpan { first: span.first, last: add_ir })
         } else {
-            Ok((lhs_span, lhs_vreg))
+            Ok(span)
         }
     }
 
