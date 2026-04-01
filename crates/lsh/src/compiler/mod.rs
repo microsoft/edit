@@ -9,24 +9,19 @@ mod backend;
 mod charset;
 mod frontend;
 mod generator;
-mod optimizer;
+pub mod ir;
 mod regex;
+pub mod ssa;
 
-use std::cell::{Cell, RefCell};
-use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::fmt::Write as _;
-use std::mem::zeroed;
 use std::path::Path;
 
 use stdext::arena::Arena;
 use stdext::collections::BString;
-use stdext::opt_ptr_eq;
 
 pub use self::charset::{Charset, SerializedCharset};
-use self::frontend::*;
 pub use self::generator::Generator;
-use crate::runtime::Register;
 
 pub fn builtin_definitions_path() -> &'static Path {
     #[cfg(windows)]
@@ -56,71 +51,35 @@ impl fmt::Display for CompileError {
 
 pub struct Compiler<'a> {
     arena: &'a Arena,
-    physical_registers: [IRRegCell<'a>; Register::COUNT],
-    functions: Vec<Function<'a>>,
+    parsed_functions: Vec<(&'a str, ir::FuncBody<'a>, FunctionAttributes<'a>, bool)>,
     charsets: Vec<&'a Charset>,
     strings: Vec<&'a str>,
     highlight_kinds: Vec<HighlightKind<'a>>,
-    next_vreg_id: Cell<u32>,
 }
 
 impl<'a> Compiler<'a> {
     pub fn new(arena: &'a Arena) -> Self {
-        #[allow(invalid_value)]
-        let mut s = Self {
+        Self {
             arena,
-            physical_registers: unsafe { zeroed() },
-            functions: Default::default(),
+            parsed_functions: Default::default(),
             charsets: Default::default(),
             strings: Default::default(),
             highlight_kinds: vec![HighlightKind { identifier: "other", value: 0 }],
-            next_vreg_id: Cell::new(0),
-        };
-
-        for i in 0..Register::COUNT {
-            let reg = s.alloc_vreg();
-            reg.borrow_mut().physical = Some(Register::from_usize(i));
-            s.physical_registers[i] = reg;
         }
-
-        s
     }
 
     pub fn parse<'src>(&mut self, path: &'src str, src: &'src str) -> CompileResult<()> {
-        let mut parser = Parser::new(self, path, src);
+        let mut parser = frontend::Parser2::new(self, path, src);
         parser.run()?;
+        let functions = std::mem::take(&mut parser.functions);
+        drop(parser);
+        self.parsed_functions.extend(functions);
         Ok(())
     }
 
     pub fn assemble(&mut self) -> CompileResult<Assembly<'a>> {
-        optimizer::optimize(self);
-        backend::Backend::new().compile(self)
-    }
-
-    fn alloc_ir(&self, ir: IR<'a>) -> IRCell<'a> {
-        self.arena.alloc_uninit().write(RefCell::new(ir))
-    }
-
-    fn alloc_iri(&self, instr: IRI<'a>) -> IRCell<'a> {
-        self.arena.alloc_uninit().write(RefCell::new(IR { next: None, instr, offset: usize::MAX }))
-    }
-
-    fn alloc_noop(&self) -> IRCell<'a> {
-        self.alloc_iri(IRI::Noop)
-    }
-
-    fn build_chain<'s>(&'s self) -> IRChainBuilder<'a, 's> {
-        IRChainBuilder { compiler: self, span: None }
-    }
-
-    fn get_reg(&self, reg: Register) -> IRRegCell<'a> {
-        self.physical_registers[reg as usize]
-    }
-
-    fn alloc_vreg(&self) -> IRRegCell<'a> {
-        let id = self.next_vreg_id.get();
-        self.next_vreg_id.set(id + 1);
-        self.arena.alloc_uninit().write(RefCell::new(IRReg::new(id)))
+        let functions = std::mem::take(&mut self.parsed_functions);
+        backend::Backend2::new().compile(self, functions)
     }
 
     fn intern_charset(&mut self, charset: &Charset) -> &'a Charset {
@@ -144,143 +103,71 @@ impl<'a> Compiler<'a> {
         &self.highlight_kinds[idx]
     }
 
-    fn visit_nodes_from(&self, root: IRCell<'a>) -> TreeVisitor<'a> {
-        let mut stack = VecDeque::new();
-        stack.push_back(root);
-        TreeVisitor { current: None, stack, visited: Default::default() }
-    }
-
-    /// Collect all "interesting" characters from conditions in a loop body.
-    /// Returns a charset where true = interesting character that should be checked.
-    fn collect_interesting_charset(&self, loop_body: IRCell<'a>) -> Charset {
-        let mut iter = self.visit_nodes_from(loop_body);
-        let mut charset = Charset::no();
-
-        #[allow(clippy::while_let_loop)]
-        loop {
-            // Can't use `while let`, because that borrows `iter`
-            // and that prevents us from calling `skip_node()`.
-            let Some(node) = iter.next() else {
-                break;
-            };
-
-            let node = node.borrow();
-            if let IRI::If { condition, then } = node.instr {
-                // For the purpose of computing fast-skips the contents of if conditions are irrelevant,
-                // so skip the subtree. This is actually quite important. This this as an example:
-                //   loop {
-                //     if /a/ {
-                //       loop {
-                //         if /b/ {
-                //         }
-                //       }
-                //     }
-                //   }
-                // The inverted charset of the inner /b/ includes "a". If we merge that into the outer
-                // loop's charset we get one that covers all characters, making fast-skips impossible.
-                // --> Skip the "then" subtree.
-                //
-                // HOWEVER, imagine a condition like this:
-                //   if /a?b/ {}
-                // This compiles to something like:
-                //   if "a"
-                //     .then -> if "b" {}
-                //     .else -> if "b" {}      (aka: .next)
-                // In other words, "then" and "next" point to the same thing.
-                // --> Only skip "then" if it's not the same as "next".
-                if !opt_ptr_eq(Some(then), node.next) {
-                    iter.skip_node(then);
-                }
-
-                match condition {
-                    Condition::Cmp { .. } => {}
-                    Condition::EndOfLine => {}
-                    Condition::Charset { cs, .. } => {
-                        // Merge this charset
-                        charset.merge(cs);
-                    }
-                    Condition::Prefix(s) | Condition::PrefixInsensitive(s) => {
-                        // First character of the prefix is interesting
-                        if let Some(&b) = s.as_bytes().first() {
-                            charset.set(b, true);
-                            if matches!(condition, Condition::PrefixInsensitive(_)) {
-                                charset.set(b.to_ascii_uppercase(), true);
-                                charset.set(b.to_ascii_lowercase(), true);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        charset
-    }
-
     pub fn as_mermaid(&self) -> String {
-        let mut output = String::new();
+        use ir::*;
 
-        // ---
-        // config:
-        // layout: elk
-        // elk:
-        //   considerModelOrder: NONE
-        // ---
+        let mut output = String::new();
         output.push_str("flowchart TB\n");
 
-        for func in &self.functions {
-            _ = writeln!(output, "  subgraph {}", func.name);
+        for (name, func, _, _) in &self.parsed_functions {
+            _ = writeln!(output, "  subgraph {name}");
             _ = writeln!(output, "    direction TB");
-            _ = writeln!(
-                output,
-                "    {}_start@{{shape: start}} --> {}",
-                func.name,
-                func.body.borrow()
-            );
+            if !func.blocks.is_empty() {
+                _ = writeln!(output, "    {name}_start@{{shape: start}} --> B0");
+            }
 
-            let mut visited = HashSet::new();
-            let mut to_visit = vec![func.body];
+            for (i, block) in func.blocks.iter().enumerate() {
+                let bid = format!("B{i}");
 
-            while let Some(node_cell) = to_visit.pop() {
-                if !visited.insert(node_cell.as_ptr()) {
-                    continue;
+                // Block header with params.
+                if block.params.is_empty() {
+                    _ = write!(output, "    {bid}[\"B{i}");
+                } else {
+                    let params: Vec<String> =
+                        block.params.iter().map(|v| format!("v{}", v.0)).collect();
+                    _ = write!(output, "    {bid}[\"B{i}({})", params.join(", "));
                 }
 
-                let node = node_cell.borrow();
-                let offset = node.offset;
-                _ = write!(output, "    {}", node);
+                // Instructions.
+                for inst in &block.insts {
+                    _ = write!(output, "<br/>v{} = ", inst.dst.0);
+                    match &inst.kind {
+                        InstKind::Imm(v) => _ = write!(output, "imm {v}"),
+                        InstKind::Copy(src) => _ = write!(output, "copy v{}", src.0),
+                        InstKind::AddImm(src, imm) => _ = write!(output, "v{} + {imm}", src.0),
+                        InstKind::HlKind(k) => _ = write!(output, "hlkind {k}"),
+                        InstKind::Flush(v) => _ = write!(output, "flush v{}", v.0),
+                        InstKind::Call(name) => _ = write!(output, "call {name}"),
+                        InstKind::AwaitInput => _ = write!(output, "await_input"),
+                        InstKind::ReadOff => _ = write!(output, "read_off"),
+                        InstKind::WriteOff(v) => _ = write!(output, "write_off v{}", v.0),
+                        InstKind::WriteHs(v) => _ = write!(output, "write_hs v{}", v.0),
+                        InstKind::AdvanceOff(n) => _ = write!(output, "advance_off {n}"),
+                        InstKind::SetOffImm(n) => _ = write!(output, "set_off_imm {n}"),
+                    }
+                }
+                _ = writeln!(output, "\"]");
 
-                match node.instr {
-                    IRI::Noop => {
-                        _ = write!(output, "[{offset}: noop]");
+                // Edges from terminator.
+                match &block.term {
+                    Some(Term::Jump { target, args }) => {
+                        let args_str = if args.is_empty() {
+                            String::new()
+                        } else {
+                            let a: Vec<String> = args.iter().map(|v| format!("v{}", v.0)).collect();
+                            format!(" [{}]", a.join(", "))
+                        };
+                        _ = writeln!(output, "    {bid} --> B{}{args_str}", target.0);
                     }
-                    IRI::Mov { dst, src } => {
-                        let src = src.borrow();
-                        let dst = dst.borrow();
-                        _ = write!(output, "[\"{offset}: {dst:?} = {src:?}\"]");
-                    }
-                    IRI::MovImm { dst, imm } => {
-                        let dst = dst.borrow();
-                        _ = write!(output, "[\"{offset}: {dst:?} = {imm}\"]");
-                    }
-                    IRI::MovKind { dst, kind } => {
-                        let dst = dst.borrow();
-                        let kind = self
-                            .highlight_kinds
-                            .iter()
-                            .find(|hk| hk.value == kind)
-                            .map_or("???", |hk| hk.identifier);
-                        _ = write!(output, "[\"{offset}: {dst:?} = `{kind}`\"]");
-                    }
-                    IRI::AddImm { dst, imm } => {
-                        let dst = dst.borrow();
-                        _ = write!(output, "[\"{offset}: {dst:?} += {imm}\"]");
-                    }
-                    IRI::If { condition, then } => {
-                        _ = write!(output, "{{\"{offset}: ");
-                        _ = match condition {
-                            Condition::Cmp { lhs, rhs, op } => {
-                                let lhs = lhs.borrow();
-                                let rhs = rhs.borrow();
+                    Some(Term::CondBranch {
+                        kind,
+                        then_block,
+                        then_args,
+                        else_block,
+                        else_args,
+                    }) => {
+                        let cond_str = match kind {
+                            CondKind::Cmp { lhs, rhs, op } => {
                                 let op_str = match op {
                                     ComparisonOp::Eq => "==",
                                     ComparisonOp::Ne => "!=",
@@ -289,54 +176,29 @@ impl<'a> Compiler<'a> {
                                     ComparisonOp::Le => "<=",
                                     ComparisonOp::Ge => ">=",
                                 };
-                                write!(output, "{lhs:?} {op_str} {rhs:?}")
+                                format!("v{} {op_str} v{}", lhs.0, rhs.0)
                             }
-                            Condition::EndOfLine => write!(output, "eol"),
-                            Condition::Charset { cs, min, max } => match (min, max) {
-                                (0, 1) => write!(output, "charset: {cs:?}?"),
-                                (0, u32::MAX) => write!(output, "charset: {cs:?}*"),
-                                (1, u32::MAX) => write!(output, "charset: {cs:?}+"),
-                                _ => write!(output, "charset: {cs:?}{{{min},{max}}}"),
-                            },
-                            Condition::Prefix(s) => write!(output, "match: {s}"),
-                            Condition::PrefixInsensitive(s) => write!(output, "imatch: {s}"),
+                            CondKind::EndOfLine => "eol".to_string(),
+                            CondKind::Charset { cs, min, max } => {
+                                format!("charset {cs:?} {{{min},{max}}}")
+                            }
+                            CondKind::Prefix(s) => format!("prefix {s:?}"),
+                            CondKind::PrefixInsensitive(s) => format!("iprefix {s:?}"),
                         };
-                        _ = writeln!(output, "\"}}");
-                        _ = writeln!(output, "    {} -->|yes| {}", node, then.borrow());
-                        to_visit.push(then);
+                        _ = writeln!(
+                            output,
+                            "    {bid} -->|\"yes: {cond_str}\"| B{}",
+                            then_block.0
+                        );
+                        _ = writeln!(output, "    {bid} -->|no| B{}", else_block.0);
+                        let _ = (then_args, else_args); // TODO: render args if needed
                     }
-                    IRI::Call { name } => {
-                        _ = write!(output, "[\"{offset}: call {name}\"]");
+                    Some(Term::Return) => {
+                        _ = writeln!(output, "    {bid} --> {name}_end@{{shape: stop}}");
                     }
-                    IRI::Return => {
-                        _ = write!(output, "[{offset}: return]");
+                    None => {
+                        _ = writeln!(output, "    {bid} --> {name}_end@{{shape: stop}}");
                     }
-                    IRI::Flush { kind } => {
-                        let kind = kind.borrow();
-                        _ = write!(output, "[{offset}: flush {kind:?}]");
-                    }
-                    IRI::AwaitInput => {
-                        _ = write!(output, "[{offset}: await input]");
-                    }
-                }
-
-                match node.instr {
-                    IRI::If { .. } => {
-                        if let Some(next) = node.next {
-                            _ = writeln!(output, "    {} -->|no| {}", node, next.borrow());
-                        }
-                    }
-                    _ => {
-                        if let Some(next) = node.next {
-                            _ = writeln!(output, " --> {}", next.borrow());
-                        } else {
-                            _ = writeln!(output);
-                        }
-                    }
-                }
-
-                if let Some(next) = node.next {
-                    to_visit.push(next);
                 }
             }
 
@@ -344,45 +206,6 @@ impl<'a> Compiler<'a> {
         }
 
         output
-    }
-}
-
-struct TreeVisitor<'a> {
-    current: Option<IRCell<'a>>,
-    stack: VecDeque<IRCell<'a>>,
-    visited: HashSet<*const RefCell<IR<'a>>>,
-}
-
-impl<'a> TreeVisitor<'a> {
-    fn skip_node(&mut self, node: IRCell<'a>) {
-        self.visited.insert(node as *const _);
-    }
-}
-
-impl<'a> Iterator for TreeVisitor<'a> {
-    type Item = IRCell<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(cell) = self.current.take() {
-            {
-                let ir = cell.borrow();
-                if let IRI::If { then, .. } = ir.instr {
-                    self.stack.push_back(then);
-                }
-                if let Some(next) = ir.next {
-                    self.stack.push_back(next);
-                }
-            }
-        }
-
-        while let Some(cell) = self.stack.pop_front() {
-            if self.visited.insert(cell) {
-                self.current = Some(cell);
-                return self.current;
-            }
-        }
-
-        None
     }
 }
 
@@ -435,151 +258,19 @@ impl<'a> fmt::Display for HighlightKindCamelcaseFormatter<'a> {
 }
 
 #[derive(Debug, Clone, Default)]
-struct FunctionAttributes<'a> {
-    display_name: Option<&'a str>,
-    paths: Vec<&'a str>,
-}
-
-#[derive(Debug, Clone)]
-struct Function<'a> {
-    name: &'a str,
-    attributes: FunctionAttributes<'a>,
-    body: IRCell<'a>,
-    public: bool,
-}
-
-// To be honest, I don't think this qualifies as an "intermediate representation",
-// if we compare this to popular compilers. But whatever. It's still intermediate to us.
-#[derive(Debug)]
-struct IR<'a> {
-    next: Option<IRCell<'a>>,
-    instr: IRI<'a>,
-    offset: usize,
-}
-
-impl<'a> fmt::Display for IR<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "i{self:p}")
-    }
-}
-
-type IRCell<'a> = &'a RefCell<IR<'a>>;
-
-// IRI = Immediate Representation Instruction
-#[derive(Debug, Clone, Copy)]
-enum IRI<'a> {
-    Noop,
-    Mov { dst: IRRegCell<'a>, src: IRRegCell<'a> },
-    MovImm { dst: IRRegCell<'a>, imm: u32 },
-    MovKind { dst: IRRegCell<'a>, kind: u32 },
-    AddImm { dst: IRRegCell<'a>, imm: u32 },
-    If { condition: Condition<'a>, then: IRCell<'a> },
-    Call { name: &'a str },
-    Return,
-    Flush { kind: IRRegCell<'a> },
-    AwaitInput,
-}
-
-#[derive(Default)]
-struct IRReg {
-    id: u32,
-    physical: Option<Register>,
-}
-
-type IRRegCell<'a> = &'a RefCell<IRReg>;
-
-impl IRReg {
-    fn new(id: u32) -> Self {
-        IRReg { id, physical: None }
-    }
-}
-
-impl fmt::Debug for IRReg {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(p) = self.physical
-            && self.id < Register::COUNT as u32
-        {
-            write!(f, "{}", p.mnemonic())
-        } else {
-            write!(f, "v{}", self.id)
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct IRSpan<'a> {
-    first: IRCell<'a>,
-    last: IRCell<'a>,
-}
-
-impl<'a> IRSpan<'a> {
-    fn single(node: IRCell<'a>) -> Self {
-        Self { first: node, last: node }
-    }
-}
-
-struct IRChainBuilder<'a, 's> {
-    compiler: &'s Compiler<'a>,
-    span: Option<IRSpan<'a>>,
-}
-
-impl<'a, 's> IRChainBuilder<'a, 's> {
-    fn append(&mut self, instr: IRI<'a>) -> &mut Self {
-        let node = self.compiler.alloc_iri(instr);
-        if let Some(span) = &mut self.span {
-            span.last.borrow_mut().set_next(node);
-            span.last = node;
-        } else {
-            self.span = Some(IRSpan::single(node));
-        }
-        self
-    }
-
-    fn build(&self) -> IRSpan<'a> {
-        self.span.unwrap_or_else(|| IRSpan::single(self.compiler.alloc_noop()))
-    }
+pub struct FunctionAttributes<'a> {
+    pub(crate) display_name: Option<&'a str>,
+    pub(crate) paths: Vec<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ComparisonOp {
+pub enum ComparisonOp {
     Eq,
     Ne,
     Lt,
     Gt,
     Le,
     Ge,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Condition<'a> {
-    Cmp { lhs: IRRegCell<'a>, rhs: IRRegCell<'a>, op: ComparisonOp },
-    EndOfLine,
-    Charset { cs: &'a Charset, min: u32, max: u32 },
-    Prefix(&'a str),
-    PrefixInsensitive(&'a str),
-}
-
-impl<'a> IR<'a> {
-    fn wants_next(&self) -> bool {
-        if self.next.is_some() {
-            return false;
-        }
-
-        match self.instr {
-            IRI::Mov { dst, .. } | IRI::MovImm { dst, .. }
-                if dst.borrow().id == Register::ProgramCounter as u32 =>
-            {
-                false
-            }
-            IRI::Return => false,
-            _ => true,
-        }
-    }
-
-    fn set_next(&mut self, n: IRCell<'a>) {
-        debug_assert!(self.wants_next());
-        self.next = Some(n);
-    }
 }
 
 fn arena_clone_str<'a>(arena: &'a Arena, s: &str) -> &'a str {

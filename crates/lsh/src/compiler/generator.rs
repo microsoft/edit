@@ -356,11 +356,11 @@ pub fn flip() {
             let (instr, len) = Instruction::decode(&assembly.instructions[off..]);
             let instr = instr.expect("instruction stream must decode");
 
-            if let Instruction::JumpEQ { lhs, rhs, .. } = instr {
-                if lhs != rhs {
-                    found_cmp = true;
-                    break;
-                }
+            if let Instruction::JumpEQ { lhs, rhs, .. } = instr
+                && lhs != rhs
+            {
+                found_cmp = true;
+                break;
             }
 
             off += len;

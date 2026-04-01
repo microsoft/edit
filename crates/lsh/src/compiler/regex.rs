@@ -45,8 +45,6 @@
 
 use std::slice;
 
-use stdext::collections::BVec;
-
 use super::*;
 
 // 0xC2-0xF4 are UTF-8 leading bytes for multibyte sequences. Including them lets
@@ -80,8 +78,6 @@ const ASCII_DIGIT_CHARSET: Charset = {
     charset.set_range(b'0'..=b'9', true);
     charset
 };
-
-pub type CaptureList<'a> = BVec<'a, (IRRegCell<'a>, IRRegCell<'a>)>;
 
 #[derive(Debug, Clone)]
 enum Regex {
@@ -492,36 +488,49 @@ impl<'a> RegexParser<'a> {
     }
 }
 
-struct CodeGen<'a, 'c> {
-    compiler: &'c mut Compiler<'a>,
-    captures: CaptureList<'a>,
-    dst_good: IRCell<'a>,
-    dst_bad: IRCell<'a>,
+// ---------------------------------------------------------------------------
+// Basic-block IR compilation
+// ---------------------------------------------------------------------------
+
+/// Compile a regex pattern into basic-block IR.
+///
+/// The NFA operates on the physical offset register. The caller is responsible
+/// for syncing SSA ↔ physical via WriteOff/ReadOff.
+///
+/// Returns `(entry_block, captures)`. On match the NFA jumps to `match_block`;
+/// on failure it jumps to `fail_block`.
+pub fn compile_regex<'a>(
+    func: &mut ir::FuncBody<'a>,
+    compiler: &mut Compiler<'a>,
+    pattern: &str,
+    match_block: ir::BlockId,
+    fail_block: ir::BlockId,
+) -> Result<(ir::BlockId, Vec<(ir::Value, ir::Value)>), String> {
+    let parser = RegexParser::new(pattern);
+    let regex = parser.parse()?;
+
+    let mut codegen = BlockCodeGen { func, compiler, captures: Vec::new() };
+    let entry = codegen.emit(&regex, match_block, fail_block)?;
+
+    // Reverse captures: Concat iterates in reverse, so groups are pushed in reverse order.
+    codegen.captures.reverse();
+
+    Ok((entry, codegen.captures))
 }
 
-impl<'a, 'c> CodeGen<'a, 'c> {
-    fn new(compiler: &'c mut Compiler<'a>, dst_good: IRCell<'a>, dst_bad: IRCell<'a>) -> Self {
-        let captures = CaptureList::empty();
-        Self { compiler, captures, dst_good, dst_bad }
-    }
+struct BlockCodeGen<'a, 'b, 'c> {
+    func: &'b mut ir::FuncBody<'a>,
+    compiler: &'c mut Compiler<'a>,
+    captures: Vec<(ir::Value, ir::Value)>,
+}
 
-    fn generate(&mut self, regex: &Regex) -> Result<IRCell<'a>, String> {
-        self.emit(regex, self.dst_good, self.dst_bad)
-    }
-
-    /// Core emission function. Returns the entry node for matching `regex`.
-    ///
-    /// The generated IR forms a DAG where:
-    /// - Matching the pattern leads to `on_match`
-    /// - Failing to match leads to `on_fail`
-    ///
-    /// For `IRI::If` nodes: `then` = match branch, `next` = fail branch.
+impl<'a, 'b, 'c> BlockCodeGen<'a, 'b, 'c> {
     fn emit(
         &mut self,
         regex: &Regex,
-        on_match: IRCell<'a>,
-        on_fail: IRCell<'a>,
-    ) -> Result<IRCell<'a>, String> {
+        on_match: ir::BlockId,
+        on_fail: ir::BlockId,
+    ) -> Result<ir::BlockId, String> {
         match regex {
             Regex::Empty => Ok(on_match),
 
@@ -532,18 +541,25 @@ impl<'a, 'c> CodeGen<'a, 'c> {
             Regex::CharClass(cs) => self.emit_charset(cs, 1, 1, on_match, on_fail),
 
             Regex::Dot => {
-                let dst = self.compiler.get_reg(Register::InputOffset);
-                let node = self.compiler.alloc_iri(IRI::AddImm { dst, imm: 1 });
-                node.borrow_mut().next = Some(on_match);
-                Ok(node)
+                let block = self.func.create_block();
+                self.func.push_inst(block, ir::InstKind::AdvanceOff(1));
+                self.func.set_term(block, ir::Term::Jump { target: on_match, args: vec![] });
+                Ok(block)
             }
 
             Regex::EndOfLine => {
-                let if_node = self
-                    .compiler
-                    .alloc_iri(IRI::If { condition: Condition::EndOfLine, then: on_match });
-                if_node.borrow_mut().next = Some(on_fail);
-                Ok(if_node)
+                let block = self.func.create_block();
+                self.func.set_term(
+                    block,
+                    ir::Term::CondBranch {
+                        kind: ir::CondKind::EndOfLine,
+                        then_block: on_match,
+                        then_args: vec![],
+                        else_block: on_fail,
+                        else_args: vec![],
+                    },
+                );
+                Ok(block)
             }
 
             Regex::WordEnd => {
@@ -554,25 +570,17 @@ impl<'a, 'c> CodeGen<'a, 'c> {
 
             Regex::Concat(parts) => {
                 let mut current_target = on_match;
-
-                // We iterate in reverse because of continuation-passing style,
-                // as explained in the module doc.
                 for part in parts.iter().rev() {
                     current_target = self.emit(part, current_target, on_fail)?;
                 }
-
                 Ok(current_target)
             }
 
             Regex::Alt(alts) => {
                 let mut current_fail = on_fail;
-
-                // We iterate in reverse because of continuation-passing style,
-                // as explained in the module doc.
                 for alt in alts.iter().rev() {
                     current_fail = self.emit(alt, on_match, current_fail)?;
                 }
-
                 Ok(current_fail)
             }
 
@@ -582,23 +590,21 @@ impl<'a, 'c> CodeGen<'a, 'c> {
 
             Regex::Group { inner, capturing } => {
                 if *capturing {
-                    // Capturing group: wrap inner pattern with Mov instructions to save
-                    // the start and end positions of the matched substring.
-                    let start_reg = self.compiler.alloc_vreg();
-                    let end_reg = self.compiler.alloc_vreg();
+                    // save_end block: ReadOff → end_val, jump to on_match.
+                    let save_end = self.func.create_block();
+                    let end_val = self.func.push_inst(save_end, ir::InstKind::ReadOff);
+                    self.func.set_term(save_end, ir::Term::Jump { target: on_match, args: vec![] });
 
-                    let off_reg = self.compiler.get_reg(Register::InputOffset);
-                    let save_end = self.compiler.alloc_iri(IRI::Mov { dst: end_reg, src: off_reg });
-                    save_end.borrow_mut().next = Some(on_match);
+                    let inner_entry = self.emit(inner, save_end, on_fail)?;
 
-                    let inner_node = self.emit(inner, save_end, on_fail)?;
+                    // save_start block: ReadOff → start_val, jump to inner_entry.
+                    let save_start = self.func.create_block();
+                    let start_val = self.func.push_inst(save_start, ir::InstKind::ReadOff);
+                    self.func
+                        .set_term(save_start, ir::Term::Jump { target: inner_entry, args: vec![] });
 
                     // Push *after* emit, so nested groups come first in the reversed list.
-                    self.captures.push(self.compiler.arena, (start_reg, end_reg));
-
-                    let save_start =
-                        self.compiler.alloc_iri(IRI::Mov { dst: start_reg, src: off_reg });
-                    save_start.borrow_mut().next = Some(inner_node);
+                    self.captures.push((start_val, end_val));
 
                     Ok(save_start)
                 } else {
@@ -608,26 +614,20 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         }
     }
 
-    /// Emit IR for repetition quantifiers (`?`, `+`, `*`, `{n,m}`).
-    ///
-    /// # Why no loops?
-    ///
-    /// Creating IR loops (self-referential nodes) would complicate the optimizer.
-    /// Since no LSH file needs unbounded repetition on complex patterns (`(foo)+`), we simply reject them.
     fn emit_repeat(
         &mut self,
         inner: &Regex,
         min: u32,
         max: u32,
-        on_match: IRCell<'a>,
-        on_fail: IRCell<'a>,
-    ) -> Result<IRCell<'a>, String> {
-        // `.*` = skip to end of line. Very common pattern, special-cased for speed.
+        on_match: ir::BlockId,
+        on_fail: ir::BlockId,
+    ) -> Result<ir::BlockId, String> {
+        // `.*` = skip to end of line.
         if min == 0 && max == u32::MAX && matches!(*inner, Regex::Dot) {
-            let off_reg = self.compiler.get_reg(Register::InputOffset);
-            let skip_node = self.compiler.alloc_iri(IRI::MovImm { dst: off_reg, imm: u32::MAX });
-            skip_node.borrow_mut().next = Some(on_match);
-            return Ok(skip_node);
+            let block = self.func.create_block();
+            self.func.push_inst(block, ir::InstKind::SetOffImm(u32::MAX));
+            self.func.set_term(block, ir::Term::Jump { target: on_match, args: vec![] });
+            return Ok(block);
         }
 
         // `.+` = one or more of any char.
@@ -636,7 +636,7 @@ impl<'a, 'c> CodeGen<'a, 'c> {
             return self.emit_charset(&cs, min, max, on_match, on_fail);
         }
 
-        // CharClass: delegate to emit_charset which uses the VM's native min/max support.
+        // CharClass: delegate to emit_charset.
         if let Regex::CharClass(ref cs) = *inner {
             return self.emit_charset(cs, min, max, on_match, on_fail);
         }
@@ -646,13 +646,11 @@ impl<'a, 'c> CodeGen<'a, 'c> {
             && s.len() == 1
         {
             // Optional single char: `a?`
-            // It can be trivially translated to a Prefix/PrefixInsensitive check
-            // where even on_fail is a success and is thus connected to on_match.
             if min == 0 && max == 1 {
                 return self.emit(inner, on_match, on_match);
             }
 
-            // Otherwise, we must translate to a Charset match.
+            // Otherwise, translate to a Charset match.
             let b = s.as_bytes()[0];
             let mut cs = Charset::no();
             if case_insensitive {
@@ -672,15 +670,13 @@ impl<'a, 'c> CodeGen<'a, 'c> {
             );
         }
 
-        // Bounded repetition: unroll. `x{2,4}` gets translated to `x x x? x?`.
-        // We emit in reverse order (continuation-passing style),
-        // so optional matches come first, then required matches.
+        // Bounded repetition: unroll.
         let mut current = on_match;
-        // Optional: Both branches succeed go to `current`.
+        // Optional copies: both branches succeed.
         for _ in min..max {
             current = self.emit(inner, current, current)?;
         }
-        // Required: Failure goes to `on_fail`.
+        // Required copies: failure goes to on_fail.
         for _ in 0..min {
             current = self.emit(inner, current, on_fail)?;
         }
@@ -691,18 +687,30 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         &mut self,
         s: &str,
         case_insensitive: bool,
-        on_match: IRCell<'a>,
-        on_fail: IRCell<'a>,
-    ) -> Result<IRCell<'a>, String> {
+        on_match: ir::BlockId,
+        on_fail: ir::BlockId,
+    ) -> Result<ir::BlockId, String> {
         if s.is_empty() {
             return Ok(on_match);
         }
         let s = self.compiler.intern_string(s);
-        let condition =
-            if case_insensitive { Condition::PrefixInsensitive(s) } else { Condition::Prefix(s) };
-        let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
-        if_node.borrow_mut().next = Some(on_fail);
-        Ok(if_node)
+        let kind = if case_insensitive {
+            ir::CondKind::PrefixInsensitive(s)
+        } else {
+            ir::CondKind::Prefix(s)
+        };
+        let block = self.func.create_block();
+        self.func.set_term(
+            block,
+            ir::Term::CondBranch {
+                kind,
+                then_block: on_match,
+                then_args: vec![],
+                else_block: on_fail,
+                else_args: vec![],
+            },
+        );
+        Ok(block)
     }
 
     fn emit_charset(
@@ -710,15 +718,12 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         cs: &Charset,
         min: u32,
         max: u32,
-        on_match: IRCell<'a>,
-        on_fail: IRCell<'a>,
-    ) -> Result<IRCell<'a>, String> {
+        on_match: ir::BlockId,
+        on_fail: ir::BlockId,
+    ) -> Result<ir::BlockId, String> {
         let mut next = if min == 0 { on_match } else { on_fail };
 
-        // If the expression is of form [a], [ab], [aA], or [aAbB] it is
-        // worth translating it to a Prefix/PrefixInsensitive check.
-        // The [a] and [aA] cases are an obvious improvement, but even the other
-        // two cases are worth it due to the shorter instruction encoding.
+        // If max=1 and the charset has ≤2 characters, convert to Prefix checks.
         if max == 1 {
             let mut cs = cs.clone();
             let mut chars = [(0u8, false); 2];
@@ -737,7 +742,7 @@ impl<'a, 'c> CodeGen<'a, 'c> {
 
             if count > 0 && cs.covers_none() {
                 for &(ch, insensitive) in chars[..count].iter().rev() {
-                    let s = unsafe { str::from_utf8_unchecked(slice::from_ref(&ch)) };
+                    let s = unsafe { std::str::from_utf8_unchecked(slice::from_ref(&ch)) };
                     let node = self.emit_literal(s, insensitive, on_match, next)?;
                     next = node;
                 }
@@ -746,34 +751,17 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         }
 
         let cs = self.compiler.intern_charset(cs);
-        let condition = Condition::Charset { cs, min, max };
-        let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
-
-        // min=0 implies that it cannot fail. Remove `on_fail` to allow for later optimizations.
-        if_node.borrow_mut().next = Some(next);
-
-        Ok(if_node)
+        let block = self.func.create_block();
+        self.func.set_term(
+            block,
+            ir::Term::CondBranch {
+                kind: ir::CondKind::Charset { cs, min, max },
+                then_block: on_match,
+                then_args: vec![],
+                else_block: next,
+                else_args: vec![],
+            },
+        );
+        Ok(block)
     }
-}
-
-/// Parse a regex pattern and generate IR that matches it.
-///
-/// The generated IR is wired to `dst_good` on successful match and `dst_bad` on failure.
-/// The returned tuple contains the start of the IR graph and a list of capture group ranges.
-pub fn parse<'a>(
-    compiler: &mut Compiler<'a>,
-    pattern: &str,
-    dst_good: IRCell<'a>,
-    dst_bad: IRCell<'a>,
-) -> Result<(IRCell<'a>, CaptureList<'a>), String> {
-    let parser = RegexParser::new(pattern);
-    let regex = parser.parse()?;
-
-    let mut codegen = CodeGen::new(compiler, dst_good, dst_bad);
-    let entry = codegen.generate(&regex)?;
-
-    // Reverse captures: Concat iterates in reverse, so groups are pushed in reverse order.
-    codegen.captures.reverse();
-
-    Ok((entry, codegen.captures))
 }

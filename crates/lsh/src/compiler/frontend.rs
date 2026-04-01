@@ -1,18 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//! Frontend: DSL source code -> IR graph
+//! Frontend2: DSL source code -> basic-block SSA IR
 //!
-//! ## Gotchas
-//!
-//! - Variables use dedicated virtual registers. Expressions emit directly into a
-//!   caller-specified destination register (destination-driven codegen, à la Lua 5).
-//! - The `raise!` macro captures token_start position at call time. Don't advance before raising.
+//! This is a rewrite of `frontend.rs` that emits into `ir::FuncBody` using
+//! `ssa::SSABuilder` instead of the old IR graph.
 
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
-
-use stdext::collections::BVec;
 
 use super::*;
 
@@ -29,43 +23,68 @@ macro_rules! raise {
     }};
 }
 
-/// A parsed condition (regex match or comparison) that branches to
-/// `dst_good` on success and `dst_bad` on failure.  Entry is `src`.
-struct CondSpan<'a> {
-    pub src: IRCell<'a>,
-    pub dst_good: IRCell<'a>,
-    pub dst_bad: IRCell<'a>,
-    pub capture_groups: BVec<'a, (IRRegCell<'a>, IRRegCell<'a>)>,
+struct Context2 {
+    loop_start: Option<ir::BlockId>,
+    loop_exit: Option<ir::BlockId>,
+    capture_groups: Vec<(ir::Value, ir::Value)>,
 }
 
-struct Context<'a> {
-    loop_start: Option<IRCell<'a>>,
-    loop_exit: Option<IRCell<'a>>,
-    capture_groups: BVec<'a, (IRRegCell<'a>, IRRegCell<'a>)>,
-}
-
-pub struct Parser<'a, 'c, 'src> {
+pub struct Parser2<'a, 'c, 'src> {
     compiler: &'c mut Compiler<'a>,
+    func: ir::FuncBody<'a>,
+    ssa: ssa::SSABuilder,
+    current_block: ir::BlockId,
     path: &'src str,
     src: &'src str,
     pos: usize,
     token_start: usize,
-    context: BVec<'a, Context<'a>>,
-    variables: HashMap<&'src str, IRRegCell<'a>>,
+    context: Vec<Context2>,
+    variables: HashMap<&'src str, ir::Variable>,
+    next_var: u32,
+
+    /// Completed functions: (name, body, attributes, is_public).
+    pub functions: Vec<(&'a str, ir::FuncBody<'a>, FunctionAttributes<'a>, bool)>,
 }
 
-impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
+impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
     pub fn new(compiler: &'c mut Compiler<'a>, path: &'src str, src: &'src str) -> Self {
-        let context = BVec::empty();
-        Self { compiler, path, src, pos: 0, token_start: 0, context, variables: Default::default() }
+        let func = ir::FuncBody::new();
+        let ssa = ssa::SSABuilder::new();
+        let current_block = ir::BlockId(0); // placeholder, overwritten per function
+        Self {
+            compiler,
+            func,
+            ssa,
+            current_block,
+            path,
+            src,
+            pos: 0,
+            token_start: 0,
+            context: Vec::new(),
+            variables: HashMap::new(),
+            next_var: 1, // 0 = OFF
+            functions: Vec::new(),
+        }
     }
 
     pub fn run(&mut self) -> CompileResult<()> {
         while !self.is_at_eof() {
-            let f = self.parse_function()?;
-            self.compiler.functions.push(f);
+            self.parse_function()?;
         }
         Ok(())
+    }
+
+    fn alloc_variable(&mut self) -> ir::Variable {
+        let v = ir::Variable(self.next_var);
+        self.next_var += 1;
+        v
+    }
+
+    /// Create a new block, declare it in the SSA builder, and return its ID.
+    fn create_block(&mut self) -> ir::BlockId {
+        let block = self.func.create_block();
+        self.ssa.declare_block(block);
+        block
     }
 
     fn parse_attributes(&mut self) -> CompileResult<FunctionAttributes<'a>> {
@@ -90,10 +109,13 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         Ok(attributes)
     }
 
-    fn parse_function(&mut self) -> CompileResult<Function<'a>> {
-        // Reset symbol table for new function
-        self.variables =
-            HashMap::from_iter([("off", self.compiler.get_reg(Register::InputOffset))]);
+    fn parse_function(&mut self) -> CompileResult<()> {
+        // Reset per-function state.
+        self.func = ir::FuncBody::new();
+        self.ssa = ssa::SSABuilder::new();
+        self.variables = HashMap::from([("off", ir::Variable::OFF)]);
+        self.next_var = 1;
+        self.context.clear();
 
         let attributes = self.parse_attributes()?;
 
@@ -111,41 +133,40 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         self.expect('(')?;
         self.expect(')')?;
 
-        let span = self.parse_block()?;
+        // Create the entry block.
+        let entry = self.create_block();
+        self.ssa.seal_block(&mut self.func, entry); // entry has no predecessors
+        self.current_block = entry;
 
-        if let mut last = span.last.borrow_mut()
-            && last.wants_next()
-        {
-            last.set_next(self.compiler.alloc_iri(IRI::Return));
+        // Define initial `off` value (e.g. the physical input offset at function entry).
+        // We model it as reading the physical offset register at the start.
+        let initial_off = self.func.push_inst(self.current_block, ir::InstKind::ReadOff);
+        self.ssa.def_var(ir::Variable::OFF, initial_off, self.current_block);
+
+        self.parse_block_body()?;
+
+        // If the current block is unterminated, emit a return.
+        if self.func.block(self.current_block).term.is_none() {
+            self.func.set_term(self.current_block, ir::Term::Return);
         }
 
-        Ok(Function { name, attributes, body: span.first, public })
+        let body = std::mem::take(&mut self.func);
+        self.functions.push((name, body, attributes, public));
+        Ok(())
     }
 
-    fn parse_block(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_block_body(&mut self) -> CompileResult<()> {
         self.expect('{')?;
 
-        // TODO: a bit inoptimal to always allocate a noop node
-        let mut result: Option<IRSpan> = None;
-
         while !matches!(self.peek(), Some('}') | None) {
-            let s = self.parse_statement()?;
-            if let Some(span) = &mut result {
-                span.last.borrow_mut().set_next(s.first);
-                span.last = s.last;
-            } else {
-                result = Some(s);
-            }
+            self.parse_statement()?;
         }
 
         self.expect('}')?;
-        Ok(match result {
-            Some(span) => span,
-            None => IRSpan::single(self.compiler.alloc_noop()),
-        })
+        Ok(())
     }
 
-    fn parse_statement(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_statement(&mut self) -> CompileResult<()> {
         if self.is_keyword("var") {
             self.parse_var_declaration()
         } else if self.is_keyword("loop") {
@@ -174,215 +195,319 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         }
     }
 
-    fn parse_loop(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_loop(&mut self) -> CompileResult<()> {
         self.expect_keyword("loop")?;
 
-        let loop_start = self.compiler.alloc_noop();
-        let loop_exit = self.compiler.alloc_noop();
-        self.parse_until_impl(loop_start, loop_start, loop_exit)
+        let loop_header = self.create_block();
+        let loop_exit = self.create_block();
+
+        // Jump from current block into loop header.
+        self.func
+            .set_term(self.current_block, ir::Term::Jump { target: loop_header, args: vec![] });
+        // Don't seal loop_header yet — the back-edge will add another predecessor.
+
+        self.current_block = loop_header;
+        self.parse_until_impl(loop_header, loop_exit)
     }
 
-    fn parse_until(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_until(&mut self) -> CompileResult<()> {
         self.expect_keyword("until")?;
 
-        let re = self.parse_regex_match()?;
+        let loop_header = self.create_block();
+        let loop_exit = self.create_block();
 
-        let loop_exit = self.compiler.alloc_noop();
-        re.dst_good.borrow_mut().set_next(loop_exit);
-        self.parse_until_impl(re.src, re.dst_bad, loop_exit)
+        // Jump from current block into loop header.
+        self.func
+            .set_term(self.current_block, ir::Term::Jump { target: loop_header, args: vec![] });
+        // Don't seal loop_header yet — the back-edge will add another predecessor.
+
+        self.current_block = loop_header;
+
+        // Parse the `until` regex condition.
+        let then_block = self.create_block();
+        let else_block = self.create_block();
+        self.emit_regex_condition(then_block, else_block)?;
+
+        // On match (condition met) → exit the loop.
+        self.ssa.seal_block(&mut self.func, then_block);
+        self.current_block = then_block;
+        self.func.set_term(self.current_block, ir::Term::Jump { target: loop_exit, args: vec![] });
+
+        // On fail (condition not met) → enter loop body.
+        self.ssa.seal_block(&mut self.func, else_block);
+        self.current_block = else_block;
+
+        self.parse_until_impl(loop_header, loop_exit)
     }
 
     fn parse_until_impl(
         &mut self,
-        loop_start: IRCell<'a>,
-        loop_good: IRCell<'a>,
-        loop_exit: IRCell<'a>,
-    ) -> CompileResult<IRSpan<'a>> {
-        // First, save the current input offset.
-        // This is used to detect if the loop made any progress.
-        let saved_offset = self.compiler.alloc_vreg();
-        let first = self.compiler.alloc_iri(IRI::Mov {
-            dst: saved_offset,
-            src: self.compiler.get_reg(Register::InputOffset),
-        });
+        loop_header: ir::BlockId,
+        loop_exit: ir::BlockId,
+    ) -> CompileResult<()> {
+        // Save offset at loop body entry for progress detection.
+        let saved_off = self.ssa.use_var(&mut self.func, ir::Variable::OFF, self.current_block);
 
-        self.context.push(
-            self.compiler.arena,
-            Context {
-                loop_start: Some(loop_start),
-                loop_exit: Some(loop_exit),
-                capture_groups: BVec::empty(),
-            },
-        );
-        let block = self.parse_block()?;
+        self.context.push(Context2 {
+            loop_start: Some(loop_header),
+            loop_exit: Some(loop_exit),
+            capture_groups: Vec::new(),
+        });
+        self.parse_block_body()?;
         self.context.pop();
 
-        // Force advance the input offset by 1 if it got stuck in the loop iteration.
-        //   if input_offset == saved_offset {
-        //       input_offset += 1;
-        //   }
-        let advance = self.compiler.alloc_ir(IR {
-            next: Some(first),
-            instr: IRI::AddImm { dst: self.compiler.get_reg(Register::InputOffset), imm: 1 },
-            offset: usize::MAX,
-        });
-        let advance_check = self.compiler.alloc_ir(IR {
-            next: Some(first),
-            instr: IRI::If {
-                condition: Condition::Cmp {
-                    lhs: self.compiler.get_reg(Register::InputOffset),
-                    rhs: saved_offset,
-                    op: ComparisonOp::Eq,
-                },
-                then: advance,
-            },
-            offset: usize::MAX,
-        });
-
-        // NOTE: It's crucial that we connect the block with the loop before calling collect_interesting_charset,
-        // as the until statement's regex is not part of the loop but still counts as an "interesting charset",
-        // for the purpose of skipping uninteresting characters.
-        first.borrow_mut().set_next(loop_start);
-        loop_good.borrow_mut().set_next(block.first);
-
-        // Skip any uninteresting characters before the next loop iteration.
-        //   if /.*?/ {}
-        let interesting = self.compiler.collect_interesting_charset(loop_start);
-        let fast_skip = if interesting.covers_all() {
-            advance_check
-        } else {
-            let mut skip_charset = interesting.clone();
-            skip_charset.invert();
-            let skip_charset = self.compiler.intern_charset(&skip_charset);
-
-            self.compiler.alloc_ir(IR {
-                next: Some(advance_check),
-                instr: IRI::If {
-                    condition: Condition::Charset { cs: skip_charset, min: 1, max: u32::MAX },
-                    then: advance_check,
-                },
-                offset: usize::MAX,
-            })
-        };
-
-        if let mut block_last = block.last.borrow_mut()
-            && block_last.wants_next()
-        {
-            block_last.set_next(fast_skip);
+        // If block was terminated (e.g. by break/return), skip the advance check.
+        if self.func.block(self.current_block).term.is_some() {
+            // Seal loop_header and loop_exit.
+            self.ssa.seal_block(&mut self.func, loop_header);
+            self.ssa.seal_block(&mut self.func, loop_exit);
+            self.current_block = loop_exit;
+            return Ok(());
         }
 
-        Ok(IRSpan { first, last: loop_exit })
+        // Advance check: if offset didn't change, advance by 1 to prevent infinite loops.
+        //   if off == saved_off { off += 1; }
+        let current_off = self.ssa.use_var(&mut self.func, ir::Variable::OFF, self.current_block);
+
+        let advance_block = self.create_block();
+        let backedge_block = self.create_block();
+
+        self.func.set_term(
+            self.current_block,
+            ir::Term::CondBranch {
+                kind: ir::CondKind::Cmp { lhs: current_off, rhs: saved_off, op: ComparisonOp::Eq },
+                then_block: advance_block,
+                then_args: vec![],
+                else_block: backedge_block,
+                else_args: vec![],
+            },
+        );
+
+        // advance_block: off += 1
+        self.ssa.seal_block(&mut self.func, advance_block);
+        self.current_block = advance_block;
+        let advanced_off =
+            self.func.push_inst(self.current_block, ir::InstKind::AddImm(current_off, 1));
+        self.ssa.def_var(ir::Variable::OFF, advanced_off, self.current_block);
+        self.func
+            .set_term(self.current_block, ir::Term::Jump { target: backedge_block, args: vec![] });
+
+        // backedge_block: jump back to loop header
+        self.ssa.seal_block(&mut self.func, backedge_block);
+        self.current_block = backedge_block;
+        self.func
+            .set_term(self.current_block, ir::Term::Jump { target: loop_header, args: vec![] });
+
+        // Now seal loop_header (all preds: entry + back-edge are known).
+        self.ssa.seal_block(&mut self.func, loop_header);
+        self.ssa.seal_block(&mut self.func, loop_exit);
+        self.current_block = loop_exit;
+        Ok(())
     }
 
-    fn parse_break(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_break(&mut self) -> CompileResult<()> {
         self.expect_keyword("break")?;
         self.expect(';')?;
 
-        if let Some(exit) = self.context.last_mut().and_then(|ctx| ctx.loop_exit) {
-            let ir = self.compiler.alloc_noop();
-            ir.borrow_mut().set_next(exit);
-            Ok(IRSpan::single(ir))
+        if let Some(exit) = self.context.last().and_then(|ctx| ctx.loop_exit) {
+            self.func.set_term(self.current_block, ir::Term::Jump { target: exit, args: vec![] });
+            // Create a dead block for any code after break.
+            let dead = self.create_block();
+            self.ssa.seal_block(&mut self.func, dead);
+            self.current_block = dead;
+            Ok(())
         } else {
             raise!(self, "loop control statement outside of a loop")
         }
     }
 
-    fn parse_continue(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_continue(&mut self) -> CompileResult<()> {
         self.expect_keyword("continue")?;
         self.expect(';')?;
 
-        if let Some(start) = self.context.last_mut().and_then(|ctx| ctx.loop_start) {
-            let ir = self.compiler.alloc_noop();
-            ir.borrow_mut().set_next(start);
-            Ok(IRSpan::single(ir))
+        if let Some(start) = self.context.last().and_then(|ctx| ctx.loop_start) {
+            self.func.set_term(self.current_block, ir::Term::Jump { target: start, args: vec![] });
+            // Create a dead block for any code after continue.
+            let dead = self.create_block();
+            self.ssa.seal_block(&mut self.func, dead);
+            self.current_block = dead;
+            Ok(())
         } else {
             raise!(self, "loop control statement outside of a loop")
         }
     }
 
-    fn parse_return(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_return(&mut self) -> CompileResult<()> {
         self.expect_keyword("return")?;
         self.expect(';')?;
-        Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Return)))
+        self.func.set_term(self.current_block, ir::Term::Return);
+        // Create a dead block for any code after return.
+        let dead = self.create_block();
+        self.ssa.seal_block(&mut self.func, dead);
+        self.current_block = dead;
+        Ok(())
     }
 
-    fn parse_if(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_if(&mut self) -> CompileResult<()> {
         self.expect_keyword("if")?;
 
-        let last = self.compiler.alloc_noop();
-        let mut first: Option<IRCell<'a>> = None;
-        let mut prev_bad: Option<IRCell<'a>> = None;
+        let join_block = self.create_block();
 
         loop {
-            let cond = self.parse_condition()?;
+            if self.peek() == Some('/') {
+                // Regex condition.
+                let then_block = self.create_block();
+                let else_block = self.create_block();
 
-            // Chain: previous else-branch -> this condition's entry.
-            if let Some(prev) = prev_bad {
-                prev.borrow_mut().set_next(cond.src);
+                let captures = self.emit_regex_condition(then_block, else_block)?;
+
+                // Parse then body.
+                self.ssa.seal_block(&mut self.func, then_block);
+                self.current_block = then_block;
+
+                // Push context with capture groups.
+                let (loop_start, loop_exit) = self
+                    .context
+                    .last()
+                    .map(|ctx| (ctx.loop_start, ctx.loop_exit))
+                    .unwrap_or((None, None));
+                self.context.push(Context2 { loop_start, loop_exit, capture_groups: captures });
+                self.parse_block_body()?;
+                self.context.pop();
+
+                if self.func.block(self.current_block).term.is_none() {
+                    self.func.set_term(
+                        self.current_block,
+                        ir::Term::Jump { target: join_block, args: vec![] },
+                    );
+                }
+
+                // Handle else.
+                self.ssa.seal_block(&mut self.func, else_block);
+                self.current_block = else_block;
+            } else {
+                // Comparison condition.
+                let then_block = self.create_block();
+                let else_block = self.create_block();
+
+                self.emit_comparison_condition(then_block, else_block)?;
+
+                // Parse then body.
+                self.ssa.seal_block(&mut self.func, then_block);
+                self.current_block = then_block;
+
+                let (loop_start, loop_exit) = self
+                    .context
+                    .last()
+                    .map(|ctx| (ctx.loop_start, ctx.loop_exit))
+                    .unwrap_or((None, None));
+                self.context.push(Context2 { loop_start, loop_exit, capture_groups: Vec::new() });
+                self.parse_block_body()?;
+                self.context.pop();
+
+                if self.func.block(self.current_block).term.is_none() {
+                    self.func.set_term(
+                        self.current_block,
+                        ir::Term::Jump { target: join_block, args: vec![] },
+                    );
+                }
+
+                // Handle else.
+                self.ssa.seal_block(&mut self.func, else_block);
+                self.current_block = else_block;
             }
-            if first.is_none() {
-                first = Some(cond.src);
-            }
 
-            // Push context with capture groups for the block.
-            let (loop_start, loop_exit) = self
-                .context
-                .last()
-                .map(|ctx| (ctx.loop_start, ctx.loop_exit))
-                .unwrap_or((None, None));
-            self.context.push(
-                self.compiler.arena,
-                Context { loop_start, loop_exit, capture_groups: cond.capture_groups },
-            );
-            let bl = self.parse_block()?;
-            self.context.pop();
-
-            // Good path -> block -> join.
-            cond.dst_good.borrow_mut().set_next(bl.first);
-            if let mut bl_last = bl.last.borrow_mut()
-                && bl_last.wants_next()
-            {
-                bl_last.set_next(last);
-            }
-
-            // No else? Bad path -> join.
             if !self.is_keyword("else") {
-                cond.dst_bad.borrow_mut().set_next(last);
+                // No else — fall through to join.
+                if self.func.block(self.current_block).term.is_none() {
+                    self.func.set_term(
+                        self.current_block,
+                        ir::Term::Jump { target: join_block, args: vec![] },
+                    );
+                }
                 break;
             }
 
             self.pos += 4; // eat "else"
 
-            if !self.is_keyword("if") {
-                // Plain else block.
-                let else_bl = self.parse_block()?;
-                cond.dst_bad.borrow_mut().set_next(else_bl.first);
-                if let mut else_last = else_bl.last.borrow_mut()
-                    && else_last.wants_next()
-                {
-                    else_last.set_next(last);
-                }
-                break;
+            if self.is_keyword("if") {
+                // else if — continue loop.
+                self.expect_keyword("if")?;
+                continue;
             }
 
-            // else if — loop around.
-            self.expect_keyword("if")?;
-            prev_bad = Some(cond.dst_bad);
+            // Plain else block.
+            self.parse_block_body()?;
+            if self.func.block(self.current_block).term.is_none() {
+                self.func.set_term(
+                    self.current_block,
+                    ir::Term::Jump { target: join_block, args: vec![] },
+                );
+            }
+            break;
         }
 
-        Ok(IRSpan { first: first.unwrap(), last })
+        self.ssa.seal_block(&mut self.func, join_block);
+        self.current_block = join_block;
+        Ok(())
     }
 
-    /// Parse a condition: either a regex `/pattern/` or a comparison `lhs OP rhs`.
-    /// Returns a `CondSpan` whose `dst_good`/`dst_bad` are ready for the caller to wire up.
-    fn parse_condition(&mut self) -> CompileResult<CondSpan<'a>> {
-        if self.peek() == Some('/') { self.parse_regex_match() } else { self.parse_comparison() }
+    /// Emit a regex condition that branches to `then_block` on match and `else_block` on fail.
+    /// Returns capture groups from the regex.
+    fn emit_regex_condition(
+        &mut self,
+        then_block: ir::BlockId,
+        else_block: ir::BlockId,
+    ) -> CompileResult<Vec<(ir::Value, ir::Value)>> {
+        let pattern = self.read_regex()?;
+
+        // Sync SSA offset to physical register before NFA.
+        let off_val = self.ssa.use_var(&mut self.func, ir::Variable::OFF, self.current_block);
+        self.func.push_inst(self.current_block, ir::InstKind::WriteOff(off_val));
+
+        // Create sink blocks for the NFA.
+        let match_sink = self.create_block();
+        let fail_sink = self.create_block();
+
+        let (nfa_entry, captures) = match regex::compile_regex(
+            &mut self.func,
+            self.compiler,
+            pattern,
+            match_sink,
+            fail_sink,
+        ) {
+            Ok(result) => result,
+            Err(err) => raise!(self, "{}", err),
+        };
+
+        // Jump to NFA entry.
+        self.func.set_term(self.current_block, ir::Term::Jump { target: nfa_entry, args: vec![] });
+
+        // match_sink: capture new offset from physical register.
+        self.ssa.seal_block(&mut self.func, match_sink);
+        let new_off = self.func.push_inst(match_sink, ir::InstKind::ReadOff);
+        self.ssa.def_var(ir::Variable::OFF, new_off, match_sink);
+        self.func.set_term(match_sink, ir::Term::Jump { target: then_block, args: vec![] });
+
+        // fail_sink: offset unchanged — explicitly re-define OFF to the pre-NFA value
+        // (NFA blocks aren't registered with the SSA builder, so it can't find off_val
+        // by walking predecessors through them).
+        self.ssa.seal_block(&mut self.func, fail_sink);
+        self.ssa.def_var(ir::Variable::OFF, off_val, fail_sink);
+        self.func.set_term(fail_sink, ir::Term::Jump { target: else_block, args: vec![] });
+
+        Ok(captures)
     }
 
-    /// Parse a comparison condition: `ident OP ident`.
-    fn parse_comparison(&mut self) -> CompileResult<CondSpan<'a>> {
+    /// Emit a comparison condition: `ident OP ident`.
+    fn emit_comparison_condition(
+        &mut self,
+        then_block: ir::BlockId,
+        else_block: ir::BlockId,
+    ) -> CompileResult<()> {
         let lhs_name = self.read_identifier()?;
-        let lhs_vreg = self.get_variable(lhs_name)?;
+        let lhs_var = self.get_variable(lhs_name)?;
+        let lhs = self.ssa.use_var(&mut self.func, lhs_var, self.current_block);
 
         self.mark();
         let op = if self.is_str("==") {
@@ -408,53 +533,24 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         };
 
         let rhs_name = self.read_identifier()?;
-        let rhs_vreg = self.get_variable(rhs_name)?;
+        let rhs_var = self.get_variable(rhs_name)?;
+        let rhs = self.ssa.use_var(&mut self.func, rhs_var, self.current_block);
 
-        let dst_good = self.compiler.alloc_noop();
-        let dst_bad = self.compiler.alloc_noop();
-        let src = self.compiler.alloc_ir(IR {
-            next: Some(dst_bad),
-            instr: IRI::If {
-                condition: Condition::Cmp { lhs: lhs_vreg, rhs: rhs_vreg, op },
-                then: dst_good,
+        self.func.set_term(
+            self.current_block,
+            ir::Term::CondBranch {
+                kind: ir::CondKind::Cmp { lhs, rhs, op },
+                then_block,
+                then_args: vec![],
+                else_block,
+                else_args: vec![],
             },
-            offset: usize::MAX,
-        });
+        );
 
-        Ok(CondSpan { src, dst_good, dst_bad, capture_groups: BVec::empty() })
+        Ok(())
     }
 
-    /// Parse a regex match expression `/pattern/`.
-    /// Self-contained: saves offset before, restores on failure.
-    /// The existing optimizer coalesces redundant save/restore chains in if/else if.
-    fn parse_regex_match(&mut self) -> CompileResult<CondSpan<'a>> {
-        let pattern = self.read_regex()?;
-        let dst_good = self.compiler.alloc_noop();
-        let nfa_bad = self.compiler.alloc_noop();
-        let (nfa_src, capture_groups) =
-            match regex::parse(self.compiler, pattern, dst_good, nfa_bad) {
-                Ok(result) => result,
-                Err(err) => raise!(self, "{}", err),
-            };
-
-        // Save offset before the NFA, restore on failure.
-        let save_reg = self.compiler.alloc_vreg();
-        let src = self.compiler.alloc_iri(IRI::Mov {
-            dst: save_reg,
-            src: self.compiler.get_reg(Register::InputOffset),
-        });
-        src.borrow_mut().set_next(nfa_src);
-
-        let dst_bad = self.compiler.alloc_iri(IRI::Mov {
-            dst: self.compiler.get_reg(Register::InputOffset),
-            src: save_reg,
-        });
-        nfa_bad.borrow_mut().set_next(dst_bad);
-
-        Ok(CondSpan { src, dst_good, dst_bad, capture_groups })
-    }
-
-    fn parse_await(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_await(&mut self) -> CompileResult<()> {
         self.expect_keyword("await")?;
 
         let ident = self.read_identifier()?;
@@ -464,19 +560,18 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         self.expect(';')?;
 
-        let ir = self.compiler.alloc_iri(IRI::AwaitInput);
-        Ok(IRSpan::single(ir))
+        self.func.push_inst(self.current_block, ir::InstKind::AwaitInput);
+        Ok(())
     }
 
-    fn parse_yield(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_yield(&mut self) -> CompileResult<()> {
         self.expect_keyword("yield")?;
 
-        // Check if this is a capture group reference: yield $n as color
         if self.peek() == Some('$') {
+            // Capture group yield: yield $n as color
             self.pos += 1;
             let capture_index = self.read_integer()? as usize - 1;
 
-            // Expect "as"
             let kw = self.read_identifier()?;
             if kw != "as" {
                 raise!(self, "expected 'as' after capture group reference");
@@ -486,7 +581,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             let kind = self.compiler.intern_highlight_kind(color).value;
             self.expect(';')?;
 
-            let (start_vreg, end_vreg) = match self.context.last() {
+            let (start_val, end_val) = match self.context.last() {
                 Some(ctx) if capture_index < ctx.capture_groups.len() => {
                     ctx.capture_groups[capture_index]
                 }
@@ -498,62 +593,52 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 None => raise!(self, "no regex context available for capture group reference"),
             };
 
-            let hs_preg = self.compiler.get_reg(Register::HighlightStart);
-            let off_preg = self.compiler.get_reg(Register::InputOffset);
-            let off_vreg = self.compiler.alloc_vreg();
-            let kind_vreg = self.compiler.alloc_vreg();
+            let block = self.current_block;
 
-            let span = self
-                .compiler
-                .build_chain()
-                // Save offset
-                .append(IRI::Mov { dst: off_vreg, src: off_preg })
-                // Set start/end temporarily
-                .append(IRI::Mov { dst: hs_preg, src: start_vreg })
-                .append(IRI::Mov { dst: off_preg, src: end_vreg })
-                // Highlight!
-                .append(IRI::MovKind { dst: kind_vreg, kind })
-                .append(IRI::Flush { kind: kind_vreg })
-                // Restore offset
-                .append(IRI::Mov { dst: off_preg, src: off_vreg })
-                .build();
-            Ok(span)
+            // Save current offset
+            let saved_off = self.func.push_inst(block, ir::InstKind::ReadOff);
+            // Set highlight start to capture start
+            self.func.push_inst(block, ir::InstKind::WriteHs(start_val));
+            // Set offset to capture end
+            self.func.push_inst(block, ir::InstKind::WriteOff(end_val));
+            // Flush with the highlight kind
+            let kind_val = self.func.push_inst(block, ir::InstKind::HlKind(kind));
+            self.func.push_inst(block, ir::InstKind::Flush(kind_val));
+            // Restore offset
+            self.func.push_inst(block, ir::InstKind::WriteOff(saved_off));
         } else {
             // Normal yield: yield color;
             let color = self.read_identifier()?;
             let kind = self.compiler.intern_highlight_kind(color).value;
-
             self.expect(';')?;
 
-            let vreg = self.compiler.alloc_vreg();
-            let span = self
-                .compiler
-                .build_chain()
-                .append(IRI::MovKind { dst: vreg, kind })
-                .append(IRI::Flush { kind: vreg })
-                .build();
-            Ok(span)
+            let block = self.current_block;
+            let kind_val = self.func.push_inst(block, ir::InstKind::HlKind(kind));
+            self.func.push_inst(block, ir::InstKind::Flush(kind_val));
         }
+
+        Ok(())
     }
 
-    fn parse_var_declaration(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_var_declaration(&mut self) -> CompileResult<()> {
         self.expect_keyword("var")?;
 
         let name = self.read_identifier()?;
         self.expect('=')?;
-        let var_vreg = self.compiler.alloc_vreg();
-        let span = self.parse_expression_into(var_vreg)?;
+        let val = self.parse_expression()?;
         self.expect(';')?;
 
-        match self.variables.entry(name) {
-            Entry::Vacant(e) => _ = e.insert(var_vreg),
-            Entry::Occupied(_) => raise!(self, "variable '{}' already declared", name),
+        if self.variables.contains_key(name) {
+            raise!(self, "variable '{}' already declared", name);
         }
+        let var = self.alloc_variable();
+        self.variables.insert(name, var);
+        self.ssa.def_var(var, val, self.current_block);
 
-        Ok(span)
+        Ok(())
     }
 
-    fn parse_identifier_stmt(&mut self) -> CompileResult<IRSpan<'a>> {
+    fn parse_identifier_stmt(&mut self) -> CompileResult<()> {
         let name = self.read_identifier()?;
 
         match self.peek() {
@@ -563,27 +648,29 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 self.expect(')')?;
                 self.expect(';')?;
                 let name = self.compiler.strings.intern(self.compiler.arena, name);
-                Ok(IRSpan::single(self.compiler.alloc_iri(IRI::Call { name })))
+                self.func.push_inst(self.current_block, ir::InstKind::Call(name));
+                Ok(())
             }
             // foo = expr;
             Some('=') if !self.is_str("==") => {
                 self.pos += 1;
-                let dst = self.get_variable(name)?;
-                let span = self.parse_expression_into(dst)?;
+                let var = self.get_variable(name)?;
+                let val = self.parse_expression()?;
                 self.expect(';')?;
-                Ok(span)
+                self.ssa.def_var(var, val, self.current_block);
+                Ok(())
             }
             // foo += expr;
             Some('+') if self.is_str("+=") => {
-                let lhs_vreg = self.get_variable(name)?;
                 self.pos += 2;
-
-                let val = self.read_integer()?;
+                let var = self.get_variable(name)?;
+                let current_val = self.ssa.use_var(&mut self.func, var, self.current_block);
+                let imm = self.read_integer()?;
                 self.expect(';')?;
-
-                let ir = self.compiler.alloc_iri(IRI::AddImm { dst: lhs_vreg, imm: val });
-                self.variables.insert(name, lhs_vreg);
-                Ok(IRSpan::single(ir))
+                let new_val =
+                    self.func.push_inst(self.current_block, ir::InstKind::AddImm(current_val, imm));
+                self.ssa.def_var(var, new_val, self.current_block);
+                Ok(())
             }
             _ => {
                 self.mark();
@@ -593,74 +680,95 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     }
 
     /// Standalone regex statement: `/pattern/;`
-    /// Side effect: advances offset on match, does nothing on mismatch.
-    fn parse_regex_stmt(&mut self) -> CompileResult<IRSpan<'a>> {
-        let re = self.parse_regex_match()?;
+    /// Advances offset on match, does nothing on mismatch.
+    fn parse_regex_stmt(&mut self) -> CompileResult<()> {
+        let join_block = self.create_block();
+        let match_block = self.create_block();
+        let fail_block = self.create_block();
+
+        let _captures = self.emit_regex_condition(match_block, fail_block)?;
+
+        // match: fall through to join
+        self.ssa.seal_block(&mut self.func, match_block);
+        self.current_block = match_block;
+        // (offset already updated in emit_regex_condition's match_sink)
+
         self.expect(';')?;
 
-        let last = self.compiler.alloc_noop();
-        re.dst_good.borrow_mut().set_next(last);
-        re.dst_bad.borrow_mut().set_next(last);
-        Ok(IRSpan { first: re.src, last })
+        self.func.set_term(self.current_block, ir::Term::Jump { target: join_block, args: vec![] });
+
+        // fail: fall through to join
+        self.ssa.seal_block(&mut self.func, fail_block);
+        self.func.set_term(fail_block, ir::Term::Jump { target: join_block, args: vec![] });
+
+        self.ssa.seal_block(&mut self.func, join_block);
+        self.current_block = join_block;
+        Ok(())
     }
 
-    /// Destination-driven expression codegen: emits code that places the
-    /// expression result directly into `dst`, avoiding redundant copies.
-    fn parse_expression_into(&mut self, dst: IRRegCell<'a>) -> CompileResult<IRSpan<'a>> {
+    /// Parse an expression, returning the SSA value it produces.
+    fn parse_expression(&mut self) -> CompileResult<ir::Value> {
         self.mark();
-        let span = match self.peek() {
+        let val = match self.peek() {
             Some('0'..='9') => {
-                let val = self.read_integer()?;
-                IRSpan::single(self.compiler.alloc_iri(IRI::MovImm { dst, imm: val }))
+                let imm = self.read_integer()?;
+                Ok(self.func.push_inst(self.current_block, ir::InstKind::Imm(imm)))
             }
             Some('/') => {
-                // Regex expression: materializes 1 (match) or 0 (no match) into dst.
-                let re = self.parse_regex_match()?;
-                let last = self.compiler.alloc_noop();
+                // Regex as expression: materializes 1 (match) or 0 (no match).
+                let match_block = self.create_block();
+                let fail_block = self.create_block();
+                let join_block = self.create_block();
 
-                let good = self.compiler.alloc_iri(IRI::MovImm { dst, imm: 1 });
-                good.borrow_mut().set_next(last);
-                re.dst_good.borrow_mut().set_next(good);
+                let _captures = self.emit_regex_condition(match_block, fail_block)?;
 
-                let bad = self.compiler.alloc_iri(IRI::MovImm { dst, imm: 0 });
-                bad.borrow_mut().set_next(last);
-                re.dst_bad.borrow_mut().set_next(bad);
+                // match -> imm 1 -> join
+                self.ssa.seal_block(&mut self.func, match_block);
+                let one = self.func.push_inst(match_block, ir::InstKind::Imm(1));
+                self.func
+                    .set_term(match_block, ir::Term::Jump { target: join_block, args: vec![] });
 
-                IRSpan { first: re.src, last }
+                // fail -> imm 0 -> join
+                self.ssa.seal_block(&mut self.func, fail_block);
+                let zero = self.func.push_inst(fail_block, ir::InstKind::Imm(0));
+                self.func.set_term(fail_block, ir::Term::Jump { target: join_block, args: vec![] });
+
+                // join: use a variable to merge the two values via SSA phi
+                self.ssa.seal_block(&mut self.func, join_block);
+                let result_var = self.alloc_variable();
+                self.ssa.def_var(result_var, one, match_block);
+                self.ssa.def_var(result_var, zero, fail_block);
+                self.current_block = join_block;
+                let result = self.ssa.use_var(&mut self.func, result_var, join_block);
+                Ok(result)
             }
             Some(c) if Self::is_ident_start(c) => {
                 let name = self.read_identifier()?;
-                let src = self.get_variable(name)?;
-                if std::ptr::eq(src, dst) {
-                    IRSpan::single(self.compiler.alloc_noop())
-                } else {
-                    IRSpan::single(self.compiler.alloc_iri(IRI::Mov { dst, src }))
-                }
+                let var = self.get_variable(name)?;
+                Ok(self.ssa.use_var(&mut self.func, var, self.current_block))
             }
             _ => raise!(self, "expected integer, identifier, or regex in expression"),
-        };
+        }?;
 
-        // Check for binary operator
+        // Check for binary operator: + imm
         if self.peek() == Some('+') && !self.is_str("+=") {
             self.pos += 1;
-            let val = self.read_integer()?;
-            let add_ir = self.compiler.alloc_iri(IRI::AddImm { dst, imm: val });
-            span.last.borrow_mut().set_next(add_ir);
-            Ok(IRSpan { first: span.first, last: add_ir })
+            let imm = self.read_integer()?;
+            Ok(self.func.push_inst(self.current_block, ir::InstKind::AddImm(val, imm)))
         } else {
-            Ok(span)
+            Ok(val)
         }
     }
 
-    fn get_variable(&self, name: &str) -> CompileResult<IRRegCell<'a>> {
+    fn get_variable(&self, name: &str) -> CompileResult<ir::Variable> {
         match self.variables.get(name) {
-            Some(&reg) => Ok(reg),
+            Some(&var) => Ok(var),
             None => raise!(self, "undefined variable '{}'", name),
         }
     }
 
     //
-    // vvv Tokenization helpers start here vvv
+    // vvv Tokenization helpers (copied verbatim from frontend.rs) vvv
     //
 
     fn is_ident_start(ch: char) -> bool {
