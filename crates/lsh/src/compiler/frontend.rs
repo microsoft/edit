@@ -29,7 +29,9 @@ macro_rules! raise {
     }};
 }
 
-struct RegexSpan<'a> {
+/// A parsed condition (regex match or comparison) that branches to
+/// `dst_good` on success and `dst_bad` on failure.  Entry is `src`.
+struct CondSpan<'a> {
     pub src: IRCell<'a>,
     pub dst_good: IRCell<'a>,
     pub dst_bad: IRCell<'a>,
@@ -162,6 +164,8 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             self.parse_await()
         } else if self.is_keyword("yield") {
             self.parse_yield()
+        } else if self.peek() == Some('/') {
+            self.parse_regex_stmt()
         } else if self.peek().is_some_and(Self::is_ident_start) {
             self.parse_identifier_stmt()
         } else {
@@ -181,7 +185,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     fn parse_until(&mut self) -> CompileResult<IRSpan<'a>> {
         self.expect_keyword("until")?;
 
-        let re = self.parse_if_regex()?;
+        let re = self.parse_regex_match()?;
 
         let loop_exit = self.compiler.alloc_noop();
         re.dst_good.borrow_mut().set_next(loop_exit);
@@ -305,30 +309,22 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
     fn parse_if(&mut self) -> CompileResult<IRSpan<'a>> {
         self.expect_keyword("if")?;
 
-        if self.peek() == Some('/') {
-            self.parse_if_regex_chain()
-        } else {
-            self.parse_if_comparison()
-        }
-    }
-
-    fn parse_if_regex_chain(&mut self) -> CompileResult<IRSpan<'a>> {
-        let mut prev: Option<IRCell<'a>> = None;
-
-        // First, save the current input offset.
-        // This is used to restore the position on failed matches.
-        let save_reg = self.compiler.alloc_vreg();
-        let first = self.compiler.alloc_iri(IRI::Mov {
-            dst: save_reg,
-            src: self.compiler.get_reg(Register::InputOffset),
-        });
-
         let last = self.compiler.alloc_noop();
+        let mut first: Option<IRCell<'a>> = None;
+        let mut prev_bad: Option<IRCell<'a>> = None;
 
         loop {
-            let re = self.parse_if_regex()?;
+            let cond = self.parse_condition()?;
 
-            // Push context with capture groups for the block
+            // Chain: previous else-branch -> this condition's entry.
+            if let Some(prev) = prev_bad {
+                prev.borrow_mut().set_next(cond.src);
+            }
+            if first.is_none() {
+                first = Some(cond.src);
+            }
+
+            // Push context with capture groups for the block.
             let (loop_start, loop_exit) = self
                 .context
                 .last()
@@ -336,64 +332,55 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                 .unwrap_or((None, None));
             self.context.push(
                 self.compiler.arena,
-                Context { loop_start, loop_exit, capture_groups: re.capture_groups },
+                Context { loop_start, loop_exit, capture_groups: cond.capture_groups },
             );
             let bl = self.parse_block()?;
             self.context.pop();
 
-            // Connect the previous else branch to form an "else if".
-            // If there's no previous one, we're in the first iteration,
-            // and so we connect it to the instruction that saves the position.
-            prev.unwrap_or(first).borrow_mut().set_next(re.src);
-
-            // Connect the if to the {}.
-            re.dst_good.borrow_mut().set_next(bl.first);
-            // Connect the end of the {} to the end of the if/else chain.
-            if let mut block_last = bl.last.borrow_mut()
-                && block_last.wants_next()
+            // Good path -> block -> join.
+            cond.dst_good.borrow_mut().set_next(bl.first);
+            if let mut bl_last = bl.last.borrow_mut()
+                && bl_last.wants_next()
             {
-                block_last.set_next(last);
+                bl_last.set_next(last);
             }
 
-            // The "else" branch of the if needs to restore the position.
-            let dst_bad = self.compiler.alloc_iri(IRI::Mov {
-                dst: self.compiler.get_reg(Register::InputOffset),
-                src: save_reg,
-            });
-            re.dst_bad.borrow_mut().set_next(dst_bad);
-
-            // No else branch? dst_bad (= no hit) means we're done, so make that connection.
+            // No else? Bad path -> join.
             if !self.is_keyword("else") {
-                dst_bad.borrow_mut().set_next(last);
+                cond.dst_bad.borrow_mut().set_next(last);
                 break;
             }
 
-            // Gobble the "else" keyword.
-            self.pos += 4;
+            self.pos += 4; // eat "else"
 
-            // The else branch has a block? That's our dst_bad.
             if !self.is_keyword("if") {
-                let bl = self.parse_block()?;
-                dst_bad.borrow_mut().set_next(bl.first);
-                // Connect the end of the {} to the end of the if/else chain.
-                if let mut bl_last = bl.last.borrow_mut()
-                    && bl_last.wants_next()
+                // Plain else block.
+                let else_bl = self.parse_block()?;
+                cond.dst_bad.borrow_mut().set_next(else_bl.first);
+                if let mut else_last = else_bl.last.borrow_mut()
+                    && else_last.wants_next()
                 {
-                    bl_last.set_next(last);
+                    else_last.set_next(last);
                 }
                 break;
             }
 
-            // Otherwise, we expect an "if" in the next iteration to form an "else if".
+            // else if — loop around.
             self.expect_keyword("if")?;
-            prev = Some(dst_bad);
+            prev_bad = Some(cond.dst_bad);
         }
 
-        Ok(IRSpan { first, last })
+        Ok(IRSpan { first: first.unwrap(), last })
     }
 
-    fn parse_if_comparison(&mut self) -> CompileResult<IRSpan<'a>> {
-        // Parse: if var1 OP var2 { block } where OP is ==, !=, <, >, <=, >=
+    /// Parse a condition: either a regex `/pattern/` or a comparison `lhs OP rhs`.
+    /// Returns a `CondSpan` whose `dst_good`/`dst_bad` are ready for the caller to wire up.
+    fn parse_condition(&mut self) -> CompileResult<CondSpan<'a>> {
+        if self.peek() == Some('/') { self.parse_regex_match() } else { self.parse_comparison() }
+    }
+
+    /// Parse a comparison condition: `ident OP ident`.
+    fn parse_comparison(&mut self) -> CompileResult<CondSpan<'a>> {
         let lhs_name = self.read_identifier()?;
         let lhs_vreg = self.get_variable(lhs_name)?;
 
@@ -425,7 +412,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
 
         let dst_good = self.compiler.alloc_noop();
         let dst_bad = self.compiler.alloc_noop();
-        let cmp = self.compiler.alloc_ir(IR {
+        let src = self.compiler.alloc_ir(IR {
             next: Some(dst_bad),
             instr: IRI::If {
                 condition: Condition::Cmp { lhs: lhs_vreg, rhs: rhs_vreg, op },
@@ -434,47 +421,37 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             offset: usize::MAX,
         });
 
-        let bl = self.parse_block()?;
-        dst_good.borrow_mut().set_next(bl.first);
-
-        let end = self.compiler.alloc_noop();
-
-        // Handle optional else branch
-        let next = if self.is_keyword("else") {
-            self.pos += 4;
-
-            let else_bl = if self.is_keyword("if") { self.parse_if() } else { self.parse_block() };
-            let else_bl = else_bl?;
-
-            if let mut else_last = else_bl.last.borrow_mut()
-                && else_last.wants_next()
-            {
-                else_last.set_next(end);
-            }
-
-            else_bl.first
-        } else {
-            end
-        };
-
-        dst_bad.borrow_mut().set_next(next);
-        if let mut block_last = bl.last.borrow_mut()
-            && block_last.wants_next()
-        {
-            block_last.set_next(end);
-        }
-
-        Ok(IRSpan { first: cmp, last: end })
+        Ok(CondSpan { src, dst_good, dst_bad, capture_groups: BVec::empty() })
     }
 
-    fn parse_if_regex(&mut self) -> CompileResult<RegexSpan<'a>> {
+    /// Parse a regex match expression `/pattern/`.
+    /// Self-contained: saves offset before, restores on failure.
+    /// The existing optimizer coalesces redundant save/restore chains in if/else if.
+    fn parse_regex_match(&mut self) -> CompileResult<CondSpan<'a>> {
         let pattern = self.read_regex()?;
         let dst_good = self.compiler.alloc_noop();
-        let dst_bad = self.compiler.alloc_noop();
-        match regex::parse(self.compiler, pattern, dst_good, dst_bad) {
-            Ok((src, capture_groups)) => Ok(RegexSpan { src, dst_good, dst_bad, capture_groups }),
-            Err(err) => raise!(self, "{}", err),
-        }
+        let nfa_bad = self.compiler.alloc_noop();
+        let (nfa_src, capture_groups) =
+            match regex::parse(self.compiler, pattern, dst_good, nfa_bad) {
+                Ok(result) => result,
+                Err(err) => raise!(self, "{}", err),
+            };
+
+        // Save offset before the NFA, restore on failure.
+        let save_reg = self.compiler.alloc_vreg();
+        let src = self.compiler.alloc_iri(IRI::Mov {
+            dst: save_reg,
+            src: self.compiler.get_reg(Register::InputOffset),
+        });
+        src.borrow_mut().set_next(nfa_src);
+
+        let dst_bad = self.compiler.alloc_iri(IRI::Mov {
+            dst: self.compiler.get_reg(Register::InputOffset),
+            src: save_reg,
+        });
+        nfa_bad.borrow_mut().set_next(dst_bad);
+
+        Ok(CondSpan { src, dst_good, dst_bad, capture_groups })
     }
 
     fn parse_await(&mut self) -> CompileResult<IRSpan<'a>> {
@@ -615,6 +592,18 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
         }
     }
 
+    /// Standalone regex statement: `/pattern/;`
+    /// Side effect: advances offset on match, does nothing on mismatch.
+    fn parse_regex_stmt(&mut self) -> CompileResult<IRSpan<'a>> {
+        let re = self.parse_regex_match()?;
+        self.expect(';')?;
+
+        let last = self.compiler.alloc_noop();
+        re.dst_good.borrow_mut().set_next(last);
+        re.dst_bad.borrow_mut().set_next(last);
+        Ok(IRSpan { first: re.src, last })
+    }
+
     /// Destination-driven expression codegen: emits code that places the
     /// expression result directly into `dst`, avoiding redundant copies.
     fn parse_expression_into(&mut self, dst: IRRegCell<'a>) -> CompileResult<IRSpan<'a>> {
@@ -623,6 +612,21 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
             Some('0'..='9') => {
                 let val = self.read_integer()?;
                 IRSpan::single(self.compiler.alloc_iri(IRI::MovImm { dst, imm: val }))
+            }
+            Some('/') => {
+                // Regex expression: materializes 1 (match) or 0 (no match) into dst.
+                let re = self.parse_regex_match()?;
+                let last = self.compiler.alloc_noop();
+
+                let good = self.compiler.alloc_iri(IRI::MovImm { dst, imm: 1 });
+                good.borrow_mut().set_next(last);
+                re.dst_good.borrow_mut().set_next(good);
+
+                let bad = self.compiler.alloc_iri(IRI::MovImm { dst, imm: 0 });
+                bad.borrow_mut().set_next(last);
+                re.dst_bad.borrow_mut().set_next(bad);
+
+                IRSpan { first: re.src, last }
             }
             Some(c) if Self::is_ident_start(c) => {
                 let name = self.read_identifier()?;
@@ -633,7 +637,7 @@ impl<'a, 'c, 'src> Parser<'a, 'c, 'src> {
                     IRSpan::single(self.compiler.alloc_iri(IRI::Mov { dst, src }))
                 }
             }
-            _ => raise!(self, "expected integer or identifier in expression"),
+            _ => raise!(self, "expected integer, identifier, or regex in expression"),
         };
 
         // Check for binary operator

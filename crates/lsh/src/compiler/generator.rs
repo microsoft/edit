@@ -316,3 +316,56 @@ impl TryFrom<u32> for HighlightKind {{
         Ok(output)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identifier_assignment_creates_distinct_ssa_value() {
+        let _ = stdext::arena::init(16 * 1024 * 1024);
+        let arena = scratch_arena(None);
+        let mut compiler = Compiler::new(&arena);
+
+        let src = r#"
+pub fn flip() {
+    var one = 1;
+    var two = 2;
+    var state = one;
+
+    loop {
+        if /a/ {
+            if state == one {
+                yield one;
+                state = two;
+            } else {
+                yield two;
+                state = one;
+            }
+        }
+    }
+}
+"#;
+
+        compiler.parse("test.lsh", src).expect("parser should accept test program");
+        let assembly = compiler.assemble().expect("assembly should succeed");
+
+        let mut off = 0;
+        let mut found_cmp = false;
+        while off < assembly.instructions.len() {
+            let (instr, len) = Instruction::decode(&assembly.instructions[off..]);
+            let instr = instr.expect("instruction stream must decode");
+
+            if let Instruction::JumpEQ { lhs, rhs, .. } = instr {
+                if lhs != rhs {
+                    found_cmp = true;
+                    break;
+                }
+            }
+
+            off += len;
+        }
+
+        assert!(found_cmp, "expected at least one JumpEQ with distinct operands");
+    }
+}
