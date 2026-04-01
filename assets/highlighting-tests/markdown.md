@@ -66,10 +66,21 @@ Reference: ![Logo][logo-ref]
 echo "Hello, world" | tr a-z A-Z
 ```
 
+```javascript
+export function greet(name) {
+  return `hello ${name}`;
+}
+```
+
 ```json
 {
   "name": "gfm-kitchen-sink",
   "private": true,
   "scripts": { "test": "echo ok" }
 }
+```
+
+```python
+def greet(name: str) -> str:
+    return f"hello {name}"
 ```

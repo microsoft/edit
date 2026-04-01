@@ -1,0 +1,74 @@
+#[display_name = "JavaScript"]
+#[path = "**/*.cjs"]
+#[path = "**/*.js"]
+#[path = "**/*.jsx"]
+#[path = "**/*.mjs"]
+pub fn javascript() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /`/ {
+            loop {
+                yield string;
+                if /\\./ {}
+                else if /`/ { yield string; break; }
+                await input;
+            }
+        } else if /(?:if|else|switch|case|default|for|while|do|break|continue|try|catch|finally|throw|return)\>/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield keyword.control;
+            }
+        } else if /(?:async|await|class|const|delete|export|extends|function|import|in|instanceof|let|new|of|super|this|typeof|var|void|yield)\>/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield keyword.other;
+            }
+        } else if /(?:true|false|null|undefined|NaN|Infinity)\>/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield constant.language;
+            }
+        } else if /-?(?:0[xX][\da-fA-F]+|0[bB][01]+|0[oO][0-7]+|\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield constant.numeric;
+            }
+        } else if /([A-Za-z_$][\w$]*)\s*\(/ {
+            yield $1 as method;
+        } else if /[A-Za-z_$][\w$]*/ {
+            // Gobble any other tokens that should not be highlighted
+        }
+
+        yield other;
+    }
+}

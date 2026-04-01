@@ -1,0 +1,61 @@
+#[display_name = "Bash"]
+#[path = "**/*.bash"]
+#[path = "**/*.sh"]
+#[path = "**/.bash_profile"]
+#[path = "**/.bashrc"]
+#[path = "**/.profile"]
+pub fn bash() {
+    until /$/ {
+        yield other;
+
+        if /#.*/ {
+            yield comment;
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /`/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /`/ { yield string; break; }
+                await input;
+            }
+        } else if /\$\{[^}]+\}|\$[A-Za-z_]\w*|\$\d+|\$[#?*!@$-]/ {
+            yield variable;
+        } else if /(?:if|then|elif|else|fi|for|while|until|do|done|case|esac|in|select)\>/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield keyword.control;
+            }
+        } else if /(?:declare|export|function|local|readonly|source)\>/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield keyword.other;
+            }
+        } else if /-?(?:0[xX][\da-fA-F]+|\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield constant.numeric;
+            }
+        } else if /([A-Za-z_][\w-]*)\s*\(/ {
+            yield $1 as method;
+        } else if /[A-Za-z_][\w-]*/ {
+            // Gobble any other tokens that should not be highlighted
+        }
+
+        yield other;
+    }
+}
