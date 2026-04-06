@@ -9,10 +9,9 @@
 //! target block's parameter list, and those values are available as [`Value`]s
 //! inside the target block.
 
-use super::charset::Charset;
-
 // Re-export so downstream users of `ir` can name the type.
 pub use super::ComparisonOp;
+use super::charset::Charset;
 
 // ---------------------------------------------------------------------------
 // Identifiers
@@ -29,11 +28,6 @@ pub struct BlockId(pub u32);
 /// Source-level variable (the SSA builder maps these to `Value`s).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Variable(pub u32);
-
-impl Variable {
-    /// The input-offset register exposed to user code as `off`.
-    pub const OFF: Variable = Variable(0);
-}
 
 // ---------------------------------------------------------------------------
 // Instructions
@@ -88,10 +82,7 @@ pub enum InstKind<'a> {
 #[derive(Debug, Clone)]
 pub enum Term<'a> {
     /// Unconditional jump. `args` are passed to the target block's parameters.
-    Jump {
-        target: BlockId,
-        args: Vec<Value>,
-    },
+    Jump { target: BlockId, args: Vec<Value> },
     /// Conditional branch.
     CondBranch {
         kind: CondKind<'a>,
@@ -166,7 +157,12 @@ impl<'a> FuncBody<'a> {
     /// Create an empty block and return its ID.
     pub fn create_block(&mut self) -> BlockId {
         let id = BlockId(self.blocks.len() as u32);
-        self.blocks.push(BasicBlock { params: Vec::new(), insts: Vec::new(), term: None, preds: Vec::new() });
+        self.blocks.push(BasicBlock {
+            params: Vec::new(),
+            insts: Vec::new(),
+            term: None,
+            preds: Vec::new(),
+        });
         id
     }
 
@@ -220,7 +216,8 @@ impl<'a> FuncBody<'a> {
     /// Append an argument to every predecessor's terminator that targets `block`.
     /// Used by the SSA builder when resolving phis.
     pub fn append_pred_arg(&mut self, pred: BlockId, target: BlockId, val: Value) {
-        let term = self.blocks[pred.0 as usize].term.as_mut().expect("predecessor has no terminator");
+        let term =
+            self.blocks[pred.0 as usize].term.as_mut().expect("predecessor has no terminator");
         match term {
             Term::Jump { target: t, args } if *t == target => {
                 args.push(val);

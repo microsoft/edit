@@ -113,8 +113,8 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
         // Reset per-function state.
         self.func = ir::FuncBody::new();
         self.ssa = ssa::SSABuilder::new();
-        self.variables = HashMap::from([("off", ir::Variable::OFF)]);
-        self.next_var = 1;
+        self.variables = HashMap::new();
+        self.next_var = 0;
         self.context.clear();
 
         let attributes = self.parse_attributes()?;
@@ -138,10 +138,8 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
         self.ssa.seal_block(&mut self.func, entry); // entry has no predecessors
         self.current_block = entry;
 
-        // Define initial `off` value (e.g. the physical input offset at function entry).
-        // We model it as reading the physical offset register at the start.
-        let initial_off = self.func.push_inst(self.current_block, ir::InstKind::ReadOff);
-        self.ssa.def_var(ir::Variable::OFF, initial_off, self.current_block);
+        // The physical `off` register is already 0 at function entry.
+        // No SSA tracking needed — `off` is managed explicitly via ReadOff/WriteOff.
 
         self.parse_block_body()?;
 
@@ -201,10 +199,8 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
         let loop_header = self.create_block();
         let loop_exit = self.create_block();
 
-        // Jump from current block into loop header.
         self.func
             .set_term(self.current_block, ir::Term::Jump { target: loop_header, args: vec![] });
-        // Don't seal loop_header yet — the back-edge will add another predecessor.
 
         self.current_block = loop_header;
         self.parse_until_impl(loop_header, loop_exit)
@@ -216,24 +212,20 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
         let loop_header = self.create_block();
         let loop_exit = self.create_block();
 
-        // Jump from current block into loop header.
         self.func
             .set_term(self.current_block, ir::Term::Jump { target: loop_header, args: vec![] });
-        // Don't seal loop_header yet — the back-edge will add another predecessor.
 
         self.current_block = loop_header;
 
-        // Parse the `until` regex condition.
+        // Parse the `until` regex condition. The NFA reads physical `off` directly.
         let then_block = self.create_block();
         let else_block = self.create_block();
         self.emit_regex_condition(then_block, else_block)?;
 
-        // On match (condition met) → exit the loop.
         self.ssa.seal_block(&mut self.func, then_block);
         self.current_block = then_block;
         self.func.set_term(self.current_block, ir::Term::Jump { target: loop_exit, args: vec![] });
 
-        // On fail (condition not met) → enter loop body.
         self.ssa.seal_block(&mut self.func, else_block);
         self.current_block = else_block;
 
@@ -245,8 +237,9 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
         loop_header: ir::BlockId,
         loop_exit: ir::BlockId,
     ) -> CompileResult<()> {
-        // Save offset at loop body entry for progress detection.
-        let saved_off = self.ssa.use_var(&mut self.func, ir::Variable::OFF, self.current_block);
+        // Save the physical offset at the start of the loop body.
+        // This is used to detect if the loop made any progress.
+        let saved_off = self.func.push_inst(self.current_block, ir::InstKind::ReadOff);
 
         self.context.push(Context2 {
             loop_start: Some(loop_header),
@@ -258,17 +251,39 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
 
         // If block was terminated (e.g. by break/return), skip the advance check.
         if self.func.block(self.current_block).term.is_some() {
-            // Seal loop_header and loop_exit.
             self.ssa.seal_block(&mut self.func, loop_header);
             self.ssa.seal_block(&mut self.func, loop_exit);
             self.current_block = loop_exit;
             return Ok(());
         }
 
-        // Advance check: if offset didn't change, advance by 1 to prevent infinite loops.
-        //   if off == saved_off { off += 1; }
-        let current_off = self.ssa.use_var(&mut self.func, ir::Variable::OFF, self.current_block);
+        // Fast-skip: skip uninteresting characters.
+        // The charset skip operates on the physical `off` register directly.
+        let interesting = collect_interesting_charset(&self.func, loop_header);
+        if !interesting.covers_all() {
+            let mut skip_charset = interesting.clone();
+            skip_charset.invert();
+            let skip_charset = self.compiler.intern_charset(&skip_charset);
 
+            let skip_cont = self.create_block();
+            self.func.set_term(
+                self.current_block,
+                ir::Term::CondBranch {
+                    kind: ir::CondKind::Charset { cs: skip_charset, min: 1, max: u32::MAX },
+                    then_block: skip_cont,
+                    then_args: vec![],
+                    else_block: skip_cont,
+                    else_args: vec![],
+                },
+            );
+            self.ssa.seal_block(&mut self.func, skip_cont);
+            self.current_block = skip_cont;
+        }
+
+        // Read the (possibly advanced) physical offset for the advance check.
+        let current_off = self.func.push_inst(self.current_block, ir::InstKind::ReadOff);
+
+        // Advance check: if offset didn't change, advance by 1.
         let advance_block = self.create_block();
         let backedge_block = self.create_block();
 
@@ -283,12 +298,10 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
             },
         );
 
-        // advance_block: off += 1
+        // advance_block: off += 1, then backedge
         self.ssa.seal_block(&mut self.func, advance_block);
         self.current_block = advance_block;
-        let advanced_off =
-            self.func.push_inst(self.current_block, ir::InstKind::AddImm(current_off, 1));
-        self.ssa.def_var(ir::Variable::OFF, advanced_off, self.current_block);
+        self.func.push_inst(self.current_block, ir::InstKind::AdvanceOff(1));
         self.func
             .set_term(self.current_block, ir::Term::Jump { target: backedge_block, args: vec![] });
 
@@ -298,7 +311,6 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
         self.func
             .set_term(self.current_block, ir::Term::Jump { target: loop_header, args: vec![] });
 
-        // Now seal loop_header (all preds: entry + back-edge are known).
         self.ssa.seal_block(&mut self.func, loop_header);
         self.ssa.seal_block(&mut self.func, loop_exit);
         self.current_block = loop_exit;
@@ -454,6 +466,11 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
 
     /// Emit a regex condition that branches to `then_block` on match and `else_block` on fail.
     /// Returns capture groups from the regex.
+    ///
+    /// The physical `off` register is assumed to already be in sync with the SSA value
+    /// (via WriteOff at the loop header or function entry). The NFA reads/writes `off`
+    /// directly. On match, we ReadOff to capture the new position. On fail, `off` is
+    /// unchanged and we re-define OFF to the pre-NFA SSA value.
     fn emit_regex_condition(
         &mut self,
         then_block: ir::BlockId,
@@ -461,16 +478,13 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
     ) -> CompileResult<Vec<(ir::Value, ir::Value)>> {
         let pattern = self.read_regex()?;
 
-        // Sync SSA offset to physical register before NFA.
-        let off_val = self.ssa.use_var(&mut self.func, ir::Variable::OFF, self.current_block);
-        self.func.push_inst(self.current_block, ir::InstKind::WriteOff(off_val));
-
         // Create sink blocks for the NFA.
         let match_sink = self.create_block();
         let fail_sink = self.create_block();
 
-        let (nfa_entry, captures) = match regex::compile_regex(
+        let (nfa_entry, captures, needs_save_restore) = match regex::compile_regex(
             &mut self.func,
+            &mut self.ssa,
             self.compiler,
             pattern,
             match_sink,
@@ -480,20 +494,26 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
             Err(err) => raise!(self, "{}", err),
         };
 
+        // Only save/restore `off` if the NFA can corrupt it on partial match failure.
+        let off_save = if needs_save_restore {
+            let val = self.func.push_inst(self.current_block, ir::InstKind::ReadOff);
+            Some(val)
+        } else {
+            None
+        };
+
         // Jump to NFA entry.
         self.func.set_term(self.current_block, ir::Term::Jump { target: nfa_entry, args: vec![] });
 
-        // match_sink: capture new offset from physical register.
+        // match_sink: NFA matched, physical `off` is advanced.
         self.ssa.seal_block(&mut self.func, match_sink);
-        let new_off = self.func.push_inst(match_sink, ir::InstKind::ReadOff);
-        self.ssa.def_var(ir::Variable::OFF, new_off, match_sink);
         self.func.set_term(match_sink, ir::Term::Jump { target: then_block, args: vec![] });
 
-        // fail_sink: offset unchanged — explicitly re-define OFF to the pre-NFA value
-        // (NFA blocks aren't registered with the SSA builder, so it can't find off_val
-        // by walking predecessors through them).
+        // fail_sink: restore `off` if the NFA could have corrupted it.
         self.ssa.seal_block(&mut self.func, fail_sink);
-        self.ssa.def_var(ir::Variable::OFF, off_val, fail_sink);
+        if let Some(saved) = off_save {
+            self.func.push_inst(fail_sink, ir::InstKind::WriteOff(saved));
+        }
         self.func.set_term(fail_sink, ir::Term::Jump { target: else_block, args: vec![] });
 
         Ok(captures)
@@ -506,8 +526,12 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
         else_block: ir::BlockId,
     ) -> CompileResult<()> {
         let lhs_name = self.read_identifier()?;
-        let lhs_var = self.get_variable(lhs_name)?;
-        let lhs = self.ssa.use_var(&mut self.func, lhs_var, self.current_block);
+        let lhs = if lhs_name == "off" {
+            self.func.push_inst(self.current_block, ir::InstKind::ReadOff)
+        } else {
+            let lhs_var = self.get_variable(lhs_name)?;
+            self.ssa.use_var(&mut self.func, lhs_var, self.current_block)
+        };
 
         self.mark();
         let op = if self.is_str("==") {
@@ -533,8 +557,12 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
         };
 
         let rhs_name = self.read_identifier()?;
-        let rhs_var = self.get_variable(rhs_name)?;
-        let rhs = self.ssa.use_var(&mut self.func, rhs_var, self.current_block);
+        let rhs = if rhs_name == "off" {
+            self.func.push_inst(self.current_block, ir::InstKind::ReadOff)
+        } else {
+            let rhs_var = self.get_variable(rhs_name)?;
+            self.ssa.use_var(&mut self.func, rhs_var, self.current_block)
+        };
 
         self.func.set_term(
             self.current_block,
@@ -561,6 +589,8 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
         self.expect(';')?;
 
         self.func.push_inst(self.current_block, ir::InstKind::AwaitInput);
+        // After await, the runtime resets off=0 for the new line.
+        // No SSA tracking needed — the physical register is authoritative.
         Ok(())
     }
 
@@ -654,22 +684,31 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
             // foo = expr;
             Some('=') if !self.is_str("==") => {
                 self.pos += 1;
-                let var = self.get_variable(name)?;
                 let val = self.parse_expression()?;
                 self.expect(';')?;
-                self.ssa.def_var(var, val, self.current_block);
+                if name == "off" {
+                    self.func.push_inst(self.current_block, ir::InstKind::WriteOff(val));
+                } else {
+                    let var = self.get_variable(name)?;
+                    self.ssa.def_var(var, val, self.current_block);
+                }
                 Ok(())
             }
             // foo += expr;
             Some('+') if self.is_str("+=") => {
                 self.pos += 2;
-                let var = self.get_variable(name)?;
-                let current_val = self.ssa.use_var(&mut self.func, var, self.current_block);
                 let imm = self.read_integer()?;
                 self.expect(';')?;
-                let new_val =
-                    self.func.push_inst(self.current_block, ir::InstKind::AddImm(current_val, imm));
-                self.ssa.def_var(var, new_val, self.current_block);
+                if name == "off" {
+                    self.func.push_inst(self.current_block, ir::InstKind::AdvanceOff(imm));
+                } else {
+                    let var = self.get_variable(name)?;
+                    let current_val = self.ssa.use_var(&mut self.func, var, self.current_block);
+                    let new_val = self
+                        .func
+                        .push_inst(self.current_block, ir::InstKind::AddImm(current_val, imm));
+                    self.ssa.def_var(var, new_val, self.current_block);
+                }
                 Ok(())
             }
             _ => {
@@ -744,8 +783,12 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
             }
             Some(c) if Self::is_ident_start(c) => {
                 let name = self.read_identifier()?;
-                let var = self.get_variable(name)?;
-                Ok(self.ssa.use_var(&mut self.func, var, self.current_block))
+                if name == "off" {
+                    Ok(self.func.push_inst(self.current_block, ir::InstKind::ReadOff))
+                } else {
+                    let var = self.get_variable(name)?;
+                    Ok(self.ssa.use_var(&mut self.func, var, self.current_block))
+                }
             }
             _ => raise!(self, "expected integer, identifier, or regex in expression"),
         }?;
@@ -920,4 +963,59 @@ impl<'a, 'c, 'src> Parser2<'a, 'c, 'src> {
         }
         self.pos + bytes.len()
     }
+}
+
+/// Collect all "interesting" characters from conditions reachable from `start_block`.
+///
+/// Returns a charset where `true` = a character that some regex condition in the loop
+/// body might match. The fast-skip skips over the inverted charset (chars no condition
+/// cares about), preventing the loop from spinning on unmatched input.
+fn collect_interesting_charset(func: &ir::FuncBody<'_>, start_block: ir::BlockId) -> Charset {
+    use std::collections::{HashSet, VecDeque};
+
+    let mut charset = Charset::no();
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(start_block);
+
+    while let Some(block_id) = queue.pop_front() {
+        if !visited.insert(block_id) {
+            continue;
+        }
+
+        let block = func.block(block_id);
+        match &block.term {
+            Some(ir::Term::CondBranch { kind, then_block, else_block, .. }) => {
+                match kind {
+                    ir::CondKind::Charset { cs, .. } => charset.merge(cs),
+                    ir::CondKind::Prefix(s) | ir::CondKind::PrefixInsensitive(s) => {
+                        if let Some(&b) = s.as_bytes().first() {
+                            charset.set(b, true);
+                            if matches!(kind, ir::CondKind::PrefixInsensitive(_)) {
+                                charset.set(b.to_ascii_uppercase(), true);
+                                charset.set(b.to_ascii_lowercase(), true);
+                            }
+                        }
+                    }
+                    ir::CondKind::Cmp { .. } | ir::CondKind::EndOfLine => {}
+                }
+
+                // Follow the else (fail) path — that continues the condition chain.
+                // Skip the then (match) path — that enters the if-body which is irrelevant
+                // for the fast-skip charset.
+                // Exception: if then == else (e.g. optional charset `a?`), follow both.
+                if then_block == else_block {
+                    queue.push_back(*then_block);
+                } else {
+                    queue.push_back(*else_block);
+                }
+            }
+            Some(ir::Term::Jump { target, .. }) => {
+                queue.push_back(*target);
+            }
+            _ => {}
+        }
+    }
+
+    charset
 }

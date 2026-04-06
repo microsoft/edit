@@ -1,0 +1,11 @@
+#[path = "**/*.md"]
+pub fn simple() {
+    var a = off;
+    if /a\w+/ {
+        yield other;
+    }
+    var b = off;
+    if a == b {
+        yield other;
+    }
+}

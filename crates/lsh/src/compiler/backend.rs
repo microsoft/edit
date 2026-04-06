@@ -151,6 +151,7 @@ impl<'a> Backend2<'a> {
                         InstKind::Flush(_)
                         | InstKind::Call(_)
                         | InstKind::AwaitInput
+                        | InstKind::ReadOff
                         | InstKind::WriteOff(_)
                         | InstKind::WriteHs(_)
                         | InstKind::AdvanceOff(_)
@@ -244,18 +245,9 @@ impl<'a> Backend2<'a> {
             let next_block = order.get(linear_idx + 1).copied();
             match block.term.as_ref() {
                 Some(Term::Jump { target, args }) => {
-                    // Phi elimination: emit copies for block params of the target.
+                    // Phi elimination: emit parallel copies for block params.
                     let target_params = &func.block(*target).params;
-                    for (i, arg) in args.iter().enumerate() {
-                        if let (Some(&dst), Some(&src)) = (
-                            target_params.get(i).and_then(|p| allocation.get(p)),
-                            allocation.get(arg),
-                        ) {
-                            if dst != src {
-                                self.push_instruction(Instruction::Mov { dst, src });
-                            }
-                        }
-                    }
+                    self.emit_parallel_copies(target_params, args, &allocation);
 
                     if Some(*target) != next_block {
                         let tgt = self.dst_by_block(*target) as u32;
@@ -266,37 +258,71 @@ impl<'a> Backend2<'a> {
                         self.record_block_reloc(*target);
                     }
                 }
-                Some(Term::CondBranch { kind, then_block, else_block, .. }) => {
-                    let tgt = self.dst_by_block(*then_block) as u32;
+                Some(Term::CondBranch { kind, then_block, then_args, else_block, else_args }) => {
+                    // If then_args is non-empty, we need a trampoline: the condition
+                    // jumps to a trampoline that does the copies then jumps to then_block.
+                    // We'll emit the trampoline after the else path.
+                    let need_then_trampoline = {
+                        let then_params = &func.block(*then_block).params;
+                        then_args.iter().enumerate().any(|(i, arg)| {
+                            if let (Some(&dst), Some(&src)) = (
+                                then_params.get(i).and_then(|p| allocation.get(p)),
+                                allocation.get(arg),
+                            ) {
+                                dst != src
+                            } else {
+                                false
+                            }
+                        })
+                    };
+
+                    // If we need a trampoline, the condition jumps there instead.
+                    // We'll record where to patch the target after emitting the trampoline.
+                    let cond_tgt = if need_then_trampoline {
+                        0u32 // placeholder, will be patched
+                    } else {
+                        self.dst_by_block(*then_block) as u32
+                    };
+
                     match kind {
                         CondKind::Cmp { lhs, rhs, op } => {
                             let lhs = allocation[lhs];
                             let rhs = allocation[rhs];
                             match op {
-                                ComparisonOp::Eq => {
-                                    self.push_instruction(Instruction::JumpEQ { lhs, rhs, tgt })
-                                }
-                                ComparisonOp::Ne => {
-                                    self.push_instruction(Instruction::JumpNE { lhs, rhs, tgt })
-                                }
-                                ComparisonOp::Lt => {
-                                    self.push_instruction(Instruction::JumpLT { lhs, rhs, tgt })
-                                }
-                                ComparisonOp::Gt => {
-                                    self.push_instruction(Instruction::JumpGT { lhs, rhs, tgt })
-                                }
-                                ComparisonOp::Le => {
-                                    self.push_instruction(Instruction::JumpLE { lhs, rhs, tgt })
-                                }
-                                ComparisonOp::Ge => {
-                                    self.push_instruction(Instruction::JumpGE { lhs, rhs, tgt })
-                                }
+                                ComparisonOp::Eq => self.push_instruction(Instruction::JumpEQ {
+                                    lhs,
+                                    rhs,
+                                    tgt: cond_tgt,
+                                }),
+                                ComparisonOp::Ne => self.push_instruction(Instruction::JumpNE {
+                                    lhs,
+                                    rhs,
+                                    tgt: cond_tgt,
+                                }),
+                                ComparisonOp::Lt => self.push_instruction(Instruction::JumpLT {
+                                    lhs,
+                                    rhs,
+                                    tgt: cond_tgt,
+                                }),
+                                ComparisonOp::Gt => self.push_instruction(Instruction::JumpGT {
+                                    lhs,
+                                    rhs,
+                                    tgt: cond_tgt,
+                                }),
+                                ComparisonOp::Le => self.push_instruction(Instruction::JumpLE {
+                                    lhs,
+                                    rhs,
+                                    tgt: cond_tgt,
+                                }),
+                                ComparisonOp::Ge => self.push_instruction(Instruction::JumpGE {
+                                    lhs,
+                                    rhs,
+                                    tgt: cond_tgt,
+                                }),
                             }
-                            self.record_block_reloc(*then_block);
                         }
                         CondKind::EndOfLine => {
-                            self.push_instruction(Instruction::JumpIfEndOfLine { tgt });
-                            self.record_block_reloc(*then_block);
+                            self.push_instruction(Instruction::JumpIfEndOfLine { tgt: cond_tgt });
                         }
                         CondKind::Charset { cs, min, max } => {
                             let idx = self.visit_charset(cs) as u32;
@@ -304,25 +330,37 @@ impl<'a> Backend2<'a> {
                                 idx,
                                 min: *min,
                                 max: *max,
-                                tgt,
+                                tgt: cond_tgt,
                             });
-                            self.record_block_reloc(*then_block);
                         }
                         CondKind::Prefix(s) => {
                             let idx = self.visit_string(s) as u32;
-                            self.push_instruction(Instruction::JumpIfMatchPrefix { idx, tgt });
-                            self.record_block_reloc(*then_block);
+                            self.push_instruction(Instruction::JumpIfMatchPrefix {
+                                idx,
+                                tgt: cond_tgt,
+                            });
                         }
                         CondKind::PrefixInsensitive(s) => {
                             let idx = self.visit_string(s) as u32;
                             self.push_instruction(Instruction::JumpIfMatchPrefixInsensitive {
                                 idx,
-                                tgt,
+                                tgt: cond_tgt,
                             });
-                            self.record_block_reloc(*then_block);
                         }
                     }
-                    // If else_block isn't the next block, emit a jump.
+
+                    if !need_then_trampoline {
+                        self.record_block_reloc(*then_block);
+                    }
+                    // Record where the condition instruction's tgt field is, for trampoline patching.
+                    let cond_tgt_patch_offset = self.assembly.instructions.len() - 4;
+
+                    // Else path: emit else_args copies (fallthrough).
+                    {
+                        let else_params = &func.block(*else_block).params;
+                        self.emit_parallel_copies(else_params, else_args, &allocation);
+                    }
+
                     if Some(*else_block) != next_block {
                         let tgt = self.dst_by_block(*else_block) as u32;
                         self.push_instruction(Instruction::MovImm {
@@ -330,6 +368,25 @@ impl<'a> Backend2<'a> {
                             imm: tgt,
                         });
                         self.record_block_reloc(*else_block);
+                    }
+
+                    // Then trampoline: emit then_args copies + jump to then_block.
+                    if need_then_trampoline {
+                        let trampoline_offset = self.assembly.instructions.len();
+                        // Patch the condition's jump target to point here.
+                        self.assembly.instructions
+                            [cond_tgt_patch_offset..cond_tgt_patch_offset + 4]
+                            .copy_from_slice(&(trampoline_offset as u32).to_le_bytes());
+
+                        let then_params = &func.block(*then_block).params;
+                        self.emit_parallel_copies(then_params, then_args, &allocation);
+
+                        let tgt = self.dst_by_block(*then_block) as u32;
+                        self.push_instruction(Instruction::MovImm {
+                            dst: Register::ProgramCounter,
+                            imm: tgt,
+                        });
+                        self.record_block_reloc(*then_block);
                     }
                 }
                 Some(Term::Return) => {
@@ -426,6 +483,83 @@ impl<'a> Backend2<'a> {
                 true
             }
         });
+    }
+
+    /// Emit a set of parallel copies `params[i] ← args[i]` in a correct sequential order.
+    ///
+    /// Naively emitting `mov dst, src` for each pair can fail when copies form
+    /// cycles (e.g. `x3←x5, x5←x3`). This implements a proper sequentialization:
+    ///
+    /// 1. Build the set of copies `(dst_reg, src_reg)`, filtering identity copies.
+    /// 2. Emit copies whose destination is not anyone's source first (leaves).
+    /// 3. For remaining cycles, break with a scratch register (`mov tmp, src; ...`).
+    fn emit_parallel_copies(
+        &mut self,
+        params: &[Value],
+        args: &[Value],
+        allocation: &HashMap<Value, Register>,
+    ) {
+        // Collect non-identity copies as (dst_reg, src_reg).
+        let mut copies: Vec<(Register, Register)> = Vec::new();
+        for (i, arg) in args.iter().enumerate() {
+            if let (Some(&dst), Some(&src)) =
+                (params.get(i).and_then(|p| allocation.get(p)), allocation.get(arg))
+            {
+                if dst != src {
+                    copies.push((dst, src));
+                }
+            }
+        }
+
+        if copies.is_empty() {
+            return;
+        }
+
+        // Repeatedly emit copies whose dst is not used as a src by any remaining copy.
+        let mut emitted = true;
+        while emitted {
+            emitted = false;
+            let mut i = 0;
+            while i < copies.len() {
+                let (dst, _) = copies[i];
+                let dst_is_src = copies.iter().any(|&(_, s)| s == dst);
+                if !dst_is_src {
+                    let (dst, src) = copies.remove(i);
+                    self.push_instruction(Instruction::Mov { dst, src });
+                    emitted = true;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        // Any remaining copies form cycles. Break each cycle with a temp.
+        // Find a scratch register not involved in any copy.
+        while !copies.is_empty() {
+            let (first_dst, _first_src) = copies[0];
+
+            let scratch = (Register::FIRST_USER_REG..Register::COUNT)
+                .map(Register::from_usize)
+                .find(|r| !copies.iter().any(|&(d, s)| d == *r || s == *r))
+                .expect("no scratch register available for cycle breaking");
+
+            // Save the first destination into scratch.
+            self.push_instruction(Instruction::Mov { dst: scratch, src: first_dst });
+
+            // Walk the cycle: A←B, B←C, ..., Z←A → emit B←C, ..., Z←scratch
+            let mut current_dst = first_dst;
+            loop {
+                let idx = copies.iter().position(|&(d, _)| d == current_dst);
+                let Some(idx) = idx else { break };
+                let (_, src) = copies.remove(idx);
+                let actual_src = if src == first_dst { scratch } else { src };
+                self.push_instruction(Instruction::Mov { dst: current_dst, src: actual_src });
+                if src == first_dst {
+                    break; // cycle complete
+                }
+                current_dst = src;
+            }
+        }
     }
 }
 
@@ -709,7 +843,7 @@ fn allocate_registers(
     }
 
     // Sort by start position.
-    intervals.sort_by_key(|i| i.start);
+    intervals.sort_by_key(|i| (i.start, i.value.0));
 
     // Available user registers.
     let mut available: Vec<Register> =
@@ -738,7 +872,7 @@ fn allocate_registers(
         if let Some(reg) = available.pop() {
             allocation.insert(interval.value, reg);
             active.push(interval);
-            active.sort_by_key(|i| i.end);
+            active.sort_by_key(|i| (i.end, i.value.0));
         } else {
             return Err(CompileError {
                 path: String::new(),
@@ -750,27 +884,4 @@ fn allocate_registers(
     }
 
     Ok(allocation)
-}
-
-#[allow(dead_code)]
-fn get_branch_arg(
-    func: &FuncBody<'_>,
-    pred: BlockId,
-    target: BlockId,
-    idx: usize,
-) -> Option<Value> {
-    let term = func.block(pred).term.as_ref()?;
-    match term {
-        Term::Jump { target: t, args } if *t == target => args.get(idx).copied(),
-        Term::CondBranch { then_block, then_args, else_block, else_args, .. } => {
-            if *then_block == target {
-                then_args.get(idx).copied()
-            } else if *else_block == target {
-                else_args.get(idx).copied()
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
 }

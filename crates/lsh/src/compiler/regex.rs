@@ -495,36 +495,102 @@ impl<'a> RegexParser<'a> {
 /// Compile a regex pattern into basic-block IR.
 ///
 /// The NFA operates on the physical offset register. The caller is responsible
-/// for syncing SSA ↔ physical via WriteOff/ReadOff.
+/// for saving/restoring `off` around the NFA if `needs_save_restore` is true.
 ///
-/// Returns `(entry_block, captures)`. On match the NFA jumps to `match_block`;
-/// on failure it jumps to `fail_block`.
+/// Returns `(entry_block, captures, needs_save_restore)`. On match the NFA jumps
+/// to `match_block`; on failure it jumps to `fail_block`.
+///
+/// `needs_save_restore` is true when a partial match can corrupt `off` — i.e.,
+/// the pattern is a concatenation where the first element can match (advancing
+/// `off`) but a later element can fail, leaving `off` in a bad state.
+#[allow(clippy::type_complexity)]
 pub fn compile_regex<'a>(
     func: &mut ir::FuncBody<'a>,
+    ssa: &mut super::ssa::SSABuilder,
     compiler: &mut Compiler<'a>,
     pattern: &str,
     match_block: ir::BlockId,
     fail_block: ir::BlockId,
-) -> Result<(ir::BlockId, Vec<(ir::Value, ir::Value)>), String> {
+) -> Result<(ir::BlockId, Vec<(ir::Value, ir::Value)>, bool), String> {
     let parser = RegexParser::new(pattern);
     let regex = parser.parse()?;
 
-    let mut codegen = BlockCodeGen { func, compiler, captures: Vec::new() };
+    let needs_save_restore = can_corrupt_offset(&regex);
+
+    let mut codegen =
+        BlockCodeGen { func, ssa, compiler, captures: Vec::new(), nfa_blocks: Vec::new() };
     let entry = codegen.emit(&regex, match_block, fail_block)?;
 
-    // Reverse captures: Concat iterates in reverse, so groups are pushed in reverse order.
+    // Seal all NFA blocks now that the entire NFA graph is built
+    // and all terminators (predecessors) have been connected.
+    let nfa_blocks = codegen.nfa_blocks.clone();
+    for block in nfa_blocks {
+        codegen.ssa.seal_block(codegen.func, block);
+    }
+
     codegen.captures.reverse();
 
-    Ok((entry, codegen.captures))
+    Ok((entry, codegen.captures, needs_save_restore))
 }
 
-struct BlockCodeGen<'a, 'b, 'c> {
+/// Returns true if a failed match of this regex can leave the physical `off`
+/// register in a corrupted state (advanced past a partial match).
+///
+/// Single conditions (Literal, CharClass, EndOfLine, WordEnd) never corrupt:
+/// they either match fully or leave `off` unchanged.
+/// Concatenations of 2+ elements can corrupt if the first matches but a later one fails.
+/// Dots always advance `off`, so `Dot` in a concat is always dangerous.
+fn can_corrupt_offset(regex: &Regex) -> bool {
+    match regex {
+        // Single conditions: the bytecode instruction atomically matches or doesn't.
+        Regex::Empty
+        | Regex::Literal(..)
+        | Regex::CharClass(_)
+        | Regex::EndOfLine
+        | Regex::WordEnd => false,
+
+        // A dot always advances offset by 1. In isolation it can't "fail" (it always
+        // progresses), but if it's part of a concat, the concat handles it.
+        Regex::Dot => false,
+
+        // Concat of 2+ elements: if the first matches, `off` advances. If a later
+        // element fails, `off` is stuck at the wrong position.
+        Regex::Concat(parts) => parts.len() >= 2,
+
+        // Alternation: each branch is tried independently. If one branch corrupts,
+        // the whole alternation can corrupt.
+        Regex::Alt(alts) => alts.iter().any(can_corrupt_offset),
+
+        // Repetition: min>1 means it's effectively a concat (match once, then again).
+        // A charset/dot repeat compiles to a single VM instruction, so it's safe.
+        Regex::Repeat { inner, min, .. } => {
+            if matches!(**inner, Regex::CharClass(_) | Regex::Dot) {
+                false // single VM instruction
+            } else {
+                *min >= 2 || can_corrupt_offset(inner)
+            }
+        }
+
+        // Groups are transparent.
+        Regex::Group { inner, .. } => can_corrupt_offset(inner),
+    }
+}
+
+struct BlockCodeGen<'a, 'b, 'c, 'd> {
     func: &'b mut ir::FuncBody<'a>,
+    ssa: &'d mut super::ssa::SSABuilder,
     compiler: &'c mut Compiler<'a>,
     captures: Vec<(ir::Value, ir::Value)>,
+    nfa_blocks: Vec<ir::BlockId>,
 }
 
-impl<'a, 'b, 'c> BlockCodeGen<'a, 'b, 'c> {
+impl<'a, 'b, 'c, 'd> BlockCodeGen<'a, 'b, 'c, 'd> {
+    fn create_block(&mut self) -> ir::BlockId {
+        let block = self.func.create_block();
+        self.ssa.declare_block(block);
+        self.nfa_blocks.push(block);
+        block
+    }
     fn emit(
         &mut self,
         regex: &Regex,
@@ -541,14 +607,14 @@ impl<'a, 'b, 'c> BlockCodeGen<'a, 'b, 'c> {
             Regex::CharClass(cs) => self.emit_charset(cs, 1, 1, on_match, on_fail),
 
             Regex::Dot => {
-                let block = self.func.create_block();
+                let block = self.create_block();
                 self.func.push_inst(block, ir::InstKind::AdvanceOff(1));
                 self.func.set_term(block, ir::Term::Jump { target: on_match, args: vec![] });
                 Ok(block)
             }
 
             Regex::EndOfLine => {
-                let block = self.func.create_block();
+                let block = self.create_block();
                 self.func.set_term(
                     block,
                     ir::Term::CondBranch {
@@ -591,14 +657,14 @@ impl<'a, 'b, 'c> BlockCodeGen<'a, 'b, 'c> {
             Regex::Group { inner, capturing } => {
                 if *capturing {
                     // save_end block: ReadOff → end_val, jump to on_match.
-                    let save_end = self.func.create_block();
+                    let save_end = self.create_block();
                     let end_val = self.func.push_inst(save_end, ir::InstKind::ReadOff);
                     self.func.set_term(save_end, ir::Term::Jump { target: on_match, args: vec![] });
 
                     let inner_entry = self.emit(inner, save_end, on_fail)?;
 
                     // save_start block: ReadOff → start_val, jump to inner_entry.
-                    let save_start = self.func.create_block();
+                    let save_start = self.create_block();
                     let start_val = self.func.push_inst(save_start, ir::InstKind::ReadOff);
                     self.func
                         .set_term(save_start, ir::Term::Jump { target: inner_entry, args: vec![] });
@@ -624,7 +690,7 @@ impl<'a, 'b, 'c> BlockCodeGen<'a, 'b, 'c> {
     ) -> Result<ir::BlockId, String> {
         // `.*` = skip to end of line.
         if min == 0 && max == u32::MAX && matches!(*inner, Regex::Dot) {
-            let block = self.func.create_block();
+            let block = self.create_block();
             self.func.push_inst(block, ir::InstKind::SetOffImm(u32::MAX));
             self.func.set_term(block, ir::Term::Jump { target: on_match, args: vec![] });
             return Ok(block);
@@ -699,7 +765,7 @@ impl<'a, 'b, 'c> BlockCodeGen<'a, 'b, 'c> {
         } else {
             ir::CondKind::Prefix(s)
         };
-        let block = self.func.create_block();
+        let block = self.create_block();
         self.func.set_term(
             block,
             ir::Term::CondBranch {
@@ -751,7 +817,7 @@ impl<'a, 'b, 'c> BlockCodeGen<'a, 'b, 'c> {
         }
 
         let cs = self.compiler.intern_charset(cs);
-        let block = self.func.create_block();
+        let block = self.create_block();
         self.func.set_term(
             block,
             ir::Term::CondBranch {
