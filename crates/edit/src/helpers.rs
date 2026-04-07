@@ -48,6 +48,7 @@ pub const COORD_TYPE_SAFE_MAX: CoordType = (1 << (CoordType::BITS / 2 - 1)) - 1;
 
 /// A 2D point. Uses [`CoordType`].
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub struct Point {
     pub x: CoordType,
     pub y: CoordType,
@@ -56,6 +57,10 @@ pub struct Point {
 impl Point {
     pub const MIN: Self = Self { x: CoordType::MIN, y: CoordType::MIN };
     pub const MAX: Self = Self { x: CoordType::MAX, y: CoordType::MAX };
+
+    pub fn as_array(&mut self) -> &mut [CoordType; 2] {
+        unsafe { &mut *(self as *mut Self as *mut [CoordType; 2]) }
+    }
 }
 
 impl PartialOrd<Self> for Point {
@@ -72,6 +77,7 @@ impl Ord for Point {
 
 /// A 2D size. Uses [`CoordType`].
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub struct Size {
     pub width: CoordType,
     pub height: CoordType,
@@ -85,6 +91,7 @@ impl Size {
 
 /// A 2D rectangle. Uses [`CoordType`].
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub struct Rect {
     pub left: CoordType,
     pub top: CoordType,

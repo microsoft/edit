@@ -442,22 +442,21 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                             };
 
                             mouse.state = InputMouseState::None;
-                            if (btn & 0x40) != 0 {
-                                mouse.state = InputMouseState::Scroll;
-                                match btn & 0x03 {
-                                    0 => mouse.scroll.y -= 3,
-                                    1 => mouse.scroll.y += 3,
-                                    2 | 3 => {}
-                                    _ => unreachable!(),
+
+                            match csi.params[0] {
+                                btn @ 0..3 if csi.final_byte == 'M' => match btn {
+                                    0 => mouse.state = InputMouseState::Left,
+                                    1 => mouse.state = InputMouseState::Middle,
+                                    2 => mouse.state = InputMouseState::Right,
+                                    _ => {}
+                                },
+                                btn @ 64..68 => {
+                                    let delta = if (btn & 1) != 0 { 3 } else { -3 };
+                                    let idx = if (btn & 2) != 0 { 0 } else { 1 };
+                                    mouse.scroll.as_array()[idx] += delta;
+                                    mouse.state = InputMouseState::Scroll;
                                 }
-                            } else if csi.final_byte == 'M' {
-                                const STATES: [InputMouseState; 4] = [
-                                    InputMouseState::Left,
-                                    InputMouseState::Middle,
-                                    InputMouseState::Right,
-                                    InputMouseState::None,
-                                ];
-                                mouse.state = STATES[(btn as usize) & 0x03];
+                                _ => {}
                             }
 
                             mouse.modifiers = kbmod::NONE;
