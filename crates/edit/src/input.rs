@@ -444,7 +444,12 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                             mouse.state = InputMouseState::None;
                             if (btn & 0x40) != 0 {
                                 mouse.state = InputMouseState::Scroll;
-                                mouse.scroll.y += if (btn & 0x01) != 0 { 3 } else { -3 };
+                                match btn & 0x03 {
+                                    0 => mouse.scroll.y -= 3,
+                                    1 => mouse.scroll.y += 3,
+                                    2 | 3 => {}
+                                    _ => unreachable!(),
+                                }
                             } else if csi.final_byte == 'M' {
                                 const STATES: [InputMouseState; 4] = [
                                     InputMouseState::Left,
