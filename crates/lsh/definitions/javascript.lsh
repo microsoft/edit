@@ -39,34 +39,22 @@ pub fn javascript() {
                 else if /`/ { yield string; break; }
                 await input;
             }
-        } else if /(?:if|else|switch|case|default|for|while|do|break|continue|try|catch|finally|throw|return)\>/ {
-            if /\w+/ {
-                yield other;
-            } else {
-                yield keyword.control;
-            }
-        } else if /(?:async|await|class|const|delete|export|extends|function|import|in|instanceof|let|new|of|super|this|typeof|var|void|yield)\>/ {
-            if /\w+/ {
-                yield other;
-            } else {
-                yield keyword.other;
-            }
+        } else if /(?:break|case|catch|continue|debugger|default|do|else|finally|for|if|return|switch|throw|try|while)\>/ {
+            yield keyword.control;
+        } else if /(?:async|await|class|const|delete|export|extends|function|import|in|instanceof|let|new|of|static|super|this|typeof|var|void|yield)\>/ {
+            yield keyword.other;
         } else if /(?:true|false|null|undefined|NaN|Infinity)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)n?/ {
             if /\w+/ {
-                yield other;
-            } else {
-                yield constant.language;
-            }
-        } else if /-?(?:(?i:0x[\da-fA-F]+)|(?i:0b[01]+)|(?i:0o[0-7]+)|\d+\.?\d*|\.\d+)(?i:e[+-]?\d+)?/ {
-            if /\w+/ {
-                yield other;
+                // Invalid numeric literal
             } else {
                 yield constant.numeric;
             }
-        } else if /([A-Za-z_$][\w$]*)\s*\(/ {
+        } else if /(\w+)\s*\(/ {
             yield $1 as method;
-        } else if /[A-Za-z_$][\w$]*/ {
-            // Gobble any other tokens that should not be highlighted
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
         }
 
         yield other;

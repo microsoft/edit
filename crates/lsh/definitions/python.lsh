@@ -34,36 +34,24 @@ pub fn python() {
                 else if /"/ { yield string; break; }
                 await input;
             }
-        } else if /(?:if|elif|else|for|while|try|except|finally|return|break|continue|raise|with|match|case|pass)\>/ {
-            if /\w+/ {
-                yield other;
-            } else {
-                yield keyword.control;
-            }
-        } else if /(?:and|as|assert|async|await|class|def|del|from|global|import|in|is|lambda|nonlocal|not|or|yield)\>/ {
-            if /\w+/ {
-                yield other;
-            } else {
-                yield keyword.other;
-            }
+        } else if /(?:break|case|continue|elif|else|except|finally|for|if|match|pass|raise|return|try|while|with)\>/ {
+            yield keyword.control;
+        } else if /(?:and|assert|async|as|await|class|def|del|from|global|import|in|is|lambda|nonlocal|not|or|type|yield)\>/ {
+            yield keyword.other;
         } else if /(?:True|False|None)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?j?)/ {
             if /\w+/ {
-                yield other;
-            } else {
-                yield constant.language;
-            }
-        } else if /-?(?:(?i:0x[\da-fA-F]+)|(?i:0b[01]+)|(?i:0o[0-7]+)|\d+\.?\d*|\.\d+)(?i:e[+-]?\d+)?(?i:j)?/ {
-            if /\w+/ {
-                yield other;
+                // Invalid numeric literal
             } else {
                 yield constant.numeric;
             }
-        } else if /@[A-Za-z_]\w*/ {
+        } else if /@\w+/ {
             yield markup.link;
-        } else if /([A-Za-z_]\w*)\s*\(/ {
+        } else if /(\w+)\s*\(/ {
             yield $1 as method;
-        } else if /[A-Za-z_]\w*/ {
-            // Gobble any other tokens that should not be highlighted
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
         }
 
         yield other;
