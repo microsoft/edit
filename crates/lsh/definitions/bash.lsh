@@ -44,7 +44,7 @@ pub fn bash() {
             } else {
                 yield keyword.other;
             }
-        } else if /-?(?:0[xX][\da-fA-F]+|\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/ {
+        } else if /-?(?:(?i:0x[\da-fA-F]+)|\d+\.?\d*|\.\d+)(?i:e[+-]?\d+)?/ {
             if /\w+/ {
                 yield other;
             } else {
