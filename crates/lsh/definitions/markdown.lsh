@@ -28,6 +28,26 @@ pub fn markdown() {
                     if /.*/ {}
                 }
             }
+        } else if /(?i:c\+\+|cpp|cc|cxx)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    cpp();
+                    if /.*/ {}
+                }
+            }
+        } else if /(?i:c)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    c();
+                    if /.*/ {}
+                }
+            }
         } else if /(?i:diff)/ {
             loop {
                 await input;

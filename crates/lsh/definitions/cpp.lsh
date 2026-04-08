@@ -1,0 +1,66 @@
+#[display_name = "C++"]
+#[path = "**/*.cpp"]
+#[path = "**/*.hpp"]
+#[path = "**/*.cc"]
+#[path = "**/*.cxx"]
+#[path = "**/*.hxx"]
+pub fn cpp() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {
+                    // Skip escaped characters
+                } else if /"/ { 
+                    yield string; 
+                    break; 
+                }
+                await input;
+            }
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /\\./ {
+                    // Skip escaped characters
+                } else if /'/ { 
+                    yield string; 
+                    break; 
+                }
+                await input;
+            }
+        } else if /#\s*(?:include|define|undef|if|ifdef|ifndef|elif|else|endif|error|pragma|warning|line)\>/ {
+            yield keyword.control;
+        } else if /(?:break|case|catch|continue|default|do|else|for|goto|if|return|switch|throw|try|while)\>/ {
+            yield keyword.control;
+        } else if /(?:alignas|alignof|asm|auto|bool|char|char16_t|char32_t|char8_t|class|concept|const|const_cast|consteval|constexpr|constinit|decltype|delete|double|dynamic_cast|enum|explicit|export|extern|float|friend|inline|int|long|mutable|namespace|new|noexcept|operator|private|protected|public|register|reinterpret_cast|requires|short|signed|sizeof|static|static_assert|static_cast|struct|template|thread_local|typedef|typeid|typename|union|unsigned|using|virtual|void|volatile|wchar_t)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|NULL|nullptr)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-fA-F']+|0b[01']+|[\d']+\.?[\d']*|\.[\d']+)(?:p[+-]?[\d']+|e[+-]?[\d']+)?[ulfz]*)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
