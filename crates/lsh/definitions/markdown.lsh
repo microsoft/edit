@@ -18,7 +18,17 @@ pub fn markdown() {
         yield comment;
     } else if /```/ {
         // NOTE: These checks are sorted alphabetically.
-        if /(?i:diff)/ {
+        if /(?i:sh|bash)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    shellscript();
+                    if /.*/ {}
+                }
+            }
+        } else if /(?i:diff)/ {
             loop {
                 await input;
                 if /\s*```/ {
@@ -30,6 +40,16 @@ pub fn markdown() {
                     if /.*/ {}
                 }
             }
+        } else if /(?i:javascript|js)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    javascript();
+                    if /.*/ {}
+                }
+            }
         } else if /(?i:json)/ {
             loop {
                 await input;
@@ -37,6 +57,16 @@ pub fn markdown() {
                     return;
                 } else {
                     json();
+                    if /.*/ {}
+                }
+            }
+        } else if /(?i:py)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    python();
                     if /.*/ {}
                 }
             }
