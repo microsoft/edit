@@ -1,0 +1,80 @@
+#[display_name = "Lua"]
+#[path = "**/*.lua"]
+#[path = "**/*.luau"]
+pub fn lua() {
+    until /$/ {
+        yield other;
+
+        if /--\[\[/ {
+            loop {
+                yield comment;
+                if /\]\]/ {
+                    yield comment;
+                    break;
+                }
+                await input;
+            }
+        } else if /--\[=\[/ {
+            loop {
+                yield comment;
+                if /\]=\]/ {
+                    yield comment;
+                    break;
+                }
+                await input;
+            }
+        } else if /--.*/ {
+            yield comment;
+        } else if /\[\[/ {
+            loop {
+                yield string;
+                if /\]\]/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /\[=\[/ {
+            loop {
+                yield string;
+                if /\]=\]/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /(?:break|continue|do|else|elseif|end|for|function|goto|if|in|repeat|return|then|until|while)\>/ {
+            yield keyword.control;
+        } else if /(?:and|export|local|not|or|type|typeof)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|nil)\>/ {
+            yield constant.language;
+        } else if /(?i:(?:0x[\da-f]+(?:\.[\da-f]+)?(?:p[+-]?\d+)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?))/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
