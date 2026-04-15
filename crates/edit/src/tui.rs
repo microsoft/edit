@@ -630,38 +630,6 @@ impl Tui {
                     self.needs_more_settling();
                 }
 
-                // if mouse_down || mouse_up {
-                //     // Roots (aka windows) are ordered in Z order, so we iterate
-                //     // them in reverse order, from topmost to bottommost.
-                //     for root in self.prev_tree.iterate_roots_rev() {
-                //         // Find the node that contains the cursor.
-                //         Tree::visit_all(root, root, true, |node| {
-                //             let n = node.borrow();
-                //             if !n.outer_clipped.contains(next_position) {
-                //                 // Skip the entire sub-tree, because it doesn't contain the cursor.
-                //                 return VisitControl::SkipChildren;
-                //             }
-                //             hovered_node = Some(node);
-                //             if n.attributes.focusable {
-                //                 focused_node = Some(node);
-                //             }
-                //             VisitControl::Continue
-                //         });
-
-                //         // This root/window contains the cursor.
-                //         // We don't care about any lower roots.
-                //         if hovered_node.is_some() {
-                //             break;
-                //         }
-
-                //         // This root is modal and swallows all clicks,
-                //         // no matter whether the click was inside it or not.
-                //         if matches!(root.borrow().content, NodeContent::Modal(_)) {
-                //             break;
-                //         }
-                //     }
-                // }
-
                 if is_scroll {
                     next_state = self.mouse_state;
                 } else if is_drag {
