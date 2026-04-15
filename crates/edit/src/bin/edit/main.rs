@@ -20,7 +20,7 @@ use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
 use draw_statusbar::*;
-use edit::framebuffer::{self, IndexedColor};
+use edit::framebuffer::{self, INDEXED_COLORS_COUNT, IndexedColor};
 use edit::helpers::*;
 use edit::input::{self, kbmod, vk};
 use edit::oklab::StraightRgba;
@@ -558,6 +558,98 @@ impl Drop for RestoreModes {
     }
 }
 
+/// Apply user-defined theme colors to the indexed_colors array.
+/// Returns a boolean array indicating which colors were user-configured.
+/// User-configured colors take priority over terminal-reported colors.
+fn apply_user_theme(
+    indexed_colors: &mut [StraightRgba; INDEXED_COLORS_COUNT],
+) -> [bool; INDEXED_COLORS_COUNT] {
+    use crate::settings::Settings;
+    use edit::framebuffer::IndexedColor;
+
+    let settings = Settings::borrow();
+    let theme = &settings.theme;
+    let mut user_configured = [false; INDEXED_COLORS_COUNT];
+
+    // Apply standard 16 colors
+    if let Some(c) = theme.black {
+        indexed_colors[IndexedColor::Black as usize] = c;
+        user_configured[IndexedColor::Black as usize] = true;
+    }
+    if let Some(c) = theme.red {
+        indexed_colors[IndexedColor::Red as usize] = c;
+        user_configured[IndexedColor::Red as usize] = true;
+    }
+    if let Some(c) = theme.green {
+        indexed_colors[IndexedColor::Green as usize] = c;
+        user_configured[IndexedColor::Green as usize] = true;
+    }
+    if let Some(c) = theme.yellow {
+        indexed_colors[IndexedColor::Yellow as usize] = c;
+        user_configured[IndexedColor::Yellow as usize] = true;
+    }
+    if let Some(c) = theme.blue {
+        indexed_colors[IndexedColor::Blue as usize] = c;
+        user_configured[IndexedColor::Blue as usize] = true;
+    }
+    if let Some(c) = theme.magenta {
+        indexed_colors[IndexedColor::Magenta as usize] = c;
+        user_configured[IndexedColor::Magenta as usize] = true;
+    }
+    if let Some(c) = theme.cyan {
+        indexed_colors[IndexedColor::Cyan as usize] = c;
+        user_configured[IndexedColor::Cyan as usize] = true;
+    }
+    if let Some(c) = theme.white {
+        indexed_colors[IndexedColor::White as usize] = c;
+        user_configured[IndexedColor::White as usize] = true;
+    }
+    if let Some(c) = theme.bright_black {
+        indexed_colors[IndexedColor::BrightBlack as usize] = c;
+        user_configured[IndexedColor::BrightBlack as usize] = true;
+    }
+    if let Some(c) = theme.bright_red {
+        indexed_colors[IndexedColor::BrightRed as usize] = c;
+        user_configured[IndexedColor::BrightRed as usize] = true;
+    }
+    if let Some(c) = theme.bright_green {
+        indexed_colors[IndexedColor::BrightGreen as usize] = c;
+        user_configured[IndexedColor::BrightGreen as usize] = true;
+    }
+    if let Some(c) = theme.bright_yellow {
+        indexed_colors[IndexedColor::BrightYellow as usize] = c;
+        user_configured[IndexedColor::BrightYellow as usize] = true;
+    }
+    if let Some(c) = theme.bright_blue {
+        indexed_colors[IndexedColor::BrightBlue as usize] = c;
+        user_configured[IndexedColor::BrightBlue as usize] = true;
+    }
+    if let Some(c) = theme.bright_magenta {
+        indexed_colors[IndexedColor::BrightMagenta as usize] = c;
+        user_configured[IndexedColor::BrightMagenta as usize] = true;
+    }
+    if let Some(c) = theme.bright_cyan {
+        indexed_colors[IndexedColor::BrightCyan as usize] = c;
+        user_configured[IndexedColor::BrightCyan as usize] = true;
+    }
+    if let Some(c) = theme.bright_white {
+        indexed_colors[IndexedColor::BrightWhite as usize] = c;
+        user_configured[IndexedColor::BrightWhite as usize] = true;
+    }
+
+    // Apply special colors
+    if let Some(c) = theme.background {
+        indexed_colors[IndexedColor::Background as usize] = c;
+        user_configured[IndexedColor::Background as usize] = true;
+    }
+    if let Some(c) = theme.foreground {
+        indexed_colors[IndexedColor::Foreground as usize] = c;
+        user_configured[IndexedColor::Foreground as usize] = true;
+    }
+
+    user_configured
+}
+
 fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) -> RestoreModes {
     sys::write_stdout(concat!(
         // 1049: Alternative Screen Buffer
@@ -588,8 +680,11 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
     let mut done = false;
     let mut osc_buffer = String::new();
     let mut indexed_colors = framebuffer::DEFAULT_THEME;
-    let mut color_responses = 0;
+    let mut _color_responses = 0;
     let mut ambiguous_width = 1;
+
+    // Apply user-defined theme colors first (highest priority)
+    let user_configured = apply_user_theme(&mut indexed_colors);
 
     while !done {
         let scratch = scratch_arena(None);
@@ -622,18 +717,27 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
 
                     let mut splits = data.split_terminator(';');
 
-                    let color = match splits.next().unwrap_or("") {
+                    let color_idx = match splits.next().unwrap_or("") {
                         // The response is `4;<color>;rgb:<r>/<g>/<b>`.
                         "4" => match splits.next().unwrap_or("").parse::<usize>() {
-                            Ok(val) if val < 16 => &mut indexed_colors[val],
+                            Ok(val) if val < 16 => val,
                             _ => continue,
                         },
                         // The response is `10;rgb:<r>/<g>/<b>`.
-                        "10" => &mut indexed_colors[IndexedColor::Foreground as usize],
+                        "10" => IndexedColor::Foreground as usize,
                         // The response is `11;rgb:<r>/<g>/<b>`.
-                        "11" => &mut indexed_colors[IndexedColor::Background as usize],
+                        "11" => IndexedColor::Background as usize,
                         _ => continue,
                     };
+
+                    // Skip if this color was user-configured (user theme has priority)
+                    if user_configured[color_idx] {
+                        _color_responses += 1;
+                        osc_buffer.clear();
+                        continue;
+                    }
+
+                    let color = &mut indexed_colors[color_idx];
 
                     let color_param = splits.next().unwrap_or("");
                     if !color_param.starts_with("rgb:") {
@@ -658,7 +762,7 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
                     }
 
                     *color = StraightRgba::from_le(rgb | 0xff000000);
-                    color_responses += 1;
+                    _color_responses += 1;
                     osc_buffer.clear();
                 }
                 _ => {}
@@ -671,9 +775,10 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         state.documents.reflow_all();
     }
 
-    if color_responses == indexed_colors.len() {
-        tui.setup_indexed_colors(indexed_colors);
-    }
+    // Always apply colors: user-configured colors take priority,
+    // terminal-reported colors fill in the rest,
+    // and DEFAULT_THEME is the fallback.
+    tui.setup_indexed_colors(indexed_colors);
 
     RestoreModes
 }

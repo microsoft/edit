@@ -262,6 +262,8 @@ pub struct TextBuffer {
     tab_size: CoordType,
     indent_with_tabs: bool,
     line_highlight_enabled: bool,
+    line_number_color: Option<StraightRgba>,
+    line_highlight_color: Option<StraightRgba>,
     language: Option<&'static Language>,
     ruler: CoordType,
     encoding: &'static str,
@@ -312,6 +314,8 @@ impl TextBuffer {
             tab_size: 4,
             indent_with_tabs: false,
             line_highlight_enabled: false,
+            line_number_color: None,
+            line_highlight_color: None,
             language: None,
             ruler: 0,
             encoding: "UTF-8",
@@ -605,6 +609,16 @@ impl TextBuffer {
     /// Sets whether the line the cursor is on should be highlighted.
     pub fn set_line_highlight_enabled(&mut self, enabled: bool) {
         self.line_highlight_enabled = enabled;
+    }
+
+    /// Set the color for line numbers in the margin.
+    pub fn set_line_number_color(&mut self, color: Option<StraightRgba>) {
+        self.line_number_color = color;
+    }
+
+    /// Set the background color for the current line highlight.
+    pub fn set_line_highlight_color(&mut self, color: Option<StraightRgba>) {
+        self.line_highlight_color = color;
     }
 
     pub fn language(&self) -> Option<&'static Language> {
@@ -2023,7 +2037,9 @@ impl TextBuffer {
                 right: destination.left + self.margin_width,
                 bottom: destination.bottom,
             };
-            fb.blend_fg(margin, StraightRgba::from_le(0x7f7f7f7f));
+            let line_number_color =
+                self.line_number_color.unwrap_or_else(|| StraightRgba::from_le(0x7f7f7f7f));
+            fb.blend_fg(margin, line_number_color);
         }
 
         if self.ruler > 0 {
@@ -2064,6 +2080,9 @@ impl TextBuffer {
                 fb.set_cursor(cursor, self.overtype);
 
                 if self.line_highlight_enabled && selection_beg >= selection_end {
+                    let highlight_color = self
+                        .line_highlight_color
+                        .unwrap_or_else(|| StraightRgba::from_le(0x7f7f7f7f));
                     fb.blend_bg(
                         Rect {
                             left: destination.left,
@@ -2071,7 +2090,7 @@ impl TextBuffer {
                             right: destination.right,
                             bottom: cursor.y + 1,
                         },
-                        StraightRgba::from_le(0x7f7f7f7f),
+                        highlight_color,
                     );
                 }
             }
