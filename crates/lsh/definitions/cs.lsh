@@ -1,0 +1,22 @@
+#[display_name = "C#"]
+#[path = "**/*.cs"]
+pub fn CSharp() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        }
+
+        yield other;
+    }
+}
