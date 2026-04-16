@@ -352,11 +352,29 @@ impl<'a> Backend<'a> {
 
                 // If the next instruction was already serialized (e.g. this is some form of loop),
                 // simply jump to the already serialized code. We're done here. Nothing new will come after this.
+                //
+                // If the destination is call/ret instruction we can just inline it.
+                // Otherwise, it'd be like jumping to a jump.
+                //
+                // TODO: If you think about it, this should kinda go into optimizer.rs, because it could
+                // do optimizations across entire instruction sequences (= it could do inlining!).
+                // But optimizer.rs doesn't have a linearized view of the assembly so it can't do this.
                 if ir.offset != usize::MAX {
-                    self.push_instruction(MovImm {
-                        dst: Register::ProgramCounter,
-                        imm: ir.offset as u32,
-                    });
+                    match ir.instr {
+                        IRI::Call { name } => {
+                            let tgt = self.dst_by_name(name) as u32;
+                            self.push_instruction(Call { tgt });
+                        }
+                        IRI::Return => {
+                            self.push_instruction(Return);
+                        }
+                        _ => {
+                            self.push_instruction(MovImm {
+                                dst: Register::ProgramCounter,
+                                imm: ir.offset as u32,
+                            });
+                        }
+                    }
                     break;
                 }
             }

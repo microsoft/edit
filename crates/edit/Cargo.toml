@@ -1,6 +1,6 @@
 [package]
 name = "edit"
-version = "1.2.1"
+version = "2.0.0"
 
 edition.workspace = true
 license.workspace = true
@@ -31,7 +31,7 @@ lsh.workspace = true
 pkg-config = "0.3"
 # The default toml crate bundles its dependencies with bad compile times. Thanks.
 # Thankfully toml-span exists. FWIW the alternative is yaml-rust (without the 2 suffix).
-toml-span = { version = "0.6", default-features = false }
+toml-span = { version = "0.7", default-features = false }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = { version = "0.1", default-features = false }

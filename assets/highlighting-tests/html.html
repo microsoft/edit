@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTML Syntax Test &amp; Demo</title>
+    <!-- Comment with special chars: <>&"' -->
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+        }
+
+        .test {
+            color: #ff0000;
+        }
+    </style>
+</head>
+
+<body>
+    <h1 id="main" class='header' data-value="123">Heading</h1>
+
+    <!-- Various elements -->
+    <p>Text with &lt; &gt; &amp; &quot; &apos; &#65; &#x41; entities</p>
+    <br />
+    <hr>
+    <img src="image.png" alt="Description" />
+
+    <!-- Attributes -->
+    <input type="text" disabled required value="" data-custom="attr">
+    <button onclick="test()">Click</button>
+
+    <!-- Nested elements -->
+    <div>
+        <span>Inline <strong>bold</strong> text</span>
+        <ul>
+            <li>Item 1</li>
+            <li>Item 2</li>
+        </ul>
+    </div>
+
+    <!-- Script -->
+    <script>
+        function test() {
+            return x < 10 && y > 5;
+        }
+    </script>
+</body>
+
+</html>

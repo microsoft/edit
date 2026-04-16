@@ -1,0 +1,62 @@
+#[display_name = "JavaScript"]
+#[path = "**/*.cjs"]
+#[path = "**/*.js"]
+#[path = "**/*.jsx"]
+#[path = "**/*.mjs"]
+pub fn javascript() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /`/ {
+            loop {
+                yield string;
+                if /\\./ {}
+                else if /`/ { yield string; break; }
+                await input;
+            }
+        } else if /(?:break|case|catch|continue|debugger|default|do|else|finally|for|if|return|switch|throw|try|while)\>/ {
+            yield keyword.control;
+        } else if /(?:async|await|class|const|delete|export|extends|function|import|in|instanceof|let|new|of|static|super|this|typeof|var|void|yield)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|null|undefined|NaN|Infinity)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)n?/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

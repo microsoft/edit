@@ -1,0 +1,59 @@
+#[display_name = "Python"]
+#[path = "**/*.py"]
+#[path = "**/*.pyi"]
+#[path = "**/*.pyw"]
+pub fn python() {
+    until /$/ {
+        yield other;
+
+        if /#.*/ {
+            yield comment;
+        } else if /'''/ {
+            loop {
+                yield string;
+                if /'''/ { yield string; break; }
+                await input;
+            }
+        } else if /"""/ {
+            loop {
+                yield string;
+                if /"""/ { yield string; break; }
+                await input;
+            }
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /(?:break|case|continue|elif|else|except|finally|for|if|match|pass|raise|return|try|while|with)\>/ {
+            yield keyword.control;
+        } else if /(?:and|assert|async|as|await|class|def|del|from|global|import|in|is|lambda|nonlocal|not|or|type|yield)\>/ {
+            yield keyword.other;
+        } else if /(?:True|False|None)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?j?)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /@\w+/ {
+            yield markup.link;
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
