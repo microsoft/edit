@@ -41,7 +41,7 @@ pub fn CSharp() {
             yield keyword.control;
         } else if /(?:abstract|bool|byte|char|class|const|decimal|delegate|double|enum|event|explicit|extern|float|implicit|int|interface|internal|long|namespace|new|object|operator|out|override|params|private|protected|public|readonly|ref|sealed|short|static|string|struct|this|typeof|uint|ulong|unsafe|ushort|virtual|void|volatile|add|args|async|await|dynamic|field|file|get|init|let|managed|nint|not|notnull|nuint|partial|record|required|sbyte|scoped|set|T|unmanaged|var)/ {
             yield keyword.other;
-        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:p[+-]?[\d_]+|e[+-]?[\d_]+)?[ulfd]*)/ {
+        } else if /(?i:-?(?i:0x[\da-fA-F_]+|0b[01_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?i:p[+-]?[\d_]+|e[+-]?[\d_]+)?[uUlLfFdD]*)/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {
