@@ -149,7 +149,7 @@ impl Rect {
 /// [`Read`] but with [`MaybeUninit<u8>`] buffers.
 pub fn file_read_uninit<T: Read>(file: &mut T, buf: &mut [MaybeUninit<u8>]) -> io::Result<usize> {
     unsafe {
-        let buf_slice = slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len());
+        let buf_slice = slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<u8>(), buf.len());
         let n = file.read(buf_slice)?;
         Ok(n)
     }

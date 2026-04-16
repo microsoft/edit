@@ -52,7 +52,7 @@ pub fn read_to_string<P: AsRef<Path>>(arena: &Arena, path: P) -> io::Result<BStr
 
 fn file_read_uninit<T: Read>(file: &mut T, buf: &mut [MaybeUninit<u8>]) -> io::Result<usize> {
     unsafe {
-        let buf_slice = from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len());
+        let buf_slice = from_raw_parts_mut(buf.as_mut_ptr().cast(), buf.len());
         let n = file.read(buf_slice)?;
         Ok(n)
     }
