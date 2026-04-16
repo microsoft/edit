@@ -28,7 +28,6 @@ libc = "0.2"
 [build-dependencies]
 stdext.workspace = true
 lsh.workspace = true
-pkg-config = "0.3"
 # The default toml crate bundles its dependencies with bad compile times. Thanks.
 # Thankfully toml-span exists. FWIW the alternative is yaml-rust (without the 2 suffix).
 toml-span = { version = "0.7", default-features = false }

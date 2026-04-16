@@ -258,7 +258,6 @@ dependencies = [
  "criterion",
  "libc",
  "lsh",
- "pkg-config",
  "stdext",
  "toml-span",
  "windows-sys",

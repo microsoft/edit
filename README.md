@@ -19,19 +19,23 @@ You can install the latest version with WinGet:
 winget install Microsoft.Edit
 ```
 
-### Linux
+### Linux (build from source)
 
-You can install the latest tagged release by pasting this into the Linux terminal:
-```sh
-curl -fsSL https://raw.githubusercontent.com/microsoft/edit/main/tools/install.sh | bash
-```
-You can uninstall via:
-```sh
-curl -fsSL https://raw.githubusercontent.com/microsoft/edit/main/tools/uninstall.sh | bash
-```
-<!-- To target a specific branch, tag, or commit instead, set `EDIT_SOURCE_REF`. -->
+If your distribution does not provide binaries, or if you'd like to build your own, you can use our install script, provided you have installed:
+* Rust (via `rustup` or similar)
+* A C compiler (e.g. `gcc`)
+* ICU (e.g. libicu78, libicu, icu)
+* curl/wget and tar
 
-The source installer is continuously tested on Ubuntu, Fedora, Arch Linux, and openSUSE Tumbleweed. Other Linux distributions are best-effort and may require manual dependency installation.
+The following command will then install `msedit` into `~/.local/bin`:
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/microsoft/edit/main/assets/install.sh | sh
+```
+
+Additional flags are `--dev`, to build directly from the main branch, and `--system` to install into `/usr/local/bin`. For instance:
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/microsoft/edit/main/assets/install.sh | sh -s -- --dev --system
+```
 
 ## Build Instructions
 
@@ -51,11 +55,11 @@ The source installer is continuously tested on Ubuntu, Fedora, Arch Linux, and o
 
 ### Build Configuration
 
-Uou can set the following environment variables at build-time to configure the build:
+You can set the following environment variables at build-time to configure the build:
 
 Environment variable | Description
 --- | ---
-`EDIT_CFG_ICU*` | See [ICU library name (SONAME)](#icu-library-name-soname) below for details. This option is particularly important on Linux.
+`EDIT_CFG_ICU*` | See [ICU library name (SONAME)](#icu-library-name-soname) below for details. Linux package maintainers are advised to review and configure these options.
 `EDIT_CFG_LANGUAGES` | A comma-separated list of languages to include in the build. See [i18n/edit.toml](i18n/edit.toml) for available languages.
 
 ## Notes to Package Maintainers
@@ -71,10 +75,12 @@ Assigning an "edit" alias is recommended, if possible.
 
 This project optionally depends on the ICU library for its Search and Replace functionality.
 
-By default, the project will look for a SONAME without version suffix:
-* Windows: `icuuc.dll`
-* macOS: `libicuuc.dylib`
-* UNIX, and other OS: `libicuuc.so`
+By default, the project will look for the following library names:
+
+ Variable | Windows | macOS | Linux / Other
+----------|---------|-------|---------------
+`EDIT_CFG_ICUUC_SONAME` | `icuuc.dll` | `libicucore.dylib` | `libicuuc.so`
+`EDIT_CFG_ICUI18N_SONAME` | `icuin.dll` | `libicucore.dylib` | `libicui18n.so`
 
 If your installation uses a different SONAME, please set the following environment variable at build time:
 * `EDIT_CFG_ICUUC_SONAME`:
