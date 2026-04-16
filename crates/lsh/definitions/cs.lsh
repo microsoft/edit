@@ -15,6 +15,26 @@ pub fn CSharp() {
                     break;
                 }
             }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /'/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
         }
 
         yield other;
