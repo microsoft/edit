@@ -7,7 +7,6 @@ comment
 */
 
 global using static System.Console;
-using System.Diagnostics;
 using System;
 
 // Numbers
@@ -43,6 +42,7 @@ using System;
 42lu;
 3.14f;
 3.14d;
+-.5_0_1e3_0d;
 
 // Constants
 true;
@@ -53,8 +53,8 @@ null;
 'a';
 '\n';
 "double quotes with escape: \" \n \t \\";
-$"";
-@"";
+$"double quotes with a value {1 + 1}";
+@"double quotes with ";
 $@"";
 @$"";
 
@@ -100,31 +100,52 @@ finally
 
 }
 
-Debug;
-
 // Other keywords (some are contextually reserved)
 var a = 1;
 dynamic b = 2;
 T c = 3;
 
-void Greet(string name)
+string Greet(string name)
 {
     return "Hello, " + name;
 }
 
-static void Greet(string name)
+static int Factorial(int n)
 {
-    return "Hello, " + name;
-}
+    if (n == 0)
+    {
+        return 1;
+    }
 
-async void Greet(string name)
-{
-    return "Hello, " + name;
+    return n * Factorial(n - 1);
 }
 
 class Animal
 {
-    private int age;
-    protected bool isAlive;
-    public Animal()
+    private int _Age;
+    public int Age { get => _Age; }
+    protected bool _IsAlive;
+    public bool IsAlive { get => _IsAlive; }
+    public Animal(int age, bool isAlive)
+    {
+        _Age = age;
+        _IsAlive = isAlive;
+    }
+
+    public virtual void Speak() { }
+}
+
+class Dog : Animal
+{
+    private string _Bark;
+
+    public Dog(string bark, int age, bool isAlive) : base(age, isAlive)
+    {
+
+    }
+
+    public override void Speak()
+    {
+        Console.WriteLine(_Bark);
+    }
 }
