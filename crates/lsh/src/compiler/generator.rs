@@ -216,7 +216,9 @@ impl TryFrom<u32> for HighlightKind {{
             _ = writeln!(
                 output,
                 "    Language {{ id: {:?}, name: {:?}, entrypoint: {} }},",
-                ep.name, ep.display_name, ep.address
+                ep.name.replace('_', "-"),
+                ep.display_name,
+                ep.address,
             );
         }
         output.push_str("];\n");
