@@ -115,6 +115,38 @@ pub fn init() -> Deinit {
     }
 }
 
+/// Reopen stdin if it's redirected (= piped input).
+pub fn reopen_stdin_if_redirected() -> io::Result<Option<File>> {
+    unsafe {
+        let stdin = STATE.stdin;
+
+        if stdin != Foundation::INVALID_HANDLE_VALUE
+            && FileSystem::GetFileType(stdin) == FileSystem::FILE_TYPE_CHAR
+        {
+            return Ok(None); // stdin refers to a TTY
+        }
+
+        STATE.stdin = FileSystem::CreateFileW(
+            w!("CONIN$"),
+            Foundation::GENERIC_READ | Foundation::GENERIC_WRITE,
+            FileSystem::FILE_SHARE_READ | FileSystem::FILE_SHARE_WRITE,
+            null_mut(),
+            FileSystem::OPEN_EXISTING,
+            0,
+            null_mut(),
+        );
+        if STATE.stdin == Foundation::INVALID_HANDLE_VALUE {
+            return Err(last_os_error());
+        }
+
+        if stdin != Foundation::INVALID_HANDLE_VALUE {
+            Ok(Some(File::from_raw_handle(stdin)))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 /// Switches the terminal into raw mode, etc.
 pub fn switch_modes() -> io::Result<()> {
     unsafe {
@@ -138,20 +170,6 @@ pub fn switch_modes() -> io::Result<()> {
             },
         };
 
-        // Reopen stdin if it's redirected (= piped input).
-        if ptr::eq(STATE.stdin, Foundation::INVALID_HANDLE_VALUE)
-            || !matches!(FileSystem::GetFileType(STATE.stdin), FileSystem::FILE_TYPE_CHAR)
-        {
-            STATE.stdin = FileSystem::CreateFileW(
-                w!("CONIN$"),
-                Foundation::GENERIC_READ | Foundation::GENERIC_WRITE,
-                FileSystem::FILE_SHARE_READ | FileSystem::FILE_SHARE_WRITE,
-                null_mut(),
-                FileSystem::OPEN_EXISTING,
-                0,
-                null_mut(),
-            );
-        }
         if ptr::eq(STATE.stdin, Foundation::INVALID_HANDLE_VALUE)
             || ptr::eq(STATE.stdout, Foundation::INVALID_HANDLE_VALUE)
         {
@@ -411,20 +429,6 @@ pub fn write_stdout(text: &str) {
                 break;
             }
         }
-    }
-}
-
-/// Check if the stdin handle is redirected to a file, etc.
-///
-/// # Returns
-///
-/// * `Some(file)` if stdin is redirected.
-/// * Otherwise, `None`.
-pub fn open_stdin_if_redirected() -> Option<File> {
-    unsafe {
-        let handle = Console::GetStdHandle(Console::STD_INPUT_HANDLE);
-        // Did we reopen stdin during `init()`?
-        if !std::ptr::eq(STATE.stdin, handle) { Some(File::from_raw_handle(handle)) } else { None }
     }
 }
 

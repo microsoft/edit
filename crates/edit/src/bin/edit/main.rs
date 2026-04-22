@@ -75,12 +75,13 @@ fn run() -> apperr::Result<()> {
         return Ok(());
     }
 
+    handle_stdin(&mut state)?;
+
     if let Err(err) = Settings::reload() {
         state.add_error(err);
     }
 
-    // This will reopen stdin if it's redirected (which may fail) and switch
-    // the terminal to raw mode which prevents the user from pressing Ctrl+C.
+    // Switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // `handle_args` may want to print a help message (must not fail),
     // and reads files (may hang; should be cancelable with Ctrl+C).
     // As such, we call this after `handle_args`.
@@ -276,16 +277,6 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         state.documents.add_file_path(p)?;
     }
 
-    if let Some(mut file) = sys::open_stdin_if_redirected() {
-        let doc = state.documents.add_untitled()?;
-        let mut tb = doc.buffer.borrow_mut();
-        tb.read_file(&mut file, None)?;
-        tb.mark_as_dirty();
-    } else if paths.is_empty() {
-        // No files were passed, and stdin is not redirected.
-        state.documents.add_untitled()?;
-    }
-
     if dir.is_none()
         && let Some(parent) = paths.last().and_then(|p| p.parent())
     {
@@ -294,6 +285,22 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
 
     state.file_picker_pending_dir = DisplayablePathBuf::from_path(dir.unwrap_or(cwd));
     Ok(false)
+}
+
+// Read any redirected (piped) stdin into a new document.
+// This doubles as a stdin handle validation. We do this after `handle_args`
+// (may exit early) and before `switch_modes` (needs a console stdin).
+fn handle_stdin(state: &mut State) -> apperr::Result<()> {
+    if let Some(mut file) = sys::reopen_stdin_if_redirected()? {
+        let doc = state.documents.add_untitled()?;
+        let mut tb = doc.buffer.borrow_mut();
+        tb.read_file(&mut file, None)?;
+        tb.mark_as_dirty();
+    } else if state.documents.len() == 0 {
+        // No files were passed, and stdin is not redirected.
+        state.documents.add_untitled()?;
+    }
+    Ok(())
 }
 
 fn print_help() {
