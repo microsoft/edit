@@ -33,6 +33,9 @@ rustflags = [
 
 # The backtrace code for panics in Rust is almost as large as the entire editor.
 # = Huge reduction in binary size by removing all that.
+[profile.release]
+panic = "immediate-abort"
+
 [unstable]
-build-std-features = ["panic_immediate_abort"]
+panic-immediate-abort = true
 build-std = ["std", "panic_abort"]
