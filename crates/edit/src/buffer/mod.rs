@@ -150,6 +150,8 @@ struct ActiveSearch {
     selection_generation: u32,
     /// Stores the text buffer offset in between searches.
     next_search_offset: usize,
+    /// Stores the current match, including zero-width matches that do not produce a selection.
+    current_match: Option<Range<usize>>,
     /// If we know there were no hits, we can skip searching.
     no_matches: bool,
 }
@@ -1175,15 +1177,28 @@ impl TextBuffer {
         replacement: &[u8],
     ) -> icu::Result<()> {
         // Editors traditionally replace the previous search hit, not the next possible one.
-        if let (Some(search), Some(..)) = (&self.search, &self.selection) {
+        if let Some(search) = &self.search {
             let search = unsafe { &mut *search.get() };
-            if search.selection_generation == self.selection_generation {
+            if search.pattern == pattern
+                && search.options == options
+                && search.selection_generation == self.selection_generation
+                && let Some(current_match) = search.current_match.clone()
+                && (!current_match.is_empty() || self.cursor.offset == current_match.end)
+            {
                 let scratch = scratch_arena(None);
                 let parsed_replacements =
                     Self::find_parse_replacement(&scratch, &mut *search, replacement);
                 let replacement =
                     self.find_fill_replacement(&mut *search, replacement, &parsed_replacements);
                 self.write(&replacement, self.cursor, true);
+
+                let next_search_offset = if current_match.is_empty() {
+                    self.next_search_offset_after_zero_width_replace()
+                } else {
+                    self.cursor.offset
+                };
+                self.find_select_next(search, next_search_offset, true);
+                return Ok(());
             }
         }
 
@@ -1204,14 +1219,18 @@ impl TextBuffer {
 
         loop {
             self.find_select_next(&mut search, offset, false);
-            if !self.has_selection() {
+            let Some(current_match) = search.current_match.clone() else {
                 break;
-            }
+            };
 
             let replacement =
                 self.find_fill_replacement(&mut search, replacement, &parsed_replacements);
             self.write(&replacement, self.cursor, true);
-            offset = self.cursor.offset;
+            offset = if current_match.is_empty() {
+                self.next_search_offset_after_zero_width_replace()
+            } else {
+                self.cursor.offset
+            };
         }
 
         Ok(())
@@ -1273,21 +1292,25 @@ impl TextBuffer {
             buffer_generation: self.buffer.generation(),
             selection_generation: 0,
             next_search_offset: 0,
+            current_match: None,
             no_matches: false,
         })
     }
 
     fn find_select_next(&mut self, search: &mut ActiveSearch, offset: usize, wrap: bool) {
+        let past_end = offset > self.text_length();
         if search.buffer_generation != self.buffer.generation() {
-            unsafe { search.regex.set_text(&mut search.text, offset) };
+            unsafe { search.regex.set_text(&mut search.text, offset.min(self.text_length())) };
             search.buffer_generation = self.buffer.generation();
             search.next_search_offset = offset;
         } else if search.next_search_offset != offset {
             search.next_search_offset = offset;
-            search.regex.reset(offset);
+            if !past_end {
+                search.regex.reset(offset);
+            }
         }
 
-        let mut hit = search.regex.next();
+        let mut hit = if past_end { None } else { search.regex.next() };
 
         // If we hit the end of the buffer, and we know that there's something to find,
         // start the search again from the beginning (= wrap around).
@@ -1297,6 +1320,7 @@ impl TextBuffer {
             hit = search.regex.next();
         }
 
+        search.current_match = hit.clone();
         search.selection_generation = if let Some(range) = hit {
             // Now the search offset is no more at the start of the buffer.
             search.next_search_offset = range.end;
@@ -1316,6 +1340,11 @@ impl TextBuffer {
             search.no_matches = true;
             self.set_selection(None)
         };
+    }
+
+    fn next_search_offset_after_zero_width_replace(&self) -> usize {
+        let next = self.cursor_move_delta_internal(self.cursor, CursorMovement::Grapheme, 1).offset;
+        if next > self.cursor.offset { next } else { self.text_length().saturating_add(1) }
     }
 
     fn find_parse_replacement<'a>(
@@ -3085,4 +3114,46 @@ fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buffer_with_text(text: &str) -> TextBuffer {
+        let mut buffer = TextBuffer::new(true).unwrap();
+        buffer.write_raw(text.as_bytes());
+        buffer.cursor_move_to_offset(0);
+        buffer
+    }
+
+    fn buffer_contents(buffer: &mut TextBuffer) -> String {
+        let mut out = String::new();
+        buffer.save_as_string(&mut out);
+        out
+    }
+
+    #[test]
+    fn zero_width_regex_replacements_work_for_single_and_replace_all() {
+        let options = SearchOptions { use_regex: true, ..Default::default() };
+
+        let mut single = buffer_with_text("abc");
+        single.find_and_select("$", options).unwrap();
+        single.find_and_replace("$", options, b"foo").unwrap();
+        assert_eq!(buffer_contents(&mut single), "abcfoo");
+
+        let mut moved_cursor = buffer_with_text("abc");
+        moved_cursor.find_and_select("$", options).unwrap();
+        moved_cursor.cursor_move_to_offset(0);
+        moved_cursor.find_and_replace("$", options, b"foo").unwrap();
+        assert_eq!(buffer_contents(&mut moved_cursor), "abc");
+
+        let mut replace_all = buffer_with_text("abc\ndef");
+        replace_all.find_and_replace_all("$", options, b"foo").unwrap();
+        assert_eq!(buffer_contents(&mut replace_all), "abcfoo\ndeffoo");
+
+        let mut adjacent = buffer_with_text("ab");
+        adjacent.find_and_replace_all("(?=.)", options, b"x").unwrap();
+        assert_eq!(buffer_contents(&mut adjacent), "xaxb");
+    }
 }
