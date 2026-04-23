@@ -149,7 +149,7 @@ use std::{io, iter, mem, ptr, time};
 
 use stdext::arena::{Arena, scratch_arena};
 use stdext::collections::{BString, BVec};
-use stdext::{arena_format, arena_write_fmt, opt_ptr_eq, str_from_raw_parts};
+use stdext::{ReplaceRange, arena_format, arena_write_fmt, opt_ptr_eq, str_from_raw_parts};
 
 use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
@@ -346,6 +346,8 @@ pub struct Tui {
     /// The number of clicks that have happened in a row.
     /// Gets reset when the mouse was released for a while.
     mouse_click_counter: CoordType,
+    /// The path to the node that is currently being hovered over.
+    mouse_hover_node_path: Vec<u64>,
     /// The path to the node that was clicked on.
     mouse_down_node_path: Vec<u64>,
     /// The position of the first click in a double/triple click series.
@@ -406,6 +408,7 @@ impl Tui {
             mouse_state: InputMouseState::None,
             mouse_is_drag: false,
             mouse_click_counter: 0,
+            mouse_hover_node_path: Vec::with_capacity(16),
             mouse_down_node_path: Vec::with_capacity(16),
             first_click_position: Point::MIN,
             first_click_target: 0,
@@ -421,6 +424,7 @@ impl Tui {
             settling_want: 0,
             read_timeout: time::Duration::MAX,
         };
+        Self::clean_node_path(&mut tui.mouse_hover_node_path);
         Self::clean_node_path(&mut tui.mouse_down_node_path);
         Self::clean_node_path(&mut tui.focused_node_path);
         Ok(tui)
@@ -583,37 +587,37 @@ impl Tui {
 
                 let mut hovered_node = None; // Needed for `mouse_down`
                 let mut focused_node = None; // Needed for `mouse_down` and `is_click`
-                if mouse_down || mouse_up {
-                    // Roots (aka windows) are ordered in Z order, so we iterate
-                    // them in reverse order, from topmost to bottommost.
-                    for root in self.prev_tree.iterate_roots_rev() {
-                        // Find the node that contains the cursor.
-                        Tree::visit_all(root, root, true, |node| {
-                            let n = node.borrow();
-                            if !n.outer_clipped.contains(next_position) {
-                                // Skip the entire sub-tree, because it doesn't contain the cursor.
-                                return VisitControl::SkipChildren;
-                            }
-                            hovered_node = Some(node);
-                            if n.attributes.focusable {
-                                focused_node = Some(node);
-                            }
-                            VisitControl::Continue
-                        });
-
-                        // This root/window contains the cursor.
-                        // We don't care about any lower roots.
-                        if hovered_node.is_some() {
-                            break;
+                // Roots (aka windows) are ordered in Z order, so we iterate
+                // them in reverse order, from topmost to bottommost.
+                for root in self.prev_tree.iterate_roots_rev() {
+                    // Find the node that contains the cursor.
+                    Tree::visit_all(root, root, true, |node| {
+                        let n = node.borrow();
+                        if !n.outer_clipped.contains(next_position) {
+                            // Skip the entire sub-tree, because it doesn't contain the cursor.
+                            return VisitControl::SkipChildren;
                         }
-
-                        // This root is modal and swallows all clicks,
-                        // no matter whether the click was inside it or not.
-                        if matches!(root.borrow().content, NodeContent::Modal(_)) {
-                            break;
+                        hovered_node = Some(node);
+                        if n.attributes.focusable {
+                            focused_node = Some(node);
                         }
+                        VisitControl::Continue
+                    });
+
+                    // This root/window contains the cursor.
+                    // We don't care about any lower roots.
+                    if hovered_node.is_some() {
+                        break;
+                    }
+
+                    // This root is modal and swallows all clicks,
+                    // no matter whether the click was inside it or not.
+                    if matches!(root.borrow().content, NodeContent::Modal(_)) {
+                        break;
                     }
                 }
+
+                Self::build_node_path(hovered_node, &mut self.mouse_hover_node_path);
 
                 if is_scroll {
                     next_state = self.mouse_state;
@@ -621,7 +625,7 @@ impl Tui {
                     self.mouse_is_drag = true;
                 } else if mouse_down {
                     // Transition from no mouse input to some mouse input --> Record the mouse down position.
-                    Self::build_node_path(hovered_node, &mut self.mouse_down_node_path);
+                    self.mouse_down_node_path.replace_range(.., &self.mouse_hover_node_path);
 
                     // On left-mouse-down we change focus.
                     let mut target = 0;
@@ -1249,6 +1253,14 @@ impl Tui {
         }
 
         result
+    }
+
+    fn was_mouse_hover_on_node(&self, id: u64) -> bool {
+        self.mouse_hover_node_path.last() == Some(&id)
+    }
+
+    fn was_mouse_hover_on_subtree(&self, node: &Node) -> bool {
+        self.mouse_hover_node_path.get(node.depth) == Some(&node.id)
     }
 
     fn was_mouse_down_on_node(&self, id: u64) -> bool {
@@ -2234,7 +2246,7 @@ impl<'a> Context<'a, '_> {
 
         // Scrolling works even if the node isn't focused.
         if self.input_scroll_delta != Point::default()
-            && node_prev.inner_clipped.contains(self.tui.mouse_position)
+            && self.tui.was_mouse_hover_on_node(node_prev.id)
         {
             tc.scroll_offset.x += self.input_scroll_delta.x;
             tc.scroll_offset.y += self.input_scroll_delta.y;
@@ -2855,7 +2867,7 @@ impl<'a> Context<'a, '_> {
             let container_rect = prev_container.inner;
 
             if self.input_scroll_delta != Point::default()
-                && container_rect.contains(self.tui.mouse_position)
+                && self.tui.was_mouse_hover_on_subtree(&prev_container)
             {
                 sc.scroll_offset.x += self.input_scroll_delta.x;
                 sc.scroll_offset.y += self.input_scroll_delta.y;
