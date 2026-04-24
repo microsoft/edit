@@ -1175,7 +1175,7 @@ impl TextBuffer {
         replacement: &[u8],
     ) -> icu::Result<()> {
         // Editors traditionally replace the previous search hit, not the next possible one.
-        if let (Some(search), Some(..)) = (&self.search, &self.selection) {
+        if let Some(search) = &self.search {
             let search = unsafe { &mut *search.get() };
             if search.selection_generation == self.selection_generation {
                 let scratch = scratch_arena(None);
@@ -1203,15 +1203,23 @@ impl TextBuffer {
         let parsed_replacements = Self::find_parse_replacement(&scratch, &mut search, replacement);
 
         loop {
-            self.find_select_next(&mut search, offset, false);
-            if !self.has_selection() {
-                break;
-            }
+            let Some(range) = self.find_select_next(&mut search, offset, false) else { break };
 
             let replacement =
                 self.find_fill_replacement(&mut search, replacement, &parsed_replacements);
             self.write(&replacement, self.cursor, true);
-            offset = self.cursor.offset;
+
+            if range.is_empty() {
+                let next = self
+                    .cursor_move_delta_internal(self.cursor, CursorMovement::Grapheme, 1)
+                    .offset;
+                if next <= self.cursor.offset {
+                    break;
+                }
+                offset = next;
+            } else {
+                offset = self.cursor.offset;
+            }
         }
 
         Ok(())
@@ -1277,7 +1285,12 @@ impl TextBuffer {
         })
     }
 
-    fn find_select_next(&mut self, search: &mut ActiveSearch, offset: usize, wrap: bool) {
+    fn find_select_next(
+        &mut self,
+        search: &mut ActiveSearch,
+        offset: usize,
+        wrap: bool,
+    ) -> Option<Range<usize>> {
         if search.buffer_generation != self.buffer.generation() {
             unsafe { search.regex.set_text(&mut search.text, offset) };
             search.buffer_generation = self.buffer.generation();
@@ -1297,7 +1310,7 @@ impl TextBuffer {
             hit = search.regex.next();
         }
 
-        search.selection_generation = if let Some(range) = hit {
+        search.selection_generation = if let Some(range) = hit.clone() {
             // Now the search offset is no more at the start of the buffer.
             search.next_search_offset = range.end;
 
@@ -1316,6 +1329,8 @@ impl TextBuffer {
             search.no_matches = true;
             self.set_selection(None)
         };
+
+        hit
     }
 
     fn find_parse_replacement<'a>(
@@ -3085,4 +3100,66 @@ fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SearchOptions, TextBuffer};
+
+    fn buffer_contents(buf: &TextBuffer) -> Vec<u8> {
+        let mut out = Vec::with_capacity(buf.text_length());
+        let mut off = 0;
+
+        while off < buf.text_length() {
+            let chunk = buf.read_forward(off);
+            out.extend_from_slice(chunk);
+            off += chunk.len();
+        }
+
+        out
+    }
+
+    #[test]
+    fn replace_all_supports_zero_width_regex_matches() {
+        let mut buf = TextBuffer::new(true).unwrap();
+        buf.write_raw(b"hello\nworld");
+
+        buf.find_and_replace_all(
+            "$",
+            SearchOptions {
+                use_regex: true,
+                ..Default::default()
+            },
+            b"foo",
+        )
+        .unwrap();
+
+        assert_eq!(buffer_contents(&buf), b"hellofoo\nworldfoo".to_vec());
+    }
+
+    #[test]
+    fn replace_supports_zero_width_regex_matches() {
+        let mut buf = TextBuffer::new(true).unwrap();
+        buf.write_raw(b"hello");
+        buf.find_and_select(
+            "$",
+            SearchOptions {
+                use_regex: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        buf.find_and_replace(
+            "$",
+            SearchOptions {
+                use_regex: true,
+                ..Default::default()
+            },
+            b"foo",
+        )
+        .unwrap();
+
+        assert_eq!(buffer_contents(&buf), b"hellofoo".to_vec());
+    }
 }
