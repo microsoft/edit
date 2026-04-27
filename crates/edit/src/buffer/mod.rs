@@ -1152,15 +1152,15 @@ impl TextBuffer {
 
         // If the user moved the cursor since the last search, but the needle remained the same,
         // we still need to move the start of the search to the new cursor position.
-        let next_search_offset = match self.selection {
-            Some(TextBufferSelection { beg, end }) => {
-                if self.selection_generation == search.selection_generation {
+        let next_search_offset = if self.selection_generation == search.selection_generation {
                     search.next_search_offset
                 } else {
+            match self.selection {
+                Some(TextBufferSelection { beg, end }) => {
                     self.cursor_move_to_logical_internal(self.cursor, beg.min(end)).offset
-                }
             }
             _ => self.cursor.offset,
+            }
         };
 
         self.find_select_next(search, next_search_offset, true);
@@ -1179,11 +1179,19 @@ impl TextBuffer {
             let search = unsafe { &mut *search.get() };
             if search.selection_generation == self.selection_generation {
                 let scratch = scratch_arena(None);
+                let zero_width = self.selection.is_none();
                 let parsed_replacements =
                     Self::find_parse_replacement(&scratch, &mut *search, replacement);
                 let replacement =
                     self.find_fill_replacement(&mut *search, replacement, &parsed_replacements);
-                self.write(&replacement, self.cursor, true);
+                self.write_raw(&replacement);
+
+                // After replacing a zero-width match, advance past it so that find_and_select wraps to the
+                // next match rather than finding the same anchor (e.g. `$`) again at the same line end.
+                if zero_width {
+                    search.next_search_offset =
+                        self.find_advance_past_zero_width(self.active_edit_off).unwrap_or(0);
+                }
             }
         }
 
@@ -1197,32 +1205,46 @@ impl TextBuffer {
         options: SearchOptions,
         replacement: &[u8],
     ) -> icu::Result<()> {
+        self.edit_begin_grouping();
+
         let scratch = scratch_arena(None);
         let mut search = self.find_construct_search(pattern, options)?;
         let mut offset = 0;
         let parsed_replacements = Self::find_parse_replacement(&scratch, &mut search, replacement);
 
-        loop {
-            let Some(range) = self.find_select_next(&mut search, offset, false) else { break };
-
+        while let Some(range) = self.find_select_next(&mut search, offset, false) {
             let replacement =
                 self.find_fill_replacement(&mut search, replacement, &parsed_replacements);
-            self.write(&replacement, self.cursor, true);
+            self.write_raw(&replacement);
 
+            // The `active_edit_off` points to the end of the last edit made by `write_raw()`.
+            // This differs from the self.cursor.offset, if `write_raw()` did an `insert_final_newline`.
+            offset = self.active_edit_off;
+
+            // Avoid infinite loops when hitting zero-length matches
+            // by advancing past the zero-length match location.
+            //
+            // This is technically not entirely correct. For instance imagine replacing
+            // "^|f" with "x" in "foo". It should technically produce "xxoo", but I
+            // found that other editors also do it wrong, so it can't matter too much.
             if range.is_empty() {
-                let next = self
-                    .cursor_move_delta_internal(self.cursor, CursorMovement::Grapheme, 1)
-                    .offset;
-                if next <= self.cursor.offset {
-                    break;
-                }
-                offset = next;
-            } else {
-                offset = self.cursor.offset;
+                offset = match self.find_advance_past_zero_width(offset) {
+                    Some(next) => next,
+                    None => break,
+                };
             }
         }
 
+        self.edit_end_grouping();
         Ok(())
+    }
+
+    /// After replacing a zero-width match, compute the offset to resume
+    /// searching from. Returns `None` if we're at the end of the buffer.
+    fn find_advance_past_zero_width(&self, offset: usize) -> Option<usize> {
+        let cursor = self.cursor_move_to_offset_internal(self.cursor, offset);
+        let next = self.cursor_move_delta_internal(cursor, CursorMovement::Grapheme, 1);
+        (next.offset > offset).then_some(next.offset)
     }
 
     fn find_construct_search(
@@ -1310,7 +1332,7 @@ impl TextBuffer {
             hit = search.regex.next();
         }
 
-        search.selection_generation = if let Some(range) = hit.clone() {
+        search.selection_generation = if let Some(range) = &hit {
             // Now the search offset is no more at the start of the buffer.
             search.next_search_offset = range.end;
 
@@ -3115,60 +3137,46 @@ fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
 mod tests {
     use super::{SearchOptions, TextBuffer};
 
-    fn buffer_contents(buf: &TextBuffer) -> Vec<u8> {
-        let mut out = Vec::with_capacity(buf.text_length());
-        let mut off = 0;
-
-        while off < buf.text_length() {
-            let chunk = buf.read_forward(off);
-            out.extend_from_slice(chunk);
-            off += chunk.len();
-        }
-
-        out
+    fn buffer_contents(buf: &mut TextBuffer) -> String {
+        let mut str = String::new();
+        buf.save_as_string(&mut str);
+        str
     }
 
     #[test]
-    fn replace_all_supports_zero_width_regex_matches() {
-        let mut buf = TextBuffer::new(true).unwrap();
-        buf.write_raw(b"hello\nworld");
+    fn replace_one_zero_width() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.set_insert_final_newline(true);
+        buf.write_raw(b"a\nb\n");
+        buf.cursor_move_to_logical(Default::default());
+
+        for _ in 0..6 {
+            buf.find_and_replace(
+                "$",
+                SearchOptions { use_regex: true, ..Default::default() },
+                b"x",
+            )
+            .unwrap();
+        }
+
+        assert_eq!(buffer_contents(&mut buf), "axx\nbxx\nx\n");
+    }
+
+    #[test]
+    fn replace_all_zero_width() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.set_insert_final_newline(true);
+        buf.write_raw(b"a\nb\n");
 
         buf.find_and_replace_all(
             "$",
-            SearchOptions {
-                use_regex: true,
-                ..Default::default()
-            },
-            b"foo",
+            SearchOptions { use_regex: true, ..Default::default() },
+            b"x",
         )
         .unwrap();
 
-        assert_eq!(buffer_contents(&buf), b"hellofoo\nworldfoo".to_vec());
-    }
-
-    #[test]
-    fn replace_supports_zero_width_regex_matches() {
-        let mut buf = TextBuffer::new(true).unwrap();
-        buf.write_raw(b"hello");
-        buf.find_and_select(
-            "$",
-            SearchOptions {
-                use_regex: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        buf.find_and_replace(
-            "$",
-            SearchOptions {
-                use_regex: true,
-                ..Default::default()
-            },
-            b"foo",
-        )
-        .unwrap();
-
-        assert_eq!(buffer_contents(&buf), b"hellofoo".to_vec());
+        assert_eq!(buffer_contents(&mut buf), "ax\nbx\nx\n");
     }
 }

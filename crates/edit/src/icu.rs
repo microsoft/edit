@@ -8,6 +8,7 @@ use std::ffi::{CStr, c_char};
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::ptr::{null, null_mut};
+use std::sync::OnceLock;
 use std::{fmt, mem};
 
 use stdext::arena::{Arena, scratch_arena};
@@ -993,28 +994,18 @@ const LIBICUI18N_PROC_NAMES: [*const c_char; 12] = [
     proc_name!("uregex_end64"),
 ];
 
-enum LibraryFunctionsState {
-    Uninitialized,
-    Failed,
-    Loaded(LibraryFunctions),
-}
-
-static mut LIBRARY_FUNCTIONS: LibraryFunctionsState = LibraryFunctionsState::Uninitialized;
+static LIBRARY_FUNCTIONS: OnceLock<Option<LibraryFunctions>> = OnceLock::new();
 
 pub fn init() -> Result<()> {
     init_if_needed()?;
     Ok(())
 }
 
-#[allow(static_mut_refs)]
 fn init_if_needed() -> Result<&'static LibraryFunctions> {
-    #[cold]
-    fn load() {
+    fn load() -> Option<LibraryFunctions> {
         unsafe {
-            LIBRARY_FUNCTIONS = LibraryFunctionsState::Failed;
-
             let Ok(icu) = sys::load_icu() else {
-                return;
+                return None;
             };
 
             type TransparentFunction = unsafe extern "C" fn() -> *const ();
@@ -1058,7 +1049,7 @@ fn init_if_needed() -> Result<&'static LibraryFunctions> {
                             "Failed to load ICU function: {:?}",
                             CStr::from_ptr(name)
                         );
-                        return;
+                        return None;
                     };
 
                     ptr.write(func);
@@ -1066,27 +1057,20 @@ fn init_if_needed() -> Result<&'static LibraryFunctions> {
                 }
             }
 
-            LIBRARY_FUNCTIONS = LibraryFunctionsState::Loaded(funcs.assume_init());
+            Some(funcs.assume_init())
         }
     }
 
-    unsafe {
-        if matches!(&LIBRARY_FUNCTIONS, LibraryFunctionsState::Uninitialized) {
-            load();
-        }
-    }
-
-    match unsafe { &LIBRARY_FUNCTIONS } {
-        LibraryFunctionsState::Loaded(f) => Ok(f),
-        _ => Err(ICU_MISSING_ERROR),
+    match LIBRARY_FUNCTIONS.get_or_init(load) {
+        Some(f) => Ok(f),
+        None => Err(ICU_MISSING_ERROR),
     }
 }
 
-#[allow(static_mut_refs)]
 fn assume_loaded() -> &'static LibraryFunctions {
-    match unsafe { &LIBRARY_FUNCTIONS } {
-        LibraryFunctionsState::Loaded(f) => f,
-        _ => unreachable!(),
+    match LIBRARY_FUNCTIONS.get() {
+        Some(Some(f)) => f,
+        _ => unsafe { std::hint::unreachable_unchecked() },
     }
 }
 
