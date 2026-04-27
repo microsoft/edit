@@ -1153,13 +1153,13 @@ impl TextBuffer {
         // If the user moved the cursor since the last search, but the needle remained the same,
         // we still need to move the start of the search to the new cursor position.
         let next_search_offset = if self.selection_generation == search.selection_generation {
-                    search.next_search_offset
-                } else {
+            search.next_search_offset
+        } else {
             match self.selection {
                 Some(TextBufferSelection { beg, end }) => {
                     self.cursor_move_to_logical_internal(self.cursor, beg.min(end)).offset
-            }
-            _ => self.cursor.offset,
+                }
+                _ => self.cursor.offset,
             }
         };
 
