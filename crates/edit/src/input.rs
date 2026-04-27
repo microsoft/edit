@@ -246,6 +246,8 @@ pub struct InputMouse {
     pub position: Point,
     /// Scroll delta.
     pub scroll: Point,
+    /// Whether the mouse is being dragged with a button held down.
+    pub drag: bool,
 }
 
 /// Primary result type of the parser.
@@ -433,43 +435,10 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                             }
                         }
                         'm' | 'M' if csi.private_byte == '<' => {
-                            let btn = csi.params[0];
-                            let mut mouse = InputMouse {
-                                state: InputMouseState::None,
-                                modifiers: kbmod::NONE,
-                                position: Default::default(),
-                                scroll: Default::default(),
-                            };
-
-                            mouse.state = InputMouseState::None;
-
-                            match csi.params[0] {
-                                btn @ 0..3 if csi.final_byte == 'M' => match btn {
-                                    0 => mouse.state = InputMouseState::Left,
-                                    1 => mouse.state = InputMouseState::Middle,
-                                    2 => mouse.state = InputMouseState::Right,
-                                    _ => {}
-                                },
-                                btn @ 64..68 => {
-                                    let delta = if (btn & 1) != 0 { 3 } else { -3 };
-                                    let idx = if (btn & 2) != 0 { 0 } else { 1 };
-                                    mouse.scroll.as_array()[idx] += delta;
-                                    mouse.state = InputMouseState::Scroll;
-                                }
-                                _ => {}
-                            }
-
-                            mouse.modifiers = kbmod::NONE;
-                            mouse.modifiers |=
-                                if (btn & 0x04) != 0 { kbmod::SHIFT } else { kbmod::NONE };
-                            mouse.modifiers |=
-                                if (btn & 0x08) != 0 { kbmod::ALT } else { kbmod::NONE };
-                            mouse.modifiers |=
-                                if (btn & 0x10) != 0 { kbmod::CTRL } else { kbmod::NONE };
-
-                            mouse.position.x = csi.params[1] as CoordType - 1;
-                            mouse.position.y = csi.params[2] as CoordType - 1;
-                            return Some(Input::Mouse(mouse));
+                            return Self::parse_xterm_mouse(
+                                &csi.params[..csi.param_count],
+                                csi.final_byte,
+                            );
                         }
                         'M' if csi.param_count == 0 => {
                             self.parser.x10_mouse_want = true;
@@ -547,38 +516,14 @@ impl<'input> Stream<'_, '_, 'input> {
             return None;
         }
 
-        let b = self.parser.x10_mouse_buf[0] as u32;
-        let x = self.parser.x10_mouse_buf[1] as CoordType - 0x21;
-        let y = self.parser.x10_mouse_buf[2] as CoordType - 0x21;
-        let action = match b & 0b11 {
-            0 => InputMouseState::Left,
-            1 => InputMouseState::Middle,
-            2 => InputMouseState::Right,
-            _ => InputMouseState::None,
-        };
-        let modifiers = {
-            let mut m = kbmod::NONE;
-            if (b & 0b00100) != 0 {
-                m |= kbmod::SHIFT;
-            }
-            if (b & 0b01000) != 0 {
-                m |= kbmod::ALT;
-            }
-            if (b & 0b10000) != 0 {
-                m |= kbmod::CTRL;
-            }
-            m
-        };
+        let b = self.parser.x10_mouse_buf[0] as u16 - 0x20;
+        let x = self.parser.x10_mouse_buf[1] as u16 - 0x20;
+        let y = self.parser.x10_mouse_buf[2] as u16 - 0x20;
 
         self.parser.x10_mouse_want = false;
         self.parser.x10_mouse_len = 0;
 
-        Some(Input::Mouse(InputMouse {
-            state: action,
-            modifiers,
-            position: Point { x, y },
-            scroll: Default::default(),
-        }))
+        Self::parse_xterm_mouse(&[b, x, y], 'M')
     }
 
     fn parse_modifiers(csi: &vt::Csi) -> InputKeyMod {
@@ -594,5 +539,56 @@ impl<'input> Stream<'_, '_, 'input> {
             modifiers |= kbmod::CTRL;
         }
         modifiers
+    }
+
+    fn parse_xterm_mouse(params: &[u16], final_byte: char) -> Option<Input<'input>> {
+        const SHIFT: u16 = 0x04;
+        const ALT: u16 = 0x08;
+        const CTRL: u16 = 0x10;
+        const MOTION: u16 = 0x20;
+        const WHEEL: u16 = 0x40;
+        const MODIFIERS: u16 = SHIFT | ALT | CTRL;
+
+        let &[btn, x, y, ..] = params else {
+            return None;
+        };
+
+        let kind = btn & !MODIFIERS;
+        let x = x as CoordType - 1;
+        let y = y as CoordType - 1;
+        let mut mouse = InputMouse {
+            state: InputMouseState::None,
+            modifiers: kbmod::NONE,
+            position: Point { x, y },
+            scroll: Default::default(),
+            drag: false,
+        };
+
+        if final_byte == 'm' {
+            // M = down, m = release.
+            // I know there's an InputMouseState::Release, but that's because the internals of tui.rs
+            // have leaked into intput.rs. input.rs indicates release by the absence of buttons being
+            // held, which is InputMouseState::None. This makes it more reliable in my opinion.
+        } else if (WHEEL..WHEEL + 4).contains(&kind) {
+            let delta = if (kind & 1) != 0 { 3 } else { -3 };
+            let idx = if (kind & 2) != 0 { 0 } else { 1 };
+            mouse.scroll.as_array()[idx] += delta;
+            mouse.state = InputMouseState::Scroll;
+        } else if (kind & !MOTION) < 3 {
+            match kind & 3 {
+                0 => mouse.state = InputMouseState::Left,
+                1 => mouse.state = InputMouseState::Middle,
+                2 => mouse.state = InputMouseState::Right,
+                _ => {}
+            }
+            mouse.drag = (kind & MOTION) != 0;
+        }
+
+        mouse.modifiers = kbmod::NONE;
+        mouse.modifiers |= if (btn & SHIFT) != 0 { kbmod::SHIFT } else { kbmod::NONE };
+        mouse.modifiers |= if (btn & ALT) != 0 { kbmod::ALT } else { kbmod::NONE };
+        mouse.modifiers |= if (btn & CTRL) != 0 { kbmod::CTRL } else { kbmod::NONE };
+
+        Some(Input::Mouse(mouse))
     }
 }
