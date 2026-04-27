@@ -316,7 +316,7 @@ impl TextBuffer {
             ruler: 0,
             encoding: "UTF-8",
             newlines_are_crlf: cfg!(windows), // Windows users want CRLF
-            insert_final_newline: false,
+            insert_final_newline: !cfg!(windows), // As mandated by POSIX.
             overtype: false,
 
             wants_cursor_visibility: false,
