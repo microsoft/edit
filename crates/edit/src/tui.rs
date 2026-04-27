@@ -2680,7 +2680,7 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::INSERT => match modifiers {
-                    kbmod::SHIFT => tb.paste(self.clipboard_ref()),
+                    kbmod::SHIFT => tb.paste(self.clipboard_ref(), single_line),
                     kbmod::CTRL => tb.copy(self.clipboard_mut()),
                     _ => tb.set_overtype(!tb.is_overtype()),
                 },
@@ -2726,7 +2726,7 @@ impl<'a> Context<'a, '_> {
                     _ => return false,
                 },
                 vk::V => match modifiers {
-                    kbmod::CTRL => tb.paste(self.clipboard_ref()),
+                    kbmod::CTRL => tb.paste(self.clipboard_ref(), single_line),
                     _ => return false,
                 },
                 vk::Y => match modifiers {

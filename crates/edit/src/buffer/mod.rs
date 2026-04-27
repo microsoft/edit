@@ -2242,8 +2242,17 @@ impl TextBuffer {
         clipboard.write_was_line_copy(line_copy);
     }
 
-    pub fn paste(&mut self, clipboard: &Clipboard) {
+    pub fn paste(&mut self, clipboard: &Clipboard, single_line: bool) {
         let data = clipboard.read();
+
+        let data = if single_line {
+            // Can't use `unicode::newlines_forward` because bracketed paste uses CR instead of LF/CRLF.
+            let off = memchr2(b'\r', b'\n', data, 0);
+            unicode::strip_newline(&data[..off])
+        } else {
+            data
+        };
+
         if data.is_empty() {
             return;
         }
