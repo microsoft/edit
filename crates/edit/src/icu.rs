@@ -813,13 +813,15 @@ fn compare_strings_ascii(a: &[u8], b: &[u8]) -> Ordering {
     // case-insensitive equal, because then we use that as a fallback.
     while let Some((&a, &b)) = iter.next() {
         if a != b {
-            let mut order = a.cmp(&b);
             let la = a.to_ascii_lowercase();
             let lb = b.to_ascii_lowercase();
+            let mut order = la.cmp(&lb);
 
-            if la == lb {
-                // High weight: Find the first character which
-                // differs case-insensitively.
+            if order == Ordering::Equal {
+                // High weight: Find the first character which differs case-insensitively.
+                // Otherwise, it falls back to (or rather: defaults to) a case-sensitive comparison.
+                order = a.cmp(&b);
+
                 for (a, b) in iter {
                     let la = a.to_ascii_lowercase();
                     let lb = b.to_ascii_lowercase();
@@ -1378,6 +1380,9 @@ mod tests {
         assert_eq!(compare_strings_ascii(b"abcd", b"abc"), Ordering::Greater);
         // Same chars, different cases - 1st char wins
         assert_eq!(compare_strings_ascii(b"AbC", b"aBc"), Ordering::Less);
+        // Different chars, different cases
+        assert_eq!(compare_strings_ascii(b"a", b"B"), Ordering::Less);
+        assert_eq!(compare_strings_ascii(b"B", b"a"), Ordering::Greater);
         // Different chars, different cases - 2nd char wins, because it differs
         assert_eq!(compare_strings_ascii(b"hallo", b"Hello"), Ordering::Less);
         assert_eq!(compare_strings_ascii(b"Hello", b"hallo"), Ordering::Greater);
