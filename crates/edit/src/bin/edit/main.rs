@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![feature(allocator_api, linked_list_cursors, string_from_utf8_lossy_owned)]
-
 mod apperr;
 mod documents;
 mod draw_editor;
@@ -10,10 +8,11 @@ mod draw_filepicker;
 mod draw_menubar;
 mod draw_statusbar;
 mod localization;
+mod settings;
 mod state;
 
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 use std::{env, process};
 
@@ -30,8 +29,11 @@ use edit::vt::{self, Token};
 use edit::{base64, path, sys, unicode};
 use localization::*;
 use state::*;
-use stdext::arena::{self, Arena, ArenaString, scratch_arena};
+use stdext::arena::{self, Arena, scratch_arena};
 use stdext::arena_format;
+use stdext::collections::{BString, BVec};
+
+use crate::settings::Settings;
 
 #[cfg(target_pointer_width = "32")]
 const SCRATCH_ARENA_CAPACITY: usize = 128 * MEBI;
@@ -73,8 +75,13 @@ fn run() -> apperr::Result<()> {
         return Ok(());
     }
 
-    // This will reopen stdin if it's redirected (which may fail) and switch
-    // the terminal to raw mode which prevents the user from pressing Ctrl+C.
+    handle_stdin(&mut state)?;
+
+    if let Err(err) = Settings::reload() {
+        state.add_error(err);
+    }
+
+    // Switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // `handle_args` may want to print a help message (must not fail),
     // and reads files (may hang; should be cancelable with Ctrl+C).
     // As such, we call this after `handle_args`.
@@ -176,15 +183,15 @@ fn run() -> apperr::Result<()> {
             let scratch = scratch_arena(None);
             let mut output = tui.render(&scratch);
 
-            write_terminal_title(&mut output, &mut state);
+            write_terminal_title(&scratch, &mut output, &mut state);
 
             if state.osc_clipboard_sync {
-                write_osc_clipboard(&mut tui, &mut state, &mut output);
+                write_osc_clipboard(&scratch, &mut output, &mut tui, &mut state);
             }
 
             #[cfg(feature = "debug-latency")]
             {
-                use std::fmt::Write as _;
+                use stdext::arena_write_fmt;
 
                 // Print the number of passes and latency in the top right corner.
                 let time_end = std::time::Instant::now();
@@ -192,7 +199,7 @@ fn run() -> apperr::Result<()> {
 
                 let scratch_alt = scratch_arena(Some(&scratch));
                 let status = arena_format!(
-                    &scratch_alt,
+                    &*scratch_alt,
                     "{}P {}B {:.3}μs",
                     passes,
                     output.len(),
@@ -208,10 +215,11 @@ fn run() -> apperr::Result<()> {
                 // If the `output` is already very large,
                 // Rust may double the size during the write below.
                 // Let's avoid that by reserving the needed size in advance.
-                output.reserve_exact(128);
+                output.reserve_exact(&*scratch, 128);
 
                 // To avoid moving the cursor, push and pop it onto the VT cursor stack.
-                _ = write!(
+                arena_write_fmt!(
+                    &*scratch,
                     output,
                     "\x1b7\x1b[0;41;97m\x1b[1;{0}H{1:2$}{3}\x1b8",
                     tui.size().width - cols - padding + 1,
@@ -233,7 +241,7 @@ fn run() -> apperr::Result<()> {
 // Returns true if the application should exit early.
 fn handle_args(state: &mut State) -> apperr::Result<bool> {
     let scratch = scratch_arena(None);
-    let mut paths: Vec<PathBuf, &Arena> = Vec::new_in(&*scratch);
+    let mut paths = BVec::empty();
     let cwd = env::current_dir()?;
     let mut dir = None;
     let mut parse_args = true;
@@ -265,22 +273,12 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
             state.wants_file_picker = StateFilePicker::Open;
             dir = Some(p);
         } else {
-            paths.push(p);
+            paths.push(&*scratch, p);
         }
     }
 
     for p in &paths {
         state.documents.add_file_path(p)?;
-    }
-
-    if let Some(mut file) = sys::open_stdin_if_redirected() {
-        let doc = state.documents.add_untitled()?;
-        let mut tb = doc.buffer.borrow_mut();
-        tb.read_file(&mut file, None)?;
-        tb.mark_as_dirty();
-    } else if paths.is_empty() {
-        // No files were passed, and stdin is not redirected.
-        state.documents.add_untitled()?;
     }
 
     if dir.is_none()
@@ -291,6 +289,22 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
 
     state.file_picker_pending_dir = DisplayablePathBuf::from_path(dir.unwrap_or(cwd));
     Ok(false)
+}
+
+// Read any redirected (piped) stdin into a new document.
+// This doubles as a stdin handle validation. We do this after `handle_args`
+// (may exit early) and before `switch_modes` (needs a console stdin).
+fn handle_stdin(state: &mut State) -> apperr::Result<()> {
+    if let Some(mut file) = sys::reopen_stdin_if_redirected()? {
+        let doc = state.documents.add_untitled()?;
+        let mut tb = doc.buffer.borrow_mut();
+        tb.read_file(&mut file, None)?;
+        tb.mark_as_dirty();
+    } else if state.documents.len() == 0 {
+        // No files were passed, and stdin is not redirected.
+        state.documents.add_untitled()?;
+    }
+    Ok(())
 }
 
 fn print_help() {
@@ -328,6 +342,9 @@ fn draw(ctx: &mut Context, state: &mut State) {
     }
     if state.wants_save {
         draw_handle_save(ctx, state);
+    }
+    if state.wants_language_picker {
+        draw_dialog_language_change(ctx, state);
     }
     if state.wants_encoding_change != StateEncodingChange::None {
         draw_dialog_encoding_change(ctx, state);
@@ -413,7 +430,7 @@ fn draw_handle_wants_exit(_ctx: &mut Context, state: &mut State) {
     }
 }
 
-fn write_terminal_title(output: &mut ArenaString, state: &mut State) {
+fn write_terminal_title<'a>(arena: &'a Arena, output: &mut BString<'a>, state: &mut State) {
     let (filename, dirty) = state
         .documents
         .active()
@@ -425,15 +442,15 @@ fn write_terminal_title(output: &mut ArenaString, state: &mut State) {
         return;
     }
 
-    output.push_str("\x1b]0;");
+    output.push_str(arena, "\x1b]0;");
     if !filename.is_empty() {
         if dirty {
-            output.push_str("● ");
+            output.push_str(arena, "● ");
         }
-        output.push_str(&sanitize_control_chars(filename));
-        output.push_str(" - ");
+        output.push_str(arena, &sanitize_control_chars(filename));
+        output.push_str(arena, " - ");
     }
-    output.push_str("edit\x1b\\");
+    output.push_str(arena, "edit\x1b\\");
 
     state.osc_title_file_status.filename = filename.to_string();
     state.osc_title_file_status.dirty = dirty;
@@ -468,10 +485,10 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
                 let template = loc(LocId::LargeClipboardWarningLine2);
                 let size = arena_format!(ctx.arena(), "{}", MetricFormatter(data_len));
 
-                let mut label =
-                    ArenaString::with_capacity_in(template.len() + size.len(), ctx.arena());
-                label.push_str(template);
-                label.replace_once_in_place("{size}", &size);
+                let mut label = BString::empty();
+                label.reserve(ctx.arena(), template.len() + size.len());
+                label.push_str(ctx.arena(), template);
+                label.replace_once_in_place(ctx.arena(), "{size}", &size);
                 label
             };
 
@@ -533,7 +550,12 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
 }
 
 #[cold]
-fn write_osc_clipboard(tui: &mut Tui, state: &mut State, output: &mut ArenaString) {
+fn write_osc_clipboard<'a>(
+    arena: &'a Arena,
+    output: &mut BString<'a>,
+    tui: &mut Tui,
+    state: &mut State,
+) {
     let clipboard = tui.clipboard_mut();
     let data = clipboard.read();
 
@@ -542,10 +564,10 @@ fn write_osc_clipboard(tui: &mut Tui, state: &mut State, output: &mut ArenaStrin
         // If `data` is *really* large, this may then double
         // the size of the `output` from e.g. 100MB to 200MB. Not good.
         // We can avoid that by reserving the needed size in advance.
-        output.reserve_exact(base64::encode_len(data.len()) + 16);
-        output.push_str("\x1b]52;c;");
-        base64::encode(output, data);
-        output.push_str("\x1b\\");
+        output.reserve_exact(arena, base64::encode_len(data.len()) + 16);
+        output.push_str(arena, "\x1b]52;c;");
+        base64::encode(arena, output, data);
+        output.push_str(arena, "\x1b\\");
     }
 
     state.osc_clipboard_sync = false;

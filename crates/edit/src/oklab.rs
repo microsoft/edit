@@ -9,8 +9,6 @@
 
 use std::fmt::Debug;
 
-use crate::simd::MemsetSafe;
-
 /// A sRGB color with straight (= not premultiplied) alpha.
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -101,8 +99,6 @@ impl Debug for StraightRgba {
         write!(f, "#{:08x}", self.0.to_be()) // Display as a hex color
     }
 }
-
-unsafe impl MemsetSafe for StraightRgba {}
 
 /// An Oklab color with alpha. By convention, it uses straight alpha.
 #[derive(Clone, Copy)]

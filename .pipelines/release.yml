@@ -104,8 +104,7 @@ extends:
               # For details on this cargo_target_dir setting, see:
               # https://eng.ms/docs/more/rust/topics/onebranch-workaround
               CARGO_TARGET_DIR: C:\cargo_target_dir
-              # msrustup only supports stable toolchains, but this project requires nightly.
-              # We were told RUSTC_BOOTSTRAP=1 is a supported workaround.
+              # RUSTC_BOOTSTRAP=1 is required to make panic-immediate-abort work.
               RUSTC_BOOTSTRAP: 1
             steps:
               # NOTE: Step objects have ordered keys and you MUST have "task" as the first key.
@@ -113,7 +112,7 @@ extends:
               - task: RustInstaller@1
                 displayName: Install Rust toolchain
                 inputs:
-                  rustVersion: ms-stable
+                  rustVersion: ms-prod
                   additionalTargets: x86_64-pc-windows-msvc aarch64-pc-windows-msvc
                   # URL of an Azure Artifacts feed configured with a crates.io upstream. Must be within the current ADO collection.
                   # NOTE: Azure Artifacts support for Rust is not yet public, but it is enabled for internal ADO organizations.
@@ -152,7 +151,7 @@ extends:
               # Extract the version for `ob_createvpack_version`.
               - script: |-
                   @echo off
-                  for /f "tokens=3 delims=- " %%x in ('findstr /c:"version = " Cargo.toml') do (
+                  for /f "tokens=3 delims=- " %%x in ('findstr /c:"version = " crates\edit\Cargo.toml') do (
                       echo ##vso[task.setvariable variable=EditVersion]%%~x
                       goto :EOF
                   )

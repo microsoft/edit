@@ -2,6 +2,8 @@
 // Licensed under the MIT License.
 
 use std::io;
+#[cfg(debug_assertions)]
+use std::marker::PhantomData;
 use std::ops::Deref;
 
 #[cfg(debug_assertions)]
@@ -16,7 +18,7 @@ use crate::helpers::*;
 pub struct ScratchArena<'a> {
     arena: debug::Arena,
     offset: usize,
-    _phantom: std::marker::PhantomData<&'a ()>,
+    _phantom: PhantomData<&'a ()>,
 }
 
 #[cfg(not(debug_assertions))]
@@ -29,7 +31,7 @@ pub struct ScratchArena<'a> {
 impl<'a> ScratchArena<'a> {
     fn new(arena: &'a release::Arena) -> Self {
         let offset = arena.offset();
-        ScratchArena { arena: Arena::delegated(arena), _phantom: std::marker::PhantomData, offset }
+        ScratchArena { arena: Arena::delegated(arena), _phantom: PhantomData, offset }
     }
 }
 

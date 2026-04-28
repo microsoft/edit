@@ -6,12 +6,10 @@
 pub mod lines_bwd;
 pub mod lines_fwd;
 mod memchr2;
-mod memset;
 
 pub use lines_bwd::*;
 pub use lines_fwd::*;
 pub use memchr2::*;
-pub use memset::*;
 
 #[cfg(test)]
 mod test {

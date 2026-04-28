@@ -143,14 +143,13 @@
 //! }
 //! ```
 
-use std::arch::breakpoint;
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
-use std::fmt::Write as _;
 use std::{io, iter, mem, ptr, time};
 
-use stdext::arena::{Arena, ArenaString, scratch_arena};
-use stdext::{arena_format, opt_ptr_eq, str_from_raw_parts};
+use stdext::arena::{Arena, scratch_arena};
+use stdext::collections::{BString, BVec};
+use stdext::{ReplaceRange, arena_format, arena_write_fmt, opt_ptr_eq, str_from_raw_parts};
 
 use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
@@ -347,6 +346,8 @@ pub struct Tui {
     /// The number of clicks that have happened in a row.
     /// Gets reset when the mouse was released for a while.
     mouse_click_counter: CoordType,
+    /// The path to the node that is currently being hovered over.
+    mouse_hover_node_path: Vec<u64>,
     /// The path to the node that was clicked on.
     mouse_down_node_path: Vec<u64>,
     /// The position of the first click in a double/triple click series.
@@ -407,6 +408,7 @@ impl Tui {
             mouse_state: InputMouseState::None,
             mouse_is_drag: false,
             mouse_click_counter: 0,
+            mouse_hover_node_path: Vec::with_capacity(16),
             mouse_down_node_path: Vec::with_capacity(16),
             first_click_position: Point::MIN,
             first_click_target: 0,
@@ -422,6 +424,7 @@ impl Tui {
             settling_want: 0,
             read_timeout: time::Duration::MAX,
         };
+        Self::clean_node_path(&mut tui.mouse_hover_node_path);
         Self::clean_node_path(&mut tui.mouse_down_node_path);
         Self::clean_node_path(&mut tui.focused_node_path);
         Ok(tui)
@@ -584,37 +587,37 @@ impl Tui {
 
                 let mut hovered_node = None; // Needed for `mouse_down`
                 let mut focused_node = None; // Needed for `mouse_down` and `is_click`
-                if mouse_down || mouse_up {
-                    // Roots (aka windows) are ordered in Z order, so we iterate
-                    // them in reverse order, from topmost to bottommost.
-                    for root in self.prev_tree.iterate_roots_rev() {
-                        // Find the node that contains the cursor.
-                        Tree::visit_all(root, root, true, |node| {
-                            let n = node.borrow();
-                            if !n.outer_clipped.contains(next_position) {
-                                // Skip the entire sub-tree, because it doesn't contain the cursor.
-                                return VisitControl::SkipChildren;
-                            }
-                            hovered_node = Some(node);
-                            if n.attributes.focusable {
-                                focused_node = Some(node);
-                            }
-                            VisitControl::Continue
-                        });
-
-                        // This root/window contains the cursor.
-                        // We don't care about any lower roots.
-                        if hovered_node.is_some() {
-                            break;
+                // Roots (aka windows) are ordered in Z order, so we iterate
+                // them in reverse order, from topmost to bottommost.
+                for root in self.prev_tree.iterate_roots_rev() {
+                    // Find the node that contains the cursor.
+                    Tree::visit_all(root, root, true, |node| {
+                        let n = node.borrow();
+                        if !n.outer_clipped.contains(next_position) {
+                            // Skip the entire sub-tree, because it doesn't contain the cursor.
+                            return VisitControl::SkipChildren;
                         }
-
-                        // This root is modal and swallows all clicks,
-                        // no matter whether the click was inside it or not.
-                        if matches!(root.borrow().content, NodeContent::Modal(_)) {
-                            break;
+                        hovered_node = Some(node);
+                        if n.attributes.focusable {
+                            focused_node = Some(node);
                         }
+                        VisitControl::Continue
+                    });
+
+                    // This root/window contains the cursor.
+                    // We don't care about any lower roots.
+                    if hovered_node.is_some() {
+                        break;
+                    }
+
+                    // This root is modal and swallows all clicks,
+                    // no matter whether the click was inside it or not.
+                    if matches!(root.borrow().content, NodeContent::Modal(_)) {
+                        break;
                     }
                 }
+
+                Self::build_node_path(hovered_node, &mut self.mouse_hover_node_path);
 
                 if is_scroll {
                     next_state = self.mouse_state;
@@ -622,7 +625,7 @@ impl Tui {
                     self.mouse_is_drag = true;
                 } else if mouse_down {
                     // Transition from no mouse input to some mouse input --> Record the mouse down position.
-                    Self::build_node_path(hovered_node, &mut self.mouse_down_node_path);
+                    self.mouse_down_node_path.replace_range(.., &self.mouse_hover_node_path);
 
                     // On left-mouse-down we change focus.
                     let mut target = 0;
@@ -773,7 +776,7 @@ impl Tui {
 
         for root in Tree::iterate_siblings(Some(self.prev_tree.root_first)) {
             let mut root = root.borrow_mut();
-            root.compute_intrinsic_size();
+            root.compute_intrinsic_size(unsafe { mem::transmute(&self.arena_next) });
         }
 
         let viewport = self.size.as_rect();
@@ -845,14 +848,12 @@ impl Tui {
         // If the focus has changed, the new node may need to be re-rendered.
         // Same, every time we encounter a previously unknown node via `get_prev_node`,
         // because that means it likely failed to get crucial information such as the layout size.
-        if cfg!(debug_assertions) && self.settling_have == 15 {
-            breakpoint();
-        }
+        debug_assert!(self.settling_have <= 15);
         self.settling_want = (self.settling_have + 1).min(20);
     }
 
     /// Renders the last frame into the framebuffer and returns the VT output.
-    pub fn render<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
+    pub fn render<'a>(&mut self, arena: &'a Arena) -> BString<'a> {
         self.framebuffer.flip(self.size);
         for child in self.prev_tree.iterate_roots() {
             let mut child = child.borrow_mut();
@@ -869,15 +870,18 @@ impl Tui {
             return;
         }
 
-        let scratch = scratch_arena(None);
-
         if node.attributes.bordered {
             // ┌────┐
             {
-                let mut fill = ArenaString::new_in(&scratch);
-                fill.push('┌');
-                fill.push_repeat('─', (outer_clipped.right - outer_clipped.left - 2) as usize);
-                fill.push('┐');
+                let scratch = scratch_arena(None);
+                let mut fill = BString::empty();
+                fill.push(&*scratch, '┌');
+                fill.push_repeat(
+                    &*scratch,
+                    '─',
+                    (outer_clipped.right - outer_clipped.left - 2) as usize,
+                );
+                fill.push(&*scratch, '┐');
                 self.framebuffer.replace_text(
                     outer_clipped.top,
                     outer_clipped.left,
@@ -888,10 +892,15 @@ impl Tui {
 
             // │    │
             {
-                let mut fill = ArenaString::new_in(&scratch);
-                fill.push('│');
-                fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left - 2) as usize);
-                fill.push('│');
+                let scratch = scratch_arena(None);
+                let mut fill = BString::empty();
+                fill.push(&*scratch, '│');
+                fill.push_repeat(
+                    &*scratch,
+                    ' ',
+                    (outer_clipped.right - outer_clipped.left - 2) as usize,
+                );
+                fill.push(&*scratch, '│');
 
                 for y in outer_clipped.top + 1..outer_clipped.bottom - 1 {
                     self.framebuffer.replace_text(
@@ -905,10 +914,15 @@ impl Tui {
 
             // └────┘
             {
-                let mut fill = ArenaString::new_in(&scratch);
-                fill.push('└');
-                fill.push_repeat('─', (outer_clipped.right - outer_clipped.left - 2) as usize);
-                fill.push('┘');
+                let scratch = scratch_arena(None);
+                let mut fill = BString::empty();
+                fill.push(&*scratch, '└');
+                fill.push_repeat(
+                    &*scratch,
+                    '─',
+                    (outer_clipped.right - outer_clipped.left - 2) as usize,
+                );
+                fill.push(&*scratch, '┘');
                 self.framebuffer.replace_text(
                     outer_clipped.bottom - 1,
                     outer_clipped.left,
@@ -920,8 +934,13 @@ impl Tui {
 
         if node.attributes.float.is_some() {
             if !node.attributes.bordered {
-                let mut fill = ArenaString::new_in(&scratch);
-                fill.push_repeat(' ', (outer_clipped.right - outer_clipped.left) as usize);
+                let scratch = scratch_arena(None);
+                let mut fill = BString::empty();
+                fill.push_repeat(
+                    &*scratch,
+                    ' ',
+                    (outer_clipped.right - outer_clipped.left) as usize,
+                );
 
                 for y in outer_clipped.top..outer_clipped.bottom {
                     self.framebuffer.replace_text(
@@ -958,15 +977,13 @@ impl Tui {
         }
 
         match &mut node.content {
-            NodeContent::Modal(title) => {
-                if !title.is_empty() {
-                    self.framebuffer.replace_text(
-                        node.outer.top,
-                        node.outer.left + 2,
-                        node.outer.right - 1,
-                        title,
-                    );
-                }
+            NodeContent::Modal(title) if !title.is_empty() => {
+                self.framebuffer.replace_text(
+                    node.outer.top,
+                    node.outer.left + 2,
+                    node.outer.right - 1,
+                    title,
+                );
             }
             NodeContent::Text(content) => self.render_styled_text(
                 inner,
@@ -1079,11 +1096,11 @@ impl Tui {
 
             let scratch = scratch_arena(None);
 
-            let mut modified = ArenaString::new_in(&scratch);
-            modified.reserve(text.len() + 3);
-            modified.push_str(&text[..skipped.start]);
-            modified.push('…');
-            modified.push_str(&text[skipped.end..]);
+            let mut modified = BString::empty();
+            modified.reserve(&*scratch, text.len() + 3);
+            modified.push_str(&*scratch, &text[..skipped.start]);
+            modified.push(&*scratch, '…');
+            modified.push_str(&*scratch, &text[skipped.end..]);
 
             self.framebuffer.replace_text(target.top, target.left, target.right, &modified);
         }
@@ -1129,89 +1146,104 @@ impl Tui {
     }
 
     /// Outputs a debug string of the layout and focus tree.
-    pub fn debug_layout<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
-        let mut result = ArenaString::new_in(arena);
-        result.push_str("general:\r\n- focus_path:\r\n");
+    pub fn debug_layout<'a>(&mut self, arena: &'a Arena) -> BString<'a> {
+        let mut result = BString::empty();
+        result.push_str(arena, "general:\r\n- focus_path:\r\n");
 
         for &id in &self.focused_node_path {
-            _ = write!(result, "  - {id:016x}\r\n");
+            arena_write_fmt!(arena, result, "  - {id:016x}\r\n");
         }
 
-        result.push_str("\r\ntree:\r\n");
+        result.push_str(arena, "\r\ntree:\r\n");
 
         for root in self.prev_tree.iterate_roots() {
             Tree::visit_all(root, root, true, |node| {
                 let node = node.borrow();
                 let depth = node.depth;
-                result.push_repeat(' ', depth * 2);
-                _ = write!(result, "- id: {:016x}\r\n", node.id);
+                result.push_repeat(arena, ' ', depth * 2);
+                arena_write_fmt!(arena, result, "- id: {:016x}\r\n", node.id);
 
-                result.push_repeat(' ', depth * 2);
-                _ = write!(result, "  classname:    {}\r\n", node.classname);
+                result.push_repeat(arena, ' ', depth * 2);
+                arena_write_fmt!(arena, result, "  classname:    {}\r\n", node.classname);
 
                 if depth == 0
                     && let Some(parent) = node.parent
                 {
                     let parent = parent.borrow();
-                    result.push_repeat(' ', depth * 2);
-                    _ = write!(result, "  parent:       {:016x}\r\n", parent.id);
+                    result.push_repeat(arena, ' ', depth * 2);
+                    arena_write_fmt!(arena, result, "  parent:       {:016x}\r\n", parent.id);
                 }
 
-                result.push_repeat(' ', depth * 2);
-                _ = write!(
+                result.push_repeat(arena, ' ', depth * 2);
+                arena_write_fmt!(
+                    arena,
                     result,
                     "  intrinsic:    {{{}, {}}}\r\n",
-                    node.intrinsic_size.width, node.intrinsic_size.height
+                    node.intrinsic_size.width,
+                    node.intrinsic_size.height
                 );
 
-                result.push_repeat(' ', depth * 2);
-                _ = write!(
+                result.push_repeat(arena, ' ', depth * 2);
+                arena_write_fmt!(
+                    arena,
                     result,
                     "  outer:        {{{}, {}, {}, {}}}\r\n",
-                    node.outer.left, node.outer.top, node.outer.right, node.outer.bottom
+                    node.outer.left,
+                    node.outer.top,
+                    node.outer.right,
+                    node.outer.bottom
                 );
 
-                result.push_repeat(' ', depth * 2);
-                _ = write!(
+                result.push_repeat(arena, ' ', depth * 2);
+                arena_write_fmt!(
+                    arena,
                     result,
                     "  inner:        {{{}, {}, {}, {}}}\r\n",
-                    node.inner.left, node.inner.top, node.inner.right, node.inner.bottom
+                    node.inner.left,
+                    node.inner.top,
+                    node.inner.right,
+                    node.inner.bottom
                 );
 
                 if node.attributes.bordered {
-                    result.push_repeat(' ', depth * 2);
-                    result.push_str("  bordered:     true\r\n");
+                    result.push_repeat(arena, ' ', depth * 2);
+                    result.push_str(arena, "  bordered:     true\r\n");
                 }
 
                 if node.attributes.bg.to_ne() != 0 {
-                    result.push_repeat(' ', depth * 2);
-                    _ = write!(result, "  bg:           {:?}\r\n", node.attributes.bg);
+                    result.push_repeat(arena, ' ', depth * 2);
+                    arena_write_fmt!(arena, result, "  bg:           {:?}\r\n", node.attributes.bg);
                 }
 
                 if node.attributes.fg.to_ne() != 0 {
-                    result.push_repeat(' ', depth * 2);
-                    _ = write!(result, "  fg:           {:?}\r\n", node.attributes.fg);
+                    result.push_repeat(arena, ' ', depth * 2);
+                    arena_write_fmt!(arena, result, "  fg:           {:?}\r\n", node.attributes.fg);
                 }
 
                 if self.is_node_focused(node.id) {
-                    result.push_repeat(' ', depth * 2);
-                    result.push_str("  focused:      true\r\n");
+                    result.push_repeat(arena, ' ', depth * 2);
+                    result.push_str(arena, "  focused:      true\r\n");
                 }
 
                 match &node.content {
                     NodeContent::Text(content) => {
-                        result.push_repeat(' ', depth * 2);
-                        _ = write!(result, "  text:         \"{}\"\r\n", &content.text);
+                        result.push_repeat(arena, ' ', depth * 2);
+                        arena_write_fmt!(
+                            arena,
+                            result,
+                            "  text:         \"{}\"\r\n",
+                            &content.text
+                        );
                     }
                     NodeContent::Textarea(content) => {
                         let tb = content.buffer.borrow();
                         let tb = &*tb;
-                        result.push_repeat(' ', depth * 2);
-                        _ = write!(result, "  textarea:     {tb:p}\r\n");
+                        result.push_repeat(arena, ' ', depth * 2);
+                        arena_write_fmt!(arena, result, "  textarea:     {tb:p}\r\n");
                     }
                     NodeContent::Scrollarea(..) => {
-                        result.push_repeat(' ', depth * 2);
-                        result.push_str("  scrollable:   true\r\n");
+                        result.push_repeat(arena, ' ', depth * 2);
+                        result.push_str(arena, "  scrollable:   true\r\n");
                     }
                     _ => {}
                 }
@@ -1221,6 +1253,14 @@ impl Tui {
         }
 
         result
+    }
+
+    fn was_mouse_hover_on_node(&self, id: u64) -> bool {
+        self.mouse_hover_node_path.last() == Some(&id)
+    }
+
+    fn was_mouse_hover_on_subtree(&self, node: &Node) -> bool {
+        self.mouse_hover_node_path.get(node.depth) == Some(&node.id)
     }
 
     fn was_mouse_down_on_node(&self, id: u64) -> bool {
@@ -1746,7 +1786,7 @@ impl<'a> Context<'a, '_> {
 
         let mut last_node = self.tree.last_node.borrow_mut();
         let title = if title.is_empty() {
-            ArenaString::new_in(self.arena())
+            BString::empty()
         } else {
             arena_format!(self.arena(), " {} ", title)
         };
@@ -1778,7 +1818,7 @@ impl<'a> Context<'a, '_> {
 
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.content = NodeContent::Table(TableContent {
-            columns: Vec::new_in(self.arena()),
+            columns: BVec::empty(),
             cell_gap: Default::default(),
         });
     }
@@ -1789,7 +1829,7 @@ impl<'a> Context<'a, '_> {
         let mut last_node = self.tree.last_node.borrow_mut();
         if let NodeContent::Table(spec) = &mut last_node.content {
             spec.columns.clear();
-            spec.columns.extend_from_slice(columns);
+            spec.columns.extend_from_slice(self.arena(), columns);
         } else {
             debug_assert!(false);
         }
@@ -1936,8 +1976,8 @@ impl<'a> Context<'a, '_> {
     pub fn styled_label_begin(&mut self, classname: &'static str) {
         self.block_begin(classname);
         self.tree.last_node.borrow_mut().content = NodeContent::Text(TextContent {
-            text: ArenaString::new_in(self.arena()),
-            chunks: Vec::with_capacity_in(4, self.arena()),
+            text: BString::empty(),
+            chunks: BVec::empty(),
             overflow: Overflow::Clip,
         });
     }
@@ -1951,11 +1991,10 @@ impl<'a> Context<'a, '_> {
 
         let last = content.chunks.last().unwrap_or(&INVALID_STYLED_TEXT_CHUNK);
         if last.offset != content.text.len() && last.fg != fg {
-            content.chunks.push(StyledTextChunk {
-                offset: content.text.len(),
-                fg,
-                attr: last.attr,
-            });
+            content.chunks.push(
+                self.arena(),
+                StyledTextChunk { offset: content.text.len(), fg, attr: last.attr },
+            );
         }
     }
 
@@ -1968,7 +2007,10 @@ impl<'a> Context<'a, '_> {
 
         let last = content.chunks.last().unwrap_or(&INVALID_STYLED_TEXT_CHUNK);
         if last.offset != content.text.len() && last.attr != attr {
-            content.chunks.push(StyledTextChunk { offset: content.text.len(), fg: last.fg, attr });
+            content.chunks.push(
+                self.arena(),
+                StyledTextChunk { offset: content.text.len(), fg: last.fg, attr },
+            );
         }
     }
 
@@ -1979,7 +2021,7 @@ impl<'a> Context<'a, '_> {
             unreachable!();
         };
 
-        content.text.push_str(text);
+        content.text.push_str(self.arena(), text);
     }
 
     /// Ends the current label block.
@@ -2204,7 +2246,7 @@ impl<'a> Context<'a, '_> {
 
         // Scrolling works even if the node isn't focused.
         if self.input_scroll_delta != Point::default()
-            && node_prev.inner_clipped.contains(self.tui.mouse_position)
+            && self.tui.was_mouse_hover_on_node(node_prev.id)
         {
             tc.scroll_offset.x += self.input_scroll_delta.x;
             tc.scroll_offset.y += self.input_scroll_delta.y;
@@ -2638,7 +2680,7 @@ impl<'a> Context<'a, '_> {
                     }
                 }
                 vk::INSERT => match modifiers {
-                    kbmod::SHIFT => tb.paste(self.clipboard_ref()),
+                    kbmod::SHIFT => tb.paste(self.clipboard_ref(), single_line),
                     kbmod::CTRL => tb.copy(self.clipboard_mut()),
                     _ => tb.set_overtype(!tb.is_overtype()),
                 },
@@ -2684,7 +2726,7 @@ impl<'a> Context<'a, '_> {
                     _ => return false,
                 },
                 vk::V => match modifiers {
-                    kbmod::CTRL => tb.paste(self.clipboard_ref()),
+                    kbmod::CTRL => tb.paste(self.clipboard_ref(), single_line),
                     _ => return false,
                 },
                 vk::Y => match modifiers {
@@ -2825,46 +2867,43 @@ impl<'a> Context<'a, '_> {
             let container_rect = prev_container.inner;
 
             if self.input_scroll_delta != Point::default()
-                && container_rect.contains(self.tui.mouse_position)
+                && self.tui.was_mouse_hover_on_subtree(&prev_container)
             {
                 sc.scroll_offset.x += self.input_scroll_delta.x;
                 sc.scroll_offset.y += self.input_scroll_delta.y;
                 self.set_input_consumed();
             } else if self.tui.mouse_state != InputMouseState::None {
                 match self.tui.mouse_state {
-                    InputMouseState::Left => {
-                        if self.tui.mouse_is_drag {
-                            // We don't need to look up the previous track node,
-                            // since it has a fixed size based on the container size.
-                            let track_rect = Rect {
-                                left: container_rect.right,
-                                top: container_rect.top,
-                                right: container_rect.right + 1,
-                                bottom: container_rect.bottom,
-                            };
-                            if track_rect.contains(self.tui.mouse_down_position) {
-                                if sc.scroll_offset_y_drag_start == CoordType::MIN {
-                                    sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
-                                }
-
-                                let content = prev_container.children.first.unwrap().borrow();
-                                let content_rect = content.inner;
-                                let content_height = content_rect.height();
-                                let track_height = track_rect.height();
-                                let scrollable_height = content_height - track_height;
-
-                                if scrollable_height > 0 {
-                                    let trackable = track_height - sc.thumb_height;
-                                    let delta_y =
-                                        self.tui.mouse_position.y - self.tui.mouse_down_position.y;
-                                    sc.scroll_offset.y = sc.scroll_offset_y_drag_start
-                                        + (delta_y as i64 * scrollable_height as i64
-                                            / trackable as i64)
-                                            as CoordType;
-                                }
-
-                                self.set_input_consumed();
+                    InputMouseState::Left if self.tui.mouse_is_drag => {
+                        // We don't need to look up the previous track node,
+                        // since it has a fixed size based on the container size.
+                        let track_rect = Rect {
+                            left: container_rect.right,
+                            top: container_rect.top,
+                            right: container_rect.right + 1,
+                            bottom: container_rect.bottom,
+                        };
+                        if track_rect.contains(self.tui.mouse_down_position) {
+                            if sc.scroll_offset_y_drag_start == CoordType::MIN {
+                                sc.scroll_offset_y_drag_start = sc.scroll_offset.y;
                             }
+
+                            let content = prev_container.children.first.unwrap().borrow();
+                            let content_rect = content.inner;
+                            let content_height = content_rect.height();
+                            let track_height = track_rect.height();
+                            let scrollable_height = content_height - track_height;
+
+                            if scrollable_height > 0 {
+                                let trackable = track_height - sc.thumb_height;
+                                let delta_y =
+                                    self.tui.mouse_position.y - self.tui.mouse_down_position.y;
+                                sc.scroll_offset.y = sc.scroll_offset_y_drag_start
+                                    + (delta_y as i64 * scrollable_height as i64 / trackable as i64)
+                                        as CoordType;
+                            }
+
+                            self.set_input_consumed();
                         }
                     }
                     InputMouseState::Release => {
@@ -3354,23 +3393,23 @@ impl<'a> Context<'a, '_> {
         };
 
         if shortcut_letter.is_ascii_uppercase() || key_name.is_some() {
-            let mut shortcut_text = ArenaString::new_in(self.arena());
+            let mut shortcut_text = BString::empty();
             if shortcut.modifiers_contains(kbmod::CTRL) {
-                shortcut_text.push_str(self.tui.modifier_translations.ctrl);
-                shortcut_text.push('+');
+                shortcut_text.push_str(self.arena(), self.tui.modifier_translations.ctrl);
+                shortcut_text.push(self.arena(), '+');
             }
             if shortcut.modifiers_contains(kbmod::ALT) {
-                shortcut_text.push_str(self.tui.modifier_translations.alt);
-                shortcut_text.push('+');
+                shortcut_text.push_str(self.arena(), self.tui.modifier_translations.alt);
+                shortcut_text.push(self.arena(), '+');
             }
             if shortcut.modifiers_contains(kbmod::SHIFT) {
-                shortcut_text.push_str(self.tui.modifier_translations.shift);
-                shortcut_text.push('+');
+                shortcut_text.push_str(self.arena(), self.tui.modifier_translations.shift);
+                shortcut_text.push(self.arena(), '+');
             }
             if let Some(name) = key_name {
-                shortcut_text.push_str(name);
+                shortcut_text.push_str(self.arena(), name);
             } else {
-                shortcut_text.push(shortcut_letter);
+                shortcut_text.push(self.arena(), shortcut_letter);
             }
 
             self.label("shortcut", &shortcut_text);
@@ -3619,7 +3658,7 @@ impl<'a> NodeMap<'a> {
         let shift = 64 - width;
         let mask = (slots - 1) as u64;
 
-        let slots = arena.alloc_uninit_slice(slots).write_filled(None);
+        let slots = arena.alloc_slice(slots, None);
         let mut node = tree.root_first;
 
         loop {
@@ -3692,7 +3731,7 @@ struct ListContent<'a> {
 
 /// NOTE: Must not contain items that require drop().
 struct TableContent<'a> {
-    columns: Vec<CoordType, &'a Arena>,
+    columns: BVec<'a, CoordType>,
     cell_gap: Size,
 }
 
@@ -3708,8 +3747,8 @@ const INVALID_STYLED_TEXT_CHUNK: StyledTextChunk =
 
 /// NOTE: Must not contain items that require drop().
 struct TextContent<'a> {
-    text: ArenaString<'a>,
-    chunks: Vec<StyledTextChunk, &'a Arena>,
+    text: BString<'a>,
+    chunks: BVec<'a, StyledTextChunk>,
     overflow: Overflow,
 }
 
@@ -3742,7 +3781,7 @@ enum NodeContent<'a> {
     #[default]
     None,
     List(ListContent<'a>),
-    Modal(ArenaString<'a>), // title
+    Modal(BString<'a>), // title
     Table(TableContent<'a>),
     Text(TextContent<'a>),
     Textarea(TextareaContent<'a>),
@@ -3819,7 +3858,7 @@ struct Node<'a> {
     inner_clipped: Rect, // in screen-space, calculated during layout, restricted to the viewport
 }
 
-impl Node<'_> {
+impl<'a> Node<'a> {
     /// Given an outer rectangle (including padding and borders) of this node,
     /// this returns the inner rectangle (excluding padding and borders).
     fn outer_to_inner(&self, mut outer: Rect) -> Rect {
@@ -3856,7 +3895,7 @@ impl Node<'_> {
     }
 
     /// Computes the intrinsic size of this node and its children.
-    fn compute_intrinsic_size(&mut self) {
+    fn compute_intrinsic_size(&mut self, arena: &'a Arena) {
         match &mut self.content {
             NodeContent::Table(spec) => {
                 // Calculate each row's height and the maximum width of each of its columns.
@@ -3866,7 +3905,7 @@ impl Node<'_> {
 
                     for (column, cell) in Tree::iterate_siblings(row.children.first).enumerate() {
                         let mut cell = cell.borrow_mut();
-                        cell.compute_intrinsic_size();
+                        cell.compute_intrinsic_size(arena);
 
                         let size = cell.intrinsic_to_outer();
 
@@ -3880,7 +3919,7 @@ impl Node<'_> {
                         // last column (flexible 1/1) must be 3 times as wide as the 2nd one (1/3rd).
                         // It's not a big deal yet, because such functionality isn't needed just yet.
                         if column >= spec.columns.len() {
-                            spec.columns.push(0);
+                            spec.columns.push(arena, 0);
                         }
                         spec.columns[column] = spec.columns[column].max(size.width);
 
@@ -3926,7 +3965,7 @@ impl Node<'_> {
 
                 for child in Tree::iterate_siblings(self.children.first) {
                     let mut child = child.borrow_mut();
-                    child.compute_intrinsic_size();
+                    child.compute_intrinsic_size(arena);
 
                     let size = child.intrinsic_to_outer();
                     max_width = max_width.max(size.width);

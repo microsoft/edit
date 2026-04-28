@@ -1,28 +1,30 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#![feature(allocator_api)]
-
 use std::hint::black_box;
 use std::io::Cursor;
+use std::path::Path;
 use std::{mem, vec};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
-use edit::simd::MemsetSafe;
-use edit::{buffer, glob, hash, json, oklab, simd, unicode};
-use stdext::arena::{self, Arena, scratch_arena};
+use edit::{buffer, hash, json, lsh, oklab, simd, unicode};
+use stdext::arena::{self, scratch_arena};
+use stdext::collections::BVec;
+use stdext::float::parse_f64_approx;
+use stdext::glob;
+use stdext::unicode::Utf8Chars;
 
 struct EditingTracePatch<'a>(usize, usize, &'a str);
 
 struct EditingTraceTransaction<'a> {
-    patches: Vec<EditingTracePatch<'a>, &'a Arena>,
+    patches: BVec<'a, EditingTracePatch<'a>>,
 }
 
 struct EditingTraceData<'a> {
     start_content: &'a str,
     end_content: &'a str,
-    txns: Vec<EditingTraceTransaction<'a>, &'a Arena>,
+    txns: BVec<'a, EditingTraceTransaction<'a>>,
 }
 
 fn bench_buffer(c: &mut Criterion) {
@@ -39,24 +41,25 @@ fn bench_buffer(c: &mut Criterion) {
         let mut res = EditingTraceData {
             start_content: root.get_str("startContent").unwrap(),
             end_content: root.get_str("endContent").unwrap(),
-            txns: Vec::with_capacity_in(txns.len(), &scratch),
+            txns: BVec::empty(),
         };
+        res.txns.reserve(&*scratch, txns.len());
 
         for txn in txns {
             let txn = txn.as_object().unwrap();
             let patches = txn.get_array("patches").unwrap();
-            let mut txn =
-                EditingTraceTransaction { patches: Vec::with_capacity_in(patches.len(), &scratch) };
+            let mut txn = EditingTraceTransaction { patches: BVec::empty() };
+            txn.patches.reserve(&*scratch, patches.len());
 
             for patch in patches {
                 let patch = patch.as_array().unwrap();
                 let offset = patch[0].as_number().unwrap() as usize;
                 let del_len = patch[1].as_number().unwrap() as usize;
                 let ins_str = patch[2].as_str().unwrap();
-                txn.patches.push(EditingTracePatch(offset, del_len, ins_str));
+                txn.patches.push(&*scratch, EditingTracePatch(offset, del_len, ins_str));
             }
 
-            res.txns.push(txn);
+            res.txns.push(&*scratch, txn);
         }
 
         res
@@ -135,6 +138,13 @@ fn bench_buffer(c: &mut Criterion) {
         });
 }
 
+fn bench_float(c: &mut Criterion) {
+    c.benchmark_group("float::parse_f64_approx")
+        .bench_function("123", |b| b.iter(|| parse_f64_approx(black_box(b"123"))))
+        .bench_function("123.456", |b| b.iter(|| parse_f64_approx(black_box(b"123.456"))))
+        .bench_function("123.456e3", |b| b.iter(|| parse_f64_approx(black_box(b"123.456e3"))));
+}
+
 fn bench_glob(c: &mut Criterion) {
     // Same benchmark as in glob-match
     const PATH: &str = "foo/bar/foo/bar/foo/bar/foo/bar/foo/bar.txt";
@@ -176,6 +186,34 @@ fn bench_json(c: &mut Criterion) {
             })
         },
     );
+}
+
+fn bench_lsh(c: &mut Criterion) {
+    let bytes = include_bytes!("../../../assets/highlighting-tests/markdown.md");
+    let bytes = &bytes[..];
+    let lang = lsh::LANGUAGES.iter().find(|lang| lang.id == "markdown").unwrap();
+    let highlighter = lsh::Highlighter::new(black_box(&bytes), lang);
+
+    c.benchmark_group("lsh").throughput(Throughput::Bytes(bytes.len() as u64)).bench_function(
+        "markdown",
+        |b| {
+            b.iter(|| {
+                let mut h = highlighter.clone();
+                loop {
+                    let scratch = scratch_arena(None);
+                    let res = h.parse_next_line(&scratch);
+                    if res.is_empty() {
+                        break;
+                    }
+                }
+            })
+        },
+    );
+
+    c.benchmark_group("lsh").bench_function("process_file_associations", |b| {
+        let path = Path::new("/some/long/path/to/file/foo.bar.foo.bar.foo.bar");
+        b.iter(|| lsh::process_file_associations(lsh::FILE_ASSOCIATIONS, black_box(path)))
+    });
 }
 
 fn bench_oklab(c: &mut Criterion) {
@@ -226,7 +264,7 @@ fn bench_simd_memchr2(c: &mut Criterion) {
     }
 }
 
-fn bench_simd_memset<T: MemsetSafe + Copy + Default>(c: &mut Criterion) {
+fn bench_simd_memset<T: Copy + Default>(c: &mut Criterion) {
     let mut group = c.benchmark_group("simd");
     let name = format!("memset<{}>", std::any::type_name::<T>());
     let size = mem::size_of::<T>();
@@ -241,7 +279,7 @@ fn bench_simd_memset<T: MemsetSafe + Copy + Default>(c: &mut Criterion) {
             &bytes,
             |b, &bytes| {
                 let slice = unsafe { buf.get_unchecked_mut(..bytes / size) };
-                b.iter(|| simd::memset(black_box(slice), Default::default()));
+                b.iter(|| stdext::simd::memset(black_box(slice), Default::default()));
             },
         );
     }
@@ -273,9 +311,7 @@ fn bench_unicode(c: &mut Criterion) {
     c.benchmark_group("unicode::Utf8Chars")
         .throughput(Throughput::Bytes(bytes.len() as u64))
         .bench_function("next", |b| {
-            b.iter(|| {
-                unicode::Utf8Chars::new(bytes, 0).fold(0u32, |acc, ch| acc.wrapping_add(ch as u32))
-            })
+            b.iter(|| Utf8Chars::new(bytes, 0).fold(0u32, |acc, ch| acc.wrapping_add(ch as u32)))
         });
 }
 
@@ -283,9 +319,11 @@ fn bench(c: &mut Criterion) {
     arena::init(128 * MEBI).unwrap();
 
     bench_buffer(c);
+    bench_float(c);
     bench_glob(c);
     bench_hash(c);
     bench_json(c);
+    bench_lsh(c);
     bench_oklab(c);
     bench_simd_lines_fwd(c);
     bench_simd_memchr2(c);

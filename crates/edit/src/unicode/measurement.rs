@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::hint::cold_path;
+use stdext::cold_path;
+use stdext::unicode::Utf8Chars;
 
-use super::Utf8Chars;
 use super::tables::*;
 use crate::document::ReadableDocument;
 use crate::helpers::{CoordType, Point};

@@ -11,6 +11,7 @@ use edit::input::{kbmod, vk};
 use edit::tui::*;
 use edit::{icu, path};
 use stdext::arena::scratch_arena;
+use stdext::collections::BVec;
 
 use crate::localization::*;
 use crate::state::*;
@@ -344,14 +345,7 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
         entries.sort_unstable_by(|a, b| {
             let a = a.as_bytes();
             let b = b.as_bytes();
-
-            let a_is_dir = a.last() == Some(&b'/');
-            let b_is_dir = b.last() == Some(&b'/');
-
-            match b_is_dir.cmp(&a_is_dir) {
-                Ordering::Equal => icu::compare_strings(a, b),
-                other => other,
-            }
+            icu::compare_strings(a, b)
         });
     }
 
@@ -376,9 +370,10 @@ fn update_autocomplete_suggestions(state: &mut State) {
     // The problem is finding the upper bound. Here I'm using a trick:
     // By appending U+10FFFF (the highest possible Unicode code point)
     // we create a needle that naturally yields an upper bound.
-    let mut needle_upper_bound = Vec::with_capacity_in(needle.len() + 4, &*scratch);
-    needle_upper_bound.extend_from_slice(needle);
-    needle_upper_bound.extend_from_slice(b"\xf4\x8f\xbf\xbf");
+    let mut needle_upper_bound = BVec::empty();
+    needle_upper_bound.reserve(&*scratch, needle.len() + 4);
+    needle_upper_bound.extend_from_slice(&*scratch, needle);
+    needle_upper_bound.extend_from_slice(&*scratch, b"\xf4\x8f\xbf\xbf");
 
     if let Some(dirs_files) = &state.file_picker_entries {
         'outer: for entries in &dirs_files[1..] {

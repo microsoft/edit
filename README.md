@@ -19,23 +19,47 @@ You can install the latest version with WinGet:
 winget install Microsoft.Edit
 ```
 
+### Linux (build from source)
+
+If your distribution does not provide binaries, or if you'd like to build your own, you can use our install script, provided you have installed:
+* Rust (via `rustup` or similar)
+* A C compiler (e.g. `gcc`)
+* ICU (e.g. libicu78, libicu, icu)
+* curl/wget and tar
+
+The following command will then install `msedit` into `~/.local/bin`:
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/microsoft/edit/main/assets/install.sh | sh
+```
+
+Additional flags are `--dev`, to build directly from the main branch, and `--system` to install into `/usr/local/bin`. For instance:
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/microsoft/edit/main/assets/install.sh | sh -s -- --dev --system
+```
+
 ## Build Instructions
 
 * [Install Rust](https://www.rust-lang.org/tools/install)
-* Install the nightly toolchain: `rustup install nightly`
-  * Alternatively, set the environment variable `RUSTC_BOOTSTRAP=1`
 * Clone the repository
-* For a release build, run:
-  * Rust 1.90 or earlier: `cargo build --config .cargo/release.toml --release`
-  * otherwise: `cargo build --config .cargo/release-nightly.toml --release`
+* If you're using nightly Rust:
+  ```sh
+  cargo build --release --config .cargo/release.toml
+  ```
+* If you're using stable Rust:
+  * Ideally: Set the environment variable `RUSTC_BOOTSTRAP=1` and use the **nightly** build instructions above.
+    This is recommended, because it drastically reduces the binary size and slightly improves performance.
+  * Otherwise, simply run:
+    ```sh
+    cargo build --release
+    ```
 
 ### Build Configuration
 
-During compilation you can set various environment variables to configure the build. The following table lists the available configuration options:
+You can set the following environment variables at build-time to configure the build:
 
 Environment variable | Description
 --- | ---
-`EDIT_CFG_ICU*` | See [ICU library name (SONAME)](#icu-library-name-soname) for details.
+`EDIT_CFG_ICU*` | See [ICU library name (SONAME)](#icu-library-name-soname) below for details. Linux package maintainers are advised to review and configure these options.
 `EDIT_CFG_LANGUAGES` | A comma-separated list of languages to include in the build. See [i18n/edit.toml](i18n/edit.toml) for available languages.
 
 ## Notes to Package Maintainers
@@ -49,11 +73,14 @@ Assigning an "edit" alias is recommended, if possible.
 
 ### ICU library name (SONAME)
 
-This project _optionally_ depends on the ICU library for its Search and Replace functionality.
-By default, the project will look for a SONAME without version suffix:
-* Windows: `icuuc.dll`
-* macOS: `libicuuc.dylib`
-* UNIX, and other OS: `libicuuc.so`
+This project optionally depends on the ICU library for its Search and Replace functionality.
+
+By default, the project will look for the following library names:
+
+ Variable | Windows | macOS | Linux / Other
+----------|---------|-------|---------------
+`EDIT_CFG_ICUUC_SONAME` | `icuuc.dll` | `libicucore.dylib` | `libicuuc.so`
+`EDIT_CFG_ICUI18N_SONAME` | `icuin.dll` | `libicucore.dylib` | `libicui18n.so`
 
 If your installation uses a different SONAME, please set the following environment variable at build time:
 * `EDIT_CFG_ICUUC_SONAME`:
@@ -61,7 +88,7 @@ If your installation uses a different SONAME, please set the following environme
 * `EDIT_CFG_ICUI18N_SONAME`:
   For instance, `libicui18n.so.76`.
 
-Additionally, this project assumes that the ICU exports are exported without `_` prefix and without version suffix, such as `u_errorName`.
+Additionally, this project assumes that the ICU exports symbols without `_` prefix and without version suffix, such as `u_errorName`.
 If your installation uses versioned exports, please set:
 * `EDIT_CFG_ICU_CPP_EXPORTS`:
   If set to `true`, it'll look for C++ symbols such as `_u_errorName`.
@@ -75,7 +102,7 @@ Finally, you can set the following environment variables:
   The way it does this is not officially supported by ICU and as such is not recommended to be relied upon.
   Enabled by default on UNIX (excluding macOS) if no other options are set.
 
-To test your settings, run `cargo test` again but with the `--ignored` flag. For instance:
+To test your build settings, run `cargo test` with the `--ignored` flag. For instance:
 ```sh
 cargo test -- --ignored
 ```

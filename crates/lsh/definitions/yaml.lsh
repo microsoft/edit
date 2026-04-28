@@ -1,0 +1,78 @@
+#[display_name = "YAML"]
+#[path = "**/*.yaml"]
+#[path = "**/*.yml"]
+pub fn yaml() {
+    if /\s+/ {
+        // Leading whitespace
+    }
+
+    var indentation = off;
+
+    loop {
+        if /-\s+/ {
+            // List item
+        }
+        if /\w+:(?:\s+|$)/ {
+            // Key: (Value follows)
+        }
+
+        if /[|>][-+]?.*/ {
+            // If we see a multiline string inducer, capture content until indentation is back to before.
+            // Since we'll skip multiple lines, we need to use nested loops here.
+
+            loop {
+                // Wait for the next line in this multiline string.
+                await input;
+
+                // Skip leading whitespace
+                if /\s+/ {
+                }
+
+                if off <= indentation {
+                    // Once the new indentation is smaller, the multiline string has ended.
+                    break;
+                }
+
+                if /.*/ {
+                    yield string;
+                }
+            }
+        } else {
+            break;
+        }
+    }
+
+    yield other;
+
+    if /---/ {
+        yield other;
+    } else if /true|false|yes|no|null|~/ {
+        // If it looks like a keyword, check if it's actually a string (e.g. "foo: true false").
+        // TODO: Ideally this would not consume the last chunk of /\s+/ before a /# comment/.
+        if /\s*[^\s#]+[^#]*/ {
+            yield string;
+        } else {
+            yield constant.language;
+        }
+    } else if /-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/ {
+        // Same as with keywords above.
+        if /\s*[^\s#]+[^#]*/ {
+            yield string;
+        } else {
+            yield constant.numeric;
+        }
+    } else if /[^\s#]+[^#]*/ {
+        // Same as before: Gobble anything that looks like a string.
+        // TODO: This could be simplified & combined with the above if we stored the
+        // highlight kind into a variable and then yield the variable value itself.
+        yield string;
+    }
+
+    if /\s+/ {
+        yield other;
+    }
+
+    if /#.*/ {
+        yield comment;
+    }
+}

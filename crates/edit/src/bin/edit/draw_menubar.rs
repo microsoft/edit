@@ -7,6 +7,7 @@ use edit::tui::*;
 use stdext::arena_format;
 
 use crate::localization::*;
+use crate::settings::Settings;
 use crate::state::*;
 
 pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
@@ -51,9 +52,27 @@ fn draw_menu_file(ctx: &mut Context, state: &mut State) {
         if ctx.menubar_menu_button(loc(LocId::FileSaveAs), 'A', vk::NULL) {
             state.wants_file_picker = StateFilePicker::SaveAs;
         }
-        if ctx.menubar_menu_button(loc(LocId::FileClose), 'C', kbmod::CTRL | vk::W) {
-            state.wants_close = true;
+    }
+    #[allow(irrefutable_let_patterns)]
+    if let path = Settings::borrow().path.as_path()
+        && !path.as_os_str().is_empty()
+        && ctx.menubar_menu_button(loc(LocId::FilePreferences), 'P', vk::NULL)
+    {
+        match state.documents.add_file_path(path) {
+            Ok(doc) => {
+                if let mut tb = doc.buffer.borrow_mut()
+                    && tb.text_length() == 0
+                {
+                    Settings::bootstrap(&mut tb);
+                }
+            }
+            Err(err) => error_log_add(ctx, state, err),
         }
+    }
+    if state.documents.active().is_some()
+        && ctx.menubar_menu_button(loc(LocId::FileClose), 'C', kbmod::CTRL | vk::W)
+    {
+        state.wants_close = true;
     }
     if ctx.menubar_menu_button(loc(LocId::FileExit), 'X', kbmod::CTRL | vk::Q) {
         state.wants_exit = true;
@@ -82,7 +101,7 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
         ctx.needs_rerender();
     }
     if ctx.menubar_menu_button(loc(LocId::EditPaste), 'P', kbmod::CTRL | vk::V) {
-        tb.paste(ctx.clipboard_ref());
+        tb.paste(ctx.clipboard_ref(), false);
         ctx.needs_rerender();
     }
     if state.wants_search.kind != StateSearchKind::Disabled {
@@ -180,7 +199,7 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
             ctx.attr_overflow(Overflow::TruncateHead);
             ctx.attr_position(Position::Center);
 
-            ctx.label("copyright", "Copyright (c) Microsoft Corp 2025");
+            ctx.label("copyright", "Copyright (c) Microsoft Corporation");
             ctx.attr_overflow(Overflow::TruncateTail);
             ctx.attr_position(Position::Center);
 

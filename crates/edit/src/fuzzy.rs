@@ -5,9 +5,8 @@
 //! Other algorithms exist, such as Sublime Text's, or the one used in `fzf`,
 //! but I figured that this one is what lots of people may be familiar with.
 
-use std::vec;
-
 use stdext::arena::{Arena, scratch_arena};
+use stdext::collections::BVec;
 
 use crate::icu;
 
@@ -18,10 +17,10 @@ pub fn score_fuzzy<'a>(
     haystack: &str,
     needle: &str,
     allow_non_contiguous_matches: bool,
-) -> (i32, Vec<usize, &'a Arena>) {
+) -> (i32, BVec<'a, usize>) {
     if haystack.is_empty() || needle.is_empty() {
         // return early if target or query are empty
-        return (NO_MATCH, Vec::new_in(arena));
+        return (NO_MATCH, BVec::empty());
     }
 
     let scratch = scratch_arena(Some(arena));
@@ -30,7 +29,7 @@ pub fn score_fuzzy<'a>(
 
     if target.len() < query.len() {
         // impossible for query to be contained in target
-        return (NO_MATCH, Vec::new_in(arena));
+        return (NO_MATCH, BVec::empty());
     }
 
     let target_lower = icu::fold_case(&scratch, haystack);
@@ -39,8 +38,11 @@ pub fn score_fuzzy<'a>(
     let query_lower = map_chars(&scratch, &query_lower);
 
     let area = query.len() * target.len();
-    let mut scores = vec::from_elem_in(0, area, &*scratch);
-    let mut matches = vec::from_elem_in(0, area, &*scratch);
+    let mut scores = BVec::empty();
+    let mut matches = BVec::empty();
+
+    scores.extend(&*scratch, std::iter::repeat_n(0, area));
+    matches.extend(&*scratch, std::iter::repeat_n(0, area));
 
     //
     // Build Scorer Matrix:
@@ -122,7 +124,7 @@ pub fn score_fuzzy<'a>(
     }
 
     // Restore Positions (starting from bottom right of matrix)
-    let mut positions = Vec::new_in(arena);
+    let mut positions = BVec::empty();
 
     if !query.is_empty() && !target.is_empty() {
         let mut query_index = query.len() - 1;
@@ -136,7 +138,7 @@ pub fn score_fuzzy<'a>(
                 }
                 target_index -= 1; // go left
             } else {
-                positions.push(target_index);
+                positions.push(arena, target_index);
 
                 // go up and left
                 if query_index == 0 || target_index == 0 {
@@ -214,9 +216,8 @@ fn score_separator_at_pos(ch: char) -> i32 {
     }
 }
 
-fn map_chars<'a>(arena: &'a Arena, s: &str) -> Vec<char, &'a Arena> {
-    let mut chars = Vec::with_capacity_in(s.len(), arena);
-    chars.extend(s.chars());
-    chars.shrink_to_fit();
+fn map_chars<'a>(arena: &'a Arena, s: &str) -> BVec<'a, char> {
+    let mut chars = BVec::empty();
+    chars.extend_sloppy(arena, s.chars());
     chars
 }

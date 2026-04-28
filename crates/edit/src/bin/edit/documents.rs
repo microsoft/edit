@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::collections::LinkedList;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -9,9 +8,11 @@ use std::{fs, io};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
+use edit::lsh::{FILE_ASSOCIATIONS, Language, process_file_associations};
 use edit::{path, sys};
 
 use crate::apperr;
+use crate::settings::Settings;
 use crate::state::DisplayablePathBuf;
 
 pub struct Document {
@@ -21,6 +22,7 @@ pub struct Document {
     pub filename: String,
     pub file_id: Option<sys::FileId>,
     pub new_file_counter: usize,
+    pub language_override: Option<Option<&'static Language>>,
 }
 
 impl Document {
@@ -63,21 +65,51 @@ impl Document {
     fn set_path(&mut self, path: PathBuf) {
         let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let dir = path.parent().map(ToOwned::to_owned).unwrap_or_default();
+
         self.filename = filename;
         self.dir = Some(DisplayablePathBuf::from_path(dir));
         self.path = Some(path);
-        self.update_file_mode();
+
+        self.buffer.borrow_mut().set_ruler(if self.filename == "COMMIT_EDITMSG" { 72 } else { 0 });
+        self.update_language();
     }
 
-    fn update_file_mode(&mut self) {
-        let mut tb = self.buffer.borrow_mut();
-        tb.set_ruler(if self.filename == "COMMIT_EDITMSG" { 72 } else { 0 });
+    pub fn auto_detect_language(&mut self) {
+        self.language_override = None;
+        self.update_language();
+    }
+
+    pub fn override_language(&mut self, lang: Option<&'static Language>) {
+        self.language_override = Some(lang);
+        self.update_language();
+    }
+
+    fn update_language(&mut self) {
+        self.buffer.borrow_mut().set_language(self.get_language());
+    }
+
+    fn get_language(&self) -> Option<&'static Language> {
+        if let Some(lang) = self.language_override {
+            return lang;
+        }
+
+        if let Some(path) = &self.path {
+            let settings = Settings::borrow();
+            if let Some(lang) = process_file_associations(&settings.file_associations, path) {
+                return Some(lang);
+            }
+            if let Some(lang) = process_file_associations(FILE_ASSOCIATIONS, path) {
+                return Some(lang);
+            }
+        }
+
+        None
     }
 }
 
 #[derive(Default)]
 pub struct DocumentManager {
-    list: LinkedList<Document>,
+    list: Vec<Document>,
 }
 
 impl DocumentManager {
@@ -88,30 +120,48 @@ impl DocumentManager {
 
     #[inline]
     pub fn active(&self) -> Option<&Document> {
-        self.list.front()
+        self.list.last()
     }
 
     #[inline]
     pub fn active_mut(&mut self) -> Option<&mut Document> {
-        self.list.front_mut()
+        self.list.last_mut()
     }
 
-    #[inline]
     pub fn update_active<F: FnMut(&Document) -> bool>(&mut self, mut func: F) -> bool {
-        let mut cursor = self.list.cursor_front_mut();
-        while let Some(doc) = cursor.current() {
-            if func(doc) {
-                let list = cursor.remove_current_as_list().unwrap();
-                self.list.cursor_front_mut().splice_before(list);
-                return true;
-            }
-            cursor.move_next();
+        let Some(idx) = self.list.iter().rposition(&mut func) else {
+            return false;
+        };
+
+        // Already active (= last) document matched? Nothing to do.
+        if idx == self.list.len() - 1 {
+            return false;
         }
-        false
+
+        // Otherwise, move the matched document to the end of the list so it becomes active.
+        // Uses unsafe, because `rotate_left()` is horrendously bad with -Copt-level=s
+        // (it's really almost comical) and I just don't tolerate that.
+        // If I'm dead and you're looking to rewrite this use `list.push(list.remove(idx))`.
+        unsafe {
+            let beg = self.list.as_mut_ptr();
+            let doc = beg.add(idx);
+            let last = beg.add(self.list.len() - 1);
+            let amount = self.list.len() - idx - 1;
+            let mut temp = std::mem::MaybeUninit::<Document>::uninit();
+
+            // Make a backup of the document
+            std::ptr::copy_nonoverlapping(doc, temp.as_mut_ptr(), 1);
+            // Shift the rest to the front
+            std::ptr::copy(doc.add(1), doc, amount);
+            // Move the backup to the end
+            std::ptr::copy_nonoverlapping(temp.as_ptr(), last, 1);
+        }
+
+        true
     }
 
     pub fn remove_active(&mut self) {
-        self.list.pop_front();
+        self.list.pop();
     }
 
     pub fn add_untitled(&mut self) -> apperr::Result<&mut Document> {
@@ -123,11 +173,13 @@ impl DocumentManager {
             filename: Default::default(),
             file_id: None,
             new_file_counter: 0,
+            language_override: None,
         };
         self.gen_untitled_name(&mut doc);
 
-        self.list.push_front(doc);
-        Ok(self.list.front_mut().unwrap())
+        // In the future this could use push_mut, but it's unstable right now. As usual.
+        self.list.push(doc);
+        Ok(self.list.last_mut().unwrap())
     }
 
     pub fn gen_untitled_name(&self, doc: &mut Document) {
@@ -183,6 +235,7 @@ impl DocumentManager {
             filename: Default::default(),
             file_id,
             new_file_counter: 0,
+            language_override: None,
         };
         doc.set_path(path);
 
@@ -196,8 +249,8 @@ impl DocumentManager {
             self.remove_active();
         }
 
-        self.list.push_front(doc);
-        Ok(self.list.front_mut().unwrap())
+        self.list.push(doc);
+        Ok(self.list.last_mut().unwrap())
     }
 
     pub fn reflow_all(&self) {

@@ -91,11 +91,11 @@ unsafe fn wyr3(p: *const u8, k: usize) -> u64 {
 }
 
 unsafe fn wyr4(p: *const u8) -> u64 {
-    unsafe { (p as *const u32).read_unaligned() as u64 }
+    unsafe { p.cast::<u32>().read_unaligned() as u64 }
 }
 
 unsafe fn wyr8(p: *const u8) -> u64 {
-    unsafe { (p as *const u64).read_unaligned() }
+    unsafe { p.cast::<u64>().read_unaligned() }
 }
 
 // This is a weak mix function on its own. It may be worth considering

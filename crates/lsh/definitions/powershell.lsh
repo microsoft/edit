@@ -1,0 +1,86 @@
+#[display_name = "PowerShell"]
+#[path = "**/*.ps1"]
+#[path = "**/*.psd1"]
+#[path = "**/*.psm1"]
+pub fn powershell() {
+    until /$/ {
+        yield other;
+
+        if /#.*/ {
+            yield comment;
+        } else if /<#/ {
+            loop {
+                yield comment;
+                if /#>/ { yield comment; break; }
+                await input;
+            }
+        } else if /'/ {
+            loop {
+                yield string;
+                if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /@'\s*$/ {
+            yield string;
+            loop {
+                if /.*/ {}
+                yield string;
+                await input;
+                if /'@/ {
+                    yield string;
+                    break;
+                }
+            }
+        } else if /@"\s*$/ {
+            yield string;
+            loop {
+                if /.*/ {}
+                yield string;
+                await input;
+                if /"@/ {
+                    yield string;
+                    break;
+                }
+            }
+        } else if /"/ {
+            loop {
+                yield string;
+                if /`./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /(?i:begin|class|clean|data|define|dynamicparam|end|enum|filter|from|function|hidden|in|param|process|static|using|var)/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield keyword.other;
+            }
+        } else if /(?i:break|continue|do|elseif|else|exit|foreach|for|if|return|switch|throw|trap|try|catch|finally|until|while)/ {
+            if /\w+/ {
+                yield other;
+            } else {
+                yield keyword.control;
+            }
+        } else if /-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/ {
+            if /[\w\-]+/ {
+                yield method;
+            } else {
+                yield constant.numeric;
+            }
+        } else if /\$false|\$true|\$null/ {
+            if /\w+/ {
+                yield variable;
+            } else {
+                yield constant.language;
+            }
+        } else if /[$@][\w\d?:]+/ {
+            yield variable;
+        } else if /[\w\d?:]+-[\w\d?:-]*/ {
+            yield method;
+        } else if /[\w\d?:]+/ {
+            // Gobble any other tokens that should not be highlighted
+        }
+
+        yield other;
+    }
+}
