@@ -1818,7 +1818,7 @@ tr = "Sekme"
 uk = "Табуляція"
 vi = "Tab"
 zh-hans = "制表符"
-zh-hant = "定位字元"
+zh-hant = "Tab"
 
 [IndentationSpaces]
 en = "Spaces"
