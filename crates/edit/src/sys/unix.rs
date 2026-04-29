@@ -51,13 +51,20 @@ pub fn init() -> Deinit {
     Deinit
 }
 
-pub fn switch_modes() -> io::Result<()> {
+/// Reopen stdin if it's redirected (= piped input).
+pub fn reopen_stdin_if_redirected() -> io::Result<Option<File>> {
     unsafe {
-        // Reopen stdin if it's redirected (= piped input).
         if libc::isatty(STATE.stdin) == 0 {
             STATE.stdin = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_RDONLY))?;
+            Ok(Some(File::from_raw_fd(libc::STDIN_FILENO)))
+        } else {
+            Ok(None)
         }
+    }
+}
 
+pub fn switch_modes() -> io::Result<()> {
+    unsafe {
         // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
         STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
 
@@ -329,17 +336,6 @@ fn set_tty_nonblocking(nonblock: bool) {
         if is_nonblock != nonblock {
             STATE.stdin_flags ^= libc::O_NONBLOCK;
             let _ = libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
-        }
-    }
-}
-
-pub fn open_stdin_if_redirected() -> Option<File> {
-    unsafe {
-        // Did we reopen stdin during `init()`?
-        if STATE.stdin != libc::STDIN_FILENO {
-            Some(File::from_raw_fd(libc::STDIN_FILENO))
-        } else {
-            None
         }
     }
 }

@@ -49,13 +49,13 @@ pub fn powershell() {
                 else if /"/ { yield string; break; }
                 await input;
             }
-        } else if /(?i:function|param|class|enum|cmdletbinding|static)/ {
+        } else if /(?i:begin|class|clean|data|define|dynamicparam|end|enum|filter|from|function|hidden|in|param|process|static|using|var)/ {
             if /\w+/ {
                 yield other;
             } else {
                 yield keyword.other;
             }
-        } else if /(?i:elseif|else|if|for(each)?|switch|default|throw|try|catch|finally|return)/ {
+        } else if /(?i:break|continue|do|elseif|else|exit|foreach|for|if|return|switch|throw|trap|try|catch|finally|until|while)/ {
             if /\w+/ {
                 yield other;
             } else {

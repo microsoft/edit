@@ -112,7 +112,7 @@ extends:
               - task: RustInstaller@1
                 displayName: Install Rust toolchain
                 inputs:
-                  rustVersion: ms-stable
+                  rustVersion: ms-prod
                   additionalTargets: x86_64-pc-windows-msvc aarch64-pc-windows-msvc
                   # URL of an Azure Artifacts feed configured with a crates.io upstream. Must be within the current ADO collection.
                   # NOTE: Azure Artifacts support for Rust is not yet public, but it is enabled for internal ADO organizations.
@@ -151,7 +151,7 @@ extends:
               # Extract the version for `ob_createvpack_version`.
               - script: |-
                   @echo off
-                  for /f "tokens=3 delims=- " %%x in ('findstr /c:"version = " Cargo.toml') do (
+                  for /f "tokens=3 delims=- " %%x in ('findstr /c:"version = " crates\edit\Cargo.toml') do (
                       echo ##vso[task.setvariable variable=EditVersion]%%~x
                       goto :EOF
                   )
