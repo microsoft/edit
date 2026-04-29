@@ -286,7 +286,7 @@ tr = "Yeni Dosya"
 uk = "Новий файл"
 vi = "Tệp mới"
 zh_hans = "新建文件"
-zh_hant = "新增檔案"
+zh_hant = "開新檔案"
 
 [FileOpen]
 en = "Open File…"
@@ -320,7 +320,7 @@ tr = "Dosya Aç…"
 uk = "Відкрити файл…"
 vi = "Mở tệp…"
 zh_hans = "打开文件…"
-zh_hant = "開啟檔案…"
+zh_hant = "開啟舊檔…"
 
 [FileSave]
 en = "Save"
@@ -469,7 +469,7 @@ tr = "Çıkış"
 uk = "Вихід"
 vi = "Thoát"
 zh_hans = "退出"
-zh_hant = "退出"
+zh_hant = "結束"
 
 [FileGoto]
 en = "Go to Line:Column…"
@@ -498,7 +498,7 @@ tr = "Satıra:Sütuna Git…"
 uk = "Перейти на рядок:стовпчик…"
 vi = "Đi tới dòng:cột…"
 zh_hans = "转到行:列…"
-zh_hant = "跳至行:列…"
+zh_hant = "跳至行:欄…"
 
 # A menu bar item
 [Edit]
@@ -566,7 +566,7 @@ tr = "Geri Al"
 uk = "Скасувати"
 vi = "Hoàn tác"
 zh_hans = "撤销"
-zh_hant = "復原"
+zh_hant = "還原"
 
 [EditRedo]
 en = "Redo"
@@ -962,7 +962,7 @@ tr = "Yardım"
 uk = "Допомога"
 vi = "Trợ giúp"
 zh_hans = "帮助"
-zh_hant = "幫助"
+zh_hant = "說明"
 
 [HelpAbout]
 en = "About"
@@ -1030,7 +1030,7 @@ tr = "Kaydedilmemiş Değişiklikler"
 uk = "Незбережені зміни"
 vi = "Các thay đổi chưa được lưu"
 zh_hans = "未保存的更改"
-zh_hant = "未儲存的變更"
+zh_hant = "有未儲存的變更"
 
 [UnsavedChangesDialogDescription]
 en = "Do you want to save the changes you made?"
@@ -1064,7 +1064,7 @@ tr = "Yaptığınız değişiklikleri kaydetmek istiyor musunuz?"
 uk = "Зберегти внесені зміни?"
 vi = "Bạn có muốn lưu các thay đổi bạn đã thực hiện không?"
 zh_hans = "您要保存所做的更改吗？"
-zh_hant = "您要保存所做的變更嗎？"
+zh_hant = "您要儲存所做的變更嗎？"
 
 [UnsavedChangesDialogYes]
 en = "Save"
@@ -1269,7 +1269,7 @@ tr = "{size} kopyaladınız, paylaşmak uzun sürebilir."
 uk = "Скопійовано {size}, передача може зайняти дещо часу."
 vi = "Bạn đã sao chép {size}, việc chia sẻ có thể mất nhiều thời gian."
 zh_hans = "你复制了 {size}，共享可能需要较长时间。"
-zh_hant = "您已複製 {size}，共享可能需要較長時間。"
+zh_hant = "您複製了 {size}，可能需要較長時間才能分享。"
 
 # Shown when the clipboard size exceeds the limit for OSC 52
 [LargeClipboardWarningLine3]
@@ -1304,7 +1304,7 @@ tr = "Yine de göndermek istiyor musunuz?"
 uk = "Все одно надіслати?"
 vi = "Bạn vẫn muốn gửi chứ?"
 zh_hans = "仍要发送吗？"
-zh_hant = "仍要傳送嗎？"
+zh_hant = "還是要傳送嗎？"
 
 # As an alternative to LargeClipboardWarningLine2 and 3
 [SuperLargeClipboardWarning]
@@ -1339,7 +1339,7 @@ tr = "Kopyaladığınız metin paylaşmak için çok büyük."
 uk = "Скопійований текст завеликий для передачі."
 vi = "Văn bản bạn sao chép quá lớn, không thể chia sẻ."
 zh_hans = "你复制的文本过大，无法共享。"
-zh_hant = "您複製的文字過大，無法分享。"
+zh_hant = "您複製的文字太大，無法分享。"
 
 [WarningDialogTitle]
 en = "Warning"
@@ -1441,7 +1441,7 @@ tr = "Bu işlem ICU kütüphanesini gerektirir"
 uk = "Ця операція потребує наявності бібліотеки ICU"
 vi = "Thao tác này cần thư viện ICU"
 zh_hans = "此操作需要 ICU 库"
-zh_hant = "此操作需要 ICU 庫"
+zh_hant = "此操作需要 ICU 程式庫"
 
 # For input field
 [SearchNeedleLabel]
@@ -1476,7 +1476,7 @@ tr = "Bul:"
 uk = "Знайти:"
 vi = "Tìm:"
 zh_hans = "查找:"
-zh_hant = "尋找:"
+zh_hant = "搜尋:"
 
 # For input field
 [SearchReplacementLabel]
@@ -1511,7 +1511,7 @@ tr = "Değiştir:"
 uk = "Заміна:"
 vi = "Thay thế:"
 zh_hans = "替换:"
-zh_hant = "替換:"
+zh_hant = "取代:"
 
 # Toggle
 [SearchMatchCase]
@@ -1581,7 +1581,7 @@ tr = "Tam sözcük"
 uk = "Ціле слово"
 vi = "Khớp toàn bộ từ"
 zh_hans = "全字匹配"
-zh_hant = "全字匹配"
+zh_hant = "比對整個字"
 
 # Toggle
 [SearchUseRegex]
@@ -1616,7 +1616,7 @@ tr = "RegEx kullan"
 uk = "RegEx"
 vi = "Sử dụng biểu thức chính quy"
 zh_hans = "正则"
-zh_hant = "正則"
+zh_hant = "使用正規表達式"
 
 # Button
 [SearchReplaceAll]
@@ -1746,7 +1746,7 @@ tr = "Kodlamayla Yeniden Aç…"
 uk = "Відкрити наново з кодуванням…"
 vi = "Mở lại với mã hóa…"
 zh_hans = "使用编码重新打开…"
-zh_hant = "使用編碼重新打開…"
+zh_hant = "使用其他編碼重新開啟…"
 
 [EncodingConvert]
 en = "Convert to encoding…"
@@ -1780,7 +1780,7 @@ tr = "Kodlamaya Dönüştür…"
 uk = "Перетворити в кодування…"
 vi = "Chuyển đổi sang mã hóa…"
 zh_hans = "转换为编码…"
-zh_hant = "轉換為編碼…"
+zh_hant = "轉換為其他編碼…"
 
 [IndentationTabs]
 en = "Tabs"
@@ -1814,7 +1814,7 @@ tr = "Sekme"
 uk = "Табуляція"
 vi = "Tab"
 zh_hans = "制表符"
-zh_hant = "製表符"
+zh_hant = "Tab"
 
 [IndentationSpaces]
 en = "Spaces"
