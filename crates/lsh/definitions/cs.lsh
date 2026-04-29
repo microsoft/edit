@@ -1,0 +1,60 @@
+#[display_name = "C#"]
+#[path = "**/*.cs"]
+pub fn CSharp() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /[@$]{0,2}"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /'/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /(?:global|using|static)/ {
+            yield keyword.control;
+        } else if /(?:as$|break|case|catch|checked|continue|default|do|else|for|foreach|finaly|fixed|goto|if|is$|lock|return|switch|throw|try|while|unchecked|by|descending|equals|extention|from|group|into|join|nameof|on$|or$|orderby|select|when|where|with|yield)/ {
+            yield keyword.control;
+        } else if /(?:abstract|bool|byte|char|class|const|decimal|delegate|double|enum|event|explicit|extern|float|implicit|int|interface|internal|long|namespace|new|object|operator|out|override|params|private|protected|public|readonly|ref|sealed|short|static|string|struct|this|typeof|uint|ulong|unsafe|ushort|virtual|void|volatile|add|args|async|await|dynamic|field|file|get|init|let|managed|nint|not|notnull|nuint|partial|record|required|sbyte|scoped|set|T|unmanaged|var)/ {
+            yield keyword.other;
+        } else if /(?i:-?(?i:0x[\da-fA-F_]+|0b[01_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?i:[+-]?[\d_]+|e[+-]?[\d_]+)?[uUlLfFdD]*)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(?:true|false|null)/ {
+            yield constant.language;
+        }else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
