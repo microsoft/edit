@@ -4,14 +4,74 @@ use edit::buffer::TextBuffer;
 use edit::cell::{Ref, SemiRefCell};
 use edit::json;
 use edit::lsh::{LANGUAGES, Language};
+use edit::oklab::StraightRgba;
 use stdext::arena::{read_to_string, scratch_arena};
 use stdext::arena_format;
 
 use crate::apperr;
 
+/// Theme configuration with user-defined colors.
+/// All colors are in RRGGBBAA format (same as framebuffer).
+#[derive(Clone, Copy, Debug)]
+pub struct ThemeConfig {
+    // Standard 16 terminal colors
+    pub black: Option<StraightRgba>,
+    pub red: Option<StraightRgba>,
+    pub green: Option<StraightRgba>,
+    pub yellow: Option<StraightRgba>,
+    pub blue: Option<StraightRgba>,
+    pub magenta: Option<StraightRgba>,
+    pub cyan: Option<StraightRgba>,
+    pub white: Option<StraightRgba>,
+    pub bright_black: Option<StraightRgba>,
+    pub bright_red: Option<StraightRgba>,
+    pub bright_green: Option<StraightRgba>,
+    pub bright_yellow: Option<StraightRgba>,
+    pub bright_blue: Option<StraightRgba>,
+    pub bright_magenta: Option<StraightRgba>,
+    pub bright_cyan: Option<StraightRgba>,
+    pub bright_white: Option<StraightRgba>,
+    // Special colors
+    pub background: Option<StraightRgba>,
+    pub foreground: Option<StraightRgba>,
+    // UI colors
+    pub line_number: Option<StraightRgba>,
+    pub line_highlight: Option<StraightRgba>,
+}
+
+impl ThemeConfig {
+    /// Create an empty theme config (all colors are None)
+    pub const fn empty() -> Self {
+        Self {
+            black: None,
+            red: None,
+            green: None,
+            yellow: None,
+            blue: None,
+            magenta: None,
+            cyan: None,
+            white: None,
+            bright_black: None,
+            bright_red: None,
+            bright_green: None,
+            bright_yellow: None,
+            bright_blue: None,
+            bright_magenta: None,
+            bright_cyan: None,
+            bright_white: None,
+            background: None,
+            foreground: None,
+            line_number: None,
+            line_highlight: None,
+        }
+    }
+
+}
+
 pub struct Settings {
     pub path: PathBuf,
     pub file_associations: Vec<(String, &'static Language)>,
+    pub theme: ThemeConfig,
 }
 
 struct SettingsCell(SemiRefCell<Settings>);
@@ -28,7 +88,11 @@ impl Settings {
     }
 
     const fn new() -> Self {
-        Settings { path: PathBuf::new(), file_associations: Vec::new() }
+        Settings {
+            path: PathBuf::new(),
+            file_associations: Vec::new(),
+            theme: ThemeConfig::empty(),
+        }
     }
 
     pub fn borrow() -> Ref<'static, Settings> {
@@ -82,8 +146,73 @@ impl Settings {
             }
         }
 
+        // Parse theme configuration
+        if let Some(theme_obj) = root.get_object("theme") {
+            self.theme = parse_theme_config(theme_obj)?;
+        }
+
         Ok(())
     }
+}
+
+/// Parse a hex color string (with or without # prefix) into StraightRgba
+/// Supports: RRGGBB, #RRGGBB, RRGGBBAA, #RRGGBBAA
+/// Format matches the framebuffer's DEFAULT_THEME (RRGGBBAA in big-endian)
+fn parse_hex_color(s: &str) -> Option<StraightRgba> {
+    let s = s.trim();
+    let s = s.strip_prefix('#').unwrap_or(s);
+
+    let val = u32::from_str_radix(s, 16).ok()?;
+
+    // Convert to RRGGBBAA format (same as DEFAULT_THEME in framebuffer.rs)
+    let rgba = match s.len() {
+        6 => StraightRgba::from_be(val << 8 | 0xFF), // RRGGBB -> RRGGBBFF
+        8 => StraightRgba::from_be(val),             // RRGGBBAA
+        _ => return None,
+    };
+
+    Some(rgba)
+}
+
+/// Parse theme configuration from JSON object
+fn parse_theme_config(obj: edit::json::Object) -> apperr::Result<ThemeConfig> {
+    let mut theme = ThemeConfig::empty();
+
+    for &(key, ref value) in obj.iter() {
+        let Some(color_str) = value.as_str() else {
+            return Err(apperr::Error::SettingsInvalid("theme color value must be a string"));
+        };
+
+        let Some(color) = parse_hex_color(color_str) else {
+            return Err(apperr::Error::SettingsInvalid("invalid color format"));
+        };
+
+        match key {
+            "black" => theme.black = Some(color),
+            "red" => theme.red = Some(color),
+            "green" => theme.green = Some(color),
+            "yellow" => theme.yellow = Some(color),
+            "blue" => theme.blue = Some(color),
+            "magenta" => theme.magenta = Some(color),
+            "cyan" => theme.cyan = Some(color),
+            "white" => theme.white = Some(color),
+            "brightBlack" | "bright_black" => theme.bright_black = Some(color),
+            "brightRed" | "bright_red" => theme.bright_red = Some(color),
+            "brightGreen" | "bright_green" => theme.bright_green = Some(color),
+            "brightYellow" | "bright_yellow" => theme.bright_yellow = Some(color),
+            "brightBlue" | "bright_blue" => theme.bright_blue = Some(color),
+            "brightMagenta" | "bright_magenta" => theme.bright_magenta = Some(color),
+            "brightCyan" | "bright_cyan" => theme.bright_cyan = Some(color),
+            "brightWhite" | "bright_white" => theme.bright_white = Some(color),
+            "background" | "bg" => theme.background = Some(color),
+            "foreground" | "fg" => theme.foreground = Some(color),
+            "lineNumber" | "line_number" => theme.line_number = Some(color),
+            "lineHighlight" | "line_highlight" => theme.line_highlight = Some(color),
+            _ => {} // Unknown theme key, ignore
+        }
+    }
+
+    Ok(theme)
 }
 
 fn settings_json_path() -> Option<PathBuf> {
