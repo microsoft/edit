@@ -345,9 +345,9 @@ impl Framebuffer {
         numerator: u32,
         denominator: u32,
     ) -> StraightRgba {
-        let c = self.indexed_colors[index as usize].to_le();
-        let a = 255 * numerator / denominator;
-        StraightRgba::from_le(a << 24 | (c & 0x00ffffff))
+        let [r, g, b, _] = self.indexed_colors[index as usize].to_bytes();
+        let a = (255 * numerator / denominator) as u8;
+        StraightRgba::from_bytes([r, g, b, a])
     }
 
     /// Returns a color opposite to the brightness of the given `color`.
