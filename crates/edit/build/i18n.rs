@@ -63,10 +63,8 @@ pub fn generate(definitions: &str) -> String {
         }
         for c in unsafe { lang.as_bytes_mut() } {
             *c = match *c {
-                b'A'..=b'Z' | b'a'..=b'z' => c.to_ascii_lowercase(),
-                b'-' => b'_',
-                b'_' => b'_',
-                _ => panic!("i18n: language tag \"{lang}\" must be [a-zA-Z_-]"),
+                b'A'..=b'Z' | b'a'..=b'z' | b'-' => c.to_ascii_lowercase(),
+                _ => panic!("i18n: language tag \"{lang}\" must be [a-zA-Z-]"),
             }
         }
     }
@@ -111,15 +109,15 @@ pub fn generate(definitions: &str) -> String {
     // Sort languages by:
     // - "en" first, because it'll map to `LangId::en == 0`, which is the default.
     // - then alphabetically
-    // - but tags with subtags (e.g. "zh_hans") before those without (e.g. "zh").
+    // - but tags with subtags (e.g. "zh-hans") before those without (e.g. "zh").
     {
         fn sort(a: &String, b: &String) -> std::cmp::Ordering {
             match (a == "en", b == "en") {
                 (true, false) => std::cmp::Ordering::Less,
                 (false, true) => std::cmp::Ordering::Greater,
                 _ => {
-                    let (a0, a1) = a.split_once('_').unwrap_or((a, "xxxxxx"));
-                    let (b0, b1) = b.split_once('_').unwrap_or((b, "xxxxxx"));
+                    let (a0, a1) = a.split_once('-').unwrap_or((a, "xxxxxx"));
+                    let (b0, b1) = b.split_once('-').unwrap_or((b, "xxxxxx"));
                     match a0.cmp(b0) {
                         std::cmp::Ordering::Equal => a1.cmp(b1),
                         ord => ord,
@@ -160,7 +158,7 @@ pub enum LangId {{
         );
 
         for lang in &languages {
-            _ = writeln!(out, "    {lang},");
+            _ = writeln!(out, "    {},", HyphenToUnderscore(lang));
         }
 
         _ = write!(
@@ -173,7 +171,7 @@ const LANGUAGES: &[(&str, LangId)] = &[
         );
 
         for (alias, lang) in &languages_with_aliases {
-            _ = writeln!(out, "    ({alias:?}, LangId::{lang}),");
+            _ = writeln!(out, "    ({alias:?}, LangId::{}),", HyphenToUnderscore(lang));
         }
 
         _ = write!(
@@ -201,4 +199,12 @@ const TRANSLATIONS: [[&str; {}]; {}] = [
     }
 
     out
+}
+
+struct HyphenToUnderscore<'a>(&'a str);
+
+impl<'a> std::fmt::Display for HyphenToUnderscore<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.chars().map(|c| if c == '-' { '_' } else { c }).try_for_each(|c| f.write_char(c))
+    }
 }
