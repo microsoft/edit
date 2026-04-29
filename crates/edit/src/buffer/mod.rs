@@ -2518,6 +2518,37 @@ impl TextBuffer {
         self.set_selection(None);
     }
 
+    pub fn backspace_unindent(&mut self) -> bool {
+        if self.selection.is_some() || self.cursor.offset == 0 {
+            return false;
+        }
+
+        let line_start = self.goto_line_start(self.cursor, self.cursor.logical_pos.y);
+        let (indent_chars, _) = self.measure_indent_internal(line_start.offset, CoordType::MAX);
+
+        let chars_from_line_start = self.cursor.logical_pos.x;
+        if chars_from_line_start == 0 || chars_from_line_start > indent_chars {
+            return false;
+        }
+
+        let cursor_column = self.cursor.column;
+        if cursor_column == 0 {
+            return false;
+        }
+
+        let prev_column = self.tab_size_prev_column(cursor_column);
+        let (prev_chars, _) = self.measure_indent_internal(line_start.offset, prev_column);
+
+        let chars_to_delete = chars_from_line_start - prev_chars;
+        if chars_to_delete <= 0 {
+            return false;
+        }
+
+        self.delete(CursorMovement::Grapheme, -chars_to_delete);
+
+        true
+    }
+
     /// Returns the logical position of the first character on this line.
     /// Return `.x == 0` if there are no non-whitespace characters.
     pub fn indent_end_logical_pos(&self) -> Point {
