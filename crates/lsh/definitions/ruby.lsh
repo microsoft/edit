@@ -40,19 +40,42 @@ pub fn ruby() {
                 else if /`/ { yield string; break; }
                 await input;
             }
-        } else if /(?:BEGIN|END|alias|begin|break|case|do|else|elsif|ensure|for|if|in|next|redo|rescue|retry|return|then|unless|until|when|while|yield)\>/ {
+        } else if /(?:begin|break|case|do|else|elsif|ensure|for|if|in|next|redo|rescue|retry|return|then|unless|until|when|while)\>/ {
             yield keyword.control;
-        } else if /(?:class|def|defined\?|end|module|self|super|undef)\>/ {
+        } else if /def\s+(\w+[!?=]?)/ {
+            yield keyword.other;
+            yield $1 as method;
+        } else if /(?:BEGIN|END|alias|class|defined\?|def|end|module|self|super|undef|yield)\>/ {
             yield keyword.other;
         } else if /(?:true|false|nil)\>/ {
             yield constant.language;
-        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?r?i?)/ {
+        } else if /\.\.\.?/ {
+            // Range operator.
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+)r?i?)/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {
                 yield constant.numeric;
             }
-        } else if /[@$]+[A-Za-z_]\w*[!?=]?/ {
+        } else if /(?i:-?[\d_]+\.[\d_]+(?:e[+-]?[\d_]+)?r?i?)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(?i:-?\.[\d_]+(?:e[+-]?[\d_]+)?r?i?)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(?i:-?[\d_]+(?:e[+-]?[\d_]+)?r?i?)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(?:@{1,2}|\$)[A-Za-z_]\w*/ {
             yield variable;
         } else if /:[A-Za-z_]\w*[!?=]?/ {
             yield constant.language;
