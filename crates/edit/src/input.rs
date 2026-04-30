@@ -569,13 +569,10 @@ impl<'input> Stream<'_, '_, 'input> {
             // I know there's an InputMouseState::Release, but that's because the internals of tui.rs
             // have leaked into intput.rs. input.rs indicates release by the absence of buttons being
             // held, which is InputMouseState::None. This makes it more reliable in my opinion.
-        } else if (WHEEL..WHEEL + 0x08).contains(&kind) {
-            let scroll_mult = if (btn & ALT) != 0 { 5 } else { 1 };
-            if (btn & 0x06) != 0 {
-                mouse.scroll.x += if (btn & 0x01) != 0 { 7 } else { -7 } * scroll_mult;
-            } else {
-                mouse.scroll.y += if (btn & 0x01) != 0 { 3 } else { -3 } * scroll_mult;
-            }
+        } else if (WHEEL..WHEEL + 0x04).contains(&kind) {
+            let delta = if (btn & 0x01) != 0 { 1 } else { -1 };
+            let idx = if (btn & (0x02 | SHIFT)) != 0 { 0 } else { 1 };
+            mouse.scroll.as_array()[idx] += delta;
             mouse.state = InputMouseState::Scroll;
         } else if (kind & !MOTION) < 3 {
             match kind & 3 {
