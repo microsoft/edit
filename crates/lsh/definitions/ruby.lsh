@@ -1,0 +1,69 @@
+#[display_name = "Ruby"]
+#[path = "**/*.rb"]
+#[path = "**/*.rake"]
+#[path = "**/*.ru"]
+#[path = "**/Gemfile"]
+#[path = "**/Rakefile"]
+pub fn ruby() {
+    until /$/ {
+        yield other;
+
+        if /#.*/ {
+            yield comment;
+        } else if /=begin\>/ {
+            loop {
+                yield comment;
+                await input;
+                if /=end\>/ {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /`/ {
+            loop {
+                yield string;
+                if /\\./ {}
+                else if /`/ { yield string; break; }
+                await input;
+            }
+        } else if /(?:BEGIN|END|alias|begin|break|case|do|else|elsif|ensure|for|if|in|next|redo|rescue|retry|return|then|unless|until|when|while|yield)\>/ {
+            yield keyword.control;
+        } else if /(?:class|def|defined\?|end|module|self|super|undef)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|nil)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?r?i?)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /[@$]+[A-Za-z_]\w*[!?=]?/ {
+            yield variable;
+        } else if /:[A-Za-z_]\w*[!?=]?/ {
+            yield constant.language;
+        } else if /[A-Z]\w*/ {
+            yield constant.language;
+        } else if /(\w+[!?=]?)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+[!?=]?/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
