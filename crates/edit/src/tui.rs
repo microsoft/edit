@@ -575,7 +575,7 @@ impl Tui {
             Some(Input::Mouse(mouse)) => {
                 let mut next_state = mouse.state;
                 let next_position = mouse.position;
-                let next_scroll = mouse.scroll;
+                let mut next_scroll = mouse.scroll;
                 let mouse_down = self.mouse_state == InputMouseState::None
                     && next_state != InputMouseState::None;
                 let mouse_up = self.mouse_state != InputMouseState::None
@@ -621,6 +621,12 @@ impl Tui {
 
                 if is_scroll {
                     next_state = self.mouse_state;
+                    next_scroll.x *= 7;
+                    next_scroll.y *= 3;
+                    if mouse.modifiers.contains(kbmod::ALT) {
+                        next_scroll.x *= 5;
+                        next_scroll.y *= 5;
+                    }
                 } else if is_drag {
                     self.mouse_is_drag = true;
                 } else if mouse_down {
