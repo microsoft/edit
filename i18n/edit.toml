@@ -15,6 +15,11 @@ __default__ = [
 
 [__alias__]
 sr = "sr-cyrl"
+zh-cn = "zh-hans"
+zh-hk = "zh-hant"
+zh-mo = "zh-hant"
+zh-sg = "zh-hans"
+zh-tw = "zh-hant"
 zh = "zh-hans"
 
 # The keyboard key
