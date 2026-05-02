@@ -7,6 +7,8 @@ mod draw_editor;
 mod draw_filepicker;
 mod draw_menubar;
 mod draw_statusbar;
+#[cfg(windows)]
+mod install;
 mod localization;
 mod settings;
 mod state;
@@ -261,6 +263,14 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
                 print_version();
                 return Ok(true);
             }
+            if arg == "--x-install" {
+                handle_x_install()?;
+                return Ok(true);
+            }
+            if arg == "--x-uninstall" {
+                handle_x_uninstall()?;
+                return Ok(true);
+            }
         }
 
         let p = cwd.join(Path::new(&arg));
@@ -285,6 +295,44 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
 
     state.file_picker_pending_dir = DisplayablePathBuf::from_path(dir.unwrap_or(cwd));
     Ok(false)
+}
+
+#[cfg(windows)]
+fn handle_x_install() -> apperr::Result<()> {
+    let install_dir = install::install()?;
+    sys::write_stdout(&format!(
+        "Installed edit.exe to {}.\nOpen a new terminal window to use the updated PATH.\n",
+        install_dir.display()
+    ));
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn handle_x_install() -> apperr::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "--x-install is only supported on Windows",
+    )
+    .into())
+}
+
+#[cfg(windows)]
+fn handle_x_uninstall() -> apperr::Result<()> {
+    let install_dir = install::uninstall()?;
+    sys::write_stdout(&format!(
+        "Uninstalled edit.exe from {}.\nOpen a new terminal window to use the updated PATH.\n",
+        install_dir.display()
+    ));
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn handle_x_uninstall() -> apperr::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "--x-uninstall is only supported on Windows",
+    )
+    .into())
 }
 
 // Read any redirected (piped) stdin into a new document.
