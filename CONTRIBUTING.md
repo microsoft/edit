@@ -23,6 +23,7 @@ As such, we generally do not accept pull requests that introduce dependencies (t
 Otherwise, you can consider this project a playground for trying out any cool ideas you have.
 
 The overall architecture of the project can be summarized as follows:
+
 * The underlying text buffer in `src/buffer` doesn't keep track of line breaks in the document.
   This is a crucial design aspect that permeates throughout the entire codebase.
 
@@ -44,6 +45,7 @@ The overall architecture of the project can be summarized as follows:
   It contains a little bit of VT logic in `setup_terminal`.
 
 If you have an issue with your terminal, the places of interest are the aforementioned:
+
 * VT parser in `src/vt.rs`
 * Platform specific code in `src/sys`
 * And the `setup_terminal` function in `src/bin/edit/main.rs`
