@@ -3135,7 +3135,8 @@ fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SearchOptions, TextBuffer};
+    use super::{CursorMovement, SearchOptions, TextBuffer};
+    use crate::helpers::Point;
 
     fn buffer_contents(buf: &mut TextBuffer) -> String {
         let mut str = String::new();
@@ -3178,5 +3179,30 @@ mod tests {
         .unwrap();
 
         assert_eq!(buffer_contents(&mut buf), "ax\nbx\nx\n");
+    }
+
+    #[test]
+    fn cursor_left_from_wrapped_eof_stays_on_text() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        let text = concat!(
+            "WordWrapBugTest  WordWrapBugTest  WordWrapBugTest  ",
+            "WordWrapBugTestWordWrapBugTest  ",
+            "WordWrapBugTestWordWrapBugTest  ",
+            "WordWrapBugTestWordWrapBugTest  WordWrapBugTest",
+        );
+        buf.write_raw(text.as_bytes());
+        buf.set_margin_enabled(true);
+        buf.set_word_wrap(true);
+        buf.set_width(79);
+        buf.cursor_move_to_logical(Point::MAX);
+
+        assert_eq!(buf.cursor_visual_pos(), Point { x: 47, y: 2 });
+        assert_eq!(buf.visual_line_count(), 3);
+
+        buf.cursor_move_delta(CursorMovement::Grapheme, -1);
+
+        assert_eq!(buf.cursor_visual_pos(), Point { x: 46, y: 2 });
+        assert_eq!(buf.cursor_logical_pos().y, 0);
     }
 }
