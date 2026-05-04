@@ -9,6 +9,3 @@ rust-version.workspace = true
 
 [dependencies]
 stdext.workspace = true
-
-[dev-dependencies]
-stdext.workspace = true
