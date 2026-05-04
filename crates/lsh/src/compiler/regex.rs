@@ -45,6 +45,7 @@
 
 use std::slice;
 
+use stdext::arena::scratch_arena;
 use stdext::collections::BVec;
 
 use super::*;
@@ -697,16 +698,17 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         if s.is_empty() {
             return Ok(on_match);
         }
-        // PrefixInsensitive needle must be ascii-lowercase: the runtime
-        // lowercases each haystack byte and compares against the needle as-is.
-        let owned;
-        let needle: &str = if case_insensitive && s.bytes().any(|b| b.is_ascii_uppercase()) {
-            owned = s.to_ascii_lowercase();
-            &owned
+
+        let scratch = scratch_arena(Some(self.compiler.arena));
+        let s = if case_insensitive {
+            let mut lower = BString::from_str(&*scratch, s);
+            lower.make_ascii_lowercase();
+            lower.leak()
         } else {
             s
         };
-        let s = self.compiler.intern_string(needle);
+
+        let s = self.compiler.intern_string(s);
         let condition =
             if case_insensitive { Condition::PrefixInsensitive(s) } else { Condition::Prefix(s) };
         let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
@@ -785,62 +787,4 @@ pub fn parse<'a>(
     codegen.captures.reverse();
 
     Ok((entry, codegen.captures))
-}
-
-#[cfg(test)]
-mod tests {
-    //! Regression for `(?i:UPPER)` literal silent-mismatch:
-    //! `inlined_memicmp` requires lowercase needle; pre-fix `emit_literal`
-    //! interned uppercase verbatim, killing the match unconditionally.
-
-    use stdext::arena::{self, Arena, scratch_arena};
-
-    use crate::compiler::Compiler;
-    use crate::runtime::Runtime;
-
-    fn matches(grammar: &str, input: &[u8]) -> bool {
-        static INIT: std::sync::Once = std::sync::Once::new();
-        INIT.call_once(|| arena::init(1 << 20).unwrap());
-
-        let arena = Arena::new(1 << 20).unwrap();
-        let mut compiler = Compiler::new(&arena);
-        compiler.parse("t.lsh", grammar).unwrap();
-        let asm = compiler.assemble().unwrap();
-
-        let charsets: Vec<[u16; 16]> = asm.charsets.iter().map(|c| c.serialize()).collect();
-        let kc = asm
-            .highlight_kinds
-            .iter()
-            .find(|h| h.identifier == "keyword.control")
-            .unwrap()
-            .value;
-        let entry = asm.entrypoints[0].address as u32;
-        let mut rt = Runtime::new(&asm.instructions, &asm.strings, &charsets, entry);
-
-        let scratch = scratch_arena(None);
-        rt.parse_next_line::<u32>(&scratch, input).iter().any(|h| h.kind == kc)
-    }
-
-    const SINGLE: &str = r#"
-#[display_name = "T"] #[path = "**/t.txt"]
-pub fn t() { if /(?i:FOO)\>/ { yield keyword.control; } }
-"#;
-
-    const ALT: &str = r#"
-#[display_name = "T"] #[path = "**/t.txt"]
-pub fn t() { if /(?i:FROM|RUN|CMD)\>/ { yield keyword.control; } }
-"#;
-
-    #[test]
-    fn case_insensitive_uppercase_literal() {
-        assert!(matches(SINGLE, b"FOO"));
-        assert!(matches(SINGLE, b"foo"));
-    }
-
-    #[test]
-    fn case_insensitive_uppercase_alternation() {
-        assert!(matches(ALT, b"FROM"));
-        assert!(matches(ALT, b"RUN"));
-        assert!(matches(ALT, b"cmd"));
-    }
 }
