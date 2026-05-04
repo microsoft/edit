@@ -697,7 +697,16 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         if s.is_empty() {
             return Ok(on_match);
         }
-        let s = self.compiler.intern_string(s);
+        // PrefixInsensitive needle must be ascii-lowercase: the runtime
+        // lowercases each haystack byte and compares against the needle as-is.
+        let owned;
+        let needle: &str = if case_insensitive && s.bytes().any(|b| b.is_ascii_uppercase()) {
+            owned = s.to_ascii_lowercase();
+            &owned
+        } else {
+            s
+        };
+        let s = self.compiler.intern_string(needle);
         let condition =
             if case_insensitive { Condition::PrefixInsensitive(s) } else { Condition::Prefix(s) };
         let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
