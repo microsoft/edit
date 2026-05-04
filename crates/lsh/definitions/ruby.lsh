@@ -5,20 +5,28 @@
 #[path = "**/Gemfile"]
 #[path = "**/Rakefile"]
 pub fn ruby() {
+    var zero = 0;
     until /$/ {
         yield other;
 
+        if off == zero {
+            if /=begin\>/ {
+                loop {
+                    yield comment;
+                    await input;
+                    if off == zero {
+                        if /=end\>/ {
+                            yield comment;
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+
         if /#.*/ {
             yield comment;
-        } else if /=begin\>/ {
-            loop {
-                yield comment;
-                await input;
-                if /=end\>/ {
-                    yield comment;
-                    break;
-                }
-            }
         } else if /'/ {
             until /$/ {
                 yield string;
@@ -40,12 +48,12 @@ pub fn ruby() {
                 else if /`/ { yield string; break; }
                 await input;
             }
-        } else if /(?:begin|break|case|do|else|elsif|ensure|for|if|in|next|redo|rescue|retry|return|then|unless|until|when|while)\>/ {
+        } else if /(?:begin|break|case|class|do|else|elsif|end|ensure|for|if|in|module|next|redo|rescue|retry|return|then|unless|until|when|while)\>/ {
             yield keyword.control;
         } else if /def\s+(\w+[!?=]?)/ {
-            yield keyword.other;
+            yield keyword.control;
             yield $1 as method;
-        } else if /(?:BEGIN|END|alias|class|defined\?|def|end|module|self|super|undef|yield)\>/ {
+        } else if /(?:BEGIN|END|alias|defined\?|self|super|undef|yield)\>/ {
             yield keyword.other;
         } else if /(?:true|false|nil)\>/ {
             yield constant.language;

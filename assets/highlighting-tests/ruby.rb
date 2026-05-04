@@ -83,9 +83,7 @@ module Demo
       @name = name
     end
 
-    def speak!
-      puts "#{@name} speaks"
-    end
+    def speak! =  puts "#{@name} speaks"
   end
 end
 
