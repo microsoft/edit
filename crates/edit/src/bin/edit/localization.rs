@@ -42,19 +42,23 @@ pub fn loc(id: LocId) -> &'static str {
 mod tests {
     use super::*;
 
-    fn assert_lang(langs: &[&str], expected: LangId) {
-        assert!(select_language(langs.iter().copied()) == expected);
-    }
-
     // Regression test for https://github.com/microsoft/edit/issues/832.
     #[test]
     fn chinese_region_aliases_select_expected_script() {
-        assert_lang(&["zh-CN.UTF-8"], LangId::zh_hans);
-        assert_lang(&["zh-SG.UTF-8"], LangId::zh_hans);
-        assert_lang(&["zh-TW.UTF-8"], LangId::zh_hant);
-        assert_lang(&["zh-HK.UTF-8"], LangId::zh_hant);
-        assert_lang(&["zh-MO.UTF-8"], LangId::zh_hant);
-        assert_lang(&["zh-Hant.UTF-8"], LangId::zh_hant);
-        assert_lang(&["zh"], LangId::zh_hans);
+        for (actual, expected) in [
+            ("zh-CN.UTF-8", "zh-hans"),
+            ("zh-SG.UTF-8", "zh-hans"),
+            ("zh-TW.UTF-8", "zh-hant"),
+            ("zh-HK.UTF-8", "zh-hant"),
+            ("zh-MO.UTF-8", "zh-hant"),
+            ("zh-Hant.UTF-8", "zh-hant"),
+            ("zh", "zh-hans"),
+        ] {
+            let Some(&(_, expected)) = LANGUAGES.iter().find(|(l, _)| expected == *l) else {
+                continue; // Disabled by EDIT_CFG_LANGUAGES
+            };
+
+            assert!(select_language(std::iter::once(actual)) == expected);
+        }
     }
 }
