@@ -19,6 +19,8 @@ use stdext::arena::scratch_arena;
 use super::*;
 use crate::runtime::{Instruction, MnemonicFormattingConfig};
 
+const JS_RUNTIME: &str = include_str!("runtime.js");
+
 pub struct Generator<'a> {
     compiler: Compiler<'a>,
 }
@@ -314,6 +316,129 @@ impl TryFrom<u32> for HighlightKind {{
             _ = writeln!(output, "    {s:?},");
         }
         output.push_str("];\n");
+
+        Ok(output)
+    }
+
+    pub fn generate_js(mut self) -> CompileResult<String> {
+        let assembly = self.compiler.assemble()?;
+
+        fn push_js_string(output: &mut String, value: &str) {
+            output.push('"');
+            let mut prev = '\0';
+            for c in value.chars() {
+                match c {
+                    '\\' => output.push_str("\\\\"),
+                    '"' => output.push_str("\\\""),
+                    '\n' => output.push_str("\\n"),
+                    '\r' => output.push_str("\\r"),
+                    '\t' => output.push_str("\\t"),
+                    '\u{08}' => output.push_str("\\b"),
+                    '\u{0c}' => output.push_str("\\f"),
+                    '\u{2028}' => output.push_str("\\u2028"),
+                    '\u{2029}' => output.push_str("\\u2029"),
+                    '/' if prev == '<' => output.push_str("\\/"),
+                    c if c.is_control() => _ = write!(output, "\\u{:04x}", c as u32),
+                    c => output.push(c),
+                }
+                prev = c;
+            }
+            output.push('"');
+        }
+
+        fn push_js_string_array(output: &mut String, values: &[&str], indent: &str) {
+            for value in values {
+                output.push_str(indent);
+                push_js_string(output, value);
+                output.push_str(",\n");
+            }
+        }
+
+        fn push_js_u8_array(output: &mut String, values: &[u8], indent: &str) {
+            const VALUES_PER_LINE: usize = 16;
+
+            for chunk in values.chunks(VALUES_PER_LINE) {
+                output.push_str(indent);
+                for value in chunk {
+                    _ = write!(output, "0x{value:02x}, ");
+                }
+                output.push('\n');
+            }
+        }
+
+        let mut output = String::new();
+        output.push_str("// This file is auto-generated. Do not edit it manually.\n");
+        output.push_str("const LSH = (() => {\n");
+        output.push_str(JS_RUNTIME);
+        output.push('\n');
+
+        output.push_str("    const LANGUAGES = [\n");
+        for ep in &assembly.entrypoints {
+            output.push_str("        { id: ");
+            push_js_string(&mut output, &ep.name.replace('_', "-"));
+            output.push_str(", name: ");
+            push_js_string(&mut output, &ep.display_name);
+            _ = writeln!(output, ", entrypoint: {} }},", ep.address);
+        }
+        output.push_str("    ];\n\n");
+
+        output.push_str("    const FILE_ASSOCIATIONS = [\n");
+        for (idx, ep) in assembly.entrypoints.iter().enumerate() {
+            for path in &ep.paths {
+                output.push_str("        [");
+                push_js_string(&mut output, path);
+                _ = writeln!(output, ", LANGUAGES[{idx}]],");
+            }
+        }
+        output.push_str("    ];\n\n");
+
+        output.push_str("    const HIGHLIGHT_KINDS = [\n");
+        for hk in &assembly.highlight_kinds {
+            output.push_str("        { identifier: ");
+            push_js_string(&mut output, hk.identifier);
+            _ = writeln!(output, ", value: {} }},", hk.value);
+        }
+        output.push_str("    ];\n\n");
+
+        output.push_str("    const ASSEMBLY = new Uint8Array([\n");
+        push_js_u8_array(&mut output, &assembly.instructions, "        ");
+        output.push_str("\n        // padding\n");
+        for _ in 0..Instruction::MAX_ENCODED_SIZE {
+            output.push_str("        0xff,\n");
+        }
+        output.push_str("    ]);\n\n");
+
+        output.push_str("    const CHARSETS = [\n");
+        for cs in assembly.charsets {
+            let cs = cs.serialize();
+            output.push_str("        [");
+            for (i, &v) in cs.iter().enumerate() {
+                if i != 0 {
+                    output.push_str(", ");
+                }
+                _ = write!(output, "0x{v:04x}");
+            }
+            output.push_str("],\n");
+        }
+        output.push_str("    ];\n\n");
+
+        output.push_str("    const STRINGS = [\n");
+        push_js_string_array(&mut output, &assembly.strings, "        ");
+        output.push_str("    ].map(encodeString);\n\n");
+
+        output.push_str(
+            r#"    return {
+        Runtime,
+        LANGUAGES,
+        FILE_ASSOCIATIONS,
+        HIGHLIGHT_KINDS,
+        ASSEMBLY,
+        CHARSETS,
+        STRINGS,
+    };
+})();
+"#,
+        );
 
         Ok(output)
     }
