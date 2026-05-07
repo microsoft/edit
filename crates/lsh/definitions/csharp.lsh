@@ -1,0 +1,93 @@
+#[display_name = "C#"]
+#[path = "**/*.cs"]
+#[path = "**/*.csx"]
+pub fn csharp() {
+    // Preprocessor directives (entire line)
+    if /\s*#\s*(?:if|elif|else|endif|define|undef|warning|error|line|nullable|region|endregion|pragma)\>.*/ {
+        yield meta.preprocessor;
+        return;
+    }
+
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /(?:\$@|@\$)"/ {
+            // Interpolated verbatim string: $@"..." or @$"..."
+            loop {
+                yield string;
+                if /""/ {
+                    // Escaped quote in verbatim strings
+                } else if /"/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /@"/ {
+            // Verbatim string: @"..."
+            loop {
+                yield string;
+                if /""/ {
+                    // Escaped quote in verbatim strings
+                } else if /"/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /\$"/ {
+            // Interpolated string: $"..."
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /'/ {
+            // Character literal
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /\[(?:assembly:|module:)?\s*([A-Z]\w*)(?:Attribute)?/ {
+            // Attribute names like [Obsolete]
+            yield $1 as markup.link;
+        } else if /(?:break|case|catch|continue|default|do|else|finally|for|foreach|goto|if|return|switch|throw|try|while|yield)\>/ {
+            yield keyword.control;
+        } else if /(?:abstract|as|await|base|bool|byte|char|checked|class|const|decimal|delegate|dynamic|enum|event|explicit|extern|false|fixed|float|from|get|global|group|implicit|in|int|interface|internal|into|is|join|let|lock|long|nameof|namespace|new|null|object|operator|orderby|out|override|params|partial|private|protected|public|readonly|record|ref|required|sbyte|sealed|select|set|short|sizeof|stackalloc|static|string|struct|this|true|typeof|uint|ulong|unmanaged|unchecked|unsafe|ushort|using|var|virtual|void|volatile|where|with)\>/ {
+            yield keyword.other;
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
