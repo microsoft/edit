@@ -34,8 +34,14 @@ public sealed class Greeter
         // Interpolated string
         var c = $"Hello {_name}, count={count}";
 
+        // Interpolated string with alignment + format specifier
+        var c2 = $"Name={_name,-10} Count={count:D2}";
+
         // Interpolated verbatim string
         var d = $@"Name={_name}\nCount={count}";
+
+        // Escaped literal braces in interpolated string (should stay string-colored)
+        var d2 = $"Literal braces: {{ and }}";
 
         return c;
     }

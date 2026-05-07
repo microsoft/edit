@@ -28,6 +28,33 @@ pub fn csharp() {
                 yield string;
                 if /""/ {
                     // Escaped quote in verbatim strings
+                } else if /\{\{/ {
+                    // Escaped literal '{'
+                } else if /\}\}/ {
+                    // Escaped literal '}'
+                } else if /(\{)/ {
+                    // Interpolation start: braces default, contents light blue.
+                    yield $1 as other;
+                    yield constant.language;
+
+                    loop {
+                        if /(\})/ {
+                            yield $1 as other;
+                            break;
+                        } else if /[^}:]+/ {
+                            // Interpolation contents (up to ':' or '}')
+                            yield constant.language;
+                        } else if /:[^}]+/ {
+                            // Format specifier: :D2, :X, :N0, etc.
+                            yield constant.numeric;
+                            yield constant.language;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Resume string highlighting
+                    yield string;
                 } else if /"/ {
                     yield string;
                     break;
@@ -50,8 +77,38 @@ pub fn csharp() {
             // Interpolated string: $"..."
             until /$/ {
                 yield string;
-                if /\\./ {}
-                else if /"/ { yield string; break; }
+                if /\\./ {
+                } else if /\{\{/ {
+                    // Escaped literal '{'
+                } else if /\}\}/ {
+                    // Escaped literal '}'
+                } else if /(\{)/ {
+                    // Interpolation start: highlight braces as default, contents as light blue.
+                    yield $1 as other;
+                    yield constant.language;
+
+                    loop {
+                        if /(\})/ {
+                            yield $1 as other;
+                            break;
+                        } else if /[^}:]+/ {
+                            // Interpolation contents (up to ':' or '}')
+                            yield constant.language;
+                        } else if /:[^}]+/ {
+                            // Format specifier: :D2, :X, :N0, etc.
+                            yield constant.numeric;
+                            yield constant.language;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Resume string highlighting
+                    yield string;
+                } else if /"/ {
+                    yield string;
+                    break;
+                }
                 await input;
             }
         } else if /"/ {
