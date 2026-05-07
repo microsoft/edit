@@ -41,8 +41,12 @@ pub fn csharp() {
                         if /(\})/ {
                             yield $1 as other;
                             break;
-                        } else if /[^}:]+/ {
+                        } else if /[^}:,]+/ {
                             // Interpolation contents (up to ':' or '}')
+                            yield constant.language;
+                        } else if /,\s*[^}:]+/ {
+                            // Alignment specifier: , -10, ,10, etc.
+                            yield constant.numeric;
                             yield constant.language;
                         } else if /:[^}]+/ {
                             // Format specifier: :D2, :X, :N0, etc.
@@ -91,8 +95,12 @@ pub fn csharp() {
                         if /(\})/ {
                             yield $1 as other;
                             break;
-                        } else if /[^}:]+/ {
+                        } else if /[^}:,]+/ {
                             // Interpolation contents (up to ':' or '}')
+                            yield constant.language;
+                        } else if /,\s*[^}:]+/ {
+                            // Alignment specifier: , -10, ,10, etc.
+                            yield constant.numeric;
                             yield constant.language;
                         } else if /:[^}]+/ {
                             // Format specifier: :D2, :X, :N0, etc.
