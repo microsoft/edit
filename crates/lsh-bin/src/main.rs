@@ -256,11 +256,18 @@ fn generate_html(js: &str) -> String {
         font: 14px/1.5 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
         letter-spacing: 0;
         tab-size: 4;
-        white-space: pre;
     }
 
     .output {
         user-select: text;
+    }
+
+    .output-chunk {
+        margin: 0;
+        font: inherit;
+        letter-spacing: 0;
+        tab-size: inherit;
+        white-space: pre;
     }
 
     .viewer:not(.has-content) .output {
@@ -366,7 +373,7 @@ fn generate_html(js: &str) -> String {
         <div class="drop-title">Drop a file</div>
         <div class="drop-subtitle">The highlighted output will appear here.</div>
     </div>
-    <pre id="output" class="output" aria-label="Highlighted output"></pre>
+    <div id="output" class="output" aria-label="Highlighted output"></div>
 </main>
 <script>
 "##,
@@ -391,8 +398,12 @@ fn generate_html(js: &str) -> String {
     const kindByValue = new Map(LSH.HIGHLIGHT_KINDS.map(kind => [kind.value, kind]));
     const languageById = new Map(LSH.LANGUAGES.map(language => [language.id, language]));
     const plainTextLanguageId = "plain-text";
+    const chunkLineCount = 100;
     let currentText = "";
     let currentFileName = "";
+    let currentChunks = [];
+    let currentLineCount = 0;
+    let currentRuntime = null;
 
     {
         const option = document.createElement("option");
@@ -487,22 +498,130 @@ fn generate_html(js: &str) -> String {
         return line.length;
     }
 
+    function createOutputChunk(lines, lineStart) {
+        const chunk = document.createElement("pre");
+        chunk.className = "output-chunk";
+        chunk.lshLines = lines;
+        chunk.lshLineStart = lineStart;
+        chunk.lshSnapshot = null;
+        chunk.lshHighlighted = false;
+        return chunk;
+    }
+
+    function appendTextChunks(fragment, lines) {
+        currentChunks = [];
+        currentLineCount = lines.length;
+        for (let start = 0; start < lines.length; start += chunkLineCount) {
+            const end = Math.min(start + chunkLineCount, lines.length);
+            const chunkLines = lines.slice(start, end);
+            const chunk = createOutputChunk(chunkLines, start);
+            chunk.textContent = chunkLines.join("\n");
+            currentChunks.push(chunk);
+            fragment.append(chunk);
+            if (end < lines.length) {
+                fragment.append("\n");
+            }
+        }
+    }
+
+    function hasLineSeparatorAfter(chunk, index) {
+        return chunk.lshLineStart + index + 1 < currentLineCount;
+    }
+
+    function lineForHighlighting(line) {
+        return line.endsWith("\r") ? line.slice(0, -1) : line;
+    }
+
+    function addMeasurement(total, measurement) {
+        total.lineCount += measurement.lineCount;
+        total.byteCount += measurement.byteCount;
+        total.changed ||= measurement.changed;
+    }
+
+    function parseChunkForSnapshot(runtime, chunk) {
+        let measuredLineCount = 0;
+        let measuredByteCount = 0;
+
+        for (let index = 0; index < chunk.lshLines.length; index += 1) {
+            const line = lineForHighlighting(chunk.lshLines[index]);
+            runtime.parseNextLine(line);
+            measuredLineCount += 1;
+            measuredByteCount += line.length;
+            if (hasLineSeparatorAfter(chunk, index)) {
+                measuredByteCount += 1;
+            }
+        }
+
+        return { lineCount: measuredLineCount, byteCount: measuredByteCount, changed: true };
+    }
+
+    function ensureChunkSnapshot(index) {
+        const measurement = { lineCount: 0, byteCount: 0, changed: false };
+        if (!currentRuntime || index < 0 || index >= currentChunks.length || currentChunks[index].lshSnapshot) {
+            return measurement;
+        }
+
+        let cursor = index - 1;
+        while (cursor > 0 && !currentChunks[cursor].lshSnapshot) {
+            cursor -= 1;
+        }
+        if (!currentChunks[cursor].lshSnapshot) {
+            return measurement;
+        }
+
+        currentRuntime.restore(currentChunks[cursor].lshSnapshot);
+        for (; cursor < index; cursor += 1) {
+            addMeasurement(measurement, parseChunkForSnapshot(currentRuntime, currentChunks[cursor]));
+            const next = currentChunks[cursor + 1];
+            if (next && !next.lshSnapshot) {
+                next.lshSnapshot = currentRuntime.snapshot();
+            }
+        }
+
+        return measurement;
+    }
+
+    function highlightChunk(index) {
+        const measurement = ensureChunkSnapshot(index);
+        const chunk = currentChunks[index];
+        if (!currentRuntime || !chunk || chunk.lshHighlighted || !chunk.lshSnapshot) {
+            return measurement;
+        }
+
+        currentRuntime.restore(chunk.lshSnapshot);
+
+        const html = [];
+        for (let lineIndex = 0; lineIndex < chunk.lshLines.length; lineIndex += 1) {
+            const line = lineForHighlighting(chunk.lshLines[lineIndex]);
+            measurement.lineCount += 1;
+            measurement.byteCount += appendHighlightedLine(html, currentRuntime, line);
+            if (lineIndex + 1 < chunk.lshLines.length) {
+                measurement.byteCount += 1;
+                html.push("\n");
+            } else if (hasLineSeparatorAfter(chunk, lineIndex)) {
+                measurement.byteCount += 1;
+            }
+        }
+
+        chunk.innerHTML = html.join("");
+        chunk.lshHighlighted = true;
+        measurement.changed = true;
+
+        const next = currentChunks[index + 1];
+        if (next && !next.lshSnapshot) {
+            next.lshSnapshot = currentRuntime.snapshot();
+        }
+
+        return measurement;
+    }
+
     let renderFrame = 0;
+    let highlightFrame = 0;
 
     function resetMetrics() {
         linesPerSecond.textContent = "0";
         megabytesPerSecond.textContent = "0.00";
         totalDuration.textContent = "0.00";
-    }
-
-    function countLines(text) {
-        let count = 1;
-        for (let index = 0; index < text.length; index += 1) {
-            if (text.charCodeAt(index) === 0x0a) {
-                count += 1;
-            }
-        }
-        return count;
     }
 
     function forceLayout() {
@@ -517,8 +636,51 @@ fn generate_html(js: &str) -> String {
         totalDuration.textContent = (elapsedSeconds * 1000).toFixed(2);
     }
 
+    function visibleChunkIndexes() {
+        const outputRect = output.getBoundingClientRect();
+        const indexes = [];
+
+        for (let index = 0; index < currentChunks.length; index += 1) {
+            const chunkRect = currentChunks[index].getBoundingClientRect();
+            if (chunkRect.bottom >= outputRect.top && chunkRect.top <= outputRect.bottom) {
+                indexes.push(index);
+            }
+        }
+
+        return indexes;
+    }
+
+    function highlightVisibleChunks(startTime = performance.now(), measuredLineCount = 0, measuredByteCount = 0) {
+        if (!currentRuntime || currentChunks.length === 0) {
+            return;
+        }
+
+        const measurement = { lineCount: measuredLineCount, byteCount: measuredByteCount, changed: measuredLineCount > 0 || measuredByteCount > 0 };
+        for (const index of visibleChunkIndexes()) {
+            if (!currentChunks[index].lshHighlighted) {
+                addMeasurement(measurement, highlightChunk(index));
+            }
+        }
+
+        if (measurement.changed) {
+            updateMetrics(measurement.lineCount, measurement.byteCount, startTime);
+        }
+    }
+
+    function scheduleVisibleChunkHighlight() {
+        if (highlightFrame === 0) {
+            highlightFrame = requestAnimationFrame(() => {
+                highlightFrame = 0;
+                highlightVisibleChunks();
+            });
+        }
+    }
+
     function showEmpty() {
         cancelRender();
+        currentChunks = [];
+        currentLineCount = 0;
+        currentRuntime = null;
         output.textContent = "";
         viewer.classList.remove("has-content");
         resetMetrics();
@@ -532,9 +694,13 @@ fn generate_html(js: &str) -> String {
         }
 
         const startTime = performance.now();
-        const measuredLineCount = countLines(currentText);
+        const lines = currentText.split("\n");
+        const fragment = document.createDocumentFragment();
+        const measuredLineCount = lines.length;
         const measuredByteCount = currentText.length;
-        output.textContent = currentText;
+        currentRuntime = null;
+        appendTextChunks(fragment, lines);
+        output.replaceChildren(fragment);
         viewer.classList.add("has-content");
         updateMetrics(measuredLineCount, measuredByteCount, startTime);
     }
@@ -573,25 +739,19 @@ fn generate_html(js: &str) -> String {
             return;
         }
 
-        const runtime = new LSH.Runtime(LSH.ASSEMBLY, LSH.STRINGS, LSH.CHARSETS, language.entrypoint);
-        const html = [];
         const lines = currentText.split("\n");
+        const fragment = document.createDocumentFragment();
         const measuredLineCount = lines.length;
-        let measuredByteCount = 0;
         const startTime = performance.now();
-
-        for (let index = 0; index < lines.length; index += 1) {
-            const line = lines[index].endsWith("\r") ? lines[index].slice(0, -1) : lines[index];
-            measuredByteCount += appendHighlightedLine(html, runtime, line);
-            if (index + 1 < lines.length) {
-                measuredByteCount += 1;
-                html.push("\n");
-            }
+        const measuredByteCount = currentText.length;
+        currentRuntime = new LSH.Runtime(LSH.ASSEMBLY, LSH.STRINGS, LSH.CHARSETS, language.entrypoint);
+        appendTextChunks(fragment, lines);
+        if (currentChunks.length > 0) {
+            currentChunks[0].lshSnapshot = currentRuntime.snapshot();
         }
-
-        output.innerHTML = html.join("");
+        output.replaceChildren(fragment);
         viewer.classList.add("has-content");
-    updateMetrics(measuredLineCount, measuredByteCount, startTime);
+        highlightVisibleChunks(startTime, measuredLineCount, measuredByteCount);
     }
 
     function cancelRender() {
@@ -599,9 +759,17 @@ fn generate_html(js: &str) -> String {
             cancelAnimationFrame(renderFrame);
             renderFrame = 0;
         }
+        if (highlightFrame !== 0) {
+            cancelAnimationFrame(highlightFrame);
+            highlightFrame = 0;
+        }
     }
 
     function scheduleRender() {
+        if (highlightFrame !== 0) {
+            cancelAnimationFrame(highlightFrame);
+            highlightFrame = 0;
+        }
         if (renderFrame === 0) {
             renderFrame = requestAnimationFrame(render);
         }
@@ -645,6 +813,7 @@ fn generate_html(js: &str) -> String {
             event.preventDefault();
         }
     });
+    output.addEventListener("scroll", scheduleVisibleChunkHighlight, { passive: true });
     reloadButton.addEventListener("click", showCurrentText);
     languageSelect.addEventListener("change", showCurrentText);
     showCurrentText();
