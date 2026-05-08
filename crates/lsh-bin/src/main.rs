@@ -129,7 +129,6 @@ fn generate_html(js: &str) -> String {
         color-scheme: dark;
         --bg: #101114;
         --panel: #17191f;
-        --panel-alt: #12141a;
         --border: #30343d;
         --text: #e7eaf0;
         --muted: #9aa3b2;
@@ -152,42 +151,41 @@ fn generate_html(js: &str) -> String {
 
     body {
         overflow: hidden;
-    }
-
-    .app {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-        height: 100vh;
-    }
-
-    .pane {
-        min-width: 0;
-        min-height: 0;
         display: grid;
         grid-template-rows: auto minmax(0, 1fr);
-        background: var(--panel);
     }
 
-    .pane + .pane {
-        border-left: 1px solid var(--border);
-        background: var(--panel-alt);
-    }
-
-    .toolbar {
+    .topbar {
         min-height: 48px;
-        display: flex;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
         align-items: center;
         gap: 12px;
         padding: 8px 10px;
         border-bottom: 1px solid var(--border);
         background: #151820;
+        min-width: 0;
+    }
+
+    .top-left,
+    .top-center,
+    .top-right {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+    }
+
+    .top-center {
+        justify-content: center;
+    }
+
+    .top-right {
+        justify-content: flex-end;
     }
 
     .metrics {
-        width: 100%;
         display: flex;
         align-items: center;
-        justify-content: flex-end;
         gap: 14px;
         color: var(--muted);
         font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
@@ -211,13 +209,38 @@ fn generate_html(js: &str) -> String {
         font: inherit;
     }
 
+    button {
+        height: 32px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0 12px;
+        background: #20242d;
+        color: var(--text);
+        font: inherit;
+    }
+
+    button:disabled {
+        color: #626b79;
+    }
+
+    button:not(:disabled):hover {
+        border-color: var(--accent);
+    }
+
     select:focus,
-    textarea:focus {
+    button:focus,
+    .drop-zone:focus {
         outline: 2px solid var(--focus);
         outline-offset: -2px;
     }
 
-    textarea,
+    .viewer {
+        position: relative;
+        min-width: 0;
+        min-height: 0;
+        background: var(--panel);
+    }
+
     .output {
         width: 100%;
         height: 100%;
@@ -236,12 +259,52 @@ fn generate_html(js: &str) -> String {
         white-space: pre;
     }
 
-    textarea {
-        caret-color: var(--accent);
-    }
-
     .output {
         user-select: text;
+    }
+
+    .viewer:not(.has-content) .output {
+        display: none;
+    }
+
+    .drop-zone {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: min(420px, calc(100vw - 32px));
+        min-height: 160px;
+        transform: translate(-50%, -50%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: 1px dashed #4b5362;
+        border-radius: 8px;
+        background: #151820;
+        color: var(--muted);
+        text-align: center;
+        padding: 24px;
+    }
+
+    .drop-title {
+        color: var(--text);
+        font-size: 16px;
+        font-weight: 600;
+    }
+
+    .drop-subtitle {
+        font-size: 13px;
+        line-height: 1.4;
+    }
+
+    .viewer.has-content .drop-zone {
+        display: none;
+    }
+
+    .viewer.dragging .drop-zone {
+        border-color: var(--accent);
+        background: #1b2030;
     }
 
     .token[data-kind="comment"] { color: #8fbc8f; }
@@ -264,35 +327,46 @@ fn generate_html(js: &str) -> String {
     .token[data-kind="meta.header"] { color: #82aaff; }
 
     @media (max-width: 760px) {
-        .app {
+        .topbar {
             grid-template-columns: 1fr;
-            grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+            justify-items: stretch;
         }
 
-        .pane + .pane {
-            border-left: 0;
-            border-top: 1px solid var(--border);
+        .top-left,
+        .top-center,
+        .top-right,
+        .metrics {
+            justify-content: center;
+        }
+
+        .metrics {
+            flex-wrap: wrap;
         }
     }
 </style>
 </head>
 <body>
-<main class="app">
-    <section class="pane">
-        <div class="toolbar">
-            <select id="language" aria-label="Language"></select>
+<header class="topbar">
+    <div class="top-left">
+        <select id="language" aria-label="Language"></select>
+    </div>
+    <div class="top-center">
+        <button id="reload" type="button" disabled>Reload</button>
+    </div>
+    <div class="top-right">
+        <div class="metrics" aria-live="polite">
+            <span><span id="lines-per-second" class="metric-value">0</span> lines/s</span>
+            <span><span id="megabytes-per-second" class="metric-value">0.00</span> MB/s</span>
+            <span><span id="total-duration" class="metric-value">0.00</span> ms total</span>
         </div>
-        <textarea id="input" spellcheck="false" aria-label="Input"></textarea>
-    </section>
-    <section class="pane">
-        <div class="toolbar">
-            <div class="metrics" aria-live="polite">
-                <span><span id="lines-per-second" class="metric-value">0</span> lines/s</span>
-                <span><span id="megabytes-per-second" class="metric-value">0.00</span> MB/s</span>
-            </div>
-        </div>
-        <pre id="output" class="output" aria-label="Highlighted output"></pre>
-    </section>
+    </div>
+</header>
+<main id="viewer" class="viewer">
+    <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Drop file">
+        <div class="drop-title">Drop a file</div>
+        <div class="drop-subtitle">The highlighted output will appear here.</div>
+    </div>
+    <pre id="output" class="output" aria-label="Highlighted output"></pre>
 </main>
 <script>
 "##,
@@ -307,12 +381,25 @@ fn generate_html(js: &str) -> String {
     "use strict";
 
     const languageSelect = document.querySelector("#language");
-    const input = document.querySelector("#input");
+    const reloadButton = document.querySelector("#reload");
+    const viewer = document.querySelector("#viewer");
+    const dropZone = document.querySelector("#drop-zone");
     const output = document.querySelector("#output");
     const linesPerSecond = document.querySelector("#lines-per-second");
     const megabytesPerSecond = document.querySelector("#megabytes-per-second");
-    const textEncoder = new TextEncoder();
+    const totalDuration = document.querySelector("#total-duration");
     const kindByValue = new Map(LSH.HIGHLIGHT_KINDS.map(kind => [kind.value, kind]));
+    const languageById = new Map(LSH.LANGUAGES.map(language => [language.id, language]));
+    const plainTextLanguageId = "plain-text";
+    let currentText = "";
+    let currentFileName = "";
+
+    {
+        const option = document.createElement("option");
+        option.value = plainTextLanguageId;
+        option.textContent = "Plain Text";
+        languageSelect.append(option);
+    }
 
     for (const language of LSH.LANGUAGES) {
         const option = document.createElement("option");
@@ -321,48 +408,49 @@ fn generate_html(js: &str) -> String {
         languageSelect.append(option);
     }
 
-    function encodeLine(line) {
-        let ascii = true;
-        for (let index = 0; index < line.length; index += 1) {
-            if (line.charCodeAt(index) > 0x7f) {
-                ascii = false;
-                break;
+    function globToRegExp(pattern) {
+        let source = "^";
+        for (const character of pattern) {
+            switch (character) {
+                case "*":
+                    source += ".*";
+                    break;
+                case "?":
+                    source += ".";
+                    break;
+                case ".":
+                case "+":
+                case "(":
+                case ")":
+                case "^":
+                case "$":
+                case "{":
+                case "}":
+                case "|":
+                case "[":
+                case "]":
+                case "\\":
+                    source += "\\" + character;
+                    break;
+                default:
+                    source += character;
+                    break;
             }
         }
-
-        if (ascii) {
-            const bytes = new Uint8Array(line.length);
-            for (let index = 0; index < line.length; index += 1) {
-                bytes[index] = line.charCodeAt(index);
-            }
-            return { bytes, offsets: null };
-        }
-
-        const bytes = [];
-        const offsets = [0];
-
-        for (let index = 0; index < line.length;) {
-            const codePoint = line.codePointAt(index);
-            const character = String.fromCodePoint(codePoint);
-            const encoded = textEncoder.encode(character);
-            const nextIndex = index + character.length;
-
-            for (const byte of encoded) {
-                bytes.push(byte);
-                offsets.push(nextIndex);
-            }
-
-            index = nextIndex;
-        }
-
-        return { bytes: new Uint8Array(bytes), offsets };
+        return new RegExp(source + "$", "i");
     }
 
-    function stringIndexForByteOffset(offsets, offset, fallback) {
-        if (offsets === null) {
-            return offset;
+    function selectLanguageForFileName(fileName) {
+        languageSelect.value = plainTextLanguageId;
+        const candidates = [fileName, "/" + fileName];
+        for (let index = 0; index < LSH.FILE_ASSOCIATIONS.length; index += 1) {
+            const [pattern, language] = LSH.FILE_ASSOCIATIONS[index];
+            const matcher = globToRegExp(pattern);
+            if (candidates.some(candidate => matcher.test(candidate))) {
+                languageSelect.value = language.id;
+                return;
+            }
         }
-        return offsets[Math.min(offset, offsets.length - 1)] ?? fallback;
     }
 
     function escapeHtml(text) {
@@ -381,12 +469,11 @@ fn generate_html(js: &str) -> String {
     }
 
     function appendHighlightedLine(html, runtime, line) {
-        const { bytes, offsets } = encodeLine(line);
-        const highlights = runtime.parseNextLine(bytes);
+        const highlights = runtime.parseNextLine(line);
 
         for (let index = 0; index + 3 < highlights.length; index += 2) {
-            const start = stringIndexForByteOffset(offsets, highlights[index], line.length);
-            const end = stringIndexForByteOffset(offsets, highlights[index + 2], line.length);
+            const start = Math.min(highlights[index], line.length);
+            const end = Math.min(highlights[index + 2], line.length);
             const text = line.slice(start, Math.max(start, end));
             const kind = kindByValue.get(highlights[index + 1]);
 
@@ -397,24 +484,99 @@ fn generate_html(js: &str) -> String {
             }
         }
 
-        return bytes.length;
+        return line.length;
     }
 
     let renderFrame = 0;
 
+    function resetMetrics() {
+        linesPerSecond.textContent = "0";
+        megabytesPerSecond.textContent = "0.00";
+        totalDuration.textContent = "0.00";
+    }
+
+    function countLines(text) {
+        let count = 1;
+        for (let index = 0; index < text.length; index += 1) {
+            if (text.charCodeAt(index) === 0x0a) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
+    function forceLayout() {
+        return output.scrollHeight;
+    }
+
+    function updateMetrics(measuredLineCount, measuredByteCount, startTime) {
+        forceLayout();
+        const elapsedSeconds = Math.max((performance.now() - startTime) / 1000, 0.000001);
+        linesPerSecond.textContent = Math.round(measuredLineCount / elapsedSeconds).toLocaleString();
+        megabytesPerSecond.textContent = (measuredByteCount / (1024 * 1024) / elapsedSeconds).toFixed(2);
+        totalDuration.textContent = (elapsedSeconds * 1000).toFixed(2);
+    }
+
+    function showEmpty() {
+        cancelRender();
+        output.textContent = "";
+        viewer.classList.remove("has-content");
+        resetMetrics();
+    }
+
+    function showPlainText() {
+        cancelRender();
+        if (currentText.length === 0) {
+            showEmpty();
+            return;
+        }
+
+        const startTime = performance.now();
+        const measuredLineCount = countLines(currentText);
+        const measuredByteCount = currentText.length;
+        output.textContent = currentText;
+        viewer.classList.add("has-content");
+        updateMetrics(measuredLineCount, measuredByteCount, startTime);
+    }
+
+    function selectedLanguage() {
+        return languageById.get(languageSelect.value) ?? null;
+    }
+
+    function updateReloadButton() {
+        reloadButton.disabled = currentText.length === 0;
+    }
+
+    function showCurrentText() {
+        updateReloadButton();
+        if (currentText.length === 0) {
+            showEmpty();
+        } else if (selectedLanguage()) {
+            scheduleRender();
+        } else {
+            showPlainText();
+        }
+    }
+
     function render() {
         renderFrame = 0;
-        const language = LSH.LANGUAGES[languageSelect.selectedIndex] ?? LSH.LANGUAGES[0];
+        const language = selectedLanguage();
+        if (!language) {
+            showPlainText();
+            return;
+        }
+
         output.textContent = "";
 
-        if (!language) {
+        if (currentText.length === 0) {
+            showEmpty();
             return;
         }
 
         const runtime = new LSH.Runtime(LSH.ASSEMBLY, LSH.STRINGS, LSH.CHARSETS, language.entrypoint);
-    const html = [];
-        const lines = input.value.split("\n");
-        const measuredLineCount = input.value.length === 0 ? 0 : lines.length;
+        const html = [];
+        const lines = currentText.split("\n");
+        const measuredLineCount = lines.length;
         let measuredByteCount = 0;
         const startTime = performance.now();
 
@@ -428,9 +590,15 @@ fn generate_html(js: &str) -> String {
         }
 
         output.innerHTML = html.join("");
-        const elapsedSeconds = Math.max((performance.now() - startTime) / 1000, 0.000001);
-        linesPerSecond.textContent = Math.round(measuredLineCount / elapsedSeconds).toLocaleString();
-        megabytesPerSecond.textContent = (measuredByteCount / (1024 * 1024) / elapsedSeconds).toFixed(2);
+        viewer.classList.add("has-content");
+    updateMetrics(measuredLineCount, measuredByteCount, startTime);
+    }
+
+    function cancelRender() {
+        if (renderFrame !== 0) {
+            cancelAnimationFrame(renderFrame);
+            renderFrame = 0;
+        }
     }
 
     function scheduleRender() {
@@ -439,9 +607,47 @@ fn generate_html(js: &str) -> String {
         }
     }
 
-    input.addEventListener("input", scheduleRender);
-    languageSelect.addEventListener("change", scheduleRender);
-    render();
+    async function loadFile(file) {
+        if (!file) {
+            return;
+        }
+
+        currentFileName = file.name;
+        currentText = await file.text();
+        selectLanguageForFileName(currentFileName);
+        showCurrentText();
+    }
+
+    function handleDrag(event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    viewer.addEventListener("dragenter", event => {
+        handleDrag(event);
+        viewer.classList.add("dragging");
+    });
+    viewer.addEventListener("dragover", handleDrag);
+    viewer.addEventListener("dragleave", event => {
+        handleDrag(event);
+        if (!viewer.contains(event.relatedTarget)) {
+            viewer.classList.remove("dragging");
+        }
+    });
+    viewer.addEventListener("drop", event => {
+        handleDrag(event);
+        viewer.classList.remove("dragging");
+        loadFile(event.dataTransfer.files[0]);
+    });
+
+    dropZone.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+        }
+    });
+    reloadButton.addEventListener("click", showCurrentText);
+    languageSelect.addEventListener("change", showCurrentText);
+    showCurrentText();
 })();
 </script>
 </body>

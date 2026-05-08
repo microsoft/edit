@@ -410,6 +410,10 @@ impl TryFrom<u32> for HighlightKind {{
 
         output.push_str("    const CHARSETS = [\n");
         for cs in assembly.charsets {
+            let mut cs = cs.clone();
+            if cs.covers_range(0xc2..=0xf4) {
+                cs.set(0xff, true);
+            }
             let cs = cs.serialize();
             output.push_str("        [");
             for (i, &v) in cs.iter().enumerate() {

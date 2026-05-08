@@ -1,7 +1,6 @@
 "use strict";
 
 const MAX_U32 = 0xffffffff;
-const encoder = new TextEncoder();
 
 function readU32(view, off) {
     return view.getUint32(off, true);
@@ -20,17 +19,18 @@ function asciiLower(byte) {
     return byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte;
 }
 
-function inSet(bitmap, byte) {
+function inSet(bitmap, codeUnit) {
+    const byte = codeUnit > 0xff ? 0xff : codeUnit;
     const loNibble = byte & 0xf;
     const hiNibble = byte >>> 4;
     return (bitmap[loNibble] & (1 << hiNibble)) !== 0;
 }
 
-function charsetGobble(bytes, off, bitmap, min, max) {
+function charsetGobble(line, off, bitmap, min, max) {
     let i = 0;
     while (i < max) {
         const idx = off + i;
-        if (idx >= bytes.length || !inSet(bitmap, bytes[idx])) {
+        if (idx >= line.length || !inSet(bitmap, line.charCodeAt(idx))) {
             break;
         }
         i += 1;
@@ -38,24 +38,24 @@ function charsetGobble(bytes, off, bitmap, min, max) {
     return i >= min ? off + i : -1;
 }
 
-function matchPrefix(bytes, off, needle) {
-    if (off >= bytes.length || bytes.length - off < needle.length) {
+function matchPrefix(line, off, needle) {
+    if (off >= line.length || line.length - off < needle.length) {
         return false;
     }
     for (let i = 0; i < needle.length; i += 1) {
-        if (bytes[off + i] !== needle[i]) {
+        if (line.charCodeAt(off + i) !== needle.charCodeAt(i)) {
             return false;
         }
     }
     return true;
 }
 
-function matchPrefixInsensitive(bytes, off, needle) {
-    if (off >= bytes.length || bytes.length - off < needle.length) {
+function matchPrefixInsensitive(line, off, needle) {
+    if (off >= line.length || line.length - off < needle.length) {
         return false;
     }
     for (let i = 0; i < needle.length; i += 1) {
-        if (asciiLower(bytes[off + i]) !== needle[i]) {
+        if (asciiLower(line.charCodeAt(off + i)) !== needle.charCodeAt(i)) {
             return false;
         }
     }
@@ -104,7 +104,7 @@ class Runtime {
         return true;
     }
 
-    parseNextLine(bytes) {
+    parseNextLine(line) {
         const result = [0, 0];
         const registers = this.registers;
         const assembly = this.assembly;
@@ -169,8 +169,8 @@ class Runtime {
                     if (!this.loadRegisters()) {
                         registers.fill(0);
                         registers[2] = this.entrypoint;
-                        if (result[result.length - 2] < bytes.length) {
-                            result.push(bytes.length, 0);
+                        if (result[result.length - 2] < line.length) {
+                            result.push(line.length, 0);
                         }
                         return result;
                     }
@@ -215,7 +215,7 @@ class Runtime {
                 }
                 case 14: {
                     registers[2] += 5;
-                    if (registers[0] >= bytes.length) {
+                    if (registers[0] >= line.length) {
                         registers[2] = readU32(view, pc + 1);
                     }
                     break;
@@ -226,7 +226,7 @@ class Runtime {
                     const min = readU32(view, pc + 5);
                     const max = readU32(view, pc + 9);
                     const target = readU32(view, pc + 13);
-                    const next = charsetGobble(bytes, registers[0], charsets[idx], min, max);
+                    const next = charsetGobble(line, registers[0], charsets[idx], min, max);
                     if (next >= 0) {
                         registers[0] = next;
                         registers[2] = target;
@@ -238,7 +238,7 @@ class Runtime {
                     const idx = readU32(view, pc + 1);
                     const target = readU32(view, pc + 5);
                     const needle = strings[idx];
-                    if (matchPrefix(bytes, registers[0], needle)) {
+                    if (matchPrefix(line, registers[0], needle)) {
                         registers[0] += needle.length;
                         registers[2] = target;
                     }
@@ -249,7 +249,7 @@ class Runtime {
                     const idx = readU32(view, pc + 1);
                     const target = readU32(view, pc + 5);
                     const needle = strings[idx];
-                    if (matchPrefixInsensitive(bytes, registers[0], needle)) {
+                    if (matchPrefixInsensitive(line, registers[0], needle)) {
                         registers[0] += needle.length;
                         registers[2] = target;
                     }
@@ -258,7 +258,7 @@ class Runtime {
                 case 18: {
                     registers[2] += 2;
                     const kind = registers[assembly[pc + 1] & 0xf];
-                    const start = Math.min(registers[1], bytes.length);
+                    const start = Math.min(registers[1], line.length);
                     const lastStartIndex = result.length - 2;
                     const lastKindIndex = result.length - 1;
                     if (result[lastStartIndex] === start || result[lastKindIndex] === kind) {
@@ -271,9 +271,9 @@ class Runtime {
                 }
                 case 19: {
                     registers[2] += 1;
-                    if (registers[0] >= bytes.length) {
-                        if (result[result.length - 2] < bytes.length) {
-                            result.push(bytes.length, 0);
+                    if (registers[0] >= line.length) {
+                        if (result[result.length - 2] < line.length) {
+                            result.push(line.length, 0);
                         }
                         return result;
                     }
@@ -287,5 +287,5 @@ class Runtime {
 }
 
 function encodeString(value) {
-    return encoder.encode(value);
+    return value;
 }
