@@ -66,9 +66,27 @@ Reference: ![Logo][logo-ref]
 echo "Hello, world" | tr a-z A-Z
 ```
 
+```go
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("hello")
+}
+```
+
 ```javascript
 export function greet(name) {
   return `hello ${name}`;
+}
+```
+
+```java
+class Demo {
+  static void main(String[] args) {
+    System.out.println("hello");
+  }
 }
 ```
 

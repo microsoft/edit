@@ -28,6 +28,16 @@ pub fn markdown() {
                     if /.*/ {}
                 }
             }
+        } else if /(?i:go|golang)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    go();
+                    if /.*/ {}
+                }
+            }
         } else if /(?i:diff)/ {
             loop {
                 await input;
@@ -47,6 +57,16 @@ pub fn markdown() {
                     return;
                 } else {
                     javascript();
+                    if /.*/ {}
+                }
+            }
+        } else if /(?i:java)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    java();
                     if /.*/ {}
                 }
             }
