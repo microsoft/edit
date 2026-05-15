@@ -60,6 +60,16 @@ pub fn markdown() {
                     if /.*/ {}
                 }
             }
+        } else if /(?i:odin)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    odin();
+                    if /.*/ {}
+                }
+            }
         } else if /(?i:py)/ {
             loop {
                 await input;

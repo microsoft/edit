@@ -84,3 +84,9 @@ export function greet(name) {
 def greet(name: str) -> str:
     return f"hello {name}"
 ```
+
+```odin
+greet :: proc(name: string) -> string {
+    return fmt.tprintf("hello %s", name)
+}
+```
