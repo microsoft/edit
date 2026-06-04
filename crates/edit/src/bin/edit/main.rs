@@ -658,6 +658,74 @@ impl TerminalProbe {
     }
 }
 
+fn record_probe_osc_response(
+    osc_buffer: &mut String,
+    indexed_colors: &mut [StraightRgba; framebuffer::INDEXED_COLORS_COUNT],
+    probe: &mut TerminalProbe,
+    data: &str,
+    partial: bool,
+) {
+    if partial {
+        osc_buffer.push_str(data);
+        return;
+    }
+
+    let parsed = if osc_buffer.is_empty() {
+        parse_probe_color_response(data)
+    } else {
+        osc_buffer.push_str(data);
+        parse_probe_color_response(osc_buffer)
+    };
+
+    if let Some((color_index, color)) = parsed {
+        indexed_colors[color_index] = color;
+        probe.record_color(color_index);
+    }
+
+    osc_buffer.clear();
+}
+
+fn parse_probe_color_response(data: &str) -> Option<(usize, StraightRgba)> {
+    let mut splits = data.split_terminator(';');
+
+    let color_index = match splits.next().unwrap_or("") {
+        // The response is `4;<color>;rgb:<r>/<g>/<b>`.
+        "4" => match splits.next().unwrap_or("").parse::<usize>() {
+            Ok(val) if val < 16 => val,
+            _ => return None,
+        },
+        // The response is `10;rgb:<r>/<g>/<b>`.
+        "10" => IndexedColor::Foreground as usize,
+        // The response is `11;rgb:<r>/<g>/<b>`.
+        "11" => IndexedColor::Background as usize,
+        _ => return None,
+    };
+
+    let color_param = splits.next().unwrap_or("");
+    if !color_param.starts_with("rgb:") {
+        return None;
+    }
+
+    let mut iter = color_param[4..].split_terminator('/');
+    let rgb_parts = [(); 3].map(|_| iter.next().unwrap_or("0"));
+    let mut rgb = 0;
+
+    for part in rgb_parts {
+        if part.len() == 2 || part.len() == 4 {
+            let Ok(mut val) = usize::from_str_radix(part, 16) else {
+                continue;
+            };
+            if part.len() == 4 {
+                // Round from 16 bits to 8 bits.
+                val = (val * 0xff + 0x7fff) / 0xffff;
+            }
+            rgb = (rgb >> 8) | ((val as u32) << 16);
+        }
+    }
+
+    Some((color_index, StraightRgba::from_le(rgb | 0xff000000)))
+}
+
 fn setup_terminal(tui: &mut Tui, state: &mut State) -> RestoreModes {
     sys::write_stdout(concat!(
         // 1049: Alternative Screen Buffer
@@ -726,57 +794,15 @@ fn setup_terminal(tui: &mut Tui, state: &mut State) -> RestoreModes {
                     }
                     _ => {}
                 },
-                Token::Osc { mut data, partial } => {
+                Token::Osc { data, partial } => {
                     probe_activity = true;
-                    if partial {
-                        osc_buffer.push_str(data);
-                        continue;
-                    }
-                    if !osc_buffer.is_empty() {
-                        osc_buffer.push_str(data);
-                        data = &osc_buffer;
-                    }
-
-                    let mut splits = data.split_terminator(';');
-
-                    let color_index = match splits.next().unwrap_or("") {
-                        // The response is `4;<color>;rgb:<r>/<g>/<b>`.
-                        "4" => match splits.next().unwrap_or("").parse::<usize>() {
-                            Ok(val) if val < 16 => val,
-                            _ => continue,
-                        },
-                        // The response is `10;rgb:<r>/<g>/<b>`.
-                        "10" => IndexedColor::Foreground as usize,
-                        // The response is `11;rgb:<r>/<g>/<b>`.
-                        "11" => IndexedColor::Background as usize,
-                        _ => continue,
-                    };
-
-                    let color_param = splits.next().unwrap_or("");
-                    if !color_param.starts_with("rgb:") {
-                        continue;
-                    }
-
-                    let mut iter = color_param[4..].split_terminator('/');
-                    let rgb_parts = [(); 3].map(|_| iter.next().unwrap_or("0"));
-                    let mut rgb = 0;
-
-                    for part in rgb_parts {
-                        if part.len() == 2 || part.len() == 4 {
-                            let Ok(mut val) = usize::from_str_radix(part, 16) else {
-                                continue;
-                            };
-                            if part.len() == 4 {
-                                // Round from 16 bits to 8 bits.
-                                val = (val * 0xff + 0x7fff) / 0xffff;
-                            }
-                            rgb = (rgb >> 8) | ((val as u32) << 16);
-                        }
-                    }
-
-                    indexed_colors[color_index] = StraightRgba::from_le(rgb | 0xff000000);
-                    probe.record_color(color_index);
-                    osc_buffer.clear();
+                    record_probe_osc_response(
+                        &mut osc_buffer,
+                        &mut indexed_colors,
+                        &mut probe,
+                        data,
+                        partial,
+                    );
                 }
                 Token::Dcs { .. } => probe_activity = true,
                 _ => {}
@@ -874,5 +900,38 @@ mod terminal_probe_tests {
         probe.record_color(IndexedColor::Background as usize);
 
         assert_eq!(probe.color_responses(), 2);
+    }
+
+    #[test]
+    fn probe_osc_buffer_clears_after_invalid_complete_response() {
+        let mut osc_buffer = String::new();
+        let mut indexed_colors = framebuffer::DEFAULT_THEME;
+        let mut probe = TerminalProbe::new();
+
+        record_probe_osc_response(
+            &mut osc_buffer,
+            &mut indexed_colors,
+            &mut probe,
+            "99;ignored",
+            true,
+        );
+        assert!(!osc_buffer.is_empty());
+
+        record_probe_osc_response(&mut osc_buffer, &mut indexed_colors, &mut probe, "", false);
+        assert!(osc_buffer.is_empty());
+
+        record_probe_osc_response(
+            &mut osc_buffer,
+            &mut indexed_colors,
+            &mut probe,
+            "10;rgb:0101/0202/0303",
+            false,
+        );
+
+        assert_eq!(probe.color_responses(), 1);
+        assert_ne!(
+            indexed_colors[IndexedColor::Foreground as usize],
+            framebuffer::DEFAULT_THEME[IndexedColor::Foreground as usize]
+        );
     }
 }
