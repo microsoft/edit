@@ -592,3 +592,42 @@ impl<'input> Stream<'_, '_, 'input> {
         Some(Input::Mouse(mouse))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_resize<'a>(
+        vt_parser: &mut vt::Parser,
+        input_parser: &mut Parser,
+        input: &'a str,
+    ) -> Option<Size> {
+        input_parser.parse(vt_parser.parse(input)).find_map(|input| match input {
+            Input::Resize(size) => Some(size),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn partial_osc_parser_state_does_not_emit_resize() {
+        let mut vt_parser = vt::Parser::new();
+        let mut stream = vt_parser.parse("\x1b]4;0;rgb:0c0c/0c0c/0c0c\x1b");
+        while stream.next().is_some() {}
+        drop(stream);
+
+        let mut input_parser = Parser::new();
+        let resize = parse_resize(&mut vt_parser, &mut input_parser, "\x1b[8;40;127t");
+
+        assert_eq!(resize, None);
+    }
+
+    #[test]
+    fn fresh_parser_parses_synthetic_resize() {
+        let mut vt_parser = vt::Parser::new();
+        let mut input_parser = Parser::new();
+
+        let resize = parse_resize(&mut vt_parser, &mut input_parser, "\x1b[8;40;127t");
+
+        assert_eq!(resize, Some(Size { width: 127, height: 40 }));
+    }
+}
