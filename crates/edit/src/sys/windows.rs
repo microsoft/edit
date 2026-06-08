@@ -259,6 +259,51 @@ fn get_console_size() -> Option<Size> {
     }
 }
 
+/// Maps a raw Win32 `KEY_EVENT_RECORD` to the UTF-16 code unit to
+/// inject, or `None` to skip the event.
+///
+/// `Ctrl+Space` reaches the console in three forms: conhost sends
+/// (vk=Space, char=0); Windows Terminal/ConPTY sends (vk=Space,
+/// char=0x20, a literal space); and the `Ctrl+Shift+2` alias sends
+/// (vk=2, char=0). All three normalize to `NUL` so downstream keymaps
+/// see `vk::NULL`. It reads only its arguments — no console or global
+/// state — so it can be unit-tested directly.
+fn translate_key_event(
+    unicode_char: u16,
+    virtual_key_code: u16,
+    control_key_state: u32,
+) -> Option<u16> {
+    const VK_SPACE: u16 = 0x20;
+    const VK_2: u16 = 0x32;
+    const CTRL_DOWN: u32 = Console::LEFT_CTRL_PRESSED | Console::RIGHT_CTRL_PRESSED;
+
+    let ctrl_pressed = (control_key_state & CTRL_DOWN) != 0;
+    let shift_pressed = (control_key_state & Console::SHIFT_PRESSED) != 0;
+    let alt_pressed =
+        (control_key_state & (Console::LEFT_ALT_PRESSED | Console::RIGHT_ALT_PRESSED)) != 0;
+
+    // AltGr surfaces as Ctrl+Alt on Windows, so a real Ctrl chord is
+    // "Ctrl down and Alt not down". Without this, AltGr+Space (and any
+    // AltGr combo the layout maps onto these keys) would be swallowed
+    // as NUL instead of producing its intended character.
+    let ctrl_chord = ctrl_pressed && !alt_pressed;
+
+    // Match the Ctrl-bearing patterns before the `unicode_char != 0`
+    // fallback, so a ConPTY Ctrl+Space (char=0x20) yields NUL rather
+    // than a literal space.
+    if ctrl_chord && virtual_key_code == VK_SPACE {
+        return Some(0);
+    }
+    if ctrl_chord && shift_pressed && virtual_key_code == VK_2 && unicode_char == 0 {
+        return Some(0);
+    }
+
+    if unicode_char != 0 {
+        return Some(unicode_char);
+    }
+    None
+}
+
 /// Reads from stdin.
 ///
 /// # Returns
@@ -334,10 +379,15 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
             match inp.EventType as u32 {
                 Console::KEY_EVENT => {
                     let event = unsafe { &inp.Event.KeyEvent };
-                    let ch = unsafe { event.uChar.UnicodeChar };
-                    if event.bKeyDown != 0 && ch != 0 {
-                        utf16_buf[utf16_buf_len] = MaybeUninit::new(ch);
-                        utf16_buf_len += 1;
+                    if event.bKeyDown != 0 {
+                        if let Some(ch) = translate_key_event(
+                            unsafe { event.uChar.UnicodeChar },
+                            event.wVirtualKeyCode,
+                            event.dwControlKeyState,
+                        ) {
+                            utf16_buf[utf16_buf_len] = MaybeUninit::new(ch);
+                            utf16_buf_len += 1;
+                        }
                     }
                 }
                 Console::WINDOW_BUFFER_SIZE_EVENT => {
@@ -631,4 +681,100 @@ fn check_bool_return(ret: BOOL) -> io::Result<()> {
 
 fn check_ptr_return<T>(ret: *mut T) -> io::Result<NonNull<T>> {
     NonNull::new(ret).ok_or_else(last_os_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VK_SPACE: u16 = 0x20;
+    const VK_2: u16 = 0x32;
+    const VK_SHIFT: u16 = 0x10;
+    const VK_UP: u16 = 0x26;
+    const VK_A: u16 = 0x41;
+    const VK_TAB: u16 = 0x09;
+
+    #[test]
+    fn translate_key_event_passes_through_real_chars() {
+        // Tab (UnicodeChar = 0x09).
+        assert_eq!(translate_key_event(0x09, VK_TAB, 0), Some(0x09));
+        // 'a'.
+        assert_eq!(translate_key_event(0x61, VK_A, 0), Some(0x61));
+        // Ctrl+A (UnicodeChar = 0x01 — the Win32 driver does the math
+        // for us for the alphabetic range).
+        assert_eq!(
+            translate_key_event(0x01, VK_A, Console::LEFT_CTRL_PRESSED),
+            Some(0x01)
+        );
+        // Plain Space (no Ctrl) MUST pass through as 0x20 — typing a
+        // space character is the dominant case.
+        assert_eq!(translate_key_event(0x20, VK_SPACE, 0), Some(0x20));
+        // AltGr is reported as Right-Alt + Left-Ctrl, so AltGr-produced
+        // characters must pass through rather than be read as a Ctrl
+        // chord and synthesized to NUL.
+        let altgr = Console::RIGHT_ALT_PRESSED | Console::LEFT_CTRL_PRESSED;
+        assert_eq!(translate_key_event(0x20, VK_SPACE, altgr), Some(0x20));
+        assert_eq!(translate_key_event(0x40, VK_2, altgr), Some(0x40));
+    }
+
+    #[test]
+    fn translate_key_event_drops_keys_with_no_char() {
+        // Arrow Up: UnicodeChar=0, handled by the VT stream once
+        // ENABLE_VIRTUAL_TERMINAL_INPUT generates the escape sequence
+        // separately.
+        assert_eq!(translate_key_event(0, VK_UP, 0), None);
+        // Shift alone: modifier-only keypress.
+        assert_eq!(translate_key_event(0, VK_SHIFT, 0), None);
+    }
+
+    #[test]
+    fn translate_key_event_synthesizes_nul_for_ctrl_space_form1() {
+        // Form 1: conhost / older WT delivers Ctrl+Space as
+        // (vk=VK_SPACE, unicode=0).
+        assert_eq!(
+            translate_key_event(0, VK_SPACE, Console::LEFT_CTRL_PRESSED),
+            Some(0)
+        );
+        assert_eq!(
+            translate_key_event(0, VK_SPACE, Console::RIGHT_CTRL_PRESSED),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn translate_key_event_synthesizes_nul_for_ctrl_space_form2() {
+        // Form 2: Windows Terminal in ConPTY mode delivers Ctrl+Space
+        // as (vk=VK_SPACE, unicode=0x20) — a literal space char that
+        // must still normalize to NUL rather than passing through.
+        assert_eq!(
+            translate_key_event(0x20, VK_SPACE, Console::LEFT_CTRL_PRESSED),
+            Some(0)
+        );
+        assert_eq!(
+            translate_key_event(0x20, VK_SPACE, Console::RIGHT_CTRL_PRESSED),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn translate_key_event_synthesizes_nul_for_ctrl_shift_2_alias() {
+        // Form 3: the Ctrl+Shift+2 ASCII alias arrives as
+        // (vk=VK_2, cks=Ctrl+Shift, unicode=0) because Ctrl+Shift+2
+        // == Ctrl+@ == NUL == Ctrl+Space at the byte level.
+        assert_eq!(
+            translate_key_event(
+                0,
+                VK_2,
+                Console::LEFT_CTRL_PRESSED | Console::SHIFT_PRESSED
+            ),
+            Some(0)
+        );
+        // Plain "2" key must NOT trigger.
+        assert_eq!(translate_key_event(0x32, VK_2, 0), Some(0x32));
+        // Just Ctrl+2 (no Shift) must NOT trigger.
+        assert_eq!(
+            translate_key_event(0x32, VK_2, Console::LEFT_CTRL_PRESSED),
+            Some(0x32)
+        );
+    }
 }
