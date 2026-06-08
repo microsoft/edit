@@ -259,6 +259,11 @@ fn get_console_size() -> Option<Size> {
     }
 }
 
+/// Virtual-key codes shared between `translate_key_event` and its
+/// tests. Kept here so the two never drift.
+const VK_SPACE: u16 = 0x20;
+const VK_2: u16 = 0x32;
+
 /// Maps a raw Win32 `KEY_EVENT_RECORD` to the UTF-16 code unit to
 /// inject, or `None` to skip the event.
 ///
@@ -273,8 +278,6 @@ fn translate_key_event(
     virtual_key_code: u16,
     control_key_state: u32,
 ) -> Option<u16> {
-    const VK_SPACE: u16 = 0x20;
-    const VK_2: u16 = 0x32;
     const CTRL_DOWN: u32 = Console::LEFT_CTRL_PRESSED | Console::RIGHT_CTRL_PRESSED;
 
     let ctrl_pressed = (control_key_state & CTRL_DOWN) != 0;
@@ -687,8 +690,6 @@ fn check_ptr_return<T>(ret: *mut T) -> io::Result<NonNull<T>> {
 mod tests {
     use super::*;
 
-    const VK_SPACE: u16 = 0x20;
-    const VK_2: u16 = 0x32;
     const VK_SHIFT: u16 = 0x10;
     const VK_UP: u16 = 0x26;
     const VK_A: u16 = 0x41;
