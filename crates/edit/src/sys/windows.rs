@@ -287,14 +287,20 @@ fn translate_key_event(
 
     // AltGr surfaces as Ctrl+Alt on Windows, so a real Ctrl chord is
     // "Ctrl down and Alt not down". Without this, AltGr+Space (and any
-    // AltGr combo the layout maps onto these keys) would be swallowed
-    // as NUL instead of producing its intended character.
+    // AltGr combo the layout maps onto these keys) would be turned into
+    // NUL instead of producing its intended character.
     let ctrl_chord = ctrl_pressed && !alt_pressed;
 
     // Match the Ctrl-bearing patterns before the `unicode_char != 0`
     // fallback, so a ConPTY Ctrl+Space (char=0x20) yields NUL rather
-    // than a literal space.
-    if ctrl_chord && virtual_key_code == VK_SPACE {
+    // than a literal space. Restrict to the two documented Ctrl+Space
+    // payloads (no char, or a literal space) so a real printable
+    // character produced on the Space key by an IME or layout still
+    // passes through as that character.
+    if ctrl_chord
+        && virtual_key_code == VK_SPACE
+        && (unicode_char == 0 || unicode_char == 0x20)
+    {
         return Some(0);
     }
     if ctrl_chord && shift_pressed && virtual_key_code == VK_2 && unicode_char == 0 {
@@ -716,6 +722,12 @@ mod tests {
         let altgr = Console::RIGHT_ALT_PRESSED | Console::LEFT_CTRL_PRESSED;
         assert_eq!(translate_key_event(0x20, VK_SPACE, altgr), Some(0x20));
         assert_eq!(translate_key_event(0x40, VK_2, altgr), Some(0x40));
+        // Ctrl + Space key carrying a real printable char (e.g. from an
+        // IME) must pass through, not be synthesized to NUL.
+        assert_eq!(
+            translate_key_event(0x41, VK_SPACE, Console::LEFT_CTRL_PRESSED),
+            Some(0x41)
+        );
     }
 
     #[test]
