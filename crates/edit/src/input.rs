@@ -449,6 +449,13 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                             let height = (csi.params[1] as CoordType).clamp(1, 32767);
                             return Some(Input::Resize(Size { width, height }));
                         }
+                        'u' if csi.param_count > 1 => {
+                            // Kitty keyboard events
+                            let char = csi.params[0] as u8;
+                            return Some(Input::Keyboard(
+                                InputKey::from_ascii(char as char)? | Self::parse_modifiers(csi),
+                            ));
+                        }
                         _ => {}
                     }
                 }
