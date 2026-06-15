@@ -439,26 +439,50 @@ pub fn icu_detect_renaming_suffix(arena: &Arena, handle: NonNull<c_void>) -> BSt
             return res;
         }
 
-        // In the versions (63-76) and distributions (Arch/Debian) I tested,
-        // this symbol seems to be always present. This allows us to call `dladdr`.
-        // It's the `UCaseMap::~UCaseMap()` destructor which for some reason isn't
-        // in a namespace. Thank you ICU maintainers for this oversight.
-        let proc = match get_proc_address::<T>(handle, c"_ZN8UCaseMapD1Ev".as_ptr()) {
-            Ok(proc) => proc,
-            Err(_) => return res,
-        };
+        #[allow(dead_code)]
+        const TARGET_LIBICU: &str = "libicuuc";
 
-        // `dladdr` is specific to GNU's libc unfortunately.
-        let mut info: libc::Dl_info = mem::zeroed();
-        let ret = libc::dladdr(proc, &mut info);
-        if ret == 0 {
-            return res;
+        #[allow(unused_mut)]
+        let mut dli_fname: Option<&str> = None;
+
+        #[cfg(not(target_vendor = "apple"))]
+        {
+            extern "C" fn dl_callback(
+                info: *mut libc::dl_phdr_info,
+                _size: usize,
+                data: *mut c_void,
+            ) -> c_int {
+                let file_path = unsafe { &mut *(data as *mut Option<&str>) };
+
+                if info.is_null() || unsafe { (*info).dlpi_name.is_null() } {
+                    return 0;
+                }
+
+                let dlpi_str = unsafe { std::ffi::CStr::from_ptr((*info).dlpi_name) };
+
+                if let Ok(s) = dlpi_str.to_str() {
+                    if s.contains(TARGET_LIBICU) {
+                        *file_path = Some(s);
+                        return 1;
+                    }
+                }
+
+                0
+            }
+
+            let ret = libc::dl_iterate_phdr(
+                Some(dl_callback),
+                &mut dli_fname as *mut Option<&str> as *mut c_void,
+            );
+
+            if ret == 0 {
+                return res;
+            }
         }
 
-        // The library path is in `info.dli_fname`.
-        let path = match std::ffi::CStr::from_ptr(info.dli_fname).to_str() {
-            Ok(name) => name,
-            Err(_) => return res,
+        let path = match dli_fname {
+            Some(name) => name,
+            None => return res,
         };
 
         let path = match std::fs::read_link(path) {
