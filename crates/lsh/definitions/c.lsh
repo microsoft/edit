@@ -35,7 +35,7 @@ pub fn c() {
             }
         } else if /(?:break|case|continue|default|do|else|for|if|return|switch|while|goto)\>/ {
             yield keyword.control;
-        } else if /(?:struct|enum|typedef|const|static|inline|volatile|sizeof|extern|register|restrict)\>/ {
+        } else if /(?:struct|enum|union|alignas|alignof|static_assert|thread_local|_Static_assert|_Thread_local|typedef|const|static|inline|volatile|sizeof|extern|register|restrict)\>/ {
             yield keyword.other;
         } else if /(?:void|int|long|char|float|double|signed|unsigned|short)\>/ {
             yield type.language;

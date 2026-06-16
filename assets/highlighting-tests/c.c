@@ -65,7 +65,7 @@ goto cleanup;
 
 cleanup :
 
-	int a = 1;
+int a = 1;
 signed long long b = 2;
 unsigned short int c = 3;
 float pi = 3.14f;
