@@ -1,0 +1,150 @@
+#[display_name="Java"]
+#[path="**/*.java"]
+pub fn java() {
+    until /$/ {
+        yield other;
+
+        // Comments
+        if /\/\/.*/ {
+            yield comment;
+        }
+        else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        }
+
+        // Text blocks
+        else if /"""/ {
+            loop {
+                yield string;
+
+                if /"""/ {
+                    yield string;
+                    break;
+                }
+
+                await input;
+            }
+        }
+
+        // Character literals
+        else if /'/ {
+            until /$/ {
+                yield string;
+
+                if /\\./ {}
+                else if /'/ {
+                    yield string;
+                    break;
+                }
+
+                await input;
+            }
+        }
+
+        // String literals
+        else if /"/ {
+            until /$/ {
+                yield string;
+
+                if /\\./ {}
+                else if /"/ {
+                    yield string;
+                    break;
+                }
+
+                await input;
+            }
+        }
+
+        // Annotations
+        else if /@[\w.]+/ {
+            yield storage.annotation;
+        }
+
+        // Control-flow keywords
+        else if /(?:break|case|catch|continue|default|do|else|finally|for|if|return|switch|throw|try|while)\>/ {
+            yield keyword.control;
+        }
+
+        // Other Java keywords
+        else if /(?:abstract|assert|class|const|enum|exports|extends|final|goto|implements|import|instanceof|interface|module|native|new|open|opens|package|private|protected|provides|public|record|requires|sealed|static|strictfp|synchronized|throws|transient|transitive|uses|var|volatile|with|yield|permits|non-sealed)\>/ {
+            yield keyword.other;
+        }
+
+        // this / super
+        else if /(?:this|super)\>/ {
+            yield constant.language;
+        }
+
+        // Literals
+        else if /(?:true|false|null)\>/ {
+            yield constant.language;
+        }
+
+        // Primitive types
+        else if /(?:boolean|byte|char|double|float|int|long|short|void)\>/ {
+            yield storage.type;
+        }
+
+        // Class / Interface / Enum / Record declarations
+        else if /(?:class|interface|enum|record)\s+(\w+)/ {
+            yield $1 as type;
+        }
+
+        // Constants
+        else if /([A-Z][A-Z0-9_]*)/ {
+            yield $1 as constant.language;
+        }
+
+        // Constructor declarations
+        else if /(?:public|private|protected)\s+([A-Z]\w*)\s*\(/ {
+            yield $1 as method;
+        }
+
+        // Method declarations
+        else if /(?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?(?:abstract\s+)?(?:synchronized\s+)?(\w+)\s+(\w+)\s*\(/ {
+            yield $1 as type;
+            yield $2 as method;
+        }
+
+        // Variable declarations
+        else if /([A-Z]\w*|boolean|byte|char|double|float|int|long|short|void)\s+(\w+)\s*(?:=|;|,|\))/ {
+            yield $1 as type;
+            yield $2 as variable;
+        }
+
+        // Class construction
+        else if /new\s+([A-Z]\w*)/ {
+            yield $1 as type;
+        }
+
+        // Generic type arguments
+        else if /<\s*([A-Z]\w*)/ {
+            yield $1 as type;
+        }
+
+        // Type usages
+        else if /([A-Z]\w*)/ {
+            yield $1 as type;
+        }
+
+        // Method calls
+        else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        }
+
+        // Consume identifiers
+        else if /\w+/ {
+        }
+
+        yield other;
+    }
+}

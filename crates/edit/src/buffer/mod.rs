@@ -2187,6 +2187,9 @@ impl TextBuffer {
                     HighlightKind::MarkupList => Some(IndexedColor::BrightBlue),
                     HighlightKind::MarkupStrikethrough => None,
                     HighlightKind::MetaHeader => Some(IndexedColor::BrightBlue),
+                    HighlightKind::Type => Some(IndexedColor::Cyan),
+                    HighlightKind::StorageAnnotation => Some(IndexedColor::Magenta),
+                    HighlightKind::StorageType => Some(IndexedColor::Blue),
                 };
                 let attr = match curr.kind {
                     HighlightKind::MarkupBold => Some(Attributes::Bold),
