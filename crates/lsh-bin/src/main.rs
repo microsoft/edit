@@ -121,7 +121,9 @@ fn run_render(generator: lsh::compiler::Generator, path: &Path) -> anyhow::Resul
             "method" => "\x1b[93m",   // Bright Yellow
             "string" => "\x1b[91m",   // Bright Red
             "variable" => "\x1b[96m", // Bright Cyan
+            "preprocessor" => "\x1b[36m", // Cyan
 
+            "type.language" => "\x1b[32m",       // Green
             "constant.language" => "\x1b[94m",   // Bright Blue
             "constant.numeric" => "\x1b[92m",    // Bright Green
             "keyword.control" => "\x1b[95m",     // Bright Magenta

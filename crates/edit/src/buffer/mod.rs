@@ -2173,6 +2173,8 @@ impl TextBuffer {
                     HighlightKind::Method => Some(IndexedColor::BrightYellow),
                     HighlightKind::String => Some(IndexedColor::BrightRed),
                     HighlightKind::Variable => Some(IndexedColor::BrightCyan),
+                    HighlightKind::Preprocessor => Some(IndexedColor::Cyan),
+                    HighlightKind::TypeLanguage => Some(IndexedColor::Green),
                     HighlightKind::ConstantLanguage => Some(IndexedColor::BrightBlue),
                     HighlightKind::ConstantNumeric => Some(IndexedColor::BrightGreen),
                     HighlightKind::KeywordControl => Some(IndexedColor::BrightMagenta),
