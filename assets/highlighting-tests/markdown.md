@@ -84,3 +84,12 @@ export function greet(name) {
 def greet(name: str) -> str:
     return f"hello {name}"
 ```
+
+```c
+#include <stdio.h>
+
+int main() {
+    printf("Hello, world\n");
+    return 0;
+}
+```
