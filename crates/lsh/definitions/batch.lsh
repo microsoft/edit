@@ -5,74 +5,52 @@
 
 
 pub fn batch() {
-    until /$/ {
-        yield other;
-
-        if /::.*/ {
-            yield comment;
-        } 
-		else if /([Rr][Ee][Mm])\s(.*)/ {  // Now, I would do this for all of the rest, but that would be extremely sloppy and hard to read.
-            yield $1 as keyword.other;
-            yield $2 as comment;
-        }
-		else if /\%\%\w/ {
-			yield variable;
+	until /$/ {
+		yield other;
+		
+		if /::.*/ {
+			yield comment;
+		} 
+		else if /(?i:rem)\>\s*(.*)/ {
+			yield keyword.other;
+			yield $1 as comment;
 		}
 		else if /\^./ {   	// Escapes 
 			yield markup.italic; 
 		}
-		else if /\%[A-Za-z0-9_\s]+\%/ { 
-			yield variable; 
-		} 
-		else if /![A-Za-z0-9_\s]+!/ { 
-			yield variable; 
-		}
-		else if /\%(?:\*|~[a-z0-9_]+|[0-9])/ { // Special variables (%~1, %~n1)
-			yield variable; 
+		else if /%%~[fdpnxsatz]{0,6}[A-Za-z]?|%%[A-Za-z]|\%(?:[0-9]|[\w\s]+\%|\*|~[A-Za-z]*[0-9])|![\w\s]+!/ {  // What even is a variable anymore
+			yield variable;
 		}
 		else if /:\w+/ {
 			yield method;  		// Most suiting out of the options that I could find that looked good
 		}
 		else if /"/ {
-            until /$/ {
-                yield string; 
-				if /\^./ {   	// Escapes 
-					yield markup.italic; 
-				}
-				else if /\%[A-Za-z0-9_]+\%/ { // Variables
-					yield variable; 
-				}
-				else if /\![A-Za-z0-9_]+\!/ { // More variables
-					yield variable; 
-				}
-				else if /\%(?:\*|~[a-z0-9_]+|[0-9])/ {
-					yield variable; 
-				}
-				else if /"/ { 
-					yield string;
-					break; 
-				} 
-				await input; 
-            }
-        } else if /(?:FOR|IF|ELSE|CALL|GOTO|IN|DO|EXIST|NOT)\>/ { // Upper
-            yield keyword.control;
-        } else if /(?:for|if|else|call|goto|in|do|exist|not)\>/ { // Lower
-            yield keyword.control;
-        } else if /(?:ASSOC|ATTRIB|BREAK|CHOICE|BCDEDIT|CACLS|CD|CHCP|CHDIR|CHKDSK|CHKNTFS|CLS|CMD|COLOR|COMP|COMPACT|CONVERT|COPY|DATE|DEL|DIR|DISKPART|DOSKEY|DRIVERQUERY|ECHO|ENDLOCAL|ERASE|EXIT|FC|FIND|FINDSTR|FORMAT|FSUTIL|FTYPE|GPRESULT|HELP|ICACLS|LABEL|MD|MKDIR|MKLINK|MODE|MORE|MOVE|OPENFILES|PATH|PAUSE|POPD|PUSHD|PRINT|PROMPT|PUSHD|RD|RECOVER|CONFIG|REN|RENAME|REPLACE|RMDIR|ROBOCOPY|SET|SETLOCAL|SC|SCHTASKS|SHIFT|SHUTDOWN|SORT|START|SUBST|SYSTEMINFO|TASKLIST|TASKKILL|TIME|TITLE|TREE|TYPE|VER|VERIFY|VOL|XCOPY|WMIC)\>/ {  // Upper
-            yield keyword.other;
-        } else if /(?:assoc|attrib|break|choice|bcdedit|cacls|cd|chcp|chdir|chkdsk|chkntfs|cls|cmd|color|comp|compact|convert|copy|date|del|dir|diskpart|doskey|driverquery|echo|endlocal|erase|exit|fc|find|findstr|format|fsutil|ftype|gpresult|help|icacls|label|md|mkdir|mklink|mode|more|move|openfiles|path|pause|popd|pushd|print|prompt|pushd|rd|recover|config|ren|rename|replace|rmdir|robocopy|set|setlocal|sc|schtasks|shift|shutdown|sort|start|subst|systeminfo|tasklist|taskkill|time|title|tree|type|ver|verify|vol|xcopy|wmic)\>/ {  // Lower
-            yield keyword.other;
-        } 
+			until /$/ {
+				yield string;
+			if /\^./ {
+				yield markup.italic;
+			} else if /%%~[fdpnxsatz]{0,6}[A-Za-z]?|%%[A-Za-z]|\%(?:[0-9]|[\w\s]+\%|\*|~[A-Za-z]*[0-9])|![\w\s]+!/ {
+				yield variable;
+			} else if /"/ {
+				yield string;
+				break;
+			}
+		}
+		} else if /(?i:for|if|else|call|goto|in|do|exist|not)\>/ {
+			yield keyword.control;
+		} else if /(?i:assoc|attrib|break|bcdedit|cacls|cd|chcp|chdir|chkdsk|chkntfs|choice|cls|cmd|color|comp|compact|convert|copy|date|del|dir|diskpart|doskey|driverquery|echo|endlocal|erase|exit|fc|find|findstr|format|fsutil|ftype|gpresult|help|icacls|label|md|mkdir|mklink|mode|more|move|openfiles|path|pause|popd|pushd|print|prompt|pushd|rd|recover|config|ren|rename|replace|rmdir|robocopy|set|setlocal|sc|schtasks|shift|shutdown|sort|start|subst|systeminfo|tasklist|taskkill|time|title|tree|type|ver|verify|vol|xcopy|wmic)\>/ {  // Finally got the case insensitivity working properly!
+			yield keyword.other;
+		} 
 		else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)n?/ {
-            if /\w+/ {
-                // Invalid numeric literal
-            } else {
-                yield constant.numeric;
-            }
-        } else if /\w+/ {
-            // Gobble word chars to align the next iteration on a word boundary.
-        }
-
-        yield other;
-    }
+			if /\w+/ {
+				// Invalid numeric literal
+			} else {
+				yield constant.numeric;
+			}
+		} else if /\w+/ {
+			// Gobble word chars to align the next iteration on a word boundary.
+		}
+		
+		yield other;
+	}
 }
