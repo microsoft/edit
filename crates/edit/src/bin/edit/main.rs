@@ -93,27 +93,14 @@ fn run() -> apperr::Result<()> {
     let mut input_parser = input::Parser::new();
     let mut tui = Tui::new()?;
 
-    let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
+    let _restore = setup_terminal(&mut state, &mut vt_parser);
 
-    state.menubar_color_bg = tui.indexed(IndexedColor::Background).oklab_blend(tui.indexed_alpha(
-        IndexedColor::BrightBlue,
-        1,
-        2,
-    ));
-    state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
-    let floater_bg = tui
-        .indexed_alpha(IndexedColor::Background, 2, 3)
-        .oklab_blend(tui.indexed_alpha(IndexedColor::Foreground, 1, 3));
-    let floater_fg = tui.contrasted(floater_bg);
     tui.setup_modifier_translations(ModifierTranslations {
         ctrl: loc(LocId::Ctrl),
         alt: loc(LocId::Alt),
         shift: loc(LocId::Shift),
     });
-    tui.set_floater_default_bg(floater_bg);
-    tui.set_floater_default_fg(floater_fg);
-    tui.set_modal_default_bg(floater_bg);
-    tui.set_modal_default_fg(floater_fg);
+    apply_theme_colors(&mut tui, &mut state);
 
     sys::inject_window_size_into_stdin();
 
@@ -174,6 +161,25 @@ fn run() -> apperr::Result<()> {
 
         if state.exit {
             break;
+        }
+
+        // A saved settings.json requests a live reload, so theme changes (and
+        // other settings) apply without a restart. Re-apply the palette and
+        // redraw before rendering, so the new colors are captured this frame.
+        if Settings::take_reload_request() {
+            if let Err(err) = Settings::reload() {
+                state.add_error(err);
+            }
+            apply_theme_colors(&mut tui, &mut state);
+
+            {
+                let mut ctx = tui.create_context(None);
+                draw(&mut ctx, &mut state);
+            }
+            while tui.needs_settling() {
+                let mut ctx = tui.create_context(None);
+                draw(&mut ctx, &mut state);
+            }
         }
 
         // Render the UI and write it to the terminal.
@@ -567,7 +573,7 @@ impl Drop for RestoreModes {
     }
 }
 
-fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) -> RestoreModes {
+fn setup_terminal(state: &mut State, vt_parser: &mut vt::Parser) -> RestoreModes {
     sys::write_stdout(concat!(
         // 1049: Alternative Screen Buffer
         //   I put the ASB switch in the beginning, just in case the terminal performs
@@ -680,11 +686,50 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         state.documents.reflow_all();
     }
 
+    // Remember the terminal's own palette (when the terminal answered all our
+    // OSC queries) so it can be restored if the `theme` setting is later
+    // switched back to `system`. The palette itself is applied by
+    // `apply_theme_colors`, which also honors a configured fixed theme.
     if color_responses == indexed_colors.len() {
-        tui.setup_indexed_colors(indexed_colors);
+        state.system_theme = indexed_colors;
     }
 
     RestoreModes
+}
+
+/// Applies the palette for the currently configured [`Theme`] and recomputes
+/// the derived UI colors (menubar, floaters, modals). Safe to call again after
+/// the `theme` setting changes, so themes can be switched live.
+fn apply_theme_colors(tui: &mut Tui, state: &mut State) {
+    // A fixed theme overrides the terminal's own palette. Unlike the
+    // OSC-queried colors it doesn't depend on the terminal answering our
+    // queries, so it applies unconditionally. We also actively paint its base
+    // background/foreground, so the editing surface uses the theme's base color
+    // rather than the terminal's (which won't match a fixed palette).
+    if let Some(palette) = Settings::borrow().theme.palette() {
+        tui.setup_indexed_colors(palette);
+        tui.set_base_fill(
+            palette[IndexedColor::Background as usize],
+            palette[IndexedColor::Foreground as usize],
+        );
+    } else {
+        tui.setup_indexed_colors(state.system_theme);
+    }
+
+    state.menubar_color_bg = tui.indexed(IndexedColor::Background).oklab_blend(tui.indexed_alpha(
+        IndexedColor::BrightBlue,
+        1,
+        2,
+    ));
+    state.menubar_color_fg = tui.contrasted(state.menubar_color_bg);
+    let floater_bg = tui
+        .indexed_alpha(IndexedColor::Background, 2, 3)
+        .oklab_blend(tui.indexed_alpha(IndexedColor::Foreground, 1, 3));
+    let floater_fg = tui.contrasted(floater_bg);
+    tui.set_floater_default_bg(floater_bg);
+    tui.set_floater_default_fg(floater_fg);
+    tui.set_modal_default_bg(floater_bg);
+    tui.set_modal_default_fg(floater_fg);
 }
 
 /// Strips all C0 control characters from the string and replaces them with "_".
