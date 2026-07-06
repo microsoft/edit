@@ -22,7 +22,15 @@ impl Settings {
     /// Fills the given settings.json text buffer with some initial contents for convenience.
     pub fn bootstrap(tb: &mut TextBuffer) {
         tb.set_crlf(false);
-        tb.write_raw(b"{\n}\n");
+        tb.write_raw(concat!(
+            "{\n",
+            "    // Maps file name globs to language IDs for syntax highlighting.\n",
+            "    // The default is empty (associations are inferred automatically).\n",
+            "    // \"files.associations\": {\n",
+            "    //     \"*.txt\": \"plaintext\"\n",
+            "    // }\n",
+            "}\n",
+        ).as_bytes());
         tb.cursor_move_to_logical(Default::default());
         tb.mark_as_clean();
     }
