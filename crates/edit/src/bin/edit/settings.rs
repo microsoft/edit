@@ -1,4 +1,6 @@
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use edit::buffer::TextBuffer;
 use edit::cell::{Ref, SemiRefCell};
@@ -61,6 +63,10 @@ struct SettingsCell(SemiRefCell<Settings>);
 unsafe impl Sync for SettingsCell {}
 static SETTINGS: SettingsCell = SettingsCell(SemiRefCell::new(Settings::new()));
 
+/// Set when the settings file is saved from within the editor, so the main
+/// loop knows to reload settings and re-apply the theme without a restart.
+static RELOAD_REQUESTED: AtomicBool = AtomicBool::new(false);
+
 impl Settings {
     /// Fills the given settings.json text buffer with some initial contents for convenience.
     pub fn bootstrap(tb: &mut TextBuffer) {
@@ -92,6 +98,23 @@ impl Settings {
 
     pub fn borrow() -> Ref<'static, Settings> {
         SETTINGS.0.borrow()
+    }
+
+    /// If the given path is the settings file, flags a reload for the main loop.
+    /// Called after a document is saved, so editing settings.json applies live.
+    pub fn note_saved(path: &Path) {
+        let is_settings = {
+            let s = SETTINGS.0.borrow();
+            !s.path.as_os_str().is_empty() && s.path == path
+        };
+        if is_settings {
+            RELOAD_REQUESTED.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Returns and clears a pending reload request. See [`Settings::note_saved`].
+    pub fn take_reload_request() -> bool {
+        RELOAD_REQUESTED.swap(false, Ordering::Relaxed)
     }
 
     pub fn reload() -> apperr::Result<()> {

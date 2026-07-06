@@ -43,6 +43,11 @@ impl Document {
             self.set_path(path);
         }
 
+        // If this was the settings file, request a live reload of settings.
+        if let Some(path) = self.path.as_deref() {
+            Settings::note_saved(path);
+        }
+
         Ok(())
     }
 

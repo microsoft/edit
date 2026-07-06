@@ -6,7 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::{Path, PathBuf};
 
-use edit::framebuffer::IndexedColor;
+use edit::framebuffer::{DEFAULT_THEME, INDEXED_COLORS_COUNT, IndexedColor};
 use edit::helpers::*;
 use edit::oklab::StraightRgba;
 use edit::tui::*;
@@ -134,6 +134,10 @@ pub struct State {
     pub menubar_color_bg: StraightRgba,
     pub menubar_color_fg: StraightRgba,
 
+    /// The terminal's own palette, as queried via OSC at startup. Used to
+    /// restore colors when the `theme` setting is switched back to `system`.
+    pub system_theme: [StraightRgba; INDEXED_COLORS_COUNT],
+
     pub documents: DocumentManager,
 
     // A ring buffer of the last 10 errors.
@@ -184,6 +188,7 @@ impl State {
         Ok(Self {
             menubar_color_bg: StraightRgba::zero(),
             menubar_color_fg: StraightRgba::zero(),
+            system_theme: DEFAULT_THEME,
 
             documents: Default::default(),
 
