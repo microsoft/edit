@@ -2,16 +2,59 @@ use std::path::PathBuf;
 
 use edit::buffer::TextBuffer;
 use edit::cell::{Ref, SemiRefCell};
+use edit::framebuffer::{
+    CATPPUCCIN_FRAPPE, CATPPUCCIN_LATTE, CATPPUCCIN_MACCHIATO, CATPPUCCIN_MOCHA,
+    INDEXED_COLORS_COUNT,
+};
 use edit::json;
 use edit::lsh::{LANGUAGES, Language};
+use edit::oklab::StraightRgba;
 use stdext::arena::{read_to_string, scratch_arena};
 use stdext::arena_format;
 
 use crate::apperr;
 
+/// The color theme to use for the editor.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum Theme {
+    /// Follow the terminal's own color palette (queried via OSC). The default.
+    #[default]
+    System,
+    CatppuccinLatte,
+    CatppuccinFrappe,
+    CatppuccinMacchiato,
+    CatppuccinMocha,
+}
+
+impl Theme {
+    fn from_id(id: &str) -> Option<Self> {
+        Some(match id {
+            "system" => Theme::System,
+            "catppuccin-latte" => Theme::CatppuccinLatte,
+            "catppuccin-frappe" => Theme::CatppuccinFrappe,
+            "catppuccin-macchiato" => Theme::CatppuccinMacchiato,
+            "catppuccin-mocha" => Theme::CatppuccinMocha,
+            _ => return None,
+        })
+    }
+
+    /// The fixed palette for this theme, or `None` when the terminal's
+    /// own palette should be used ([`Theme::System`]).
+    pub fn palette(self) -> Option<[StraightRgba; INDEXED_COLORS_COUNT]> {
+        Some(match self {
+            Theme::System => return None,
+            Theme::CatppuccinLatte => CATPPUCCIN_LATTE,
+            Theme::CatppuccinFrappe => CATPPUCCIN_FRAPPE,
+            Theme::CatppuccinMacchiato => CATPPUCCIN_MACCHIATO,
+            Theme::CatppuccinMocha => CATPPUCCIN_MOCHA,
+        })
+    }
+}
+
 pub struct Settings {
     pub path: PathBuf,
     pub file_associations: Vec<(String, &'static Language)>,
+    pub theme: Theme,
 }
 
 struct SettingsCell(SemiRefCell<Settings>);
@@ -22,21 +65,29 @@ impl Settings {
     /// Fills the given settings.json text buffer with some initial contents for convenience.
     pub fn bootstrap(tb: &mut TextBuffer) {
         tb.set_crlf(false);
-        tb.write_raw(concat!(
-            "{\n",
-            "    // Maps file name globs to language IDs for syntax highlighting.\n",
-            "    // The default is empty (associations are inferred automatically).\n",
-            "    // \"files.associations\": {\n",
-            "    //     \"*.txt\": \"plaintext\"\n",
-            "    // }\n",
-            "}\n",
-        ).as_bytes());
+        tb.write_raw(
+            concat!(
+                "{\n",
+                "    // Color theme. One of: \"system\" (follow the terminal palette),\n",
+                "    // \"catppuccin-latte\", \"catppuccin-frappe\", \"catppuccin-macchiato\",\n",
+                "    // \"catppuccin-mocha\".\n",
+                "    // \"theme\": \"system\",\n",
+                "\n",
+                "    // Maps file name globs to language IDs for syntax highlighting.\n",
+                "    // The default is empty (associations are inferred automatically).\n",
+                "    // \"files.associations\": {\n",
+                "    //     \"*.txt\": \"plaintext\"\n",
+                "    // }\n",
+                "}\n",
+            )
+            .as_bytes(),
+        );
         tb.cursor_move_to_logical(Default::default());
         tb.mark_as_clean();
     }
 
     const fn new() -> Self {
-        Settings { path: PathBuf::new(), file_associations: Vec::new() }
+        Settings { path: PathBuf::new(), file_associations: Vec::new(), theme: Theme::System }
     }
 
     pub fn borrow() -> Ref<'static, Settings> {
@@ -72,6 +123,16 @@ impl Settings {
         let Some(root) = json.as_object() else {
             return Err(apperr::Error::SettingsInvalid("Non-object root"));
         };
+
+        if let Some(value) = root.get("theme") {
+            let Some(id) = value.as_str() else {
+                return Err(apperr::Error::SettingsInvalid("theme"));
+            };
+            let Some(theme) = Theme::from_id(id) else {
+                return Err(apperr::Error::SettingsInvalid("theme"));
+            };
+            self.theme = theme;
+        }
 
         if let Some(f) = root.get_object("files.associations") {
             for &(mut key, ref value) in f.iter() {

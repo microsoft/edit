@@ -680,7 +680,18 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         state.documents.reflow_all();
     }
 
-    if color_responses == indexed_colors.len() {
+    // A configured theme overrides the terminal's own palette. Unlike the
+    // OSC-queried colors, it doesn't depend on the terminal answering our
+    // queries, so it applies unconditionally. We also actively paint its base
+    // background/foreground, so the editing surface uses the theme's base color
+    // rather than the terminal's (which won't match a fixed palette).
+    if let Some(palette) = Settings::borrow().theme.palette() {
+        tui.setup_indexed_colors(palette);
+        tui.set_base_fill(
+            palette[IndexedColor::Background as usize],
+            palette[IndexedColor::Foreground as usize],
+        );
+    } else if color_responses == indexed_colors.len() {
         tui.setup_indexed_colors(indexed_colors);
     }
 

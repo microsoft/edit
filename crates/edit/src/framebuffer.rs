@@ -87,6 +87,99 @@ pub const DEFAULT_THEME: [StraightRgba; INDEXED_COLORS_COUNT] = [
     StraightRgba::from_be(0xbebebeff), // Foreground
 ];
 
+/// Catppuccin Latte palette (light). Uses the official ANSI color mapping.
+/// See: <https://github.com/catppuccin/catppuccin>
+pub const CATPPUCCIN_LATTE: [StraightRgba; INDEXED_COLORS_COUNT] = [
+    StraightRgba::from_be(0xbcc0ccff), // Black         (surface1)
+    StraightRgba::from_be(0xd20f39ff), // Red
+    StraightRgba::from_be(0x40a02bff), // Green
+    StraightRgba::from_be(0xdf8e1dff), // Yellow
+    StraightRgba::from_be(0x1e66f5ff), // Blue
+    StraightRgba::from_be(0xea76cbff), // Magenta       (pink)
+    StraightRgba::from_be(0x179299ff), // Cyan          (teal)
+    StraightRgba::from_be(0x5c5f77ff), // White         (subtext1)
+    StraightRgba::from_be(0xacb0beff), // BrightBlack    (surface2)
+    StraightRgba::from_be(0xd20f39ff), // BrightRed
+    StraightRgba::from_be(0x40a02bff), // BrightGreen
+    StraightRgba::from_be(0xdf8e1dff), // BrightYellow
+    StraightRgba::from_be(0x1e66f5ff), // BrightBlue
+    StraightRgba::from_be(0xea76cbff), // BrightMagenta
+    StraightRgba::from_be(0x179299ff), // BrightCyan
+    StraightRgba::from_be(0x6c6f85ff), // BrightWhite    (subtext0)
+    // --------
+    StraightRgba::from_be(0xeff1f5ff), // Background     (base)
+    StraightRgba::from_be(0x4c4f69ff), // Foreground     (text)
+];
+
+/// Catppuccin Frappé palette. Uses the official ANSI color mapping.
+pub const CATPPUCCIN_FRAPPE: [StraightRgba; INDEXED_COLORS_COUNT] = [
+    StraightRgba::from_be(0x51576dff), // Black         (surface1)
+    StraightRgba::from_be(0xe78284ff), // Red
+    StraightRgba::from_be(0xa6d189ff), // Green
+    StraightRgba::from_be(0xe5c890ff), // Yellow
+    StraightRgba::from_be(0x8caaeeff), // Blue
+    StraightRgba::from_be(0xf4b8e4ff), // Magenta       (pink)
+    StraightRgba::from_be(0x81c8beff), // Cyan          (teal)
+    StraightRgba::from_be(0xb5bfe2ff), // White         (subtext1)
+    StraightRgba::from_be(0x626880ff), // BrightBlack    (surface2)
+    StraightRgba::from_be(0xe78284ff), // BrightRed
+    StraightRgba::from_be(0xa6d189ff), // BrightGreen
+    StraightRgba::from_be(0xe5c890ff), // BrightYellow
+    StraightRgba::from_be(0x8caaeeff), // BrightBlue
+    StraightRgba::from_be(0xf4b8e4ff), // BrightMagenta
+    StraightRgba::from_be(0x81c8beff), // BrightCyan
+    StraightRgba::from_be(0xa5adceff), // BrightWhite    (subtext0)
+    // --------
+    StraightRgba::from_be(0x303446ff), // Background     (base)
+    StraightRgba::from_be(0xc6d0f5ff), // Foreground     (text)
+];
+
+/// Catppuccin Macchiato palette. Uses the official ANSI color mapping.
+pub const CATPPUCCIN_MACCHIATO: [StraightRgba; INDEXED_COLORS_COUNT] = [
+    StraightRgba::from_be(0x494d64ff), // Black         (surface1)
+    StraightRgba::from_be(0xed8796ff), // Red
+    StraightRgba::from_be(0xa6da95ff), // Green
+    StraightRgba::from_be(0xeed49fff), // Yellow
+    StraightRgba::from_be(0x8aadf4ff), // Blue
+    StraightRgba::from_be(0xf5bde6ff), // Magenta       (pink)
+    StraightRgba::from_be(0x8bd5caff), // Cyan          (teal)
+    StraightRgba::from_be(0xb8c0e0ff), // White         (subtext1)
+    StraightRgba::from_be(0x5b6078ff), // BrightBlack    (surface2)
+    StraightRgba::from_be(0xed8796ff), // BrightRed
+    StraightRgba::from_be(0xa6da95ff), // BrightGreen
+    StraightRgba::from_be(0xeed49fff), // BrightYellow
+    StraightRgba::from_be(0x8aadf4ff), // BrightBlue
+    StraightRgba::from_be(0xf5bde6ff), // BrightMagenta
+    StraightRgba::from_be(0x8bd5caff), // BrightCyan
+    StraightRgba::from_be(0xa5adcbff), // BrightWhite    (subtext0)
+    // --------
+    StraightRgba::from_be(0x24273aff), // Background     (base)
+    StraightRgba::from_be(0xcad3f5ff), // Foreground     (text)
+];
+
+/// Catppuccin Mocha palette (dark). Uses the official ANSI color mapping.
+pub const CATPPUCCIN_MOCHA: [StraightRgba; INDEXED_COLORS_COUNT] = [
+    StraightRgba::from_be(0x45475aff), // Black         (surface1)
+    StraightRgba::from_be(0xf38ba8ff), // Red
+    StraightRgba::from_be(0xa6e3a1ff), // Green
+    StraightRgba::from_be(0xf9e2afff), // Yellow
+    StraightRgba::from_be(0x89b4faff), // Blue
+    StraightRgba::from_be(0xf5c2e7ff), // Magenta       (pink)
+    StraightRgba::from_be(0x94e2d5ff), // Cyan          (teal)
+    StraightRgba::from_be(0xbac2deff), // White         (subtext1)
+    StraightRgba::from_be(0x585b70ff), // BrightBlack    (surface2)
+    StraightRgba::from_be(0xf38ba8ff), // BrightRed
+    StraightRgba::from_be(0xa6e3a1ff), // BrightGreen
+    StraightRgba::from_be(0xf9e2afff), // BrightYellow
+    StraightRgba::from_be(0x89b4faff), // BrightBlue
+    StraightRgba::from_be(0xf5c2e7ff), // BrightMagenta
+    StraightRgba::from_be(0x94e2d5ff), // BrightCyan
+    StraightRgba::from_be(0xa6adc8ff), // BrightWhite    (subtext0)
+    // --------
+    StraightRgba::from_be(0x1e1e2eff), // Background     (base)
+    StraightRgba::from_be(0xcdd6f4ff), // Foreground     (text)
+];
+
 /// A shoddy framebuffer for terminal applications.
 ///
 /// The idea is that you create a [`Framebuffer`], draw a bunch of text and
@@ -162,6 +255,17 @@ impl Framebuffer {
         if lightness[0] > lightness[1] {
             self.auto_colors.swap(0, 1);
         }
+    }
+
+    /// Actively paints the default background/foreground of every cell with the
+    /// given colors, instead of letting the terminal's own defaults show through.
+    ///
+    /// [`set_indexed_colors`](Self::set_indexed_colors) resets these fills to
+    /// transparent, so call this afterwards. This is used by fixed themes (e.g.
+    /// Catppuccin), whose base color must not depend on the terminal's palette.
+    pub fn set_base_fill(&mut self, background: StraightRgba, foreground: StraightRgba) {
+        self.background_fill = background;
+        self.foreground_fill = foreground;
     }
 
     /// Begins a new frame with the given `size`.

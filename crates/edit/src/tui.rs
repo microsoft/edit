@@ -435,6 +435,12 @@ impl Tui {
         self.framebuffer.set_indexed_colors(colors);
     }
 
+    /// Actively paints every cell's default background/foreground with the given
+    /// colors. See [`Framebuffer::set_base_fill()`].
+    pub fn set_base_fill(&mut self, background: StraightRgba, foreground: StraightRgba) {
+        self.framebuffer.set_base_fill(background, foreground);
+    }
+
     /// Set up translations for Ctrl/Alt/Shift modifiers.
     pub fn setup_modifier_translations(&mut self, translations: ModifierTranslations) {
         self.modifier_translations = translations;
