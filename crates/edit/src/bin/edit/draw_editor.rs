@@ -399,9 +399,13 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
     }
     let mut action = Action::None;
 
+    // Derive the foreground from the background so it stays legible regardless
+    // of the theme. A hardcoded BrightWhite is too light on themes whose Red is
+    // a light color (e.g. Catppuccin).
+    let bg = ctx.indexed(IndexedColor::Red);
     ctx.modal_begin("unsaved-changes", loc(LocId::UnsavedChangesDialogTitle));
-    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
-    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+    ctx.attr_background_rgba(bg);
+    ctx.attr_foreground_rgba(ctx.contrasted(bg));
     {
         let contains_focus = ctx.contains_focus();
 
