@@ -252,8 +252,12 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                     action = Some(SearchAction::Search);
                 }
                 if !state.search_success {
-                    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
-                    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
+                    // Derive the foreground from the background so it stays
+                    // legible on themes whose Red is a light color (e.g.
+                    // Catppuccin), instead of a hardcoded BrightWhite.
+                    let bg = ctx.indexed(IndexedColor::Red);
+                    ctx.attr_background_rgba(bg);
+                    ctx.attr_foreground_rgba(ctx.contrasted(bg));
                 }
                 ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
                 if focus == StateSearchKind::Search {
