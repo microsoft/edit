@@ -1,7 +1,6 @@
 #[display_name = "XML"]
 #[path = "**/*.csproj.user"]
 #[path = "**/*.csproj"]
-#[path = "**/*.html"]
 #[path = "**/*.nuspec"]
 #[path = "**/*.proj"]
 #[path = "**/*.props"]

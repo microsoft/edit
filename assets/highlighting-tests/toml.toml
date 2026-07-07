@@ -1,0 +1,44 @@
+# Line comment
+
+title = "TOML example"
+enabled = true
+disabled = false
+
+# Numbers
+int1 = 42
+int2 = 0xff
+int3 = 0b1010
+int4 = 0o77
+int5 = 1_000_000
+float1 = 3.14
+float2 = 1.5e-3
+float3 = inf
+float4 = nan
+
+# Dates
+date1 = 2026-07-06
+datetime1 = 2026-07-06T12:30:00Z
+datetime2 = 2026-07-06 12:30:00.5+02:00
+
+# Strings
+basic = "double \" quote \n escape"
+literal = 'no \n escape here'
+multiline = """
+multi-line
+basic string
+"""
+multiline_literal = '''
+multi-line
+literal string
+'''
+
+[package]
+name = "edit"
+version = "1.0.0"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+
+[[bin]]
+name = "edit"
+path = "src/main.rs"

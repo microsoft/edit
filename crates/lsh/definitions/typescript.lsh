@@ -1,0 +1,67 @@
+#[display_name = "TypeScript"]
+#[path = "**/*.ts"]
+#[path = "**/*.tsx"]
+#[path = "**/*.mts"]
+#[path = "**/*.cts"]
+pub fn typescript() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /`/ {
+            loop {
+                yield string;
+                if /\\./ {}
+                else if /`/ { yield string; break; }
+                await input;
+            }
+        } else if /@\w+/ {
+            // Decorator.
+            yield markup.link;
+        } else if /(?:break|case|catch|continue|debugger|default|do|else|finally|for|if|return|switch|throw|try|while)\>/ {
+            yield keyword.control;
+        } else if /(?:abstract|as|asserts|async|await|class|const|declare|delete|enum|export|extends|function|implements|import|in|infer|instanceof|interface|is|keyof|let|namespace|new|of|override|private|protected|public|readonly|satisfies|static|super|this|type|typeof|var|void|yield)\>/ {
+            yield keyword.other;
+        } else if /(?:any|boolean|never|number|object|string|symbol|undefined|unknown|bigint|Array|Promise|Record|Partial|Readonly|Map|Set)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|null|undefined|NaN|Infinity)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)n?/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

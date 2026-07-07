@@ -1,0 +1,48 @@
+/* Block comment
+   spanning lines */
+
+@import "reset.css";
+
+:root {
+  --primary: #3366ff;
+  --spacing: 8px;
+}
+
+body {
+  margin: 0;
+  padding: 1.5rem;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #333;
+  background: #ffffff;
+}
+
+.container {
+  display: flex;
+  width: 100%;
+  max-width: 960px;
+  transform: rotate(45deg);
+  transition: all 0.3s ease-in-out;
+}
+
+#header,
+.nav > li {
+  color: rgba(0, 0, 0, 0.8);
+  content: "hello \" world";
+  z-index: 10 !important;
+}
+
+@media (max-width: 600px) {
+  .container {
+    flex-direction: column;
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

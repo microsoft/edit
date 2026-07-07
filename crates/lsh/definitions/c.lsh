@@ -1,0 +1,53 @@
+#[display_name = "C"]
+#[path = "**/*.c"]
+#[path = "**/*.h"]
+pub fn c() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /#\s*(?:include|define|undef|if|ifdef|ifndef|elif|else|endif|pragma|error|warning|line)\>/ {
+            // Preprocessor directive.
+            yield markup.link;
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /'/ {
+            single_quote_string();
+        } else if /(?:break|case|continue|default|do|else|for|goto|if|return|switch|while)\>/ {
+            yield keyword.control;
+        } else if /(?:auto|const|enum|extern|inline|register|restrict|sizeof|static|struct|typedef|union|volatile|_Alignas|_Alignof|_Atomic|_Noreturn|_Static_assert|_Thread_local)\>/ {
+            yield keyword.other;
+        } else if /(?:void|char|short|int|long|float|double|signed|unsigned|_Bool|_Complex|_Imaginary|bool|size_t|ssize_t|ptrdiff_t|wchar_t|int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t|intptr_t|uintptr_t|FILE|va_list)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|NULL)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-f]+|0b[01]+|[\d']+\.?[\d']*|\.[\d]+)(?:e[+-]?[\d]+)?)[uUlLfF]*/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

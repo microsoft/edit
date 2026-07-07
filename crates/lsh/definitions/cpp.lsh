@@ -1,0 +1,66 @@
+#[display_name = "C++"]
+#[path = "**/*.cpp"]
+#[path = "**/*.cxx"]
+#[path = "**/*.cc"]
+#[path = "**/*.hpp"]
+#[path = "**/*.hxx"]
+#[path = "**/*.hh"]
+#[path = "**/*.ipp"]
+#[path = "**/*.tpp"]
+pub fn cpp() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /#\s*(?:include|define|undef|if|ifdef|ifndef|elif|else|endif|pragma|error|warning|line|import|export)\>/ {
+            // Preprocessor directive.
+            yield markup.link;
+        } else if /R"[^(]*\(/ {
+            // Raw string literal. Escapes are not processed, may span lines.
+            loop {
+                yield string;
+                if /\)[^"]*"/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /'/ {
+            single_quote_string();
+        } else if /(?:break|case|catch|continue|co_await|co_return|co_yield|default|do|else|for|goto|if|return|switch|throw|try|while)\>/ {
+            yield keyword.control;
+        } else if /(?:alignas|alignof|auto|class|concept|const|consteval|constexpr|constinit|const_cast|decltype|delete|dynamic_cast|enum|explicit|export|extern|friend|inline|mutable|namespace|new|noexcept|operator|override|private|protected|public|register|reinterpret_cast|requires|sizeof|static|static_assert|static_cast|struct|template|this|thread_local|typedef|typeid|typename|union|using|virtual|volatile)\>/ {
+            yield keyword.other;
+        } else if /(?:void|bool|char|char8_t|char16_t|char32_t|wchar_t|short|int|long|float|double|signed|unsigned|size_t|ssize_t|ptrdiff_t|int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t|string|wstring|string_view|vector|map|set|unordered_map|unordered_set|pair|tuple|array|shared_ptr|unique_ptr|weak_ptr|optional|variant)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|nullptr|NULL)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-f']+|0b[01']+|[\d']+\.?[\d']*|\.[\d]+)(?:e[+-]?[\d]+)?)[uUlLfFzZ]*/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*(?:<[^;{}()]*>)?\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

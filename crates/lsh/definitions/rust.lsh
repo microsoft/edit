@@ -1,0 +1,65 @@
+#[display_name = "Rust"]
+#[path = "**/*.rs"]
+pub fn rust() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /r#*"/ {
+            // Raw string literal. Escapes are not processed.
+            loop {
+                yield string;
+                if /"#*/ { yield string; break; }
+                await input;
+            }
+        } else if /b?"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /b?'(?:\\.|[^'\\])'/ {
+            yield string;
+        } else if /'(?:static|_|[a-zA-Z]\w*)\>/ {
+            // Lifetime annotation.
+            yield variable;
+        } else if /#!?\[/ {
+            // Attribute.
+            yield markup.link;
+        } else if /(?:as|break|continue|else|for|if|in|loop|match|return|while)\>/ {
+            yield keyword.control;
+        } else if /(?:async|await|const|crate|dyn|enum|extern|fn|impl|let|mod|move|mut|pub|ref|self|Self|static|struct|super|trait|type|union|unsafe|use|where)\>/ {
+            yield keyword.other;
+        } else if /(?:bool|char|str|u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64|String|Vec|Option|Result|Box|Rc|Arc|Cell|RefCell)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|None|Some|Ok|Err)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64)?/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)!/ {
+            // Macro invocation.
+            yield $1 as method;
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

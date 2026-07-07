@@ -1,0 +1,56 @@
+#[display_name = "Go"]
+#[path = "**/*.go"]
+pub fn go() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /`/ {
+            // Raw string literal. Escapes are not processed, may span lines.
+            loop {
+                yield string;
+                if /`/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /'(?:\\.|[^'\\])'/ {
+            yield string;
+        } else if /(?:break|case|continue|default|else|fallthrough|for|goto|if|range|return|select|switch)\>/ {
+            yield keyword.control;
+        } else if /(?:chan|const|defer|func|go|import|interface|map|package|struct|type|var)\>/ {
+            yield keyword.other;
+        } else if /(?:bool|byte|complex64|complex128|error|float32|float64|int|int8|int16|int32|int64|rune|string|uint|uint8|uint16|uint32|uint64|uintptr|any)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|nil|iota)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)i?/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

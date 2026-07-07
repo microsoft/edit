@@ -1,0 +1,51 @@
+#[display_name = "CSS"]
+#[path = "**/*.css"]
+#[path = "**/*.scss"]
+#[path = "**/*.less"]
+pub fn css() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            // Line comment (SCSS/LESS).
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /'/ {
+            single_quote_string();
+        } else if /"/ {
+            double_quote_string();
+        } else if /@[\w-]+/ {
+            // At-rule such as @media, @import, @keyframes.
+            yield keyword.control;
+        } else if /\$[\w-]+/ {
+            // SCSS variable.
+            yield variable;
+        } else if /!important\>/ {
+            yield keyword.other;
+        } else if /#[\da-fA-F]{3,8}\>/ {
+            // Hex color.
+            yield constant.numeric;
+        } else if /(?i:-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(?:px|em|rem|ex|ch|vw|vh|vmin|vmax|cm|mm|in|pt|pc|deg|rad|grad|turn|ms|s|fr|%)?/ {
+            yield constant.numeric;
+        } else if /([\w-]+)\s*:/ {
+            // Property name.
+            yield $1 as variable;
+            yield other;
+        } else if /[.#][\w-]+/ {
+            // Class or id selector.
+            yield keyword.other;
+        } else if /\w+/ {
+            // Element selector / value keyword. Gobble to a word boundary.
+        }
+
+        yield other;
+    }
+}

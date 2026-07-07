@@ -1,0 +1,54 @@
+#[display_name = "TOML"]
+#[path = "**/*.toml"]
+#[path = "**/Cargo.lock"]
+pub fn toml() {
+    // Table headers such as [package] or [[bin]].
+    if /\s*\[\[?[^\]]*\]\]?/ {
+        yield meta.header;
+        yield other;
+    }
+
+    until /$/ {
+        yield other;
+
+        if /#.*/ {
+            yield comment;
+        } else if /([\w.-]+|"[^"]*"|'[^']*')\s*=/ {
+            yield $1 as variable;
+            yield other;
+        } else if /'''/ {
+            // Multi-line literal string.
+            loop {
+                yield string;
+                if /'''/ { yield string; break; }
+                await input;
+            }
+        } else if /"""/ {
+            // Multi-line basic string.
+            loop {
+                yield string;
+                if /"""/ { yield string; break; }
+                await input;
+            }
+        } else if /'/ {
+            single_quote_string();
+        } else if /"/ {
+            double_quote_string();
+        } else if /(?:true|false)\>/ {
+            yield constant.language;
+        } else if /\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})?)?/ {
+            // Date / time.
+            yield constant.numeric;
+        } else if /(?i:[+-]?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|inf|nan|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)/ {
+            if /\w+/ {
+                // Not a number after all.
+            } else {
+                yield constant.numeric;
+            }
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

@@ -1,0 +1,94 @@
+#[display_name = "HTML"]
+#[path = "**/*.html"]
+#[path = "**/*.htm"]
+#[path = "**/*.xhtml"]
+#[path = "**/*.vue"]
+#[path = "**/*.svelte"]
+pub fn html() {
+    until /$/ {
+        yield other;
+
+        if /<!--/ {
+            loop {
+                yield comment;
+                await input;
+                if /-->/ {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /<!(DOCTYPE|doctype)[^>]*>/ {
+            yield $1 as constant.language;
+            yield other;
+        } else if /<(?:script)\>/ {
+            // Embedded JavaScript.
+            yield constant.language;
+            yield other;
+            html_tag_attributes();
+            loop {
+                await input;
+                if /\s*<\/script\s*>/ {
+                    yield constant.language;
+                    yield other;
+                    break;
+                } else {
+                    javascript();
+                    if /.*/ {}
+                }
+            }
+        } else if /<(?:style)\>/ {
+            // Embedded CSS.
+            yield constant.language;
+            yield other;
+            html_tag_attributes();
+            loop {
+                await input;
+                if /\s*<\/style\s*>/ {
+                    yield constant.language;
+                    yield other;
+                    break;
+                } else {
+                    css();
+                    if /.*/ {}
+                }
+            }
+        } else if /<([\w:.-]+)/ {
+            yield $1 as constant.language;
+            yield other;
+            html_tag_attributes();
+        } else if /<\/([\w:.-]+)\s*>/ {
+            yield $1 as constant.language;
+            yield other;
+        } else if /(?:&#|&)[\w:.-]+;/ {
+            yield constant.numeric;
+        }
+
+        yield other;
+    }
+}
+
+// Consumes tag attributes up to and including the closing `>`.
+fn html_tag_attributes() {
+    until />/ {
+        yield other;
+        await input;
+
+        if /([\w:.-]+)\s*=/ {
+            yield $1 as variable;
+            yield other;
+        } else if /"/ {
+            until /"/ {
+                yield string;
+                await input;
+            }
+            yield string;
+        } else if /'/ {
+            until /'/ {
+                yield string;
+                await input;
+            }
+            yield string;
+        }
+    }
+    yield other;
+}
