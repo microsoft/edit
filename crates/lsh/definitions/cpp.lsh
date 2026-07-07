@@ -2,6 +2,7 @@
 #[path = "**/*.cpp"]
 #[path = "**/*.cxx"]
 #[path = "**/*.cc"]
+#[path = "**/*.h"]
 #[path = "**/*.hpp"]
 #[path = "**/*.hxx"]
 #[path = "**/*.hh"]

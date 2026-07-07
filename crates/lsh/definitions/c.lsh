@@ -1,6 +1,5 @@
 #[display_name = "C"]
 #[path = "**/*.c"]
-#[path = "**/*.h"]
 pub fn c() {
     until /$/ {
         yield other;
