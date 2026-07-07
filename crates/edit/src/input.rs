@@ -18,7 +18,7 @@ use crate::vt;
 /// Of course you could just translate on the ABI boundary, but my hope is that this
 /// design lets me realize some restrictions early on that I can't foresee yet.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct InputKey(u32);
 
 impl InputKey {
@@ -212,6 +212,9 @@ pub mod kbmod {
     pub const CTRL: InputKeyMod = InputKeyMod::new(0x01000000);
     pub const ALT: InputKeyMod = InputKeyMod::new(0x02000000);
     pub const SHIFT: InputKeyMod = InputKeyMod::new(0x04000000);
+    /// The "Super" modifier (Windows/Command key), reported by the
+    /// Kitty keyboard protocol when enabled and forwarded by the terminal.
+    pub const SUPER: InputKeyMod = InputKeyMod::new(0x08000000);
 
     pub const CTRL_ALT: InputKeyMod = InputKeyMod::new(0x03000000);
     pub const CTRL_SHIFT: InputKeyMod = InputKeyMod::new(0x05000000);
@@ -381,6 +384,11 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                             }
                         }
                         'Z' => return Some(Input::Keyboard(kbmod::SHIFT | vk::TAB)),
+                        'u' => {
+                            if let Some(input) = Self::parse_kitty_key(csi) {
+                                return Some(input);
+                            }
+                        }
                         '~' => {
                             const LUT: [u8; 35] = [
                                 0,
@@ -538,7 +546,44 @@ impl<'input> Stream<'_, '_, 'input> {
         if (p1 & 0x04) != 0 {
             modifiers |= kbmod::CTRL;
         }
+        if (p1 & 0x08) != 0 {
+            modifiers |= kbmod::SUPER;
+        }
         modifiers
+    }
+
+    /// Decodes a Kitty keyboard protocol key event of the form
+    /// `CSI <unicode-codepoint> ; <modifiers> u`.
+    ///
+    /// This is only ever received when the Kitty keyboard protocol has been
+    /// enabled during terminal setup (see the `edit` binary's `setup_terminal`),
+    /// which is gated on the terminal advertising support. Under the flags we
+    /// request, a handful of special keys (Enter/Tab/Escape/Backspace) and all
+    /// modified keys arrive in this form, so we map them back onto the existing
+    /// `vk`/`kbmod` model.
+    fn parse_kitty_key(csi: &vt::Csi) -> Option<Input<'input>> {
+        let cp = csi.params[0] as u32;
+        let modifiers = Self::parse_modifiers(csi);
+
+        let key = match cp {
+            13 => vk::RETURN,
+            9 => vk::TAB,
+            27 => vk::ESCAPE,
+            127 => vk::BACK,
+            // a-z: fold to A-Z so it matches the `vk` letter constants.
+            0x61..=0x7a => InputKey::new(cp & !0x20),
+            // Other printable ASCII passes through as-is.
+            0x20..=0x7e => InputKey::new(cp),
+            _ => return None,
+        };
+
+        // Translate the macOS clipboard shortcuts Super+C/V/X onto the existing
+        // Ctrl+C/V/X handling so all downstream copy/cut/paste logic is reused.
+        if modifiers.contains(kbmod::SUPER) && matches!(cp, 0x63 | 0x76 | 0x78) {
+            return Some(Input::Keyboard(kbmod::CTRL | key));
+        }
+
+        Some(Input::Keyboard(key | modifiers))
     }
 
     fn parse_xterm_mouse(params: &[u16], final_byte: char) -> Option<Input<'input>> {
@@ -590,5 +635,61 @@ impl<'input> Stream<'_, '_, 'input> {
         mouse.modifiers |= if (btn & CTRL) != 0 { kbmod::CTRL } else { kbmod::NONE };
 
         Some(Input::Mouse(mouse))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Feeds `input` through the VT tokenizer and input parser and returns the
+    /// single keyboard key it decodes to (panicking otherwise).
+    fn decode_key(input: &str) -> InputKey {
+        let mut vt_parser = vt::Parser::new();
+        let mut parser = Parser::new();
+        let vt_stream = vt_parser.parse(input);
+        let mut stream = parser.parse(vt_stream);
+        match stream.next() {
+            Some(Input::Keyboard(key)) => key,
+            _ => panic!("expected a keyboard input"),
+        }
+    }
+
+    #[test]
+    fn kitty_super_c_maps_to_ctrl_c() {
+        // CSI 99 ; 9 u -> Super+c (modifier 9 = base 1 + super bit 8).
+        assert_eq!(decode_key("\x1b[99;9u"), kbmod::CTRL | vk::C);
+    }
+
+    #[test]
+    fn kitty_super_v_and_x_map_to_ctrl() {
+        assert_eq!(decode_key("\x1b[118;9u"), kbmod::CTRL | vk::V);
+        assert_eq!(decode_key("\x1b[120;9u"), kbmod::CTRL | vk::X);
+    }
+
+    #[test]
+    fn kitty_ctrl_c_maps_to_ctrl_c() {
+        // CSI 99 ; 5 u -> Ctrl+c (modifier 5 = base 1 + ctrl bit 4).
+        assert_eq!(decode_key("\x1b[99;5u"), kbmod::CTRL | vk::C);
+    }
+
+    #[test]
+    fn kitty_plain_letter() {
+        // CSI 97 u -> plain 'a', folded to A with no modifiers.
+        assert_eq!(decode_key("\x1b[97u"), vk::A);
+    }
+
+    #[test]
+    fn kitty_super_plain_letter() {
+        // Super+a (non clipboard key) keeps the SUPER modifier.
+        assert_eq!(decode_key("\x1b[97;9u"), kbmod::SUPER | vk::A);
+    }
+
+    #[test]
+    fn kitty_special_keys() {
+        assert_eq!(decode_key("\x1b[13u"), vk::RETURN);
+        assert_eq!(decode_key("\x1b[9u"), vk::TAB);
+        assert_eq!(decode_key("\x1b[27u"), vk::ESCAPE);
+        assert_eq!(decode_key("\x1b[127u"), vk::BACK);
     }
 }

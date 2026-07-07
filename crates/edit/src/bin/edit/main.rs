@@ -47,7 +47,7 @@ fn main() -> process::ExitCode {
     if cfg!(debug_assertions) {
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            drop(RestoreModes);
+            drop(RestoreModes { kitty_enabled: false });
             drop(sys::Deinit);
             hook(info);
         }));
@@ -562,10 +562,17 @@ fn write_osc_clipboard<'a>(
     state.osc_clipboard_sync = false;
 }
 
-struct RestoreModes;
+struct RestoreModes {
+    /// Whether we pushed Kitty keyboard protocol flags and thus need to pop them.
+    kitty_enabled: bool,
+}
 
 impl Drop for RestoreModes {
     fn drop(&mut self) {
+        // Pop the Kitty keyboard protocol flags we pushed during setup, if any.
+        if self.kitty_enabled {
+            sys::write_stdout("\x1b[<u");
+        }
         // Same as in the beginning but in the reverse order.
         // It also includes DECSCUSR 0 to reset the cursor style and DECTCEM to show the cursor.
         // We specifically don't reset mode 1036, because most applications expect it to be set nowadays.
@@ -594,6 +601,11 @@ fn setup_terminal(state: &mut State, vt_parser: &mut vt::Parser) -> RestoreModes
         // actual display width of the character and assigns it columns accordingly.
         // We detect it by writing the character and asking for the cursor position.
         "\r…\x1b[6n",
+        // Query the current Kitty keyboard protocol flags. Terminals that
+        // support the protocol reply with `CSI ? <flags> u`; others stay silent.
+        // We use this to gate enabling the protocol (see below), so that
+        // non-supporting terminals are entirely unaffected.
+        "\x1b[?u",
         // CSI c reports the terminal capabilities.
         // It also helps us to detect the end of the responses, because not all
         // terminals support the OSC queries, but all of them support CSI c.
@@ -605,6 +617,7 @@ fn setup_terminal(state: &mut State, vt_parser: &mut vt::Parser) -> RestoreModes
     let mut indexed_colors = framebuffer::DEFAULT_THEME;
     let mut color_responses = 0;
     let mut ambiguous_width = 1;
+    let mut kitty_supported = false;
 
     while !done {
         let scratch = scratch_arena(None);
@@ -621,6 +634,8 @@ fn setup_terminal(state: &mut State, vt_parser: &mut vt::Parser) -> RestoreModes
             match token {
                 Token::Csi(csi) => match csi.final_byte {
                     'c' => done = true,
+                    // Kitty keyboard protocol flags report: `CSI ? <flags> u`.
+                    'u' if csi.private_byte == '?' => kitty_supported = true,
                     // CPR (Cursor Position Report) response.
                     'R' => ambiguous_width = csi.params[1] as CoordType - 1,
                     _ => {}
@@ -694,7 +709,15 @@ fn setup_terminal(state: &mut State, vt_parser: &mut vt::Parser) -> RestoreModes
         state.system_theme = indexed_colors;
     }
 
-    RestoreModes
+    // Only enable the Kitty keyboard protocol if the terminal advertised support.
+    // Flag 1 ("disambiguate escape codes") is enough to receive the Super (Command)
+    // modifier on letters, enabling macOS-style Cmd+C/V/X, while plain text still
+    // arrives as normal text input.
+    if kitty_supported {
+        sys::write_stdout("\x1b[>1u");
+    }
+
+    RestoreModes { kitty_enabled: kitty_supported }
 }
 
 /// Applies the palette for the currently configured [`Theme`] and recomputes
