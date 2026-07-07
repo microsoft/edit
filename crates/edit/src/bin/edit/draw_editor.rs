@@ -1,17 +1,22 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::fs;
 use std::num::ParseIntError;
+use std::path::PathBuf;
 
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
-use edit::icu;
 use edit::input::{kbmod, vk};
 use edit::tui::*;
+use edit::{icu, path};
 use stdext::string_from_utf8_lossy_owned;
 
 use crate::localization::*;
 use crate::state::*;
+
+/// Width in columns of the file browser pane, including its border.
+const FILE_PANE_WIDTH: CoordType = 30;
 
 pub fn draw_editor(ctx: &mut Context, state: &mut State) {
     if !matches!(state.wants_search.kind, StateSearchKind::Hidden | StateSearchKind::Disabled) {
@@ -25,16 +30,164 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         StateSearchKind::Replace => 5,
         _ => 2,
     };
+    let content_height = size.height - height_reduction;
 
+    if state.file_pane_visible {
+        ctx.table_begin("editor-row");
+        ctx.table_set_columns(&[FILE_PANE_WIDTH, COORD_TYPE_SAFE_MAX]);
+        ctx.attr_intrinsic_size(Size { width: 0, height: content_height });
+        {
+            ctx.table_next_row();
+
+            draw_file_pane(ctx, state, content_height);
+            draw_editor_area(ctx, state, content_height);
+        }
+        ctx.table_end();
+    } else {
+        draw_editor_area(ctx, state, content_height);
+    }
+}
+
+fn draw_editor_area(ctx: &mut Context, state: &mut State, content_height: CoordType) {
     if let Some(doc) = state.documents.active() {
         ctx.textarea("textarea", doc.buffer.clone());
         ctx.inherit_focus();
+        if state.wants_editor_focus {
+            state.wants_editor_focus = false;
+            ctx.steal_focus();
+        }
     } else {
+        state.wants_editor_focus = false;
         ctx.block_begin("empty");
         ctx.block_end();
     }
 
-    ctx.attr_intrinsic_size(Size { width: 0, height: size.height - height_reduction });
+    ctx.attr_intrinsic_size(Size { width: 0, height: content_height });
+}
+
+/// Draws the Yazi-like file browser pane on the left-hand side.
+fn draw_file_pane(ctx: &mut Context, state: &mut State, content_height: CoordType) {
+    // Initialize the directory to the active document's directory (or the CWD)
+    // the first time the pane is shown.
+    if state.file_pane_dir.as_path().as_os_str().is_empty() {
+        let dir = state
+            .documents
+            .active()
+            .and_then(|doc| doc.dir.as_ref().map(|d| d.as_path().to_path_buf()))
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        state.file_pane_dir = DisplayablePathBuf::from_path(dir);
+        state.file_pane_entries = None;
+    }
+
+    if state.file_pane_entries.is_none() {
+        refresh_file_pane_entries(state);
+    }
+
+    let mut navigate_to: Option<PathBuf> = None;
+    let mut open_file: Option<PathBuf> = None;
+
+    ctx.block_begin("file-pane");
+    ctx.attr_focus_well();
+    ctx.attr_border();
+    ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
+    ctx.attr_intrinsic_size(Size { width: FILE_PANE_WIDTH, height: content_height });
+    {
+        let contains_focus = ctx.contains_focus();
+
+        ctx.label("dir", state.file_pane_dir.as_str());
+        ctx.attr_overflow(Overflow::TruncateMiddle);
+
+        if contains_focus && ctx.consume_shortcut(vk::ESCAPE) {
+            state.wants_editor_focus = true;
+        }
+
+        ctx.scrollarea_begin("file-pane-scroll", Size { width: 0, height: content_height - 3 });
+        {
+            ctx.next_block_id_mixin(state.file_pane_dir_revision);
+            ctx.list_begin("entries");
+
+            let mut first = true;
+            for entries in state.file_pane_entries.as_ref().unwrap() {
+                for entry in entries {
+                    let sel = ctx.list_item(false, entry.as_str());
+                    ctx.attr_overflow(Overflow::TruncateMiddle);
+
+                    if first && state.file_pane_focus {
+                        ctx.list_item_steal_focus();
+                    }
+                    first = false;
+
+                    if sel == ListSelection::Activated {
+                        let path =
+                            path::normalize(&state.file_pane_dir.as_path().join(entry.as_path()));
+                        if path.is_dir() {
+                            navigate_to = Some(path);
+                        } else {
+                            open_file = Some(path);
+                        }
+                    }
+                }
+            }
+
+            ctx.list_end();
+        }
+        ctx.scrollarea_end();
+    }
+    ctx.block_end();
+
+    state.file_pane_focus = false;
+
+    if let Some(dir) = navigate_to {
+        state.file_pane_dir = DisplayablePathBuf::from_path(dir);
+        state.file_pane_dir_revision = state.file_pane_dir_revision.wrapping_add(1);
+        state.file_pane_entries = None;
+        ctx.needs_rerender();
+    } else if let Some(path) = open_file {
+        match state.documents.add_file_path(&path) {
+            Ok(..) => {
+                state.wants_editor_focus = true;
+                ctx.needs_rerender();
+            }
+            Err(err) => error_log_add(ctx, state, err),
+        }
+    }
+}
+
+/// Reads the contents of `state.file_pane_dir` into `state.file_pane_entries`.
+/// Handles inaccessible directories gracefully (yields an empty listing).
+fn refresh_file_pane_entries(state: &mut State) {
+    let dir = state.file_pane_dir.as_path();
+    // ["..", directories, files]
+    let mut dirs_files = [Vec::new(), Vec::new(), Vec::new()];
+
+    if cfg!(windows) || dir.parent().is_some() {
+        dirs_files[0].push(DisplayablePathBuf::from(".."));
+    }
+
+    if let Ok(iter) = fs::read_dir(dir) {
+        for entry in iter.flatten() {
+            if let Ok(metadata) = entry.metadata() {
+                let mut name = entry.file_name();
+                let is_dir = metadata.is_dir()
+                    || (metadata.is_symlink()
+                        && fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()));
+                let idx = if is_dir { 1 } else { 2 };
+
+                if is_dir {
+                    name.push("/");
+                }
+
+                dirs_files[idx].push(DisplayablePathBuf::from(name));
+            }
+        }
+    }
+
+    for entries in &mut dirs_files[1..] {
+        entries.sort_unstable_by(|a, b| icu::compare_strings(a.as_bytes(), b.as_bytes()));
+    }
+
+    state.file_pane_entries = Some(dirs_files);
 }
 
 fn draw_search(ctx: &mut Context, state: &mut State) {

@@ -142,6 +142,18 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
         }
     }
 
+    // The menu item toggles visibility. Focusing the pane is bound to the
+    // Ctrl+B shortcut instead (handled globally), so no shortcut is shown here.
+    if ctx.menubar_menu_checkbox(loc(LocId::ViewFilePane), 'B', vk::NULL, state.file_pane_visible) {
+        state.file_pane_visible = !state.file_pane_visible;
+        if state.file_pane_visible {
+            state.file_pane_focus = true;
+        } else {
+            state.wants_editor_focus = true;
+        }
+        ctx.needs_rerender();
+    }
+
     ctx.menubar_menu_end();
 }
 

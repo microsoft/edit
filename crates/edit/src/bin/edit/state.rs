@@ -153,6 +153,14 @@ pub struct State {
     pub file_picker_overwrite_warning: Option<PathBuf>,            // The path the warning is about.
     pub file_picker_autocomplete: Vec<DisplayablePathBuf>,
 
+    // Left-hand file browser pane (Yazi-like).
+    pub file_pane_visible: bool,
+    pub file_pane_focus: bool, // Request to move keyboard focus into the pane.
+    pub file_pane_dir: DisplayablePathBuf,
+    pub file_pane_dir_revision: u64, // Bumped every time `file_pane_dir` changes.
+    pub file_pane_entries: Option<[Vec<DisplayablePathBuf>; 3]>, // ["..", directories, files]
+    pub wants_editor_focus: bool,    // Request to move keyboard focus back into the editor.
+
     pub wants_search: StateSearch,
     pub search_needle: String,
     pub search_replacement: String,
@@ -203,6 +211,13 @@ impl State {
             file_picker_entries: None,
             file_picker_overwrite_warning: None,
             file_picker_autocomplete: Vec::new(),
+
+            file_pane_visible: false,
+            file_pane_focus: false,
+            file_pane_dir: Default::default(),
+            file_pane_dir_revision: 0,
+            file_pane_entries: None,
+            wants_editor_focus: false,
 
             wants_search: StateSearch { kind: StateSearchKind::Hidden, focus: false },
             search_needle: Default::default(),

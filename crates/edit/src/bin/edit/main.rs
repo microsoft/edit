@@ -385,6 +385,11 @@ fn draw(ctx: &mut Context, state: &mut State) {
             state.wants_exit = true;
         } else if key == kbmod::CTRL | vk::G {
             state.wants_goto = true;
+        } else if key == kbmod::CTRL | vk::B {
+            // Focus the file browser pane, showing it first if it's hidden.
+            // (Toggling visibility is done from the View menu.)
+            state.file_pane_visible = true;
+            state.file_pane_focus = true;
         } else if key == kbmod::CTRL | vk::F && state.wants_search.kind != StateSearchKind::Disabled
         {
             state.wants_search.kind = StateSearchKind::Search;
