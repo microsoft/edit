@@ -86,6 +86,7 @@ fn draw_file_pane(ctx: &mut Context, state: &mut State, content_height: CoordTyp
 
     let mut navigate_to: Option<PathBuf> = None;
     let mut open_file: Option<PathBuf> = None;
+    let mut close_pane = false;
 
     ctx.block_begin("file-pane");
     ctx.attr_focus_well();
@@ -95,6 +96,13 @@ fn draw_file_pane(ctx: &mut Context, state: &mut State, content_height: CoordTyp
     {
         let contains_focus = ctx.contains_focus();
 
+        // Header: a right-aligned [X] button to close the pane, then the
+        // current directory.
+        if ctx.button("close", "X", ButtonStyle::default()) {
+            close_pane = true;
+        }
+        ctx.attr_position(Position::Right);
+
         ctx.label("dir", state.file_pane_dir.as_str());
         ctx.attr_overflow(Overflow::TruncateMiddle);
 
@@ -102,7 +110,7 @@ fn draw_file_pane(ctx: &mut Context, state: &mut State, content_height: CoordTyp
             state.wants_editor_focus = true;
         }
 
-        ctx.scrollarea_begin("file-pane-scroll", Size { width: 0, height: content_height - 3 });
+        ctx.scrollarea_begin("file-pane-scroll", Size { width: 0, height: content_height - 4 });
         {
             ctx.next_block_id_mixin(state.file_pane_dir_revision);
             ctx.list_begin("entries");
@@ -137,6 +145,13 @@ fn draw_file_pane(ctx: &mut Context, state: &mut State, content_height: CoordTyp
     ctx.block_end();
 
     state.file_pane_focus = false;
+
+    if close_pane {
+        state.file_pane_visible = false;
+        state.wants_editor_focus = true;
+        ctx.needs_rerender();
+        return;
+    }
 
     if let Some(dir) = navigate_to {
         state.file_pane_dir = DisplayablePathBuf::from_path(dir);
