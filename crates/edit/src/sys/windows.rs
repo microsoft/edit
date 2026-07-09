@@ -297,10 +297,7 @@ fn translate_key_event(
     // payloads (no char, or a literal space) so a real printable
     // character produced on the Space key by an IME or layout still
     // passes through as that character.
-    if ctrl_chord
-        && virtual_key_code == VK_SPACE
-        && (unicode_char == 0 || unicode_char == 0x20)
-    {
+    if ctrl_chord && virtual_key_code == VK_SPACE && (unicode_char == 0 || unicode_char == 0x20) {
         return Some(0);
     }
     if ctrl_chord && shift_pressed && virtual_key_code == VK_2 && unicode_char == 0 {
@@ -709,10 +706,7 @@ mod tests {
         assert_eq!(translate_key_event(0x61, VK_A, 0), Some(0x61));
         // Ctrl+A (UnicodeChar = 0x01 — the Win32 driver does the math
         // for us for the alphabetic range).
-        assert_eq!(
-            translate_key_event(0x01, VK_A, Console::LEFT_CTRL_PRESSED),
-            Some(0x01)
-        );
+        assert_eq!(translate_key_event(0x01, VK_A, Console::LEFT_CTRL_PRESSED), Some(0x01));
         // Plain Space (no Ctrl) MUST pass through as 0x20 — typing a
         // space character is the dominant case.
         assert_eq!(translate_key_event(0x20, VK_SPACE, 0), Some(0x20));
@@ -730,14 +724,8 @@ mod tests {
         // sees it. If the terminal does deliver a Space key event with a
         // real produced character, keep that text input instead of treating
         // it as the editor command binding.
-        assert_eq!(
-            translate_key_event(0x41, VK_SPACE, Console::LEFT_CTRL_PRESSED),
-            Some(0x41)
-        );
-        assert_eq!(
-            translate_key_event(0x3042, VK_SPACE, Console::LEFT_CTRL_PRESSED),
-            Some(0x3042)
-        );
+        assert_eq!(translate_key_event(0x41, VK_SPACE, Console::LEFT_CTRL_PRESSED), Some(0x41));
+        assert_eq!(translate_key_event(0x3042, VK_SPACE, Console::LEFT_CTRL_PRESSED), Some(0x3042));
     }
 
     #[test]
@@ -754,14 +742,8 @@ mod tests {
     fn translate_key_event_synthesizes_nul_for_ctrl_space_form1() {
         // Form 1: conhost / older WT delivers Ctrl+Space as
         // (vk=VK_SPACE, unicode=0).
-        assert_eq!(
-            translate_key_event(0, VK_SPACE, Console::LEFT_CTRL_PRESSED),
-            Some(0)
-        );
-        assert_eq!(
-            translate_key_event(0, VK_SPACE, Console::RIGHT_CTRL_PRESSED),
-            Some(0)
-        );
+        assert_eq!(translate_key_event(0, VK_SPACE, Console::LEFT_CTRL_PRESSED), Some(0));
+        assert_eq!(translate_key_event(0, VK_SPACE, Console::RIGHT_CTRL_PRESSED), Some(0));
     }
 
     #[test]
@@ -769,14 +751,8 @@ mod tests {
         // Form 2: Windows Terminal in ConPTY mode delivers Ctrl+Space
         // as (vk=VK_SPACE, unicode=0x20) — a literal space char that
         // must still normalize to NUL rather than passing through.
-        assert_eq!(
-            translate_key_event(0x20, VK_SPACE, Console::LEFT_CTRL_PRESSED),
-            Some(0)
-        );
-        assert_eq!(
-            translate_key_event(0x20, VK_SPACE, Console::RIGHT_CTRL_PRESSED),
-            Some(0)
-        );
+        assert_eq!(translate_key_event(0x20, VK_SPACE, Console::LEFT_CTRL_PRESSED), Some(0));
+        assert_eq!(translate_key_event(0x20, VK_SPACE, Console::RIGHT_CTRL_PRESSED), Some(0));
     }
 
     #[test]
@@ -785,19 +761,12 @@ mod tests {
         // (vk=VK_2, cks=Ctrl+Shift, unicode=0) because Ctrl+Shift+2
         // == Ctrl+@ == NUL == Ctrl+Space at the byte level.
         assert_eq!(
-            translate_key_event(
-                0,
-                VK_2,
-                Console::LEFT_CTRL_PRESSED | Console::SHIFT_PRESSED
-            ),
+            translate_key_event(0, VK_2, Console::LEFT_CTRL_PRESSED | Console::SHIFT_PRESSED),
             Some(0)
         );
         // Plain "2" key must NOT trigger.
         assert_eq!(translate_key_event(0x32, VK_2, 0), Some(0x32));
         // Just Ctrl+2 (no Shift) must NOT trigger.
-        assert_eq!(
-            translate_key_event(0x32, VK_2, Console::LEFT_CTRL_PRESSED),
-            Some(0x32)
-        );
+        assert_eq!(translate_key_event(0x32, VK_2, Console::LEFT_CTRL_PRESSED), Some(0x32));
     }
 }
