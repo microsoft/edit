@@ -385,15 +385,15 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
             match inp.EventType as u32 {
                 Console::KEY_EVENT => {
                     let event = unsafe { &inp.Event.KeyEvent };
-                    if event.bKeyDown != 0 {
-                        if let Some(ch) = translate_key_event(
+                    if event.bKeyDown != 0
+                        && let Some(ch) = translate_key_event(
                             unsafe { event.uChar.UnicodeChar },
                             event.wVirtualKeyCode,
                             event.dwControlKeyState,
-                        ) {
-                            utf16_buf[utf16_buf_len] = MaybeUninit::new(ch);
-                            utf16_buf_len += 1;
-                        }
+                        )
+                    {
+                        utf16_buf[utf16_buf_len] = MaybeUninit::new(ch);
+                        utf16_buf_len += 1;
                     }
                 }
                 Console::WINDOW_BUFFER_SIZE_EVENT => {
