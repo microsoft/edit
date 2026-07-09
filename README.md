@@ -19,6 +19,12 @@ You can install the latest version with WinGet:
 winget install Microsoft.Edit
 ```
 
+#### Ctrl+Space in Windows terminals
+
+Edit binds `Ctrl+Space` as a keyboard command when the terminal delivers that key event to the application. Windows Terminal and ConPTY commonly pass it through as a Space key event carrying either `NUL` or a literal space; the classic console host commonly passes it as a Space key event carrying `NUL`. Edit normalizes those forms to the same command input.
+
+Some Windows input-language or IME configurations reserve `Ctrl+Space` for switching input methods. In those setups, Edit can only handle the binding if the terminal/input stack passes the key event through. If an IME produces text on the Space key, Edit preserves that text input instead of treating it as the command binding.
+
 ### Linux (build from source)
 
 If your distribution does not provide binaries, or if you'd like to build your own, you can use our install script, provided you have installed:

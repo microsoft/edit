@@ -722,11 +722,21 @@ mod tests {
         let altgr = Console::RIGHT_ALT_PRESSED | Console::LEFT_CTRL_PRESSED;
         assert_eq!(translate_key_event(0x20, VK_SPACE, altgr), Some(0x20));
         assert_eq!(translate_key_event(0x40, VK_2, altgr), Some(0x40));
-        // Ctrl + Space key carrying a real printable char (e.g. from an
-        // IME) must pass through, not be synthesized to NUL.
+    }
+
+    #[test]
+    fn translate_key_event_passes_through_ime_chars_on_space() {
+        // Some IME/input-language setups use Ctrl+Space before Edit ever
+        // sees it. If the terminal does deliver a Space key event with a
+        // real produced character, keep that text input instead of treating
+        // it as the editor command binding.
         assert_eq!(
             translate_key_event(0x41, VK_SPACE, Console::LEFT_CTRL_PRESSED),
             Some(0x41)
+        );
+        assert_eq!(
+            translate_key_event(0x3042, VK_SPACE, Console::LEFT_CTRL_PRESSED),
+            Some(0x3042)
         );
     }
 
