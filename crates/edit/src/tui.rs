@@ -3171,11 +3171,17 @@ impl<'a> Context<'a, '_> {
             && self.consume_shortcut(kbmod::ALT | InputKey::new(accelerator as u32));
 
         let button_id = self.tree.last_node.borrow().id;
-        if contains_focus && self.tui.menubar_toggle_id == button_id && self.contains_mouse_down() {
+        let mouse_clicked = self.input_mouse_click != 0 && self.button_activated();
+
+        if mouse_clicked && self.tui.menubar_toggle_id == button_id {
             self.tui.menubar_toggle_id = 0;
             self.tui.pop_focusable_node(1);
 
             return false;
+        }
+
+        if mouse_clicked {
+            self.tui.menubar_toggle_id = button_id;
         }
 
         if contains_focus || keyboard_focus {
