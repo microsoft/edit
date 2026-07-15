@@ -2283,29 +2283,14 @@ impl<'a> Context<'a, '_> {
 
                     // If the editor is only 1 line tall we can't possibly scroll up or down.
                     if height >= 2 {
-                        fn calc(min: CoordType, max: CoordType, mouse: CoordType) -> CoordType {
-                            // Otherwise, the scroll zone is up to 3 lines at the top/bottom.
-                            let zone_height = ((max - min) / 2).min(3);
-
-                            // The .y positions where the scroll zones begin:
-                            // Mouse coordinates above top and below bottom respectively.
-                            let scroll_min = min + zone_height;
-                            let scroll_max = max - zone_height - 1;
-
-                            // Calculate the delta for scrolling up or down.
-                            let delta_min = (mouse - scroll_min).clamp(-zone_height, 0);
-                            let delta_max = (mouse - scroll_max).clamp(0, zone_height);
-
-                            // If I didn't mess up my logic here, only one of the two values can possibly be !=0.
-                            let idx = 3 + delta_min + delta_max;
-
-                            const SPEEDS: [CoordType; 7] = [-9, -3, -1, 0, 1, 3, 9];
-                            let idx = idx.clamp(0, SPEEDS.len() as CoordType) as usize;
-                            SPEEDS[idx]
-                        }
-
-                        let delta_x = calc(text_rect.left, text_rect.right, mouse.x);
-                        let delta_y = calc(text_rect.top, text_rect.bottom, mouse.y);
+                        // Auto-scroll relative to where the drag started, so that moving
+                        // only along one axis (e.g. selecting horizontally in the top or
+                        // bottom rows) doesn't trigger a scroll on the other axis. See #32.
+                        let down = self.tui.mouse_down_position;
+                        let delta_x =
+                            drag_scroll_speed(text_rect.left, text_rect.right, down.x, mouse.x);
+                        let delta_y =
+                            drag_scroll_speed(text_rect.top, text_rect.bottom, down.y, mouse.y);
 
                         tc.scroll_offset.x += delta_x;
                         tc.scroll_offset.y += delta_y;
@@ -4054,5 +4039,95 @@ impl<'a> Node<'a> {
                 }
             }
         }
+    }
+}
+
+/// Computes the auto-scroll speed for one axis while drag-selecting text.
+///
+/// `min` is the inclusive start and `max` the exclusive end of the viewport on this
+/// axis, `start` is where the drag began, and `pos` is the current mouse position
+/// (all in the same coordinate space). A positive result scrolls towards `max`, a
+/// negative one towards `min`.
+///
+/// Each edge has a scroll zone up to 3 cells deep. Normally a drag that enters a zone
+/// scrolls, but if the drag *started* inside a zone the trigger point is pulled to the
+/// start position. That way movement along the other axis alone (for example selecting
+/// horizontally in the top or bottom rows) no longer forces a scroll, and the speed
+/// ramps up from where the drag began rather than snapping to full speed.
+/// See <https://github.com/microsoft/edit/issues/32>.
+fn drag_scroll_speed(
+    min: CoordType,
+    max: CoordType,
+    start: CoordType,
+    pos: CoordType,
+) -> CoordType {
+    // The scroll zone is up to 3 cells at each edge (less on a tiny viewport).
+    let zone = ((max - min) / 2).min(3);
+
+    // The positions at which the scroll zones begin. A drag that started inside a zone
+    // moves the trigger to the start position, so `pos == start` yields no scroll.
+    let scroll_min = (min + zone).min(start);
+    let scroll_max = (max - zone - 1).max(start);
+
+    // Only one of these can be non-zero, because `scroll_min <= start <= scroll_max`.
+    let delta_min = (pos - scroll_min).clamp(-zone, 0);
+    let delta_max = (pos - scroll_max).clamp(0, zone);
+
+    let idx = 3 + delta_min + delta_max;
+
+    const SPEEDS: [CoordType; 7] = [-9, -3, -1, 0, 1, 3, 9];
+    let idx = idx.clamp(0, SPEEDS.len() as CoordType - 1) as usize;
+    SPEEDS[idx]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A 20-cell tall viewport spanning rows [0, 20); the scroll zones are rows 0..3
+    // (up) and rows 17..20 (down).
+    const MIN: CoordType = 0;
+    const MAX: CoordType = 20;
+
+    #[test]
+    fn drag_scroll_no_scroll_in_the_middle() {
+        // A drag started and held in the middle never scrolls.
+        for pos in 3..17 {
+            assert_eq!(drag_scroll_speed(MIN, MAX, 10, pos), 0, "pos={pos}");
+        }
+    }
+
+    #[test]
+    fn drag_scroll_from_middle_reaches_edges() {
+        // Starting in the middle keeps the classic edge-triggered behavior: the closer
+        // to an edge, the faster the scroll.
+        assert_eq!(drag_scroll_speed(MIN, MAX, 10, 2), -1);
+        assert_eq!(drag_scroll_speed(MIN, MAX, 10, 1), -3);
+        assert_eq!(drag_scroll_speed(MIN, MAX, 10, 0), -9);
+        assert_eq!(drag_scroll_speed(MIN, MAX, 10, 17), 1);
+        assert_eq!(drag_scroll_speed(MIN, MAX, 10, 18), 3);
+        assert_eq!(drag_scroll_speed(MIN, MAX, 10, 19), 9);
+    }
+
+    #[test]
+    fn drag_scroll_horizontal_move_in_edge_zone_does_not_scroll() {
+        // The regression from #32: a drag that starts inside the top or bottom zone and
+        // then only moves along the other axis (same `pos` as `start`) must not scroll.
+        for start in [0, 1, 2, 17, 18, 19] {
+            assert_eq!(drag_scroll_speed(MIN, MAX, start, start), 0, "start={start}");
+        }
+    }
+
+    #[test]
+    fn drag_scroll_from_edge_start_still_scrolls_past_the_start() {
+        // Starting inside the top zone: moving further up (towards the edge) still
+        // scrolls, and the speed ramps from the start position instead of snapping.
+        assert_eq!(drag_scroll_speed(MIN, MAX, 2, 2), 0);
+        assert_eq!(drag_scroll_speed(MIN, MAX, 2, 1), -1);
+        assert_eq!(drag_scroll_speed(MIN, MAX, 2, 0), -3);
+        // Symmetrically for the bottom zone.
+        assert_eq!(drag_scroll_speed(MIN, MAX, 17, 17), 0);
+        assert_eq!(drag_scroll_speed(MIN, MAX, 17, 18), 1);
+        assert_eq!(drag_scroll_speed(MIN, MAX, 17, 19), 3);
     }
 }
