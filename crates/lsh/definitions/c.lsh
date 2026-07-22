@@ -1,0 +1,58 @@
+#[display_name = "C"]
+#[path = "**/*.c"]
+#[path = "**/*.h"]
+pub fn c() {
+
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /#.*/ {
+            yield preprocessor;
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /'/ { // technically not how '' works in C, but means we don't have to deal with stuff like '\n' manually
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /(?:break|case|continue|default|do|else|for|if|return|switch|while|goto)\>/ {
+            yield keyword.control;
+        } else if /(?:struct|enum|union|alignas|alignof|static_assert|thread_local|_Static_assert|_Thread_local|typedef|const|static|inline|volatile|sizeof|extern|register|restrict)\>/ {
+            yield keyword.other;
+        } else if /(?:void|int|long|char|float|double|signed|unsigned|short)\>/ {
+            yield type.language;
+        } else if /(?:true|false|NULL)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)(?:[fF]|[uU][lL]?|[lL][uU]?)?/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
