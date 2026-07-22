@@ -285,6 +285,12 @@ impl DocumentManager {
             tb.set_insert_final_newline(!cfg!(windows)); // As mandated by POSIX.
             tb.set_margin_enabled(true);
             tb.set_line_highlight_enabled(true);
+
+            // Apply theme colors
+            let settings = Settings::borrow();
+            let theme = &settings.theme;
+            tb.set_line_number_color(theme.line_number);
+            tb.set_line_highlight_color(theme.line_highlight);
         }
         Ok(buffer)
     }
