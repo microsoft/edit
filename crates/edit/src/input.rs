@@ -449,11 +449,71 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                             let height = (csi.params[1] as CoordType).clamp(1, 32767);
                             return Some(Input::Resize(Size { width, height }));
                         }
-                        'u' if csi.param_count > 1 => {
+                        'u' => {
                             // Kitty keyboard events
-                            let char = csi.params[0] as u8;
+                            let key = match csi.params[0] {
+                                97 ..= 122 => Some(InputKey::new(csi.params[0] as u32 & !0x20)), // Shift a-z to A-Z
+                                127 => Some(vk::BACK),
+
+                                // F13-F24
+                                57376 => Some(vk::F13),
+                                57377 => Some(vk::F14),
+                                57378 => Some(vk::F15),
+                                57379 => Some(vk::F16),
+                                57380 => Some(vk::F17),
+                                57381 => Some(vk::F18),
+                                57382 => Some(vk::F19),
+                                57383 => Some(vk::F20),
+                                57384 => Some(vk::F21),
+                                57385 => Some(vk::F22),
+                                57386 => Some(vk::F23),
+                                57387 => Some(vk::F24),
+                                57388 ..= 57398 => None, // Ignore F25-F35
+
+                                // Number pad keys
+                                57399 => Some(vk::NUMPAD0),
+                                57400 => Some(vk::NUMPAD1),
+                                57401 => Some(vk::NUMPAD2),
+                                57402 => Some(vk::NUMPAD3),
+                                57403 => Some(vk::NUMPAD4),
+                                57404 => Some(vk::NUMPAD5),
+                                57405 => Some(vk::NUMPAD6),
+                                57406 => Some(vk::NUMPAD7),
+                                57407 => Some(vk::NUMPAD8),
+                                57408 => Some(vk::NUMPAD9),
+                                57409 => Some(vk::DECIMAL),
+                                57410 => Some(vk::DIVIDE),
+                                57411 => Some(vk::MULTIPLY),
+                                57412 => Some(vk::SUBTRACT),
+                                57413 => Some(vk::ADD),
+                                57414 => Some(vk::RETURN),
+                                57415 => Some(InputKey::new('=' as u32)),
+                                57416 => Some(vk::SEPARATOR),
+                                57417 => Some(vk::LEFT),
+                                57418 => Some(vk::RIGHT),
+                                57419 => Some(vk::UP),
+                                57420 => Some(vk::DOWN),
+                                57421 => Some(vk::PRIOR),
+                                57422 => Some(vk::NEXT),
+                                57423 => Some(vk::HOME),
+                                57424 => Some(vk::END),
+                                57425 => Some(vk::INSERT),
+                                57426 => Some(vk::DELETE),
+
+                                // Keys to Ignore
+                                57358 => None, // Caps Lock
+                                57359 => None, // Scroll Lock
+                                57360 => None, // Num Lock
+                                57361 => None, // Print Screen
+                                57362 => None, // Pause
+                                57363 => None, // Menu
+                                57428 ..= 57440 => None, // Media and Volume
+                                57441 ..= 57454 => None, // Left/Right Modifiers
+
+                                _ => Some(InputKey::new(csi.params[0] as u32)),
+                            }?;
                             return Some(Input::Keyboard(
-                                InputKey::from_ascii(char as char)? | Self::parse_modifiers(csi),
+                                key | Self::parse_modifiers(csi),
                             ));
                         }
                         _ => {}
