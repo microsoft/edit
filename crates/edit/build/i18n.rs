@@ -142,7 +142,7 @@ pub fn generate(definitions: &str) -> String {
 pub enum LocId {{",
         );
 
-        for (k, _) in translations.iter() {
+        for k in translations.keys() {
             _ = writeln!(out, "    {k},");
         }
 
@@ -187,7 +187,7 @@ const TRANSLATIONS: [[&str; {}]; {}] = [
 
         for lang in &languages {
             _ = writeln!(out, "    [");
-            for (_, v) in translations.iter() {
+            for v in translations.values() {
                 const DEFAULT: &String = &String::new();
                 let v = v.get(lang).or_else(|| v.get("en")).unwrap_or(DEFAULT);
                 _ = writeln!(out, "        {v:?},");
