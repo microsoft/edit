@@ -90,6 +90,16 @@ pub fn markdown() {
                     if /.*/ {}
                 }
             }
+        } else if /(?i:C\#|CSharp|cs)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    CSharp();
+                    if /.*/ { }
+                }
+            }
         } else {
             loop {
                 await input;
