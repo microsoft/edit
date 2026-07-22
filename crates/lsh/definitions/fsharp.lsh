@@ -1,0 +1,115 @@
+#[display_name = "F#"]
+#[path = "**/*.fs"]
+#[path = "**/*.fsi"]
+#[path = "**/*.fsx"]
+pub fn fsharp() {
+    until /$/ {
+        yield other;
+
+        // Line comment
+        if /\/\/.*/ {
+            yield comment;
+
+        // Preprocessor / script directives
+        } else if /#(?:if|else|endif|load|r|I|nowarn|light|time|help|quit)\>.*/ {
+            yield keyword.other;
+
+        // Block comment: (* ... *)
+        } else if /\(\*/ {
+            loop {
+                yield comment;
+                if /\*\)/ {
+                    yield comment;
+                    break;
+                }
+                await input;
+            }
+
+        // Triple-quoted string: """ ... """
+        } else if /"""/ {
+            loop {
+                yield string;
+                if /"""/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+
+        // Verbatim (optionally interpolated) string: @"..." or $@"..."
+        } else if /\$?@"/ {
+            loop {
+                yield string;
+                if /""/ {
+                    // Escaped quote
+                } else if /"/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+
+        // Interpolated string: $"..."
+        } else if /\$"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {
+                    // Escape sequences
+                } else if /"/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+
+        // Regular string: "..."
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {
+                    // Escape sequences
+                } else if /"/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+
+        // Character literal: 'a', '\n', etc.
+        } else if /'(?:\\.|[^'\\])'/ {
+            yield string;
+
+        // Backtick identifiers: ``identifier with spaces``
+        } else if /``[^`]+``/ {
+            yield variable;
+        } else if /`[^`]+`/ {
+            yield variable;
+
+        // Keywords
+        } else if /(?:if|then|else|elif|match|with|function|try|finally|for|to|downto|while|do|return|yield|begin|end|in)\>/ {
+            yield keyword.control;
+        } else if /(?:let|use|and|rec|mutable|open|module|namespace|type|member|interface|abstract|override|default|static|inline|extern|public|private|internal|new|inherit|as|of|when|exception|raise|lazy|assert|global)\>/ {
+            yield keyword.other;
+
+        // Language constants
+        } else if /(?:true|false|null)\>/ {
+            yield constant.language;
+
+        // Numbers (best-effort)
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)(?:u(?:y|s|l|n)|(?:y|s|l|n)|[fFmM])?/ {
+            if /\w+/ {
+                // Not a number after all.
+            } else {
+                yield constant.numeric;
+            }
+
+        // Method calls in .NET-style syntax: Foo.Bar(...)
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
