@@ -71,15 +71,17 @@ fn run() -> apperr::Result<()> {
     localization::init();
 
     let mut state = State::new()?;
+
+    // Load settings so user file associations are ready when opening files passed as args
+    if let Err(err) = Settings::reload() {
+        state.add_error(err);
+    }
+
     if handle_args(&mut state)? {
         return Ok(());
     }
 
     handle_stdin(&mut state)?;
-
-    if let Err(err) = Settings::reload() {
-        state.add_error(err);
-    }
 
     // Switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // `handle_args` may want to print a help message (must not fail),
