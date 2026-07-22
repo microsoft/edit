@@ -10,10 +10,10 @@ pub fn toml() {
     }
 
     // Table headers: [table], [a.b.c] and [[array.of.tables]].
-    if /\[\[[^\]]*\]\]/ {
-        yield meta.header;
-    } else if /\[[^\]]*\]/ {
-        yield meta.header;
+    if /\[\[([^\]]*)\]\]/ {
+        yield $1 as meta.header;
+    } else if /\[([^\]]*)\]/ {
+        yield $1 as meta.header;
     }
 
     yield other;
@@ -50,7 +50,7 @@ pub fn toml() {
             yield $1 as variable;
         }
         // Bare or dotted key: key = ..., a.b.c = ... (also matches inside inline tables).
-        else if /([A-Za-z0-9_.-]+)[ \t]*=/ {
+        else if /([\w.-]+)[ \t]*=/ {
             yield $1 as variable;
         } else if /"/ {
             double_quote_string();
@@ -58,7 +58,6 @@ pub fn toml() {
             // Literal string: no escape sequences, so a trailing backslash
             // (e.g. a Windows path like 'C:\dir\') still ends the string.
             until /$/ {
-                yield string;
                 if /'/ {
                     yield string;
                     break;
@@ -68,13 +67,13 @@ pub fn toml() {
             yield constant.language;
         } else if /\+?-?(?:inf|nan)\>/ {
             yield constant.language;
-        } else if /\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})?)?/ {
+        } else if /(?i:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:z|[+-]\d{2}:\d{2})?)?)/ {
             // Offset date-time, local date-time and local date.
             yield constant.numeric;
         } else if /\d{2}:\d{2}:\d{2}(?:\.\d+)?/ {
             // Local time.
             yield constant.numeric;
-        } else if /\+?-?(?:0x[0-9a-fA-F][0-9a-fA-F_]*|0o[0-7][0-7_]*|0b[01][01_]*|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?)/ {
+        } else if /(?i:\+?-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)/ {
             if /\w+/ {
                 // Not a number after all.
             } else {
