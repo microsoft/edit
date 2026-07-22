@@ -563,7 +563,7 @@ impl Drop for RestoreModes {
         // Same as in the beginning but in the reverse order.
         // It also includes DECSCUSR 0 to reset the cursor style and DECTCEM to show the cursor.
         // We specifically don't reset mode 1036, because most applications expect it to be set nowadays.
-        sys::write_stdout("\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1002;1006;2004l\x1b[?1049l");
+        sys::write_stdout("\x1b[<u\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1002;1006;2004l\x1b[?1049l");
     }
 }
 
@@ -576,7 +576,8 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         // 1006: SGR Mouse Mode
         // 2004: Bracketed Paste Mode
         // 1036: Xterm: "meta sends escape" (Alt keypresses should be encoded with ESC + char)
-        "\x1b[?1049h\x1b[?1002;1006;2004h\x1b[?1036h",
+        // CSI u: Kitty Keyboard Protocol: Push Disambiguate escape codes flag
+        "\x1b[?1049h\x1b[?1002;1006;2004h\x1b[?1036h\x1b[>1u",
         // OSC 4 color table requests for indices 0 through 15 (base colors).
         "\x1b]4;0;?;1;?;2;?;3;?;4;?;5;?;6;?;7;?\x07",
         "\x1b]4;8;?;9;?;10;?;11;?;12;?;13;?;14;?;15;?\x07",
