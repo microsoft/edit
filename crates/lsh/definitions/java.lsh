@@ -1,0 +1,56 @@
+#[display_name = "Java"]
+#[path = "**/*.java"]
+pub fn java() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /(?:break|case|catch|continue|default|do|else|finally|for|if|return|switch|throw|throws|try|while)\>/ {
+            yield keyword.control;
+        } else if /(?:abstract|assert|class|enum|extends|final|implements|import|instanceof|interface|module|native|new|package|private|protected|public|record|sealed|static|strictfp|super|synchronized|this|transient|volatile)\>/ {
+            yield keyword.other;
+        } else if /(?:boolean|byte|char|double|float|int|long|short|void|var)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|null)\>/ {
+            yield constant.language;
+        } else if /@\w+/ {
+            yield markup.link;
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:p[+-]?[\d_]+|e[+-]?[\d_]+)?[dfl]?)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
