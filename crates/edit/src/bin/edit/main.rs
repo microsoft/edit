@@ -40,6 +40,12 @@ const SCRATCH_ARENA_CAPACITY: usize = 128 * MEBI;
 #[cfg(target_pointer_width = "64")]
 const SCRATCH_ARENA_CAPACITY: usize = 512 * MEBI;
 
+// After DA, briefly drain follow-up probe responses so split OSC replies do not leak into
+// the main input parser. Keep the window short because real user input is still on stdin.
+const TERMINAL_PROBE_QUIET_TIMEOUT: Duration = Duration::from_millis(50);
+// Bound terminal probing for terminals that omit DA or leave a control sequence unfinished.
+const TERMINAL_PROBE_HARD_TIMEOUT: Duration = Duration::from_secs(3);
+
 // NOTE: Before our main() gets called, Rust initializes its stdlib. This pulls in the entire
 // std::io::{stdin, stdout, stderr} machinery, and probably some more, which amounts to about 20KB.
 // It can technically be avoided nowadays with `#![no_main]`. Maybe a fun project for later? :)
@@ -89,11 +95,9 @@ fn run() -> apperr::Result<()> {
     // As such, we call this after `handle_args`.
     sys::switch_modes()?;
 
-    let mut vt_parser = vt::Parser::new();
-    let mut input_parser = input::Parser::new();
     let mut tui = Tui::new()?;
 
-    let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
+    let _restore = setup_terminal(&mut tui, &mut state);
 
     state.menubar_color_bg = tui.indexed(IndexedColor::Background).oklab_blend(tui.indexed_alpha(
         IndexedColor::BrightBlue,
@@ -116,6 +120,11 @@ fn run() -> apperr::Result<()> {
     tui.set_modal_default_fg(floater_fg);
 
     sys::inject_window_size_into_stdin();
+
+    // Startup probing may leave partial terminal responses in the probe parser.
+    // Start application input parsing with an independent parser lifecycle.
+    let mut vt_parser = vt::Parser::new();
+    let mut input_parser = input::Parser::new();
 
     #[cfg(feature = "debug-latency")]
     let mut last_latency_width = 0;
@@ -567,7 +576,159 @@ impl Drop for RestoreModes {
     }
 }
 
-fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) -> RestoreModes {
+struct TerminalProbe {
+    seen_device_attributes: bool,
+    seen_cursor_position: bool,
+    seen_colors: [bool; framebuffer::INDEXED_COLORS_COUNT],
+    color_responses: usize,
+    quiet_deadline: Option<std::time::Instant>,
+}
+
+impl TerminalProbe {
+    fn new() -> Self {
+        Self {
+            seen_device_attributes: false,
+            seen_cursor_position: false,
+            seen_colors: [false; framebuffer::INDEXED_COLORS_COUNT],
+            color_responses: 0,
+            quiet_deadline: None,
+        }
+    }
+
+    fn record_device_attributes(&mut self, now: std::time::Instant) {
+        self.seen_device_attributes = true;
+        self.quiet_deadline = Some(now + TERMINAL_PROBE_QUIET_TIMEOUT);
+    }
+
+    fn record_activity_after_device_attributes(&mut self, now: std::time::Instant) {
+        if self.seen_device_attributes {
+            self.quiet_deadline = Some(now + TERMINAL_PROBE_QUIET_TIMEOUT);
+        }
+    }
+
+    fn record_cursor_position(&mut self) {
+        self.seen_cursor_position = true;
+    }
+
+    fn record_color(&mut self, index: usize) {
+        if !self.seen_colors[index] {
+            self.seen_colors[index] = true;
+            self.color_responses += 1;
+        }
+    }
+
+    fn color_responses(&self) -> usize {
+        self.color_responses
+    }
+
+    fn is_complete(&self) -> bool {
+        self.seen_device_attributes
+            && self.seen_cursor_position
+            && self.color_responses == framebuffer::INDEXED_COLORS_COUNT
+    }
+
+    fn should_finish(
+        &self,
+        parser_is_ground: bool,
+        now: std::time::Instant,
+        hard_deadline: std::time::Instant,
+    ) -> bool {
+        if parser_is_ground && self.is_complete() {
+            return true;
+        }
+
+        if parser_is_ground
+            && self.seen_device_attributes
+            && self.quiet_deadline.is_some_and(|deadline| now >= deadline)
+        {
+            return true;
+        }
+
+        now >= hard_deadline
+    }
+
+    fn next_read_deadline(
+        &self,
+        parser_is_ground: bool,
+        hard_deadline: std::time::Instant,
+    ) -> std::time::Instant {
+        if parser_is_ground {
+            self.quiet_deadline.unwrap_or(hard_deadline).min(hard_deadline)
+        } else {
+            hard_deadline
+        }
+    }
+}
+
+fn record_probe_osc_response(
+    osc_buffer: &mut String,
+    indexed_colors: &mut [StraightRgba; framebuffer::INDEXED_COLORS_COUNT],
+    probe: &mut TerminalProbe,
+    data: &str,
+    partial: bool,
+) {
+    if partial {
+        osc_buffer.push_str(data);
+        return;
+    }
+
+    let parsed = if osc_buffer.is_empty() {
+        parse_probe_color_response(data)
+    } else {
+        osc_buffer.push_str(data);
+        parse_probe_color_response(osc_buffer)
+    };
+
+    if let Some((color_index, color)) = parsed {
+        indexed_colors[color_index] = color;
+        probe.record_color(color_index);
+    }
+
+    osc_buffer.clear();
+}
+
+fn parse_probe_color_response(data: &str) -> Option<(usize, StraightRgba)> {
+    let mut splits = data.split_terminator(';');
+
+    let color_index = match splits.next().unwrap_or("") {
+        // The response is `4;<color>;rgb:<r>/<g>/<b>`.
+        "4" => match splits.next().unwrap_or("").parse::<usize>() {
+            Ok(val) if val < 16 => val,
+            _ => return None,
+        },
+        // The response is `10;rgb:<r>/<g>/<b>`.
+        "10" => IndexedColor::Foreground as usize,
+        // The response is `11;rgb:<r>/<g>/<b>`.
+        "11" => IndexedColor::Background as usize,
+        _ => return None,
+    };
+
+    let color_param = splits.next().unwrap_or("");
+    if !color_param.starts_with("rgb:") {
+        return None;
+    }
+
+    let mut iter = color_param[4..].split_terminator('/');
+    let rgb_parts = [(); 3].map(|_| iter.next().unwrap_or("0"));
+    let mut rgb = 0;
+
+    for part in rgb_parts {
+        if part.len() == 2 || part.len() == 4 {
+            let Ok(mut val) = usize::from_str_radix(part, 16) else {
+                continue;
+            };
+            if part.len() == 4 {
+                // Round from 16 bits to 8 bits.
+                val = (val * 0xff + 0x7fff) / 0xffff;
+            }
+            rgb = (rgb >> 8) | ((val as u32) << 16);
+        }
+    }
+
+    Some((color_index, StraightRgba::from_le(rgb | 0xff000000)))
+}
+
+fn setup_terminal(tui: &mut Tui, state: &mut State) -> RestoreModes {
     sys::write_stdout(concat!(
         // 1049: Alternative Screen Buffer
         //   I put the ASB switch in the beginning, just in case the terminal performs
@@ -594,84 +755,64 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         "\x1b[c",
     ));
 
-    let mut done = false;
     let mut osc_buffer = String::new();
     let mut indexed_colors = framebuffer::DEFAULT_THEME;
-    let mut color_responses = 0;
     let mut ambiguous_width = 1;
+    let mut probe = TerminalProbe::new();
+    let mut vt_parser = vt::Parser::new();
+    let hard_deadline = std::time::Instant::now() + TERMINAL_PROBE_HARD_TIMEOUT;
 
-    while !done {
+    loop {
+        let now = std::time::Instant::now();
+        if probe.should_finish(vt_parser.is_ground(), now, hard_deadline) {
+            break;
+        }
+
         let scratch = scratch_arena(None);
+        let mut timeout = probe
+            .next_read_deadline(vt_parser.is_ground(), hard_deadline)
+            .saturating_duration_since(now);
+        timeout = timeout.min(vt_parser.read_timeout());
 
-        // We explicitly set a high read timeout, because we're not
-        // waiting for user keyboard input. If we encounter a lone ESC,
-        // it's unlikely to be from a ESC keypress, but rather from a VT sequence.
-        let Some(input) = sys::read_stdin(&scratch, Duration::from_secs(3)) else {
+        let Some(input) = sys::read_stdin(&scratch, timeout) else {
             break;
         };
 
+        let got_input = !input.is_empty();
+        let mut probe_activity = false;
         let mut vt_stream = vt_parser.parse(&input);
         while let Some(token) = vt_stream.next() {
             match token {
                 Token::Csi(csi) => match csi.final_byte {
-                    'c' => done = true,
+                    'c' => {
+                        probe.record_device_attributes(std::time::Instant::now());
+                        probe_activity = true;
+                    }
                     // CPR (Cursor Position Report) response.
-                    'R' => ambiguous_width = csi.params[1] as CoordType - 1,
+                    'R' => {
+                        probe.record_cursor_position();
+                        ambiguous_width = csi.params[1] as CoordType - 1;
+                        probe_activity = true;
+                    }
                     _ => {}
                 },
-                Token::Osc { mut data, partial } => {
-                    if partial {
-                        osc_buffer.push_str(data);
-                        continue;
-                    }
-                    if !osc_buffer.is_empty() {
-                        osc_buffer.push_str(data);
-                        data = &osc_buffer;
-                    }
-
-                    let mut splits = data.split_terminator(';');
-
-                    let color = match splits.next().unwrap_or("") {
-                        // The response is `4;<color>;rgb:<r>/<g>/<b>`.
-                        "4" => match splits.next().unwrap_or("").parse::<usize>() {
-                            Ok(val) if val < 16 => &mut indexed_colors[val],
-                            _ => continue,
-                        },
-                        // The response is `10;rgb:<r>/<g>/<b>`.
-                        "10" => &mut indexed_colors[IndexedColor::Foreground as usize],
-                        // The response is `11;rgb:<r>/<g>/<b>`.
-                        "11" => &mut indexed_colors[IndexedColor::Background as usize],
-                        _ => continue,
-                    };
-
-                    let color_param = splits.next().unwrap_or("");
-                    if !color_param.starts_with("rgb:") {
-                        continue;
-                    }
-
-                    let mut iter = color_param[4..].split_terminator('/');
-                    let rgb_parts = [(); 3].map(|_| iter.next().unwrap_or("0"));
-                    let mut rgb = 0;
-
-                    for part in rgb_parts {
-                        if part.len() == 2 || part.len() == 4 {
-                            let Ok(mut val) = usize::from_str_radix(part, 16) else {
-                                continue;
-                            };
-                            if part.len() == 4 {
-                                // Round from 16 bits to 8 bits.
-                                val = (val * 0xff + 0x7fff) / 0xffff;
-                            }
-                            rgb = (rgb >> 8) | ((val as u32) << 16);
-                        }
-                    }
-
-                    *color = StraightRgba::from_le(rgb | 0xff000000);
-                    color_responses += 1;
-                    osc_buffer.clear();
+                Token::Osc { data, partial } => {
+                    probe_activity = true;
+                    record_probe_osc_response(
+                        &mut osc_buffer,
+                        &mut indexed_colors,
+                        &mut probe,
+                        data,
+                        partial,
+                    );
                 }
+                Token::Dcs { .. } => probe_activity = true,
                 _ => {}
             }
+        }
+
+        if probe_activity || got_input && !vt_parser.is_ground() {
+            probe.record_activity_after_device_attributes(std::time::Instant::now());
         }
     }
 
@@ -680,7 +821,7 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         state.documents.reflow_all();
     }
 
-    if color_responses == indexed_colors.len() {
+    if probe.color_responses() == indexed_colors.len() {
         tui.setup_indexed_colors(indexed_colors);
     }
 
@@ -704,5 +845,95 @@ fn sanitize_control_chars(text: &str) -> Cow<'_, str> {
         Cow::Owned(sanitized)
     } else {
         Cow::Borrowed(text)
+    }
+}
+
+#[cfg(test)]
+mod terminal_probe_tests {
+    use super::*;
+
+    #[test]
+    fn probe_waits_past_quiet_window_when_parser_has_pending_sequence() {
+        let start = std::time::Instant::now();
+        let hard_deadline = start + TERMINAL_PROBE_HARD_TIMEOUT;
+        let mut probe = TerminalProbe::new();
+
+        probe.record_device_attributes(start);
+        let quiet_deadline = start + TERMINAL_PROBE_QUIET_TIMEOUT;
+
+        assert!(!probe.should_finish(false, quiet_deadline, hard_deadline));
+        assert!(probe.should_finish(false, hard_deadline, hard_deadline));
+    }
+
+    #[test]
+    fn probe_finishes_after_quiet_window_when_parser_is_ground() {
+        let start = std::time::Instant::now();
+        let hard_deadline = start + TERMINAL_PROBE_HARD_TIMEOUT;
+        let mut probe = TerminalProbe::new();
+
+        probe.record_device_attributes(start);
+        let quiet_deadline = start + TERMINAL_PROBE_QUIET_TIMEOUT;
+
+        assert!(probe.should_finish(true, quiet_deadline, hard_deadline));
+    }
+
+    #[test]
+    fn probe_complete_fast_path_requires_ground_parser() {
+        let start = std::time::Instant::now();
+        let hard_deadline = start + TERMINAL_PROBE_HARD_TIMEOUT;
+        let mut probe = TerminalProbe::new();
+
+        probe.record_device_attributes(start);
+        probe.record_cursor_position();
+        for index in 0..framebuffer::INDEXED_COLORS_COUNT {
+            probe.record_color(index);
+        }
+
+        assert!(!probe.should_finish(false, start, hard_deadline));
+        assert!(probe.should_finish(true, start, hard_deadline));
+    }
+
+    #[test]
+    fn probe_counts_unique_color_responses() {
+        let mut probe = TerminalProbe::new();
+
+        probe.record_color(IndexedColor::Foreground as usize);
+        probe.record_color(IndexedColor::Foreground as usize);
+        probe.record_color(IndexedColor::Background as usize);
+
+        assert_eq!(probe.color_responses(), 2);
+    }
+
+    #[test]
+    fn probe_osc_buffer_clears_after_invalid_complete_response() {
+        let mut osc_buffer = String::new();
+        let mut indexed_colors = framebuffer::DEFAULT_THEME;
+        let mut probe = TerminalProbe::new();
+
+        record_probe_osc_response(
+            &mut osc_buffer,
+            &mut indexed_colors,
+            &mut probe,
+            "99;ignored",
+            true,
+        );
+        assert!(!osc_buffer.is_empty());
+
+        record_probe_osc_response(&mut osc_buffer, &mut indexed_colors, &mut probe, "", false);
+        assert!(osc_buffer.is_empty());
+
+        record_probe_osc_response(
+            &mut osc_buffer,
+            &mut indexed_colors,
+            &mut probe,
+            "10;rgb:0101/0202/0303",
+            false,
+        );
+
+        assert_eq!(probe.color_responses(), 1);
+        assert_ne!(
+            indexed_colors[IndexedColor::Foreground as usize],
+            framebuffer::DEFAULT_THEME[IndexedColor::Foreground as usize]
+        );
     }
 }
