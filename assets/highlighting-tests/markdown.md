@@ -84,3 +84,10 @@ export function greet(name) {
 def greet(name: str) -> str:
     return f"hello {name}"
 ```
+
+```CSharp
+public string Greet(string name)
+{
+  return $"hello {name}";
+}
+```
