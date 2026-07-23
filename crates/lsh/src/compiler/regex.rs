@@ -45,6 +45,7 @@
 
 use std::slice;
 
+use stdext::arena::scratch_arena;
 use stdext::collections::BVec;
 
 use super::*;
@@ -697,6 +698,16 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         if s.is_empty() {
             return Ok(on_match);
         }
+
+        let scratch = scratch_arena(Some(self.compiler.arena));
+        let s = if case_insensitive {
+            let mut lower = BString::from_str(&*scratch, s);
+            lower.make_ascii_lowercase();
+            lower.leak()
+        } else {
+            s
+        };
+
         let s = self.compiler.intern_string(s);
         let condition =
             if case_insensitive { Condition::PrefixInsensitive(s) } else { Condition::Prefix(s) };
