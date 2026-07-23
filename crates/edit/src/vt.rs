@@ -172,7 +172,12 @@ impl<'input> Stream<'_, 'input> {
                         self.parser.state = State::Esc;
                         self.off += 1;
                     }
-                    c @ (0x00..0x20 | 0x7f) => {
+                    0x00 => {
+                        // Ctrl+Space and Ctrl+Shift+2 both produce ^@, or \0.
+                        self.off += 1;
+                        return Some(Token::Ctrl(' '));
+                    }
+                    c @ (0x01..0x20 | 0x7f) => {
                         self.off += 1;
                         return Some(Token::Ctrl(c as char));
                     }
