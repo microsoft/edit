@@ -1,0 +1,63 @@
+#[display_name = "C"]
+#[path = "**/*.c"]
+#[path = "**/*.h"]
+pub fn c() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /"/ {
+            until /$/ {
+                yield string;
+                if /\\./ {
+                    // Skip escaped characters
+                } else if /"/ { 
+                    yield string; 
+                    break; 
+                }
+                await input;
+            }
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /\\./ {
+                    // Skip escaped characters
+                } else if /'/ { 
+                    yield string; 
+                    break; 
+                }
+                await input;
+            }
+        } else if /#\s*(?:include|define|undef|if|ifdef|ifndef|elif|else|endif|error|pragma|warning|line)\>/ {
+            yield keyword.control;
+        } else if /(?:break|case|continue|default|do|else|for|goto|if|return|switch|while)\>/ {
+            yield keyword.control;
+        } else if /(?:auto|char|const|double|enum|extern|float|inline|int|long|register|restrict|short|signed|sizeof|static|struct|typedef|union|unsigned|void|volatile|_Alignas|_Alignof|_Atomic|_Bool|_Complex|_Generic|_Imaginary|_Noreturn|_Static_assert|_Thread_local)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|NULL)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-fA-F']+|0b[01']+|[\d']+\.?[\d']*|\.[\d']+)(?:p[+-]?[\d']+|e[+-]?[\d']+)?[ulfz]*)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
