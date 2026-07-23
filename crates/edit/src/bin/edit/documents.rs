@@ -209,7 +209,13 @@ impl DocumentManager {
         if file_id.is_some() && self.update_active(|doc| doc.file_id == file_id) {
             let doc = self.active_mut().unwrap();
             if let Some(goto) = goto {
-                doc.buffer.borrow_mut().cursor_move_to_logical(goto);
+                let mut tb = doc.buffer.borrow_mut();
+                let line = if goto.y < 0 {
+                    tb.logical_line_count().saturating_add(goto.y)
+                } else {
+                    goto.y.saturating_sub(1)
+                };
+                tb.cursor_move_to_logical(Point { x: goto.x, y: line.max(0) });
             }
             return Ok(doc);
         }
@@ -220,10 +226,16 @@ impl DocumentManager {
                 let mut tb = buffer.borrow_mut();
                 tb.read_file(file, None)?;
 
-                if let Some(goto) = goto
-                    && goto != Default::default()
-                {
-                    tb.cursor_move_to_logical(goto);
+                if let Some(goto) = goto {
+                    let line = if goto.y < 0 {
+                        tb.logical_line_count().saturating_add(goto.y)
+                    } else {
+                        goto.y.saturating_sub(1)
+                    };
+                    let goto = Point { x: goto.x, y: line.max(0) };
+                    if goto != Default::default() {
+                        tb.cursor_move_to_logical(goto);
+                    }
                 }
             }
         }
@@ -292,20 +304,28 @@ impl DocumentManager {
     // Parse a filename in the form of "filename:line:char".
     // Returns the position of the first colon and the line/char coordinates.
     fn parse_filename_goto(path: &Path) -> (&Path, Option<Point>) {
-        fn parse(s: &[u8]) -> Option<CoordType> {
+        fn parse(s: &[u8], allow_negative: bool) -> Option<CoordType> {
             if s.is_empty() {
                 return None;
             }
 
+            let (negative, digits) = match s {
+                [b'-', rest @ ..] if allow_negative => (true, rest),
+                _ => (false, s),
+            };
+            if digits.is_empty() {
+                return None;
+            }
+
             let mut num: CoordType = 0;
-            for &b in s {
+            for &b in digits {
                 if !b.is_ascii_digit() {
                     return None;
                 }
                 let digit = (b - b'0') as CoordType;
                 num = num.checked_mul(10)?.checked_add(digit)?;
             }
-            Some(num)
+            Some(if negative { -num } else { num })
         }
 
         fn find_colon_rev(bytes: &[u8], offset: usize) -> Option<usize> {
@@ -320,24 +340,22 @@ impl DocumentManager {
             _ => return (path, None),
         };
 
-        let last = match parse(&bytes[colend + 1..]) {
-            Some(last) => last,
-            None => return (path, None),
-        };
-        let last = (last - 1).max(0);
         let mut len = colend;
-        let mut goto = Point { x: 0, y: last };
-
-        if let Some(colbeg) = find_colon_rev(bytes, colend) {
-            // Same here: Don't allow empty filenames.
-            if colbeg != 0
-                && let Some(first) = parse(&bytes[colbeg + 1..colend])
-            {
-                let first = (first - 1).max(0);
-                len = colbeg;
-                goto = Point { x: last, y: first };
-            }
-        }
+        let goto = if let Some(colbeg) = find_colon_rev(bytes, colend)
+            && colbeg != 0
+            && let Some(line) = parse(&bytes[colbeg + 1..colend], true)
+        {
+            let Some(column) = parse(&bytes[colend + 1..], false) else {
+                return (path, None);
+            };
+            len = colbeg;
+            Point { x: column.saturating_sub(1), y: line }
+        } else {
+            let Some(line) = parse(&bytes[colend + 1..], true) else {
+                return (path, None);
+            };
+            Point { x: 0, y: line }
+        };
 
         // Strip off the :line:char suffix.
         let path = &bytes[..len];
@@ -361,20 +379,24 @@ mod tests {
         assert_eq!(parse("123"), ("123", None));
         assert_eq!(parse("abc"), ("abc", None));
         assert_eq!(parse(":123"), (":123", None));
-        assert_eq!(parse("abc:123"), ("abc", Some(Point { x: 0, y: 122 })));
-        assert_eq!(parse("45:123"), ("45", Some(Point { x: 0, y: 122 })));
-        assert_eq!(parse(":45:123"), (":45", Some(Point { x: 0, y: 122 })));
-        assert_eq!(parse("abc:45:123"), ("abc", Some(Point { x: 122, y: 44 })));
-        assert_eq!(parse("abc:def:123"), ("abc:def", Some(Point { x: 0, y: 122 })));
-        assert_eq!(parse("1:2:3"), ("1", Some(Point { x: 2, y: 1 })));
-        assert_eq!(parse("::3"), (":", Some(Point { x: 0, y: 2 })));
-        assert_eq!(parse("1::3"), ("1:", Some(Point { x: 0, y: 2 })));
+        assert_eq!(parse("abc:123"), ("abc", Some(Point { x: 0, y: 123 })));
+        assert_eq!(parse("45:123"), ("45", Some(Point { x: 0, y: 123 })));
+        assert_eq!(parse(":45:123"), (":45", Some(Point { x: 0, y: 123 })));
+        assert_eq!(parse("abc:45:123"), ("abc", Some(Point { x: 122, y: 45 })));
+        assert_eq!(parse("abc:def:123"), ("abc:def", Some(Point { x: 0, y: 123 })));
+        assert_eq!(parse("1:2:3"), ("1", Some(Point { x: 2, y: 2 })));
+        assert_eq!(parse("::3"), (":", Some(Point { x: 0, y: 3 })));
+        assert_eq!(parse("1::3"), ("1:", Some(Point { x: 0, y: 3 })));
         assert_eq!(parse(""), ("", None));
         assert_eq!(parse(":"), (":", None));
         assert_eq!(parse("::"), ("::", None));
-        assert_eq!(parse("a:1"), ("a", Some(Point { x: 0, y: 0 })));
+        assert_eq!(parse("a:1"), ("a", Some(Point { x: 0, y: 1 })));
         assert_eq!(parse("1:a"), ("1:a", None));
-        assert_eq!(parse("file.txt:10"), ("file.txt", Some(Point { x: 0, y: 9 })));
-        assert_eq!(parse("file.txt:10:5"), ("file.txt", Some(Point { x: 4, y: 9 })));
+        assert_eq!(parse("file.txt:10"), ("file.txt", Some(Point { x: 0, y: 10 })));
+        assert_eq!(parse("file.txt:10:5"), ("file.txt", Some(Point { x: 4, y: 10 })));
+        assert_eq!(parse("file.txt:-1"), ("file.txt", Some(Point { x: 0, y: -1 })));
+        assert_eq!(parse("file.txt:-5"), ("file.txt", Some(Point { x: 0, y: -5 })));
+        assert_eq!(parse("file.txt:-10:5"), ("file.txt", Some(Point { x: 4, y: -10 })));
+        assert_eq!(parse("file.txt:10:-5"), ("file.txt:10:-5", None));
     }
 }
