@@ -340,6 +340,7 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                         let key = ch as u32 | 0x40;
                         return Some(Input::Keyboard(kbmod::CTRL | InputKey::new(key)));
                     }
+                    ' ' => return Some(Input::Keyboard(kbmod::CTRL | vk::SPACE)),
                     '\x7f' => return Some(Input::Keyboard(vk::BACK)),
                     _ => {}
                 },
