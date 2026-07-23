@@ -1963,6 +1963,26 @@ vi = "Thư mục:"
 zh-hans = "文件夹:"
 zh-hant = "資料夾:"
 
+[NewFolder]
+en = "New Folder"
+zh-hans = "新建文件夹"
+
+[NewFolderDialogNameLabel]
+en = "Folder name:"
+zh-hans = "文件夹名称:"
+
+[NewFolderCreate]
+en = "Create"
+zh-hans = "创建"
+
+[ShowHidden]
+en = "Show Hidden"
+zh-hans = "显示隐藏文件"
+
+[HideHidden]
+en = "Hide Hidden"
+zh-hans = "隐藏隐藏文件"
+
 [SaveAsDialogNameLabel]
 en = "File name:"
 ar = "اسم الملف:"

@@ -13,6 +13,7 @@ use edit::{icu, path};
 use stdext::arena::scratch_arena;
 use stdext::collections::BVec;
 
+use crate::apperr;
 use crate::localization::*;
 use crate::state::*;
 
@@ -42,7 +43,9 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     );
     ctx.attr_intrinsic_size(Size { width, height });
     {
-        let contains_focus = ctx.contains_focus();
+        let modal_active =
+            state.file_picker_overwrite_warning.is_some() || state.file_picker_new_folder;
+        let contains_focus = !modal_active && ctx.contains_focus();
         let mut activated = false;
 
         ctx.table_begin("path");
@@ -62,10 +65,14 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
             ctx.label("name-label", loc(LocId::SaveAsDialogNameLabel));
 
-            let name_changed = ctx.editline("name", &mut state.file_picker_pending_name);
+            let name_changed = if modal_active {
+                false
+            } else {
+                ctx.editline("name", &mut state.file_picker_pending_name)
+            };
             ctx.inherit_focus();
 
-            if ctx.contains_focus() {
+            if !modal_active && ctx.contains_focus() {
                 if name_changed && ctx.is_focused() {
                     update_autocomplete_suggestions(state);
                 }
@@ -127,7 +134,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 }
             }
 
-            if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
+            if !modal_active && ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
                 activated = true;
             }
         }
@@ -144,7 +151,8 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 // -1 for the label (top)
                 // -1 for the label (bottom)
                 // -1 for the editline (bottom)
-                height: height - 3,
+                // -1 for the file picker action buttons
+                height: height - 5,
             },
         );
         ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
@@ -155,7 +163,18 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
             for entries in state.file_picker_entries.as_ref().unwrap() {
                 for entry in entries {
-                    match ctx.list_item(false, entry.as_str()) {
+                    let selected = entry.as_path() == state.file_picker_pending_name;
+                    let selection = if modal_active {
+                        ctx.list_item(selected, entry.as_str());
+                        ListSelection::Unchanged
+                    } else {
+                        ctx.list_item(selected, entry.as_str())
+                    };
+                    if selected && state.file_picker_focus_pending_name {
+                        ctx.list_item_steal_focus();
+                        state.file_picker_focus_pending_name = false;
+                    }
+                    match selection {
                         ListSelection::Unchanged => {}
                         ListSelection::Selected => {
                             state.file_picker_pending_name = entry.as_path().into()
@@ -169,6 +188,40 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.list_end();
         }
         ctx.scrollarea_end();
+
+        if !modal_active {
+            ctx.table_begin("new-folder-action");
+            ctx.inherit_focus();
+            ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
+            ctx.attr_padding(Rect::two(0, 1));
+            {
+                ctx.table_next_row();
+                ctx.inherit_focus();
+
+                if ctx.button("new-folder", loc(LocId::NewFolder), ButtonStyle::default()) {
+                    state.file_picker_new_folder = true;
+                    state.file_picker_new_folder_name = Default::default();
+                }
+                ctx.inherit_focus();
+
+                let hidden_label = if state.file_picker_show_hidden {
+                    loc(LocId::HideHidden)
+                } else {
+                    loc(LocId::ShowHidden)
+                };
+                if ctx.button("hidden", hidden_label, ButtonStyle::default()) {
+                    state.file_picker_show_hidden = !state.file_picker_show_hidden;
+                    state.file_picker_entries = None;
+                    state.file_picker_autocomplete.clear();
+                }
+                ctx.inherit_focus();
+
+                if ctx.button("close", loc(LocId::Cancel), ButtonStyle::default()) {
+                    done = true;
+                }
+            }
+            ctx.table_end();
+        }
 
         if contains_focus
             && (ctx.consume_shortcut(vk::BACK) || ctx.consume_shortcut(kbmod::ALT | vk::UP))
@@ -186,6 +239,77 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 && path.exists()
             {
                 state.file_picker_overwrite_warning = doit.take();
+            }
+        }
+
+        if state.file_picker_new_folder {
+            let mut create = false;
+
+            ctx.modal_begin("new-folder", loc(LocId::NewFolder));
+            ctx.attr_intrinsic_size(Size { width: 48, height: 5 });
+            {
+                ctx.table_begin("new-folder");
+                ctx.table_set_columns(&[0, COORD_TYPE_SAFE_MAX]);
+                ctx.table_set_cell_gap(Size { width: 1, height: 0 });
+                ctx.attr_padding(Rect::three(1, 2, 1));
+                ctx.inherit_focus();
+                {
+                    ctx.table_next_row();
+                    ctx.inherit_focus();
+
+                    ctx.label("folder-label", loc(LocId::NewFolderDialogNameLabel));
+                    ctx.editline("folder-name", &mut state.file_picker_new_folder_name);
+                    ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
+                    ctx.focus_on_first_present();
+
+                    if ctx.is_focused() && ctx.consume_shortcut(vk::RETURN) {
+                        create = true;
+                    }
+
+                    ctx.table_next_row();
+                    ctx.label("spacer-label", "");
+                    ctx.label("spacer", "");
+
+                    ctx.table_next_row();
+                    ctx.label("spacer", "");
+
+                    ctx.table_begin("new-folder-actions");
+                    ctx.inherit_focus();
+                    ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+                    {
+                        ctx.table_next_row();
+                        ctx.inherit_focus();
+
+                        create |= ctx.button(
+                            "create",
+                            loc(LocId::NewFolderCreate),
+                            ButtonStyle::default(),
+                        );
+                        ctx.inherit_focus();
+
+                        if ctx.button("cancel", loc(LocId::Cancel), ButtonStyle::default()) {
+                            state.file_picker_new_folder = false;
+                            state.file_picker_new_folder_name = Default::default();
+                        }
+                    }
+                    ctx.table_end();
+                }
+                ctx.table_end();
+            }
+            if ctx.modal_end() {
+                state.file_picker_new_folder = false;
+                state.file_picker_new_folder_name = Default::default();
+            }
+
+            if create {
+                match create_new_folder(state) {
+                    Ok(()) => {
+                        state.file_picker_new_folder = false;
+                        state.file_picker_new_folder_name = Default::default();
+                        ctx.needs_rerender();
+                    }
+                    Err(err) => error_log_add(ctx, state, err),
+                }
             }
         }
     }
@@ -263,7 +387,32 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         state.file_picker_entries = Default::default();
         state.file_picker_overwrite_warning = Default::default();
         state.file_picker_autocomplete = Default::default();
+        state.file_picker_new_folder = Default::default();
+        state.file_picker_new_folder_name = Default::default();
+        state.file_picker_focus_pending_name = Default::default();
     }
+}
+
+fn create_new_folder(state: &mut State) -> apperr::Result<()> {
+    let dir = state.file_picker_pending_dir.as_path();
+    let path = new_folder_path(state);
+    fs::create_dir_all(&path)?;
+
+    state.file_picker_pending_name = path
+        .strip_prefix(dir)
+        .ok()
+        .and_then(|path| path.components().next())
+        .map_or(Default::default(), |component| component.as_os_str().into());
+    state.file_picker_entries = None;
+    state.file_picker_pending_dir_revision = state.file_picker_pending_dir_revision.wrapping_add(1);
+    state.file_picker_focus_pending_name = true;
+    state.file_picker_autocomplete.clear();
+    Ok(())
+}
+
+fn new_folder_path(state: &State) -> PathBuf {
+    let dir = state.file_picker_pending_dir.as_path();
+    path::normalize(&dir.join(&state.file_picker_new_folder_name))
 }
 
 // Returns Some(path) if the path refers to a file.
@@ -327,6 +476,10 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
         for entry in iter.flatten() {
             if let Ok(metadata) = entry.metadata() {
                 let mut name = entry.file_name();
+                if !state.file_picker_show_hidden && name.as_encoded_bytes().starts_with(b".") {
+                    continue;
+                }
+
                 let dir = metadata.is_dir()
                     || (metadata.is_symlink()
                         && fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()));
@@ -400,4 +553,18 @@ fn update_autocomplete_suggestions(state: &mut State) {
     }
 
     state.file_picker_autocomplete = matches;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_folder_path() {
+        let mut state = State::new().unwrap();
+        state.file_picker_pending_dir = DisplayablePathBuf::from_path(PathBuf::from("/tmp/edit"));
+        state.file_picker_new_folder_name = "foo/../bar/baz".into();
+
+        assert_eq!(new_folder_path(&state), Path::new("/tmp/edit/bar/baz"));
+    }
 }
