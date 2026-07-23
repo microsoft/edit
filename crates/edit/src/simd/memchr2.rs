@@ -16,7 +16,9 @@ pub fn memchr2(needle1: u8, needle2: u8, haystack: &[u8], offset: usize) -> usiz
         let end = beg.add(haystack.len());
         let it = beg.add(offset.min(haystack.len()));
         let it = memchr2_raw(needle1, needle2, it, end);
-        it.offset_from_unsigned(beg)
+        let offset = it.offset_from_unsigned(beg);
+        std::hint::assert_unchecked(offset <= haystack.len());
+        offset
     }
 }
 
