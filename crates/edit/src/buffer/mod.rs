@@ -3022,31 +3022,57 @@ impl TextBuffer {
                     let mut offset = cursor.offset;
 
                     while beg < added.len() {
-                        let (end, line) = simd::lines_fwd(added, beg, 0, 1);
-                        let has_newline = line != 0;
-                        let link = &added[beg..end];
+                        // Find the next newline (\r or \n).
+                        let nl = simd::memchr2(b'\r', b'\n', added, beg);
+                        if nl >= added.len() {
+                            // No more newlines — write the rest as a single chunk.
+                            let line = &added[beg..];
+                            {
+                                let gap = self.buffer.allocate_gap(offset, line.len(), 0);
+                                let written = slice_copy_safe(gap, line);
+                                self.buffer.commit_gap(written);
+                            }
+                            break;
+                        }
+
+                        // Treat \r\n as a single newline (skip the \n after \r).
+                        if added[nl] == b'\n' && nl > 0 && added[nl - 1] == b'\r' {
+                            // This \n is the second half of a \r\n; skip it.
+                            // The \r was already handled in a previous iteration.
+                            // (This branch only fires if memchr2 found \n first,
+                            // which happens when \r is at a different position.)
+                            // Actually, memchr2 finds whichever comes first,
+                            // so if \r and \n are adjacent, we always find \r first.
+                            // This branch is for safety / correctness.
+                            beg = nl + 1;
+                            continue;
+                        }
+
+                        let link = &added[beg..nl];
                         let line = unicode::strip_newline(link);
                         let mut written;
-
                         {
                             let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
                             written = slice_copy_safe(gap, line);
 
-                            if has_newline {
-                                if self.newlines_are_crlf && written < gap.len() {
-                                    gap[written] = b'\r';
-                                    written += 1;
-                                }
-                                if written < gap.len() {
-                                    gap[written] = b'\n';
-                                    written += 1;
-                                }
+                            if self.newlines_are_crlf && written < gap.len() {
+                                gap[written] = b'\r';
+                                written += 1;
+                            }
+                            if written < gap.len() {
+                                gap[written] = b'\n';
+                                written += 1;
                             }
 
                             self.buffer.commit_gap(written);
                         }
 
-                        beg = end;
+                        // Skip past the newline character we just found.
+                        beg = nl + 1;
+                        // If it was \r followed by \n, skip the \n too.
+                        if added[nl] == b'\r' && beg < added.len() && added[beg] == b'\n' {
+                            beg += 1;
+                        }
                         offset += written;
                     }
                 }
@@ -3138,6 +3164,7 @@ fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::{SearchOptions, TextBuffer};
+    use crate::helpers::Point;
 
     fn buffer_contents(buf: &mut TextBuffer) -> String {
         let mut str = String::new();
@@ -3180,5 +3207,191 @@ mod tests {
         .unwrap();
 
         assert_eq!(buffer_contents(&mut buf), "ax\nbx\nx\n");
+    }
+
+    // --- Undo/Redo regression tests for multi-newline handling ---
+
+    #[test]
+    fn undo_redo_single_newline() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.write_raw(b"foo\nbar\n");
+        buf.cursor_move_to_logical(Point { x: 0, y: 2 });
+
+        // Type: Enter, "abc"
+        buf.write_canon(b"\nabc");
+
+        let content = buffer_contents(&mut buf);
+        assert!(content.contains('\n'), "should contain newlines");
+
+        // Undo should remove what we typed
+        buf.undo();
+        assert_eq!(buffer_contents(&mut buf), "foo\nbar\n");
+
+        // Redo should restore it
+        buf.redo();
+        assert_eq!(buffer_contents(&mut buf), content);
+    }
+
+    #[test]
+    fn undo_redo_multiple_newlines() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.write_raw(b"foo\nbar\n");
+        buf.cursor_move_to_logical(Point { x: 0, y: 2 });
+
+        // Type: Enter, "abc", Enter, "def"
+        buf.write_canon(b"\nabc\ndef");
+
+        let content = buffer_contents(&mut buf);
+        // Should have at least 4 lines (foo, bar, abc, def) + possible blank lines
+        assert!(content.matches('\n').count() >= 4, "should have at least 4 newlines, got: {:?}", content);
+
+        // Undo should remove everything we typed
+        buf.undo();
+        assert_eq!(buffer_contents(&mut buf), "foo\nbar\n");
+
+        // Redo should restore all of it
+        buf.redo();
+        assert_eq!(buffer_contents(&mut buf), content);
+    }
+
+    #[test]
+    fn undo_redo_only_newlines() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.write_raw(b"foo\n");
+        buf.cursor_move_to_logical(Point { x: 0, y: 1 });
+
+        // Type three newlines in a row
+        buf.write_canon(b"\n\n\n");
+
+        let content = buffer_contents(&mut buf);
+        assert!(content.starts_with("foo\n"), "should start with foo\\n, got: {:?}", content);
+        let nl_count = content.matches('\n').count();
+        assert!(nl_count >= 3, "should have at least 3 newlines after foo, got: {}", nl_count);
+
+        buf.undo();
+        assert_eq!(buffer_contents(&mut buf), "foo\n");
+
+        buf.redo();
+        assert_eq!(buffer_contents(&mut buf), content);
+    }
+
+    #[test]
+    fn undo_redo_newline_at_start() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.write_raw(b"hello\n");
+        buf.cursor_move_to_logical(Point { x: 0, y: 0 });
+
+        // Insert newline + text at the very beginning
+        buf.write_canon(b"\nworld");
+
+        let content = buffer_contents(&mut buf);
+        assert!(content.contains("world"), "should contain 'world', got: {:?}", content);
+        assert!(content.contains("hello"), "should contain 'hello', got: {:?}", content);
+
+        buf.undo();
+        assert_eq!(buffer_contents(&mut buf), "hello\n");
+
+        buf.redo();
+        assert_eq!(buffer_contents(&mut buf), content);
+    }
+
+    #[test]
+    fn undo_redo_crlf_newlines() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(true);
+        buf.write_raw(b"foo\r\nbar\r\n");
+        buf.cursor_move_to_logical(Point { x: 0, y: 2 });
+
+        // Type: Enter, "abc", Enter, "def" (LF input, should become CRLF)
+        buf.write_canon(b"\nabc\ndef");
+
+        let content = buffer_contents(&mut buf);
+        assert!(content.contains("\r\n"), "should contain CRLF, got: {:?}", content);
+        assert!(content.contains("abc"), "should contain abc, got: {:?}", content);
+        assert!(content.contains("def"), "should contain def, got: {:?}", content);
+
+        buf.undo();
+        assert_eq!(buffer_contents(&mut buf), "foo\r\nbar\r\n");
+
+        buf.redo();
+        assert_eq!(buffer_contents(&mut buf), content);
+    }
+
+    #[test]
+    fn undo_redo_empty_buffer_newlines() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+
+        // Type into empty buffer
+        buf.write_canon(b"\n\n");
+
+        let content = buffer_contents(&mut buf);
+        let nl_count = content.matches('\n').count();
+        assert!(nl_count >= 2, "should have at least 2 newlines, got: {:?}", content);
+
+        buf.undo();
+        assert_eq!(buffer_contents(&mut buf), "");
+
+        buf.redo();
+        assert_eq!(buffer_contents(&mut buf), content);
+    }
+
+    #[test]
+    fn undo_redo_multiple_undo_redo_cycles() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.write_raw(b"base\n");
+        buf.cursor_move_to_logical(Point { x: 0, y: 1 });
+
+        // First edit
+        buf.write_canon(b"\nfirst");
+        let first_content = buffer_contents(&mut buf);
+        assert!(first_content.contains("first"), "should contain 'first', got: {:?}", first_content);
+
+        // Undo first
+        buf.undo();
+        assert_eq!(buffer_contents(&mut buf), "base\n");
+
+        // Second edit
+        buf.cursor_move_to_logical(Point { x: 0, y: 1 });
+        buf.write_canon(b"\nsecond\nthird");
+        let second_content = buffer_contents(&mut buf);
+        assert!(second_content.contains("second"), "should contain 'second', got: {:?}", second_content);
+        assert!(second_content.contains("third"), "should contain 'third', got: {:?}", second_content);
+
+        // Undo second
+        buf.undo();
+        assert_eq!(buffer_contents(&mut buf), "base\n");
+
+        // Redo second
+        buf.redo();
+        assert_eq!(buffer_contents(&mut buf), second_content);
+    }
+
+    #[test]
+    fn undo_redo_newline_with_text_before_and_after() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.write_raw(b"aaa\nbbb\n");
+        buf.cursor_move_to_logical(Point { x: 3, y: 1 }); // end of "bbb"
+
+        // Insert newline + text after "bbb"
+        buf.write_canon(b"\nccc\nddd");
+
+        let content = buffer_contents(&mut buf);
+        assert!(content.contains("aaa"), "should contain aaa, got: {:?}", content);
+        assert!(content.contains("bbb"), "should contain bbb, got: {:?}", content);
+        assert!(content.contains("ccc"), "should contain ccc, got: {:?}", content);
+        assert!(content.contains("ddd"), "should contain ddd, got: {:?}", content);
+
+        buf.undo();
+        assert_eq!(buffer_contents(&mut buf), "aaa\nbbb\n");
+
+        buf.redo();
+        assert_eq!(buffer_contents(&mut buf), content);
     }
 }
