@@ -333,14 +333,18 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                     return Some(Input::Text(text));
                 }
                 vt::Token::Ctrl(ch) => match ch {
-                    '\0' | '\t' | '\r' => return Some(Input::Keyboard(InputKey::new(ch as u32))),
+                    '\0' => {
+                        // Both Ctrl+Space and Ctrl+Shift+2 produce \0, and
+                        // Ctrl+Space is probably the more common of the two.
+                        return Some(Input::Keyboard(kbmod::CTRL | vk::SPACE));
+                    }
+                    '\t' | '\r' => return Some(Input::Keyboard(InputKey::new(ch as u32))),
                     '\n' => return Some(Input::Keyboard(kbmod::CTRL | vk::RETURN)),
                     ..='\x1a' => {
                         // Shift control code to A-Z
                         let key = ch as u32 | 0x40;
                         return Some(Input::Keyboard(kbmod::CTRL | InputKey::new(key)));
                     }
-                    ' ' => return Some(Input::Keyboard(kbmod::CTRL | vk::SPACE)),
                     '\x7f' => return Some(Input::Keyboard(vk::BACK)),
                     _ => {}
                 },
