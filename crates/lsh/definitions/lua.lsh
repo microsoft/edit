@@ -35,6 +35,8 @@ pub fn lua() {
                 await input;
             }
         } else if /\[=\[/ {
+            // TODO: Handling these long strings requires backreferences which are not supported yet.
+            // Something like... \[(=*)\[.*?\]\1\]
             loop {
                 yield string;
                 if /\]=\]/ {
@@ -44,26 +46,16 @@ pub fn lua() {
                 await input;
             }
         } else if /'/ {
-            until /$/ {
-                yield string;
-                if /\\./ {}
-                else if /'/ { yield string; break; }
-                await input;
-            }
+            single_quote_string();
         } else if /"/ {
-            until /$/ {
-                yield string;
-                if /\\./ {}
-                else if /"/ { yield string; break; }
-                await input;
-            }
+            double_quote_string();
         } else if /(?:break|continue|do|else|elseif|end|for|function|goto|if|in|repeat|return|then|until|while)\>/ {
             yield keyword.control;
         } else if /(?:and|export|local|not|or|type|typeof)\>/ {
             yield keyword.other;
         } else if /(?:true|false|nil)\>/ {
             yield constant.language;
-        } else if /(?i:(?:0x[\da-f]+(?:\.[\da-f]+)?(?:p[+-]?\d+)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?))/ {
+        } else if /(?i:0x[\da-f]+(?:\.[\da-f]+)?(?:p[+-]?\d+)?|-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {
