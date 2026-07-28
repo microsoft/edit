@@ -37,6 +37,13 @@ Additional flags are `--dev`, to build directly from the main branch, and `--sys
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/microsoft/edit/main/assets/install.sh | sh -s -- --dev --system
 ```
 
+### macOS
+
+You can install the latest version with Homebrew:
+```sh
+brew install msedit
+```
+
 ## Build Instructions
 
 * [Install Rust](https://www.rust-lang.org/tools/install)
