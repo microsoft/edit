@@ -31,24 +31,24 @@ enum SubCommands {
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand, name = "compile", description = "Generate Rust code from .lsh files")]
 struct SubCommandOneCompile {
-    #[argh(positional, description = "source .lsh file or directory")]
-    lsh: PathBuf,
+    #[argh(positional, description = "source .lsh files or directories")]
+    lsh: Vec<PathBuf>,
 }
 
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand, name = "assembly", description = "Generate assembly from .lsh files")]
 struct SubCommandAssembly {
-    #[argh(positional, description = "source .lsh file or directory")]
-    lsh: PathBuf,
+    #[argh(positional, description = "source .lsh files or directories")]
+    lsh: Vec<PathBuf>,
 }
 
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand, name = "render", description = "Highlight text files")]
 struct SubCommandRender {
-    #[argh(positional, description = "source .lsh file or directory")]
-    lsh: PathBuf,
-    #[argh(positional, description = "source text file")]
+    #[argh(option, description = "source text file")]
     input: PathBuf,
+    #[argh(positional, description = "source .lsh files or directories")]
+    lsh: Vec<PathBuf>,
 }
 
 pub fn main() {
@@ -67,21 +67,32 @@ fn run() -> anyhow::Result<()> {
     let mut read_lsh = |path: &Path| {
         if path.is_dir() { generator.read_directory(path) } else { generator.read_file(path) }
     };
+    let mut read_lsh_inputs = |paths: &[PathBuf]| -> anyhow::Result<()> {
+        if paths.is_empty() {
+            bail!("At least one .lsh file or directory is required");
+        }
+
+        for path in paths {
+            read_lsh(path)?;
+        }
+
+        Ok(())
+    };
 
     match &command.sub {
         SubCommands::Compile(cmd) => {
-            read_lsh(&cmd.lsh)?;
+            read_lsh_inputs(&cmd.lsh)?;
             let output = generator.generate_rust()?;
             _ = stdout().write_all(output.as_bytes());
         }
         SubCommands::Assembly(cmd) => {
-            read_lsh(&cmd.lsh)?;
+            read_lsh_inputs(&cmd.lsh)?;
             let vt = stdout().is_terminal();
             let output = generator.generate_assembly(vt)?;
             _ = stdout().write_all(output.as_bytes());
         }
         SubCommands::Render(cmd) => {
-            read_lsh(&cmd.lsh)?;
+            read_lsh_inputs(&cmd.lsh)?;
             run_render(generator, &cmd.input)?;
         }
     }
