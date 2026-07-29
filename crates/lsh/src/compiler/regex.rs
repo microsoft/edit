@@ -585,7 +585,7 @@ impl<'a, 'c> CodeGen<'a, 'c> {
                 // We iterate in reverse because of continuation-passing style,
                 // as explained in the module doc.
                 for alt in alts.iter().rev() {
-                    current_fail = self.emit(alt, on_match, current_fail)?;
+                    current_fail = self.emit_for_backtracking(alt, on_match, current_fail)?;
                 }
 
                 Ok(current_fail)
@@ -621,6 +621,29 @@ impl<'a, 'c> CodeGen<'a, 'c> {
                 }
             }
         }
+    }
+
+    fn emit_for_backtracking(
+        &mut self,
+        inner: &Regex,
+        on_match: IRCell<'a>,
+        on_fail: IRCell<'a>,
+    ) -> Result<IRCell<'a>, String> {
+        // Since each alternative may fail, we need to save the offset for backtracking.
+        let off_reg = self.compiler.get_reg(Register::InputOffset);
+        let saved = self.compiler.alloc_vreg();
+
+        // Create the backtracking node (restores the offset = the on_fail for the self.emit() below).
+        let restore = self.compiler.alloc_iri(IRI::Mov { dst: off_reg, src: saved });
+        restore.borrow_mut().next = Some(on_fail);
+
+        // Recurse into the alternative.
+        let entry = self.emit(inner, on_match, restore)?;
+
+        // Create the save node whose target is the self.emit() above.
+        let save = self.compiler.alloc_iri(IRI::Mov { dst: saved, src: off_reg });
+        save.borrow_mut().next = Some(entry);
+        Ok(save)
     }
 
     /// Emit IR for repetition quantifiers (`?`, `+`, `*`, `{n,m}`).
@@ -693,7 +716,7 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         let mut current = on_match;
         // Optional: Both branches succeed go to `current`.
         for _ in min..max {
-            current = self.emit(inner, current, current)?;
+            current = self.emit_for_backtracking(inner, current, current)?;
         }
         // Required: Failure goes to `on_fail`.
         for _ in 0..min {
