@@ -47,6 +47,7 @@ extends:
   template: v2/Microsoft.${{parameters.official}}.yml@GovernedTemplates
   parameters:
     featureFlags:
+      autoBaseline: false
       WindowsHostVersion:
         Version: 2022
         Network: R1
@@ -112,7 +113,7 @@ extends:
               - task: RustInstaller@1
                 displayName: Install Rust toolchain
                 inputs:
-                  rustVersion: ms-prod
+                  rustVersion: ms-prod@llvm
                   additionalTargets: x86_64-pc-windows-msvc aarch64-pc-windows-msvc
                   # URL of an Azure Artifacts feed configured with a crates.io upstream. Must be within the current ADO collection.
                   # NOTE: Azure Artifacts support for Rust is not yet public, but it is enabled for internal ADO organizations.

@@ -194,7 +194,6 @@ impl DocumentManager {
     }
 
     pub fn add_file_path(&mut self, path: &Path) -> apperr::Result<&mut Document> {
-        let (path, goto) = Self::parse_filename_goto(path);
         let path = path::normalize(path);
 
         let mut file = match File::open(&path) {
@@ -208,9 +207,6 @@ impl DocumentManager {
         // Check if the file is already open.
         if file_id.is_some() && self.update_active(|doc| doc.file_id == file_id) {
             let doc = self.active_mut().unwrap();
-            if let Some(goto) = goto {
-                doc.buffer.borrow_mut().cursor_move_to_logical(goto);
-            }
             return Ok(doc);
         }
 
@@ -219,12 +215,6 @@ impl DocumentManager {
             if let Some(file) = &mut file {
                 let mut tb = buffer.borrow_mut();
                 tb.read_file(file, None)?;
-
-                if let Some(goto) = goto
-                    && goto != Default::default()
-                {
-                    tb.cursor_move_to_logical(goto);
-                }
             }
         }
 
@@ -288,63 +278,63 @@ impl DocumentManager {
         }
         Ok(buffer)
     }
+}
 
-    // Parse a filename in the form of "filename:line:char".
-    // Returns the position of the first colon and the line/char coordinates.
-    fn parse_filename_goto(path: &Path) -> (&Path, Option<Point>) {
-        fn parse(s: &[u8]) -> Option<CoordType> {
-            if s.is_empty() {
+/// Parse a filename in the form of "filename:line:char".
+/// Returns the position of the first colon and the line/char coordinates.
+pub fn parse_filename_goto(path: &Path) -> (&Path, Option<Point>) {
+    fn parse(s: &[u8]) -> Option<CoordType> {
+        if s.is_empty() {
+            return None;
+        }
+
+        let mut num: CoordType = 0;
+        for &b in s {
+            if !b.is_ascii_digit() {
                 return None;
             }
-
-            let mut num: CoordType = 0;
-            for &b in s {
-                if !b.is_ascii_digit() {
-                    return None;
-                }
-                let digit = (b - b'0') as CoordType;
-                num = num.checked_mul(10)?.checked_add(digit)?;
-            }
-            Some(num)
+            let digit = (b - b'0') as CoordType;
+            num = num.checked_mul(10)?.checked_add(digit)?;
         }
-
-        fn find_colon_rev(bytes: &[u8], offset: usize) -> Option<usize> {
-            (0..offset.min(bytes.len())).rev().find(|&i| bytes[i] == b':')
-        }
-
-        let bytes = path.as_os_str().as_encoded_bytes();
-        let colend = match find_colon_rev(bytes, bytes.len()) {
-            // Reject filenames that would result in an empty filename after stripping off the :line:char suffix.
-            // For instance, a filename like ":123:456" will not be processed by this function.
-            Some(colend) if colend > 0 => colend,
-            _ => return (path, None),
-        };
-
-        let last = match parse(&bytes[colend + 1..]) {
-            Some(last) => last,
-            None => return (path, None),
-        };
-        let last = (last - 1).max(0);
-        let mut len = colend;
-        let mut goto = Point { x: 0, y: last };
-
-        if let Some(colbeg) = find_colon_rev(bytes, colend) {
-            // Same here: Don't allow empty filenames.
-            if colbeg != 0
-                && let Some(first) = parse(&bytes[colbeg + 1..colend])
-            {
-                let first = (first - 1).max(0);
-                len = colbeg;
-                goto = Point { x: last, y: first };
-            }
-        }
-
-        // Strip off the :line:char suffix.
-        let path = &bytes[..len];
-        let path = unsafe { OsStr::from_encoded_bytes_unchecked(path) };
-        let path = Path::new(path);
-        (path, Some(goto))
+        Some(num)
     }
+
+    fn find_colon_rev(bytes: &[u8], offset: usize) -> Option<usize> {
+        (0..offset.min(bytes.len())).rev().find(|&i| bytes[i] == b':')
+    }
+
+    let bytes = path.as_os_str().as_encoded_bytes();
+    let colend = match find_colon_rev(bytes, bytes.len()) {
+        // Reject filenames that would result in an empty filename after stripping off the :line:char suffix.
+        // For instance, a filename like ":123:456" will not be processed by this function.
+        Some(colend) if colend > 0 => colend,
+        _ => return (path, None),
+    };
+
+    let last = match parse(&bytes[colend + 1..]) {
+        Some(last) => last,
+        None => return (path, None),
+    };
+    let last = (last - 1).max(0);
+    let mut len = colend;
+    let mut goto = Point { x: 0, y: last };
+
+    if let Some(colbeg) = find_colon_rev(bytes, colend) {
+        // Same here: Don't allow empty filenames.
+        if colbeg != 0
+            && let Some(first) = parse(&bytes[colbeg + 1..colend])
+        {
+            let first = (first - 1).max(0);
+            len = colbeg;
+            goto = Point { x: last, y: first };
+        }
+    }
+
+    // Strip off the :line:char suffix.
+    let path = &bytes[..len];
+    let path = unsafe { OsStr::from_encoded_bytes_unchecked(path) };
+    let path = Path::new(path);
+    (path, Some(goto))
 }
 
 #[cfg(test)]
@@ -354,7 +344,7 @@ mod tests {
     #[test]
     fn test_parse_last_numbers() {
         fn parse(s: &str) -> (&str, Option<Point>) {
-            let (p, g) = DocumentManager::parse_filename_goto(Path::new(s));
+            let (p, g) = parse_filename_goto(Path::new(s));
             (p.to_str().unwrap(), g)
         }
 
