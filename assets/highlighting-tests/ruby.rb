@@ -1,9 +1,11 @@
-# Comments
 # Single-line comment
 
 =begin
-Multi-line
-comment
+Multi-line comment
+=end
+
+=begin rdoc
+The rest of the `=begin` line is ignored by Ruby.
 =end
 
 # Numbers
@@ -19,6 +21,9 @@ comment
 1_000_000
 3.14r
 2i
+1.upto(3)
+(1..3).to_a
+(1...3).to_a
 
 # Constants
 true
@@ -26,18 +31,24 @@ false
 nil
 Object
 String
+Demo::Animal
+::Kernel
+MAX_SIZE = 10
 
 # Strings
 'single quotes with escape: \' \n \t \\'
 "double quotes with escape: \" \n \t \\"
+"interpolated: #{1 + 1} and a # that is not a comment"
 `echo shell command`
 
 # Symbols and variables
 :symbol
 :method_name?
+attr_accessor :name, :age
 @instance_var
 @@class_var
 $global_var
+{ key: 'value' }
 
 # Control flow keywords
 if true
@@ -68,6 +79,10 @@ while false
   redo
 end
 
+until true
+  puts "spin"
+end
+
 begin
   raise "oops"
 rescue StandardError => e
@@ -76,6 +91,9 @@ ensure
   puts e
 end
 
+puts "even" if 42.even? and not false
+puts "odd" or true
+
 # Definitions and method calls
 module Demo
   class Animal
@@ -83,7 +101,19 @@ module Demo
       @name = name
     end
 
-    def speak! =  puts "#{@name} speaks"
+    def self.create(name)
+      new(name)
+    end
+
+    def ==(other)
+      @name == other.name
+    end
+
+    def name=(value)
+      @name = value
+    end
+
+    def speak! = puts "#{@name} speaks"
   end
 end
 
@@ -93,6 +123,7 @@ undef old_speak
 BEGIN { puts "start" }
 END { puts "finish" }
 defined? Demo
+puts __FILE__, __LINE__
 self
 super
 yield
