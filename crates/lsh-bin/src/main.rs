@@ -122,20 +122,23 @@ fn run_render(generator: lsh::compiler::Generator, path: &Path) -> anyhow::Resul
             "string" => "\x1b[91m",   // Bright Red
             "variable" => "\x1b[96m", // Bright Cyan
 
-            "constant.language" => "\x1b[94m",   // Bright Blue
-            "constant.numeric" => "\x1b[92m",    // Bright Green
-            "keyword.control" => "\x1b[95m",     // Bright Magenta
-            "keyword.other" => "\x1b[94m",       // Bright Blue
-            "markup.bold" => "\x1b[1m",          // Bold
-            "markup.changed" => "\x1b[94m",      // Bright Blue
-            "markup.deleted" => "\x1b[91m",      // Bright Red
-            "markup.heading" => "\x1b[94m",      // Bright Blue
-            "markup.inserted" => "\x1b[92m",     // Bright Green
-            "markup.italic" => "\x1b[3m",        // Italic
-            "markup.link" => "\x1b[4m",          // Underlined
-            "markup.list" => "\x1b[94m",         // Bright Blue
-            "markup.strikethrough" => "\x1b[9m", // Strikethrough
-            "meta.header" => "\x1b[94m",         // Bright Blue
+            "constant.language" => "\x1b[94m",    // Bright Blue
+            "constant.numeric" => "\x1b[92m",     // Bright Green
+            "keyword.control" => "\x1b[95m",      // Bright Magenta
+            "keyword.other" => "\x1b[94m",        // Bright Blue
+            "keyword.preprocessor" => "\x1b[94m", // Bright Blue
+            "markup.bold" => "\x1b[1m",           // Bold
+            "markup.changed" => "\x1b[94m",       // Bright Blue
+            "markup.deleted" => "\x1b[91m",       // Bright Red
+            "markup.heading" => "\x1b[94m",       // Bright Blue
+            "markup.inserted" => "\x1b[92m",      // Bright Green
+            "markup.italic" => "\x1b[3m",         // Italic
+            "markup.link" => "\x1b[4m",           // Underlined
+            "markup.list" => "\x1b[94m",          // Bright Blue
+            "markup.strikethrough" => "\x1b[9m",  // Strikethrough
+            "meta.header" => "\x1b[94m",          // Bright Blue
+            "storage.annotation" => "\x1b[36m",   // Cyan
+            "storage.type" => "\x1b[36m",         // Cyan
 
             _ => {
                 unknown_kinds.push(hk.identifier.to_string());

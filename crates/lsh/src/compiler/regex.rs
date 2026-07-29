@@ -27,6 +27,7 @@
 //! | `foo`        | `Prefix("foo")` - single prefix check                    |
 //! | `\+\+\+`     | `Prefix("+++")` - escapes fused into literals            |
 //! | `(?i:foo)`   | `PrefixInsensitive("foo")`                               |
+//! | `(?i:[a-f])` | `Charset` with both cases folded in                      |
 //! | `[a-z]+`     | `Charset{cs, min=1, max=∞}` - greedy char class          |
 //! | `[a-z]?`     | `Charset{cs, min=0, max=1}` - optional char              |
 //! | `$`          | `EndOfLine` condition                                    |
@@ -402,7 +403,7 @@ impl<'a> RegexParser<'a> {
                 }
                 Atom::Meta(']') => break,
                 Atom::Meta(c) | Atom::Char(c) => {
-                    if !c.is_ascii() {
+                    if c as u32 > 0xff {
                         return unexpected_unicode(c);
                     }
 
@@ -425,7 +426,7 @@ impl<'a> RegexParser<'a> {
                                 end = b'>';
                             }
                             Atom::Meta(c) | Atom::Char(c) => {
-                                if !c.is_ascii() {
+                                if c as u32 > 0xff {
                                     return unexpected_unicode(c);
                                 }
                                 end = c as u8;
@@ -439,6 +440,10 @@ impl<'a> RegexParser<'a> {
                     charset.set_range(start..=end, true);
                 }
             }
+        }
+
+        if self.case_insensitive {
+            charset.fold_case();
         }
 
         if negated {
@@ -483,6 +488,16 @@ impl<'a> RegexParser<'a> {
                         Ok(Atom::Class(cs))
                     }
                     't' => Ok(Atom::Char('\t')),
+                    'x' => {
+                        if let Some(byte) =
+                            self.rest().get(..2).and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                        {
+                            self.pos += 2;
+                            Ok(Atom::Char(byte as char))
+                        } else {
+                            Err("invalid hex escape sequence".to_string())
+                        }
+                    }
                     c if !c.is_ascii_alphanumeric() => Ok(Atom::Char(c)),
                     c => Err(format!("unknown escape sequence '\\{c}'")),
                 }
