@@ -2177,6 +2177,7 @@ impl TextBuffer {
                     HighlightKind::ConstantNumeric => Some(IndexedColor::BrightGreen),
                     HighlightKind::KeywordControl => Some(IndexedColor::BrightMagenta),
                     HighlightKind::KeywordOther => Some(IndexedColor::BrightBlue),
+                    HighlightKind::KeywordPreprocessor => Some(IndexedColor::BrightBlue),
                     HighlightKind::MarkupBold => None,
                     HighlightKind::MarkupChanged => Some(IndexedColor::BrightBlue),
                     HighlightKind::MarkupDeleted => Some(IndexedColor::BrightRed),

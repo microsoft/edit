@@ -94,10 +94,3 @@ export type Greeting = (name: string) -> string
 def greet(name: str) -> str:
     return f"hello {name}"
 ```
-
-```CSharp
-public string Greet(string name)
-{
-  return $"hello {name}";
-}
-```

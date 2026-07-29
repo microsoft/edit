@@ -27,6 +27,7 @@
 //! | `foo`        | `Prefix("foo")` - single prefix check                    |
 //! | `\+\+\+`     | `Prefix("+++")` - escapes fused into literals            |
 //! | `(?i:foo)`   | `PrefixInsensitive("foo")`                               |
+//! | `(?i:[a-f])` | `Charset` with both cases folded in                      |
 //! | `[a-z]+`     | `Charset{cs, min=1, max=∞}` - greedy char class          |
 //! | `[a-z]?`     | `Charset{cs, min=0, max=1}` - optional char              |
 //! | `$`          | `EndOfLine` condition                                    |
@@ -439,6 +440,10 @@ impl<'a> RegexParser<'a> {
                     charset.set_range(start..=end, true);
                 }
             }
+        }
+
+        if self.case_insensitive {
+            charset.fold_case();
         }
 
         if negated {
