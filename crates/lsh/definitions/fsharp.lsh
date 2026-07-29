@@ -3,30 +3,29 @@
 #[path = "**/*.fsi"]
 #[path = "**/*.fsx"]
 pub fn fsharp() {
+    // Compiler and script directives always occupy the entire line.
+    if /\s*#(?:if|else|endif|light|line|load|nowarn|time|help|quit|r|I)\>.*/ {
+        yield keyword.preprocessor;
+        return;
+    }
+
     until /$/ {
         yield other;
 
-        // Line comment
         if /\/\/.*/ {
             yield comment;
-
-        // Preprocessor / script directives
-        } else if /#(?:if|else|endif|load|r|I|nowarn|light|time|help|quit)\>.*/ {
-            yield keyword.other;
-
-        // Block comment: (* ... *)
         } else if /\(\*/ {
+            // F# block comments nest, but LSH can't count, so we stop at the first `*)`.
             loop {
                 yield comment;
+                await input;
                 if /\*\)/ {
                     yield comment;
                     break;
                 }
-                await input;
             }
-
-        // Triple-quoted string: """ ... """
-        } else if /"""/ {
+        } else if /\$*"""/ {
+            // Triple-quoted string. It has no escape sequences and may span lines.
             loop {
                 yield string;
                 if /"""/ {
@@ -35,9 +34,8 @@ pub fn fsharp() {
                 }
                 await input;
             }
-
-        // Verbatim (optionally interpolated) string: @"..." or $@"..."
         } else if /\$?@"/ {
+            // Verbatim string. `""` is the only escape sequence and it may span lines.
             loop {
                 yield string;
                 if /""/ {
@@ -48,62 +46,30 @@ pub fn fsharp() {
                 }
                 await input;
             }
-
-        // Interpolated string: $"..."
-        } else if /\$"/ {
-            until /$/ {
-                yield string;
-                if /\\./ {
-                    // Escape sequences
-                } else if /"/ {
-                    yield string;
-                    break;
-                }
-                await input;
-            }
-
-        // Regular string: "..."
-        } else if /"/ {
-            until /$/ {
-                yield string;
-                if /\\./ {
-                    // Escape sequences
-                } else if /"/ {
-                    yield string;
-                    break;
-                }
-                await input;
-            }
-
-        // Character literal: 'a', '\n', etc.
-        } else if /'(?:\\.|[^'\\])'/ {
+        } else if /\$?"/ {
+            double_quote_string();
+        } else if /'\\?.'/ {
+            // A lone `'` starts a generic type parameter, so a character literal
+            // must only match if the closing quote is present as well.
             yield string;
-
-        // Backtick identifiers: ``identifier with spaces``
         } else if /``[^`]+``/ {
             yield variable;
-        } else if /`[^`]+`/ {
-            yield variable;
-
-        // Keywords
-        } else if /(?:if|then|else|elif|match|with|function|try|finally|for|to|downto|while|do|return|yield|begin|end|in)\>/ {
+        } else if /\[<([A-Z]\w*)/ {
+            yield $1 as storage.annotation;
+        } else if /(?:if|then|elif|else|match|with|function|fun|try|finally|for|downto|done|do|to|while|return|yield|begin|end|in)\>/ {
             yield keyword.control;
-        } else if /(?:let|use|and|rec|mutable|open|module|namespace|type|member|interface|abstract|override|default|static|inline|extern|public|private|internal|new|inherit|as|of|when|exception|raise|lazy|assert|global)\>/ {
+        } else if /(?:abstract|and|assert|as|base|class|default|delegate|downcast|enum|exception|extern|global|inherit|inline|interface|internal|lazy|let|member|module|mutable|namespace|new|not|of|open|or|override|private|protected|public|rec|sig|static|struct|type|upcast|use|val|when)\>/ {
             yield keyword.other;
-
-        // Language constants
         } else if /(?:true|false|null)\>/ {
             yield constant.language;
-
-        // Numbers (best-effort)
-        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)(?:u(?:y|s|l|n)|(?:y|s|l|n)|[fFmM])?/ {
+        } else if /(?:bigint|bool|byte|char|decimal|double|exn|float32|float|int8|int16|int32|int64|int|nativeint|obj|sbyte|single|string|uint8|uint16|uint32|uint64|unativeint|uint|unit|void)\>/ {
+            yield storage.type;
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?[filmnsuy]{0,2})/ {
             if /\w+/ {
-                // Not a number after all.
+                // Invalid numeric literal
             } else {
                 yield constant.numeric;
             }
-
-        // Method calls in .NET-style syntax: Foo.Bar(...)
         } else if /(\w+)\s*\(/ {
             yield $1 as method;
         } else if /\w+/ {

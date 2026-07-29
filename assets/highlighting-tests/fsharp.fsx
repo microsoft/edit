@@ -1,74 +1,144 @@
-// --- F# highlighting test ---
-// Exercises: comments, block comments, strings, chars, numbers, directives,
-// keywords/control flow, types/members, and backtick identifiers.
+// Single-line comment
+/// Documentation comment
+(* Block comment
+   spanning multiple lines *)
+(*** Banner comment ***)
 
-#r "System.Runtime"
 #r "nuget: Newtonsoft.Json, 13.0.3"
 #load "some-script.fsx"
+#I "lib"
+#nowarn "40"
+#if DEBUG
+#light
+#endif
 
-(*** Block comment (not nested in this highlighter) ***)
-(* Another block comment *)
+module Demo.App
 
 open System
-open Newtonsoft.Json
 
-module ``My Module With Spaces`` =
-    let pi = 3.14159
-    let hex = 0xDEAD_BEEF
-    let bin = 0b1010_1100
-    let sci = 1.23e-4
+// Numbers
+42
+3.14
+.5
+10_000_000
+1e10
+1.5e-3
+0xff
+0xFF
+0b1010
+0o777
+42y
+42uy
+42s
+42us
+42L
+42UL
+42n
+42un
+42I
+3.14f
+3.14m
+3.14M
+-.5_0_1e3_0
+
+// Constants
+true
+false
+null
+
+// Strings and characters
+'a'
+'\n'
+'\\'
+'\''
+"double quotes with escape: \" \n \t \\"
+$"interpolated {1 + 1}"
+@"C:\Temp\file.txt"
+@"verbatim with ""escaped"" quotes"
+$@"interpolated verbatim {1}"
+"""
+triple-quoted string
+"""
+$"""interpolated triple-quoted {1}"""
+
+// Backtick identifiers
+let ``an identifier with spaces`` = 1
+
+[<Obsolete("Use NewThing instead")>]
+type Person(name: string, age: int) =
+    member val Nickname = "" with get, set
+    member _.Name: string = name
+    member _.Age: int = age
+    override _.ToString() = $"{name} ({age})"
+
+[<AbstractClass>]
+type Shape() =
+    abstract member Area: unit -> float
+    default _.Area() = 0.0
+
+type Color =
+    | Red
+    | Green
+    | Blue
+
+type IGreeter =
+    abstract member Greet: string -> unit
+
+// Generic type parameters must not be mistaken for character literals
+let swap (a: 'a, b: 'b) = (b, a)
+let inline add (x: ^T) (y: ^T) = x + y
+
+let rec fib n =
+    if n <= 1 then n
+    else fib (n - 1) + fib (n - 2)
+
+let classify x =
+    match x with
+    | 0 -> "zero"
+    | 1 | 2 -> "small"
+    | _ when x < 0 -> "negative"
+    | _ -> "other"
+
+let tryParseInt (s: string) =
+    try
+        let v = Int32.Parse(s)
+        Ok v
+    with
+    | :? FormatException -> Error "format"
+    | ex -> Error ex.Message
+
+let demoLoops () =
     let mutable counter = 0
 
-    let name = "Edit"
-    let path = @"C:\Program Files\Edit\edit.exe"
-    let escaped = "tab:\t newline:\n quote:\" backslash:\\"
-    let interpolated = $"Hello, {name}!"
-    let interpolatedVerbatim = $@"Path: {path}"
+    for i = 1 to 3 do
+        counter <- counter + i
 
-    let triple = """
-This is a triple-quoted string.
-It can span multiple lines without escapes.
-"""
+    for i = 3 downto 1 do
+        counter <- counter - i
 
-    let chA = 'a'
-    let chN = '\n'
+    while counter < 20 do
+        counter <- counter + 1
 
-    let rec fib n =
-        if n <= 1 then n
-        else fib (n - 1) + fib (n - 2)
+    counter
 
-    let classify x =
-        match x with
-        | 0 -> "zero"
-        | 1 | 2 -> "small"
-        | _ when x < 0 -> "negative"
-        | _ -> "other"
+let demoLambdas () =
+    let twice = fun x -> x * 2
+    let thrice = function x -> x * 3
+    [ 1; 2; 3 ] |> List.map twice |> List.map thrice
 
-    let tryParseInt (s: string) =
-        try
-            let v = Int32.Parse(s)
-            Ok v
-        with
-        | :? FormatException -> Error "format"
-        | ex -> Error ex.Message
+let demoResources () =
+    use stream = new IO.MemoryStream()
+    assert (stream.Length = 0L)
+    lazy (stream.Length)
 
-    type Person(name: string, age: int) =
-        member _.Name = name
-        member _.Age = age
-        override _.ToString() = $"{name} ({age})"
+exception MyError of string
 
-    let demoLoops () =
-        for i = 1 to 3 do
-            counter <- counter + i
+module private Internals =
+    let helper () = raise (MyError "boom")
 
-        while counter < 20 do
-            counter <- counter + 1
-
-        // Method-call style tokenization
-        let p = Person("Ada", 37)
-        printfn "%s" (p.ToString())
-
-    // Single-backtick identifier fallback (not typical F#, but supported by lexer)
-    let `singleBacktickIdentifier` = 42
-
-    demoLoops ()
+[<EntryPoint>]
+let main argv =
+    printfn "%s" (Person("Ada", 37).ToString())
+    demoLoops () |> ignore
+    demoLambdas () |> ignore
+    0
