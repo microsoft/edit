@@ -151,8 +151,6 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 
             if change {
                 action = change_action;
-                state.wants_search.focus = true;
-                ctx.needs_rerender();
             }
         }
         ctx.table_end();

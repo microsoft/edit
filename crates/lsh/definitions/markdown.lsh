@@ -60,6 +60,16 @@ pub fn markdown() {
                     if /.*/ {}
                 }
             }
+        } else if /(?i:lua|luau)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    lua();
+                    if /.*/ {}
+                }
+            }
         } else if /(?i:py)/ {
             loop {
                 await input;
