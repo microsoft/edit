@@ -1,93 +1,109 @@
-// Comments
 // Single-line comment
-
 /*
  * Multi-line
  * comment
  */
 
+// Preprocessor directives
 #include <stdio.h>
-#include <stdbool.h>
-#define MAX_BUFFER 1024
-#ifndef MY_HEADER_H
-#define MY_HEADER_H
+#include "foo.h"
+#ifndef HEADER_GUARD
+#  define HEADER_GUARD
 #endif
+#define MAX_BUFFER 1024
+#define MIN(a, b) \
+    ((a) < (b) ? (a) : (b))
+#pragma once
+#warning "unmaintained"
 
 // Numbers
 42;
+0777;
 3.14;
 .5;
 1e10;
 1.5e-3;
 0xff;
-0xFF;
 0b1010;
-0o77;
-42ul;
-3.14f;
+0x1p-3;
+-12L;
+15lU;
+6.283F;
+1'000'000;
 
-// Constants
+// Constants and literals
 true;
 false;
 NULL;
-
-// Strings and characters
+nullptr;
 'a';
-'\n';
-"double quotes with escape: \" \n \t \\";
+'\'';
+"escapes: \" \n \t \\";
 
-// Control flow keywords
-int main(int argc, char *argv[]) {
-    if (argc > 1) {
-        // ...
-    } else if (argc == 0) {
-        // ...
-    } else {
-        // ...
-    }
-
+// Control flow
+int main(int argc, char *argv[])
+{
     for (int i = 0; i < 10; i++) {
-        if (i == 5) continue;
-        if (i == 8) break;
+        if (i == 5) {
+            continue;
+        } else if (i == 8) {
+            break;
+        } else {
+            goto end;
+        }
     }
 
-    while (false) { }
-    do { } while (false);
+    do {
+        printf("Hello %s!\n", argv[0]);
+    } while (false);
 
     switch (argc) {
-        case 1:
-            break;
-        default:
-            goto end;
+    case 1:
+        break;
+    default:
+        break;
     }
 
 end:
     return 0;
 }
 
-// Other keywords and structures
+// Types and storage classes
+extern int global_var;
+static const char *text = "Hello World!";
+volatile unsigned short hardware_register;
+register signed long long fast_loop_counter;
+_Atomic int atomic_counter;
+_Bool is_active;
+thread_local double tau;
+typeof(tau) tau_copy;
+
+// Aggregates
 struct Point {
     int x;
     int y;
 };
 
 typedef union {
-    char c;
-    double d;
-} DataUnion;
+    char bytes[4];
+    float value;
+} Pixel;
 
-enum Color { RED, GREEN, BLUE };
+enum EntityKind {
+    Bear,
+    Bee,
+    Dog,
+};
 
-extern int global_var;
-static const int MAX_RETRIES = 5;
-volatile int hardware_register;
-register int fast_loop_counter;
+// Designated initializers, where `.x` must not be mistaken for a number.
+struct Point origin = { .x = 0, .y = 0 };
 
-// C99/C11 specific keywords
-_Atomic int atomic_counter;
-_Bool is_active;
+// Declarations and calls
 _Noreturn void die(void);
+alignas(16) char buffer[64];
+static_assert(sizeof(struct Point) == 8, "unexpected layout");
 
-// Function calls
-printf("hello\n");
-sizeof(struct Point);
+static inline int add(int a, int b)
+{
+    return a + b;
+}

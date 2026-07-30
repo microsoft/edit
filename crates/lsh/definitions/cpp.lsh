@@ -1,9 +1,9 @@
 #[display_name = "C++"]
 #[path = "**/*.cpp"]
-#[path = "**/*.hpp"]
 #[path = "**/*.cc"]
 #[path = "**/*.cxx"]
-#[path = "**/*.hxx"]
+#[path = "**/*.hpp"]
+#[path = "**/*.h"]
 pub fn cpp() {
     until /$/ {
         yield other;
@@ -19,37 +19,23 @@ pub fn cpp() {
                     break;
                 }
             }
-        } else if /"/ {
-            until /$/ {
-                yield string;
-                if /\\./ {
-                    // Skip escaped characters
-                } else if /"/ { 
-                    yield string; 
-                    break; 
-                }
-                await input;
-            }
+        } else if /#\s*(?:define|elifdef|elifndef|elif|else|embed|endif|error|ifdef|ifndef|if|include|line|pragma|undef|warning)\>/ {
+            // Only the directive itself is highlighted. The remainder of the
+            // line is regular C++, more or less, and lexed as such.
+            yield keyword.preprocessor;
         } else if /'/ {
-            until /$/ {
-                yield string;
-                if /\\./ {
-                    // Skip escaped characters
-                } else if /'/ { 
-                    yield string; 
-                    break; 
-                }
-                await input;
-            }
-        } else if /#\s*(?:include|define|undef|if|ifdef|ifndef|elif|else|endif|error|pragma|warning|line)\>/ {
+            single_quote_string();
+        } else if /"/ {
+            double_quote_string();
+        } else if /(?:break|case|catch|co_await|co_return|co_yield|continue|default|do|else|for|goto|if|return|switch|throw|try|while)\>/ {
             yield keyword.control;
-        } else if /(?:break|case|catch|continue|default|do|else|for|goto|if|return|switch|throw|try|while)\>/ {
-            yield keyword.control;
-        } else if /(?:alignas|alignof|asm|auto|bool|char|char16_t|char32_t|char8_t|class|concept|const|const_cast|consteval|constexpr|constinit|decltype|delete|double|dynamic_cast|enum|explicit|export|extern|float|friend|inline|int|long|mutable|namespace|new|noexcept|operator|private|protected|public|register|reinterpret_cast|requires|short|signed|sizeof|static|static_assert|static_cast|struct|template|this|thread_local|typedef|typeid|typename|union|unsigned|using|virtual|void|volatile|wchar_t)\>/ {
+        } else if /(?:alignas|alignof|class|concept|consteval|constexpr|constinit|const_cast|const|decltype|delete|dynamic_cast|enum|explicit|export|extern|final|friend|inline|mutable|namespace|new|noexcept|operator|override|private|protected|public|register|reinterpret_cast|requires|sizeof|static_assert|static_cast|static|struct|template|this|thread_local|typedef|typeid|typename|union|using|virtual|volatile)\>/ {
             yield keyword.other;
-        } else if /(?:true|false|NULL|nullptr)\>/ {
+        } else if /(?:true|false|nullptr|NULL)\>/ {
             yield constant.language;
-        } else if /(?i:-?(?:0x[\da-fA-F']+|0b[01']+|[\d']+\.?[\d']*|\.[\d']+)(?:p[+-]?[\d']+|e[+-]?[\d']+)?[ulfz]*)/ {
+        } else if /(?:auto|bool|char8_t|char16_t|char32_t|char|double|float|int|long|short|signed|unsigned|void|wchar_t)\>/ {
+            yield storage.type;
+        } else if /(?i:-?(?:0x[\da-f']+|0b[01']+|[\d']+\.?[\d']*|\.[\d']+)(?:[ep][+-]?[\d']+)?[fluz]*)/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {

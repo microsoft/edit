@@ -66,24 +66,6 @@ Reference: ![Logo][logo-ref]
 echo "Hello, world" | tr a-z A-Z
 ```
 
-```c
-#include <stdio.h>
-
-int main() {
-    printf("Hello, world\n");
-    return 0;
-}
-```
-
-```cpp
-#include <iostream>
-
-int main() {
-    std::cout << "Hello, world" << std::endl;
-    return 0;
-}
-```
-
 ```javascript
 export function greet(name) {
   return `hello ${name}`;
