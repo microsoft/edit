@@ -66,27 +66,9 @@ Reference: ![Logo][logo-ref]
 echo "Hello, world" | tr a-z A-Z
 ```
 
-```go
-package main
-
-import "fmt"
-
-func main() {
-    fmt.Println("hello")
-}
-```
-
 ```javascript
 export function greet(name) {
   return `hello ${name}`;
-}
-```
-
-```java
-class Demo {
-  static void main(String[] args) {
-    System.out.println("hello");
-  }
 }
 ```
 
@@ -96,16 +78,6 @@ class Demo {
   "private": true,
   "scripts": { "test": "echo ok" }
 }
-```
-
-```lua
-local function greet(name)
-    return "hello " .. name
-end
-```
-
-```luau
-export type Greeting = (name: string) -> string
 ```
 
 ```python

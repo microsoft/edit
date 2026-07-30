@@ -1,6 +1,4 @@
-// Comments
-// Single-line comment
-
+// Line comment
 /*
  * Multi-line
  * comment
@@ -9,100 +7,124 @@
 package main
 
 import (
-    "fmt"
-    "time"
+	"fmt"
+	"time"
 )
 
-const Pi = 3.14
-var enabled = true
-
 // Numbers
-42
-3.14
-.5
-1e10
-1.5e-3
-0xff
-0XFF
-0b1010
-0o77
-1_000_000
-2.5i
+const (
+	Dec  = 42
+	Neg  = -7
+	Hex  = 0xCAFE_BABE
+	Oct  = 0o755
+	Old  = 0755
+	Bin  = 0b1010
+	Sep  = 1_000_000
+	Flt  = 3.14
+	Half = .5
+	Exp  = 1e10
+	Sci  = 1.5e-3
+	Imag = 2.5i
+)
 
-// Constants
-true
-false
-nil
-iota
+// Constants and iota
+const (
+	A = iota
+	B
+)
+
+var (
+	yes  = true
+	no   = false
+	none = nil
+)
+
+// Predeclared types
+var (
+	b    bool
+	by   byte
+	r    rune
+	s    string
+	i    int
+	i8   int8
+	i64  int64
+	u    uint
+	u32  uint32
+	up   uintptr
+	f64  float64
+	c128 complex128
+	e    error
+	a    any
+)
 
 // Strings and runes
-'a'
-'\n'
-"double quotes with escape: \" \n \t \\"
-`raw string
-spans lines`
-
-// Control flow
-func main() {
-    if enabled {
-        fmt.Println("enabled")
-    } else {
-        fmt.Println("disabled")
-    }
-
-    for i := 0; i < 10; i++ {
-        if i == 5 {
-            continue
-        }
-        if i == 8 {
-            break
-        }
-    }
-
-    switch now := time.Now().Weekday(); now {
-    case time.Saturday, time.Sunday:
-        fmt.Println("weekend")
-    default:
-        fmt.Println("weekday")
-    }
-
-    values := []int{1, 2, 3}
-    for _, value := range values {
-        fmt.Println(value)
-    }
-
-    ch := make(chan int, 1)
-    go func() {
-        defer close(ch)
-        ch <- 42
-    }()
-
-    select {
-    case msg := <-ch:
-        fmt.Println(msg)
-    default:
-        fmt.Println("no message")
-    }
-}
+var (
+	char    = 'a'
+	escaped = '\n'
+	quote   = '\''
+	str     = "double quotes with escapes: \" \n \t \\"
+	raw     = `raw string
+spans lines and may contain "quotes"`
+)
 
 type Speaker interface {
-    Speak() string
+	Speak() string
 }
 
 type Animal struct {
-    Name string
+	Name string `json:"name"`
 }
 
 func (a Animal) Speak() string {
-    return fmt.Sprintf("%s speaks", a.Name)
+	return fmt.Sprintf("%s speaks", a.Name)
 }
 
-func greet(name string) string {
-    return fmt.Sprintf("hello %s", name)
+func compare[T comparable](a, b T) bool {
+	return a == b
 }
 
-var _ Speaker = Animal{}
+func main() {
+	if yes {
+		fmt.Println("enabled")
+	} else {
+		fmt.Println("disabled")
+	}
 
-// Function calls
-fmt.Println(greet("world"))
-time.Now()
+	for i := 0; i < 10; i++ {
+		switch {
+		case i == 5:
+			continue
+		case i == 8:
+			goto done
+		default:
+			fallthrough
+		}
+	}
+
+	switch now := time.Now().Weekday(); now {
+	case time.Saturday, time.Sunday:
+		fmt.Println("weekend")
+	}
+
+	values := []int{1, 2, 3}
+	m := map[string]int{"one": 1}
+	for _, value := range values {
+		fmt.Println(value, m)
+	}
+
+	ch := make(chan int, 1)
+	go func() {
+		defer close(ch)
+		ch <- 42
+	}()
+
+	select {
+	case msg := <-ch:
+		fmt.Println(msg)
+	default:
+		fmt.Println("no message")
+	}
+
+done:
+	var _ Speaker = Animal{Name: "dog"}
+}
