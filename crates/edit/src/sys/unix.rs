@@ -51,13 +51,20 @@ pub fn init() -> Deinit {
     Deinit
 }
 
-pub fn switch_modes() -> io::Result<()> {
+/// Reopen stdin if it's redirected (= piped input).
+pub fn reopen_stdin_if_redirected() -> io::Result<Option<File>> {
     unsafe {
-        // Reopen stdin if it's redirected (= piped input).
         if libc::isatty(STATE.stdin) == 0 {
             STATE.stdin = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_RDONLY))?;
+            Ok(Some(File::from_raw_fd(libc::STDIN_FILENO)))
+        } else {
+            Ok(None)
         }
+    }
+}
 
+pub fn switch_modes() -> io::Result<()> {
+    unsafe {
         // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
         STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
 
@@ -225,7 +232,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
 
             // Read from stdin.
             let spare = buf.spare_capacity_mut();
-            let ret = libc::read(STATE.stdin, spare.as_mut_ptr() as *mut _, spare.len());
+            let ret = libc::read(STATE.stdin, spare.as_mut_ptr().cast(), spare.len());
             if ret > 0 {
                 buf.set_len(buf.len() + ret as usize);
                 break;
@@ -305,7 +312,7 @@ pub fn write_stdout(text: &str) {
     while written < buf.len() {
         let w = &buf[written..];
         let w = &buf[..w.len().min(GIBI)];
-        let n = unsafe { libc::write(STATE.stdout, w.as_ptr() as *const _, w.len()) };
+        let n = unsafe { libc::write(STATE.stdout, w.as_ptr().cast(), w.len()) };
 
         if n >= 0 {
             written += n as usize;
@@ -329,17 +336,6 @@ fn set_tty_nonblocking(nonblock: bool) {
         if is_nonblock != nonblock {
             STATE.stdin_flags ^= libc::O_NONBLOCK;
             let _ = libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
-        }
-    }
-}
-
-pub fn open_stdin_if_redirected() -> Option<File> {
-    unsafe {
-        // Did we reopen stdin during `init()`?
-        if STATE.stdin != libc::STDIN_FILENO {
-            Some(File::from_raw_fd(libc::STDIN_FILENO))
-        } else {
-            None
         }
     }
 }
@@ -417,11 +413,11 @@ pub fn load_icu() -> io::Result<LibIcu> {
     const LIBICUI18N: &str = concat!(env!("EDIT_CFG_ICUI18N_SONAME"), "\0");
 
     if const { const_str_eq(LIBICUUC, LIBICUI18N) } {
-        let icu = unsafe { load_library(LIBICUUC.as_ptr() as *const _)? };
+        let icu = unsafe { load_library(LIBICUUC.as_ptr().cast())? };
         Ok(LibIcu { libicuuc: icu, libicui18n: icu })
     } else {
-        let libicuuc = unsafe { load_library(LIBICUUC.as_ptr() as *const _)? };
-        let libicui18n = unsafe { load_library(LIBICUI18N.as_ptr() as *const _)? };
+        let libicuuc = unsafe { load_library(LIBICUUC.as_ptr().cast())? };
+        let libicui18n = unsafe { load_library(LIBICUI18N.as_ptr().cast())? };
         Ok(LibIcu { libicuuc, libicui18n })
     }
 }
@@ -515,26 +511,22 @@ where
     }
 }
 
-pub fn preferred_languages(arena: &Arena) -> BVec<'_, BString<'_>> {
+pub fn preferred_languages(arena: &Arena) -> BVec<'_, &'_ str> {
     let mut locales = BVec::empty();
 
     for key in ["LANGUAGE", "LC_ALL", "LANG"] {
         if let Ok(val) = std::env::var(key)
             && !val.is_empty()
         {
-            locales.extend_sloppy(
-                arena,
-                val.split(':').filter(|s| !s.is_empty()).map(|s| {
-                    // Replace all underscores with dashes,
-                    // because the localization code expects pt-br, not pt_BR.
-                    let mut res = BVec::empty();
-                    res.extend(
-                        arena,
-                        s.as_bytes().iter().map(|&b| if b == b'_' { b'-' } else { b }),
-                    );
-                    unsafe { BString::from_utf8_unchecked(res) }
-                }),
-            );
+            let val = BString::from_str(arena, &val).leak();
+
+            for c in unsafe { val.as_bytes_mut() } {
+                if *c == b'_' {
+                    *c = b'-';
+                }
+            }
+
+            locales.extend_sloppy(arena, val.split(':').filter(|s| !s.is_empty()));
             break;
         }
     }
