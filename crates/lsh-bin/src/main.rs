@@ -2,7 +2,11 @@
 // Licensed under the MIT License.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Write as _, stdout};
+use std::io::{BufRead, BufReader, BufWriter, IsTerminal, Write as _, stdin, stdout};
+#[cfg(unix)]
+use std::os::unix::io::{AsRawFd, FromRawFd};
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
@@ -45,8 +49,10 @@ struct SubCommandAssembly {
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand, name = "render", description = "Highlight text files")]
 struct SubCommandRender {
-    #[argh(option, description = "source text file")]
-    input: PathBuf,
+    #[argh(option, description = "source text file; otherwise defaults to stdin")]
+    input: Option<PathBuf>,
+    #[argh(option, description = "language ID; defaults to detection from the input path")]
+    language: Option<String>,
     #[argh(positional, description = "source .lsh files or directories")]
     lsh: Vec<PathBuf>,
 }
@@ -93,22 +99,36 @@ fn run() -> anyhow::Result<()> {
         }
         SubCommands::Render(cmd) => {
             read_lsh_inputs(&cmd.lsh)?;
-            run_render(generator, &cmd.input)?;
+            run_render(generator, cmd.input.as_deref(), cmd.language.as_deref())?;
         }
     }
 
     Ok(())
 }
 
-fn run_render(generator: lsh::compiler::Generator, path: &Path) -> anyhow::Result<()> {
+fn run_render(
+    generator: lsh::compiler::Generator,
+    path: Option<&Path>,
+    language: Option<&str>,
+) -> anyhow::Result<()> {
     let assembly = generator.assemble()?;
 
-    let Some(entrypoint) = assembly.entrypoints.iter().find(|ep| {
-        ep.paths
+    let entrypoint = if let Some(language) = language {
+        assembly.entrypoints.iter().find(|ep| ep.name.replace('_', "-") == language).ok_or_else(
+            || anyhow::anyhow!("No highlighting definition found for language {language:?}"),
+        )?
+    } else if let Some(path) = path {
+        assembly
+            .entrypoints
             .iter()
-            .any(|pattern| glob_match(pattern.as_bytes(), path.as_os_str().as_encoded_bytes()))
-    }) else {
-        bail!("No matching highlighting definition found");
+            .find(|ep| {
+                ep.paths.iter().any(|pattern| {
+                    glob_match(pattern.as_bytes(), path.as_os_str().as_encoded_bytes())
+                })
+            })
+            .ok_or_else(|| anyhow::anyhow!("No matching highlighting definition found"))?
+    } else {
+        bail!("A language ID is required when reading from stdin");
     };
 
     let mut color_map = Vec::new();
@@ -122,20 +142,23 @@ fn run_render(generator: lsh::compiler::Generator, path: &Path) -> anyhow::Resul
             "string" => "\x1b[91m",   // Bright Red
             "variable" => "\x1b[96m", // Bright Cyan
 
-            "constant.language" => "\x1b[94m",   // Bright Blue
-            "constant.numeric" => "\x1b[92m",    // Bright Green
-            "keyword.control" => "\x1b[95m",     // Bright Magenta
-            "keyword.other" => "\x1b[94m",       // Bright Blue
-            "markup.bold" => "\x1b[1m",          // Bold
-            "markup.changed" => "\x1b[94m",      // Bright Blue
-            "markup.deleted" => "\x1b[91m",      // Bright Red
-            "markup.heading" => "\x1b[94m",      // Bright Blue
-            "markup.inserted" => "\x1b[92m",     // Bright Green
-            "markup.italic" => "\x1b[3m",        // Italic
-            "markup.link" => "\x1b[4m",          // Underlined
-            "markup.list" => "\x1b[94m",         // Bright Blue
-            "markup.strikethrough" => "\x1b[9m", // Strikethrough
-            "meta.header" => "\x1b[94m",         // Bright Blue
+            "constant.language" => "\x1b[94m",    // Bright Blue
+            "constant.numeric" => "\x1b[92m",     // Bright Green
+            "keyword.control" => "\x1b[95m",      // Bright Magenta
+            "keyword.other" => "\x1b[94m",        // Bright Blue
+            "keyword.preprocessor" => "\x1b[94m", // Bright Blue
+            "markup.bold" => "\x1b[1m",           // Bold
+            "markup.changed" => "\x1b[94m",       // Bright Blue
+            "markup.deleted" => "\x1b[91m",       // Bright Red
+            "markup.heading" => "\x1b[94m",       // Bright Blue
+            "markup.inserted" => "\x1b[92m",      // Bright Green
+            "markup.italic" => "\x1b[3m",         // Italic
+            "markup.link" => "\x1b[4m",           // Underlined
+            "markup.list" => "\x1b[94m",          // Bright Blue
+            "markup.strikethrough" => "\x1b[9m",  // Strikethrough
+            "meta.header" => "\x1b[94m",          // Bright Blue
+            "storage.annotation" => "\x1b[36m",   // Cyan
+            "storage.type" => "\x1b[36m",         // Cyan
 
             _ => {
                 unknown_kinds.push(hk.identifier.to_string());
@@ -170,7 +193,19 @@ fn run_render(generator: lsh::compiler::Generator, path: &Path) -> anyhow::Resul
         entrypoint.address as u32,
     );
 
-    let reader = BufReader::with_capacity(128 * 1024, File::open(path)?);
+    let file = if let Some(path) = path {
+        File::open(path)?
+    } else {
+        #[cfg(unix)]
+        unsafe {
+            File::from_raw_fd(stdin().as_raw_fd())
+        }
+        #[cfg(windows)]
+        unsafe {
+            File::from_raw_handle(stdin().as_raw_handle())
+        }
+    };
+    let reader = BufReader::with_capacity(128 * 1024, file);
     let mut stdout = BufWriter::with_capacity(128 * 1024, stdout());
 
     for line in reader.lines() {

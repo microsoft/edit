@@ -1,93 +1,131 @@
-// Comments
-// Single-line comment
+// Line comment
+/* Block comment */
+/** Javadoc @param x @return y */
 
-/*
- * Multi-line
- * comment
- */
+package com.example.highlighting;
 
-package example;
-
-import java.time.Instant;
 import java.util.List;
+import java.util.ArrayList;
+import static java.lang.Math.max;
+import java.util.*;
 
-@Deprecated
-public class Demo {
-    private static final double PI = 3.14;
-    private boolean enabled = true;
+const int CONST = 0;
+goto label;
 
-    // Numbers
-    int decimal = 42;
-    double fraction = 3.14;
-    double leadingDot = .5;
-    double scientific = 1.5e-3;
-    int hex = 0xff;
-    int binary = 0b1010;
-    long grouped = 1_000_000L;
-    float floatValue = 2.5f;
+open module com.example {
+    requires transitive java.base;
+    exports com.example.pkg to other.module;
+    opens com.example.internal;
+    provides Greeter with Dog;
+    uses Greeter;
+}
 
-    // Constants
-    boolean yes = true;
-    boolean no = false;
-    Object nothing = null;
+enum Color { RED, GREEN, BLUE }
 
-    // Strings and chars
-    char letter = 'a';
-    char newline = '\n';
-    String message = "double quotes with escape: \" \n \t \\";
-
-    public static void main(String[] args) {
-        Demo demo = new Demo();
-        if (demo.enabled) {
-            System.out.println("enabled");
-        } else {
-            System.out.println("disabled");
-        }
-
-        for (int i = 0; i < 10; i++) {
-            if (i == 5) {
-                continue;
-            }
-            if (i == 8) {
-                break;
-            }
-        }
-
-        while (false) {
-            break;
-        }
-
-        switch (args.length) {
-            case 0:
-                System.out.println("no args");
-                break;
-            default:
-                System.out.println("args");
-        }
-
-        try {
-            demo.run();
-        } catch (IllegalStateException ex) {
-            throw ex;
-        } finally {
-            System.out.println(Instant.now());
-        }
-    }
-
-    public void run() {
-        List<String> names = List.of("Ada", "Grace");
-        for (String name : names) {
-            System.out.println(greet(name));
-        }
-    }
-
-    public String greet(String name) {
-        return "hello " + name;
+record Point(int x, int y) {
+    Point {
+        if (x < 0) throw new IllegalArgumentException();
     }
 }
 
-record Point(int x, int y) {}
-
 sealed interface Shape permits Circle {}
+non-sealed class Circle implements Shape {}
 
-final class Circle implements Shape {}
+@FunctionalInterface
+interface Greeter<T extends Comparable<T>> {
+    String greet(T name);
+    default boolean ok() { return true; }
+}
+
+@Deprecated
+public abstract strictfp class Animal implements Comparable<Animal> {
+    // Numbers
+    static final int I = 42, HEX = 0xFF, BIN = 0b1010, OCT = 077, US = 1_000_000;
+    static final long L = 0xCAFE_BABEL;
+    static final double D = 3.14, E = 1.5e-3, HALF = .5;
+    static final float F = 3.14f;
+    private byte b;
+    protected short s;
+    private volatile transient int flags;
+
+    // Strings, char, escapes, text block
+    String str = "quotes \" \n \t \\ \u00e9";
+    char c = '\n';
+    String block = """
+        text block
+        with "quotes"
+        """;
+
+    Animal() { super(); }
+
+    native void nativeMethod();
+
+    abstract String speak() throws Exception;
+
+    @Override
+    public synchronized int compareTo(Animal o) {
+        return this.flags - o.flags;
+    }
+}
+
+final class Dog extends Animal {
+    String speak() { return "bark"; }
+
+    // Constants, control flow
+    void flow() {
+        boolean t = true, f = false;
+        Object n = null;
+
+        if (t) {
+        } else if (f) {
+        } else {
+        }
+
+        for (int i = 0; i < 10; i++) {
+            if (i == 5) continue;
+            if (i == 8) break;
+        }
+        for (int x : new int[] { 1, 2, 3 }) {}
+        while (f) {}
+        do {} while (f);
+
+        try {
+            throw new RuntimeException("oops");
+        } catch (RuntimeException e) {
+        } finally {
+        }
+
+        assert t : "message";
+        return;
+    }
+
+    // var, switch expression, yield, pattern guards, instanceof, lambda
+    <U> U run(Object obj) {
+        var list = new ArrayList<String>();
+        int r = switch (list.size()) {
+            case 1 -> 10;
+            case 2 -> { yield 20; }
+            default -> 0;
+        };
+        String desc = switch (obj) {
+            case Integer i when i > 0 -> "pos";
+            case String p -> "str";
+            default -> "other";
+        };
+        if (obj instanceof String p) {
+            System.out.println(p.length());
+        }
+        Greeter<String> g = name -> "Hi " + name;
+        return null;
+    }
+}
+
+// Function calls
+class Main {
+    public static void main(String[] args) {
+        System.out.println("hello");
+        int v = Integer.parseInt("42");
+        max(1, 2);
+        new Dog().speak();
+    }
+}
