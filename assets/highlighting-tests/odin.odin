@@ -1,5 +1,4 @@
-// Single-line comment
-
+// Line comment
 /*
  * Multi-line
  * comment
@@ -10,250 +9,136 @@ package main
 
 import "core:fmt"
 
-// Package-level constants
-MY_CONST :: 42
-PI       :: 3.14159
-NAME     :: "Odin"
+// Numbers
+Dec  :: 42
+Neg  :: -7
+Hex  :: 0xCAFE_BABE
+Oct  :: 0o755
+Bin  :: 0b1010
+Sep  :: 1_000_000
+Flt  :: 3.14
+Half :: .5
+Exp  :: 1e10
+Sci  :: 1.5e-3
+Imag :: 2i
+Quat :: 3j
+HexF :: 0h3f800000
+Bad  :: 1abc
 
-// Struct type
-Vector3 :: struct {
-    x, y, z: f32,
+// Constants
+yes  := true
+no   := false
+none := nil
+_     = 0
+
+// Basic types
+b:    bool
+b32v: b32
+r:    rune
+s:    string
+cs:   cstring
+i:    int
+i128v: i128
+u:    uint
+up:   uintptr
+u32b: u32be
+i16l: i16le
+f16v: f16
+f64v: f64
+c128: complex128
+q256: quaternion256
+p:    rawptr
+t:    typeid
+a:    any
+
+// Strings and runes
+char    := 'a'
+escaped := '\n'
+quote   := '\''
+str     := "double quotes with escapes: \" \n \t \\"
+raw     := `raw string
+spans lines and may contain "quotes"`
+
+Speaker :: struct #packed {
+	name: string `fmt:"q"`,
 }
 
-// Union type
-Value :: union {
-    int,
-    f64,
-    string,
-}
+Value :: union {int, f64}
 
-// Enum type
-Direction :: enum {
-    North,
-    South,
-    East,
-    West,
-}
+Direction :: enum {North, South}
 
-// Bit set
 Flags :: bit_set[Direction]
 
-// Distinct type
 Meters :: distinct f32
 
-// Procedures
-add :: proc(a, b: int) -> int {
-    return a + b
+Header :: bit_field u32 {
+	tag: u8 | 3,
 }
 
-variadic :: proc(nums: ..int) -> int {
-    result := 0
-    for n in nums {
-        result += n
-    }
-    return result
+@(deprecated = "use speak instead")
+old_speak :: proc(s: Speaker) -> string {
+	return fmt.tprintf("%s speaks", s.name)
 }
 
-get_value :: proc() -> (int, bool) {
-    return 42, true
+@private
+compare :: proc(a, b: $T) -> bool where intrinsics.type_is_comparable(T) {
+	return a == b
 }
 
-@(deprecated = "use new_func instead")
-old_func :: proc() {
-    fmt.println("old")
-}
+foreign import kernel32 "system:kernel32.lib"
 
-demo_numbers :: proc() {
-    // Integer and float literals
-    _ := 42
-    _ := 3.14
-    _ := 1_000_000
-    _ := 0xFF
-    _ := 0b1010
-    _ := 0o77
-    _ := 1.5e-3
-    _ := 2i          // imaginary
-
-    // Language constants
-    _ := true
-    _ := false
-    _ = nil
-}
-
-demo_strings :: proc() {
-    // Double-quoted strings with escape sequences
-    _ := "hello, world"
-    _ := "escape: \" \n \t \\"
-
-    // Raw strings (backtick — no escape processing)
-    _ := `C:\Windows\notepad.exe`
-    _ := `no \n escapes here`
-
-    // Rune / character literals
-    _ := 'A'
-    _ := '\n'
-    _ := '世'
-}
-
-demo_control_flow :: proc() {
-    // If / else if / else
-    if true {
-        fmt.println("yes")
-    } else if false {
-        fmt.println("no")
-    } else {
-        fmt.println("maybe")
-    }
-
-    // C-style for loop
-    for i := 0; i < 10; i += 1 {
-        if i == 5 { continue }
-        if i == 8 { break }
-    }
-
-    // Range-based for loop
-    for i in 0..<10 {
-        fmt.println(i)
-    }
-
-    // Switch statement
-    x := 42
-    switch x {
-    case 1:
-        fmt.println("one")
-    case 2, 3:
-        fmt.println("two or three")
-    case:
-        fmt.println("other")
-    }
-
-    // Fallthrough
-    switch 0 {
-    case 0:
-        fallthrough
-    case 1:
-        fmt.println("zero or one")
-    }
-
-    // When (compile-time conditional)
-    when ODIN_OS == .Windows {
-        fmt.println("Windows")
-    } else {
-        fmt.println("other OS")
-    }
-
-    // Defer
-    defer fmt.println("deferred")
-
-    // or_else / or_break
-    val := get_value() or_else 0
-    _ = val
-
-    for {
-        get_value() or_break
-    }
-}
-
-demo_types :: proc() {
-    // Struct literal
-    v := Vector3{x = 1, y = 4, z = 9}
-    fmt.println(v)
-
-    // Union
-    val: Value = 137
-    if i, ok := val.(int); ok {
-        fmt.println(i)
-    }
-
-    // Enum and switch
-    d := Direction.North
-    switch d {
-    case .North:
-        fmt.println("north")
-    case .South, .East, .West:
-        fmt.println("other direction")
-    }
-
-    // Bit set
-    flags := Flags{.North, .East}
-    fmt.println(.North in flags)
-
-    // Distinct type
-    dist := Meters(100.0)
-    fmt.println(dist)
-
-    // Cast / transmute / auto_cast
-    x: int = cast(int)3.14
-    y := transmute([4]u8)u32(0xDEAD_BEEF)
-    z := auto_cast x
-    _, _ = y, z
-}
-
-demo_collections :: proc() {
-    // Dynamic array
-    arr := make([dynamic]int)
-    defer delete(arr)
-    append(&arr, 1, 2, 3)
-    fmt.println(arr)
-
-    // Map
-    m := make(map[string]int)
-    defer delete(m)
-    m["key"] = 99
-    fmt.println(m["key"])
-
-    // Pointer
-    val := 123
-    ptr := &val
-    ptr^ = 456
-    fmt.println(val)
-}
-
-demo_builtins :: proc() {
-    // typeid / type_of
-    _ = typeid_of(int)
-    val := 0
-    _ = type_of(val)
-
-    // size_of / align_of / offset_of
-    _ = size_of(Vector3)
-    _ = align_of(f64)
-    _ = offset_of(Vector3, y)
-
-    // context
-    context.user_index = 1
-}
-
-demo_directives :: proc() {
-    // Compile-time assert
-    #assert(size_of(u8) == 1)
-
-    // SOA layout
-    v: #soa[4]Vector3
-    _ = v
-
-    // Partial switch
-    #partial switch d := Direction.North; d {
-    case .North:
-        fmt.println("north")
-    }
-
-    // Unroll for
-    #unroll for elem, idx in [3]int{1, 4, 9} {
-        fmt.println(elem, idx)
-    }
+@(default_calling_convention = "std")
+foreign kernel32 {
+	ExitProcess :: proc(code: u32) ---
 }
 
 main :: proc() {
-    demo_numbers()
-    demo_strings()
-    demo_control_flow()
-    demo_types()
-    demo_collections()
-    demo_builtins()
-    demo_directives()
+	if yes {
+		fmt.println("enabled")
+	} else when ODIN_DEBUG {
+		fmt.println("debug")
+	} else {
+		fmt.println("disabled")
+	}
 
-    fmt.println(add(1, 2))
-    fmt.println(variadic(1, 2, 3, 4, 5))
-    old_func()
+	for i := 0; i < 10; i += 1 {
+		switch {
+		case i == 5:
+			continue
+		case i == 8:
+			break
+		case:
+			fallthrough
+		}
+	}
+
+	for i in 0..<10 {}
+	for i in 0..=9 {}
+
+	values := [dynamic]int{1, 2, 3}
+	m := map[string]int{"one" = 1}
+	defer delete(values)
+	for value, index in values {
+		fmt.println(index, value, m["one"])
+	}
+
+	v: Value = 137
+	#partial switch _ in v {
+	case int:
+		fmt.println("int")
+	}
+
+	soa: #soa[4]Speaker
+	#unroll for i in 0..<2 {}
+
+	x := cast(int)3.14
+	y := transmute(u32)f32(1)
+	z := auto_cast x
+	w := m["two"] or_else 0
+	_, _, _, _ = x, y, z, w
+
+	#assert(size_of(u8) == 1)
+	context.user_index = 1
+	ptr := &x
+	ptr^ = 456
 }
