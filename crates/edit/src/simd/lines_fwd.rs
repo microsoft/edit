@@ -118,10 +118,10 @@ unsafe fn lines_fwd_avx2(
             // Unrolling the loop by 4x speeds things up by >3x.
             // It allows us to accumulate matches before doing a single `vpsadbw`.
             while end.offset_from_unsigned(beg) >= 128 {
-                let v1 = _mm256_loadu_si256(beg.add(0) as *const _);
-                let v2 = _mm256_loadu_si256(beg.add(32) as *const _);
-                let v3 = _mm256_loadu_si256(beg.add(64) as *const _);
-                let v4 = _mm256_loadu_si256(beg.add(96) as *const _);
+                let v1 = _mm256_loadu_si256(beg.add(0).cast());
+                let v2 = _mm256_loadu_si256(beg.add(32).cast());
+                let v3 = _mm256_loadu_si256(beg.add(64).cast());
+                let v4 = _mm256_loadu_si256(beg.add(96).cast());
 
                 // `vpcmpeqb` leaves each comparison result byte as 0 or -1 (0xff).
                 // This allows us to accumulate the comparisons by subtracting them.
@@ -145,7 +145,7 @@ unsafe fn lines_fwd_avx2(
             }
 
             while end.offset_from_unsigned(beg) >= 32 {
-                let v = _mm256_loadu_si256(beg as *const _);
+                let v = _mm256_loadu_si256(beg.cast());
                 let c = _mm256_cmpeq_epi8(v, lf);
 
                 // If you ask an LLM, the best way to do this is
@@ -221,10 +221,10 @@ unsafe fn lines_fwd_lasx(
 
         if line < line_stop {
             while end.offset_from_unsigned(beg) >= 128 {
-                let v1 = lasx_xvld::<0>(beg as *const _);
-                let v2 = lasx_xvld::<32>(beg as *const _);
-                let v3 = lasx_xvld::<64>(beg as *const _);
-                let v4 = lasx_xvld::<96>(beg as *const _);
+                let v1 = lasx_xvld::<0>(beg.cast());
+                let v2 = lasx_xvld::<32>(beg.cast());
+                let v3 = lasx_xvld::<64>(beg.cast());
+                let v4 = lasx_xvld::<96>(beg.cast());
 
                 let mut sum = lasx_xvneg_b(lasx_xvseqi_b::<LF>(v1));
                 sum = lasx_xvsub_b(sum, lasx_xvseqi_b::<LF>(v2));
@@ -242,7 +242,7 @@ unsafe fn lines_fwd_lasx(
             }
 
             while end.offset_from_unsigned(beg) >= 32 {
-                let v = lasx_xvld::<0>(beg as *const _);
+                let v = lasx_xvld::<0>(beg.cast());
                 let c = lasx_xvseqi_b::<LF>(v);
 
                 let ones = lasx_xvandi_b::<1>(c);
@@ -292,10 +292,10 @@ unsafe fn lines_fwd_lsx(
 
         if line < line_stop {
             while end.offset_from_unsigned(beg) >= 64 {
-                let v1 = lsx_vld::<0>(beg as *const _);
-                let v2 = lsx_vld::<16>(beg as *const _);
-                let v3 = lsx_vld::<32>(beg as *const _);
-                let v4 = lsx_vld::<48>(beg as *const _);
+                let v1 = lsx_vld::<0>(beg.cast());
+                let v2 = lsx_vld::<16>(beg.cast());
+                let v3 = lsx_vld::<32>(beg.cast());
+                let v4 = lsx_vld::<48>(beg.cast());
 
                 let mut sum = lsx_vneg_b(lsx_vseqi_b::<LF>(v1));
                 sum = lsx_vsub_b(sum, lsx_vseqi_b::<LF>(v2));
@@ -313,7 +313,7 @@ unsafe fn lines_fwd_lsx(
             }
 
             while end.offset_from_unsigned(beg) >= 16 {
-                let v = lsx_vld::<0>(beg as *const _);
+                let v = lsx_vld::<0>(beg.cast());
                 let c = lsx_vseqi_b::<LF>(v);
 
                 let ones = lsx_vandi_b::<1>(c);

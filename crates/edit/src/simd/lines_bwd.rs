@@ -117,10 +117,10 @@ unsafe fn lines_bwd_avx2(
         while end.offset_from_unsigned(beg) >= 128 {
             let chunk_start = end.sub(128);
 
-            let v1 = _mm256_loadu_si256(chunk_start.add(0) as *const _);
-            let v2 = _mm256_loadu_si256(chunk_start.add(32) as *const _);
-            let v3 = _mm256_loadu_si256(chunk_start.add(64) as *const _);
-            let v4 = _mm256_loadu_si256(chunk_start.add(96) as *const _);
+            let v1 = _mm256_loadu_si256(chunk_start.add(0).cast());
+            let v2 = _mm256_loadu_si256(chunk_start.add(32).cast());
+            let v3 = _mm256_loadu_si256(chunk_start.add(64).cast());
+            let v4 = _mm256_loadu_si256(chunk_start.add(96).cast());
 
             let mut sum = _mm256_setzero_si256();
             sum = _mm256_sub_epi8(sum, _mm256_cmpeq_epi8(v1, lf));
@@ -142,7 +142,7 @@ unsafe fn lines_bwd_avx2(
 
         while end.offset_from_unsigned(beg) >= 32 {
             let chunk_start = end.sub(32);
-            let v = _mm256_loadu_si256(chunk_start as *const _);
+            let v = _mm256_loadu_si256(chunk_start.cast());
             let c = _mm256_cmpeq_epi8(v, lf);
 
             let ones = _mm256_and_si256(c, _mm256_set1_epi8(0x01));
@@ -216,10 +216,10 @@ unsafe fn lines_bwd_lasx(
         while end.offset_from_unsigned(beg) >= 128 {
             let chunk_start = end.sub(128);
 
-            let v1 = lasx_xvld::<0>(chunk_start as *const _);
-            let v2 = lasx_xvld::<32>(chunk_start as *const _);
-            let v3 = lasx_xvld::<64>(chunk_start as *const _);
-            let v4 = lasx_xvld::<96>(chunk_start as *const _);
+            let v1 = lasx_xvld::<0>(chunk_start.cast());
+            let v2 = lasx_xvld::<32>(chunk_start.cast());
+            let v3 = lasx_xvld::<64>(chunk_start.cast());
+            let v4 = lasx_xvld::<96>(chunk_start.cast());
 
             let mut sum = lasx_xvneg_b(lasx_xvseqi_b::<LF>(v1));
             sum = lasx_xvsub_b(sum, lasx_xvseqi_b::<LF>(v2));
@@ -238,7 +238,7 @@ unsafe fn lines_bwd_lasx(
 
         while end.offset_from_unsigned(beg) >= 32 {
             let chunk_start = end.sub(32);
-            let v = lasx_xvld::<0>(chunk_start as *const _);
+            let v = lasx_xvld::<0>(chunk_start.cast());
             let c = lasx_xvseqi_b::<LF>(v);
 
             let ones = lasx_xvandi_b::<1>(c);
@@ -289,10 +289,10 @@ unsafe fn lines_bwd_lsx(
         while end.offset_from_unsigned(beg) >= 64 {
             let chunk_start = end.sub(64);
 
-            let v1 = lsx_vld::<0>(chunk_start as *const _);
-            let v2 = lsx_vld::<16>(chunk_start as *const _);
-            let v3 = lsx_vld::<32>(chunk_start as *const _);
-            let v4 = lsx_vld::<48>(chunk_start as *const _);
+            let v1 = lsx_vld::<0>(chunk_start.cast());
+            let v2 = lsx_vld::<16>(chunk_start.cast());
+            let v3 = lsx_vld::<32>(chunk_start.cast());
+            let v4 = lsx_vld::<48>(chunk_start.cast());
 
             let mut sum = lsx_vneg_b(lsx_vseqi_b::<LF>(v1));
             sum = lsx_vsub_b(sum, lsx_vseqi_b::<LF>(v2));
@@ -311,7 +311,7 @@ unsafe fn lines_bwd_lsx(
 
         while end.offset_from_unsigned(beg) >= 16 {
             let chunk_start = end.sub(16);
-            let v = lsx_vld::<0>(chunk_start as *const _);
+            let v = lsx_vld::<0>(chunk_start.cast());
             let c = lsx_vseqi_b::<LF>(v);
 
             let ones = lsx_vandi_b::<1>(c);

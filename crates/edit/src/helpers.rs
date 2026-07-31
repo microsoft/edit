@@ -6,7 +6,7 @@
 use std::cmp::Ordering;
 use std::io::{self, Read};
 use std::mem::MaybeUninit;
-use std::{fmt, slice};
+use std::{fmt, ptr, slice};
 
 pub const KILO: usize = 1000;
 pub const MEGA: usize = 1000 * 1000;
@@ -59,7 +59,7 @@ impl Point {
     pub const MAX: Self = Self { x: CoordType::MAX, y: CoordType::MAX };
 
     pub fn as_array(&mut self) -> &mut [CoordType; 2] {
-        unsafe { &mut *(self as *mut Self as *mut [CoordType; 2]) }
+        unsafe { &mut *ptr::from_mut(self).cast() }
     }
 }
 

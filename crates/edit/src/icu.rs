@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::ffi::{CStr, c_char};
 use std::mem::MaybeUninit;
 use std::ops::Range;
-use std::ptr::{null, null_mut};
+use std::ptr::{self, null, null_mut};
 use std::sync::OnceLock;
 use std::{fmt, mem};
 
@@ -348,7 +348,7 @@ impl Text {
 
         let ut = unsafe { &mut *ptr };
         ut.p_funcs = &FUNCS;
-        ut.context = tb as *const TextBuffer as *mut _;
+        ut.context = ptr::from_ref(tb).cast_mut().cast();
         ut.a = -1;
 
         Ok(Self(ut))
@@ -356,7 +356,7 @@ impl Text {
 }
 
 fn text_buffer_from_utext<'a>(ut: &icu_ffi::UText) -> &'a TextBuffer {
-    unsafe { &*(ut.context as *const TextBuffer) }
+    unsafe { &*(ut.context.cast()) }
 }
 
 fn double_cache_from_utext<'a>(ut: &icu_ffi::UText) -> &'a mut DoubleCache {

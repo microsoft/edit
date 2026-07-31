@@ -397,7 +397,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
                 0,
                 utf16_buf[0].as_ptr(),
                 utf16_buf_len as i32,
-                spare.as_mut_ptr() as *mut _,
+                spare.as_mut_ptr().cast(),
                 spare.len() as i32,
                 null(),
                 null_mut(),
@@ -488,7 +488,7 @@ fn file_id_from_handle(file: &File) -> io::Result<FileId> {
         check_bool_return(FileSystem::GetFileInformationByHandleEx(
             file.as_raw_handle(),
             FileSystem::FileIdInfo,
-            info.as_mut_ptr() as *mut _,
+            info.as_mut_ptr().cast(),
             mem::size_of::<FileSystem::FILE_ID_INFO>() as u32,
         ))?;
         Ok(FileId::Id(info.assume_init()))
@@ -538,7 +538,7 @@ unsafe fn load_library(name: *const u16) -> io::Result<NonNull<c_void>> {
 // It'd be nice to constrain T to std::marker::FnPtr, but that's unstable.
 pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: *const c_char) -> io::Result<T> {
     unsafe {
-        let ptr = LibraryLoader::GetProcAddress(handle.as_ptr(), name as *const u8);
+        let ptr = LibraryLoader::GetProcAddress(handle.as_ptr(), name.cast());
         if let Some(ptr) = ptr { Ok(mem::transmute_copy(&ptr)) } else { Err(last_os_error()) }
     }
 }

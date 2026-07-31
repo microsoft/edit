@@ -50,3 +50,6 @@ features = [
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 zstd = { version = "0.13", default-features = false }
+
+[lints]
+workspace = true

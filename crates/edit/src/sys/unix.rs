@@ -507,7 +507,7 @@ where
         res.push_str(arena, name);
         res.push_str(arena, suffix);
         res.push(arena, '\0');
-        res.as_ptr() as *const c_char
+        res.as_ptr().cast()
     }
 }
 
