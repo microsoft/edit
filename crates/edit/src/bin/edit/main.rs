@@ -291,13 +291,7 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     for (p, goto) in &paths {
         let doc = state.documents.add_file_path(p)?;
         if let Some(goto) = goto {
-            let mut tb = doc.buffer.borrow_mut();
-            let line = if goto.y < 0 {
-                tb.logical_line_count().saturating_add(goto.y)
-            } else {
-                goto.y.saturating_sub(1)
-            };
-            tb.cursor_move_to_logical(Point { x: goto.x, y: line.max(0) });
+            doc.cursor_move_to_goto(*goto);
         }
     }
 

@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::num::ParseIntError;
-
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::icu;
@@ -319,19 +317,12 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
             ctx.steal_focus();
 
             if ctx.consume_shortcut(vk::RETURN) {
-                match validate_goto_point(&state.goto_target) {
-                    Ok(goto) => {
-                        let mut buf = doc.buffer.borrow_mut();
-                        let line = if goto.y < 0 {
-                            buf.logical_line_count().saturating_add(goto.y)
-                        } else {
-                            goto.y.saturating_sub(1)
-                        };
-                        buf.cursor_move_to_logical(Point { x: goto.x, y: line.max(0) });
-                        buf.make_cursor_visible();
-                        done = true;
-                    }
-                    Err(_) => state.goto_invalid = true,
+                if let Some(goto) = validate_goto_point(&state.goto_target) {
+                    doc.cursor_move_to_goto(goto);
+                    doc.buffer.borrow_mut().make_cursor_visible();
+                    done = true;
+                } else {
+                    state.goto_invalid = true;
                 }
                 ctx.needs_rerender();
             }
@@ -349,12 +340,17 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
     }
 }
 
-fn validate_goto_point(line: &str) -> Result<Point, ParseIntError> {
+fn validate_goto_point(line: &str) -> Option<Point> {
+    let mut coords = [0; 2];
     let (y, x) = line.split_once(':').unwrap_or((line, "1"));
-    let y = y.parse::<CoordType>()?;
-    let x = x.parse::<CoordType>()?;
-    if x <= 0 {
-        return Err("".parse::<CoordType>().unwrap_err());
+    // Using a loop here avoids 2 copies of the str->int code.
+    // This makes the binary more compact.
+    for (i, s) in [x, y].iter().enumerate() {
+        coords[i] = s.parse::<CoordType>().ok()?;
     }
-    Ok(Point { x: x.saturating_sub(1), y })
+    // Counting backwards is only supported for lines.
+    if coords[0] < 1 {
+        return None;
+    }
+    Some(Point { x: coords[0], y: coords[1] })
 }
