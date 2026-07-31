@@ -1,0 +1,50 @@
+#[display_name = "Rust"]
+#[path = "**/*.rs"]
+pub fn rust() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /b?'(?:\\.[^']*|[^'][\x80-\xBF]*)'/ {
+            yield string;
+        } else if /'[A-Za-z_]\w*/ {
+            yield keyword.other;
+        } else if /[cb]?r#"/ {
+            loop {
+                yield string;
+                if /"#/ { yield string; break; }
+                await input;
+            }
+        } else if /[cb]?"/ {
+            double_quote_string();
+        } else if /(?:break|continue|else|for|if|loop|match|return|while)\>/ {
+            yield keyword.control;
+        } else if /(?:as|async|await|const|crate|dyn|enum|extern|fn|impl|in|let|mod|move|mut|pub|ref|self|Self|static|struct|super|trait|type|unsafe|use|where)\>/ {
+            yield keyword.other;
+        } else if /(?:false|true)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*)(?:e[+-]?[\d_]+)?)(?:[iu](?:8|16|32|64|128|size)|f32|f64)?/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /((?:r#)?\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /[\w#]+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

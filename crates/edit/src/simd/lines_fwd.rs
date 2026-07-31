@@ -213,7 +213,7 @@ unsafe fn lines_fwd_lasx(
             }
         }
 
-        let lf = lasx_xvrepli_b(b'\n' as i32);
+        const LF: i32 = b'\n' as i32;
         let off = beg.align_offset(32);
         if off != 0 && off < end.offset_from_unsigned(beg) {
             (beg, line) = lines_fwd_fallback(beg, beg.add(off), line, line_stop);
@@ -226,11 +226,10 @@ unsafe fn lines_fwd_lasx(
                 let v3 = lasx_xvld::<64>(beg as *const _);
                 let v4 = lasx_xvld::<96>(beg as *const _);
 
-                let mut sum = lasx_xvrepli_b(0);
-                sum = lasx_xvsub_b(sum, lasx_xvseq_b(v1, lf));
-                sum = lasx_xvsub_b(sum, lasx_xvseq_b(v2, lf));
-                sum = lasx_xvsub_b(sum, lasx_xvseq_b(v3, lf));
-                sum = lasx_xvsub_b(sum, lasx_xvseq_b(v4, lf));
+                let mut sum = lasx_xvneg_b(lasx_xvseqi_b::<LF>(v1));
+                sum = lasx_xvsub_b(sum, lasx_xvseqi_b::<LF>(v2));
+                sum = lasx_xvsub_b(sum, lasx_xvseqi_b::<LF>(v3));
+                sum = lasx_xvsub_b(sum, lasx_xvseqi_b::<LF>(v4));
                 let sum = horizontal_sum(sum);
 
                 let line_next = line + sum as CoordType;
@@ -244,9 +243,9 @@ unsafe fn lines_fwd_lasx(
 
             while end.offset_from_unsigned(beg) >= 32 {
                 let v = lasx_xvld::<0>(beg as *const _);
-                let c = lasx_xvseq_b(v, lf);
+                let c = lasx_xvseqi_b::<LF>(v);
 
-                let ones = lasx_xvand_v(c, lasx_xvrepli_b(1));
+                let ones = lasx_xvandi_b::<1>(c);
                 let sum = horizontal_sum(ones);
 
                 let line_next = line + sum as CoordType;
@@ -298,8 +297,7 @@ unsafe fn lines_fwd_lsx(
                 let v3 = lsx_vld::<32>(beg as *const _);
                 let v4 = lsx_vld::<48>(beg as *const _);
 
-                let mut sum = lsx_vldi(0);
-                sum = lsx_vsub_b(sum, lsx_vseqi_b::<LF>(v1));
+                let mut sum = lsx_vneg_b(lsx_vseqi_b::<LF>(v1));
                 sum = lsx_vsub_b(sum, lsx_vseqi_b::<LF>(v2));
                 sum = lsx_vsub_b(sum, lsx_vseqi_b::<LF>(v3));
                 sum = lsx_vsub_b(sum, lsx_vseqi_b::<LF>(v4));

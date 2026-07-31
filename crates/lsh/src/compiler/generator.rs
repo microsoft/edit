@@ -211,7 +211,7 @@ impl TryFrom<u32> for HighlightKind {{
         output.push_str(&self.compiler.as_mermaid());
         output.push_str("*/\n");
 
-        output.push_str("\n#[rustfmt::skip] pub const LANGUAGES: &[Language] = &[\n");
+        output.push_str("\n#[rustfmt::skip] pub static LANGUAGES: &[Language] = &[\n");
         for ep in &assembly.entrypoints {
             _ = writeln!(
                 output,
@@ -224,7 +224,7 @@ impl TryFrom<u32> for HighlightKind {{
         output.push_str("];\n");
 
         output.push_str(
-            "\n#[rustfmt::skip] pub const FILE_ASSOCIATIONS: &[(&str, &Language)] = &[\n",
+            "\n#[rustfmt::skip] pub static FILE_ASSOCIATIONS: &[(&str, &Language)] = &[\n",
         );
         for (idx, ep) in assembly.entrypoints.iter().enumerate() {
             for path in &ep.paths {
@@ -235,7 +235,7 @@ impl TryFrom<u32> for HighlightKind {{
 
         _ = writeln!(
             output,
-            "\n#[rustfmt::skip] pub const ASSEMBLY: [u8; {len}] = [",
+            "\n#[rustfmt::skip] pub static ASSEMBLY: [u8; {len}] = [",
             len = assembly.instructions.len() + Instruction::MAX_ENCODED_SIZE,
         );
         let line_num_width = assembly.instructions.len().checked_ilog10().unwrap_or(0) as usize + 1;
@@ -289,7 +289,7 @@ impl TryFrom<u32> for HighlightKind {{
 
         _ = writeln!(
             output,
-            "\n#[rustfmt::skip] pub const CHARSETS: [[u16; 16]; {len}] = [",
+            "\n#[rustfmt::skip] pub static CHARSETS: [[u16; 16]; {len}] = [",
             len = assembly.charsets.len(),
         );
         for cs in assembly.charsets {
@@ -307,7 +307,7 @@ impl TryFrom<u32> for HighlightKind {{
 
         _ = writeln!(
             output,
-            "\n#[rustfmt::skip] pub const STRINGS: [&str; {len}] = [",
+            "\n#[rustfmt::skip] pub static STRINGS: [&str; {len}] = [",
             len = assembly.strings.len(),
         );
         for s in assembly.strings {

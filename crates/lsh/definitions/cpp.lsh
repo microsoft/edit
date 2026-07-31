@@ -1,0 +1,52 @@
+#[display_name = "C++"]
+#[path = "**/*.cpp"]
+#[path = "**/*.cc"]
+#[path = "**/*.cxx"]
+#[path = "**/*.hpp"]
+#[path = "**/*.h"]
+pub fn cpp() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /#\s*(?:define|elifdef|elifndef|elif|else|embed|endif|error|ifdef|ifndef|if|include|line|pragma|undef|warning)\>/ {
+            // Only the directive itself is highlighted. The remainder of the
+            // line is regular C++, more or less, and lexed as such.
+            yield keyword.preprocessor;
+        } else if /'/ {
+            single_quote_string();
+        } else if /"/ {
+            double_quote_string();
+        } else if /(?:break|case|catch|co_await|co_return|co_yield|continue|default|do|else|for|goto|if|return|switch|throw|try|while)\>/ {
+            yield keyword.control;
+        } else if /(?:alignas|alignof|class|concept|consteval|constexpr|constinit|const_cast|const|decltype|delete|dynamic_cast|enum|explicit|export|extern|final|friend|inline|mutable|namespace|new|noexcept|operator|override|private|protected|public|register|reinterpret_cast|requires|sizeof|static_assert|static_cast|static|struct|template|this|thread_local|typedef|typeid|typename|union|using|virtual|volatile)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|nullptr|NULL)\>/ {
+            yield constant.language;
+        } else if /(?:auto|bool|char8_t|char16_t|char32_t|char|double|float|int|long|short|signed|unsigned|void|wchar_t)\>/ {
+            yield storage.type;
+        } else if /(?i:-?(?:0x[\da-f']+|0b[01']+|[\d']+\.?[\d']*|\.[\d']+)(?:[ep][+-]?[\d']+)?[fluz]*)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

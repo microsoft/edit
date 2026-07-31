@@ -190,7 +190,7 @@ impl<'a> BString<'a> {
     pub fn push_utf16_lossy(&mut self, alloc: &'a dyn Allocator, string: &[u16]) {
         self.extend(
             alloc,
-            char::decode_utf16(string.iter().cloned())
+            char::decode_utf16(string.iter().copied())
                 .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER)),
         );
     }

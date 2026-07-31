@@ -70,7 +70,7 @@ pub fn markdown() {
                     if /.*/ {}
                 }
             }
-        } else if /(?i:py)/ {
+        } else if /(?i:py|python)/ {
             loop {
                 await input;
                 if /\s*```/ {
