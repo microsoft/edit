@@ -80,6 +80,11 @@ impl Parser {
         }
     }
 
+    /// Returns whether the parser has no unfinished VT sequence pending.
+    pub fn is_ground(&self) -> bool {
+        matches!(self.state, State::Ground)
+    }
+
     /// Suggests a timeout for the next call to `read()`.
     ///
     /// We need this because of the ambiguity of whether a trailing
@@ -116,6 +121,45 @@ pub struct Stream<'parser, 'input> {
     parser: &'parser mut Parser,
     input: &'input str,
     off: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parser_reports_pending_osc_until_st_is_complete() {
+        let mut parser = Parser::new();
+        assert!(parser.is_ground());
+
+        let mut stream = parser.parse("\x1b]11;rgb:0c0c/0c0c/0c0c\x1b");
+        assert!(stream.next().is_some());
+        assert!(stream.next().is_none());
+        drop(stream);
+        assert!(!parser.is_ground());
+
+        let mut stream = parser.parse("\\");
+        assert!(matches!(stream.next(), Some(Token::Osc { partial: false, .. })));
+        assert!(stream.next().is_none());
+        drop(stream);
+        assert!(parser.is_ground());
+    }
+
+    #[test]
+    fn parser_reports_ground_after_escape_timeout() {
+        let mut parser = Parser::new();
+
+        let mut stream = parser.parse("\x1b");
+        assert!(stream.next().is_none());
+        drop(stream);
+        assert!(!parser.is_ground());
+
+        let mut stream = parser.parse("");
+        assert!(matches!(stream.next(), Some(Token::Esc('\0'))));
+        assert!(stream.next().is_none());
+        drop(stream);
+        assert!(parser.is_ground());
+    }
 }
 
 impl<'input> Stream<'_, 'input> {
