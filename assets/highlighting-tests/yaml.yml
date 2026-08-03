@@ -1,0 +1,43 @@
+# This is a comment
+---
+string: "Hello, world!"
+plain: plainValue
+multiline: |
+  This is a
+  true
+  multiline string.
+folded: >
+  This is a
+  true
+  folded string.
+number_int: 42
+number_float: 3.1415
+number_scientific: 1.23e45
+number_negative: -7
+boolean_true: true
+boolean_false: false
+null_value: null
+explicit_null: ~
+date: 2024-06-01
+timestamp: 2024-06-01T12:34:56Z
+confusable_string_number: 1.23e45 1.23e45 # This is a comment
+sequence:
+  - item1
+  - item2
+  - 3
+  - true
+mapping:
+  key1: value1
+  key2: value2
+nested:
+  - name: Alice
+    age: 30
+    married: false
+  - name: Bob
+    age: 25
+    married: true
+empty_sequence: [foo, 123, bar]
+empty_mapping: { foo: bar }
+literal_colon: "value:with:colons"
+literal_dash: "-not-a-sequence"
+special_chars: "Tab:\t Newline:\n Unicode:\u2713"
