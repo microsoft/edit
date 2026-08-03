@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!DOCTYPE root [
+  <!ENTITY custom "Custom Entity">
+]>
+<!-- Root comment with special chars: <>&"' -->
+<?processing-instruction target="value"?>
+<root xmlns="http://default.namespace" xmlns:ns="http://custom.namespace">
+  <!-- Elements and attributes -->
+  <element attribute="value" ns:attr='single-quoted' empty-attr="">
+    <self-closing id="123" />
+    <nested>Text &amp; &lt; &gt; &quot; &apos; content</nested>
+    <entity>&custom;</entity>
+  </element>
+
+  <!-- CDATA section -->
+  <script><![CDATA[
+    function test() {
+      return x < 10 && y > 5;
+    }
+  ]]></script>
+
+  <!-- Mixed content -->
+  <mixed>Text before <tag>inline</tag> text after</mixed>
+
+  <!-- Numeric character references -->
+  <chars>&#65; &#x41; &#x1F600;</chars>
+
+  <!-- Edge cases -->
+  <edge-cases>
+    <empty></empty>
+    <whitespace>   </whitespace>
+    <special-chars>!@#$%^*()_+-={}[]|\:;"'&lt;&gt;,.</special-chars>
+  </edge-cases>
+
+  <!-- Nested namespaces -->
+  <ns:custom ns:id="namespaced">
+    <ns:child />
+  </ns:custom>
+</root>

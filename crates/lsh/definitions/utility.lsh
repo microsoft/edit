@@ -1,0 +1,21 @@
+fn single_quote_string() {
+    until /$/ {
+        if /\\./ {
+            // Escape sequences
+        } else if /'/ {
+            yield string;
+            break;
+        }
+    }
+}
+
+fn double_quote_string() {
+    until /$/ {
+        if /\\./ {
+            // Escape sequences
+        } else if /"/ {
+            yield string;
+            break;
+        }
+    }
+}

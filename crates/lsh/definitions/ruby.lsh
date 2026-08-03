@@ -1,0 +1,77 @@
+#[display_name = "Ruby"]
+#[path = "**/*.gemspec"]
+#[path = "**/*.rake"]
+#[path = "**/*.rb"]
+#[path = "**/*.ru"]
+#[path = "**/Gemfile"]
+#[path = "**/Rakefile"]
+pub fn ruby() {
+    if /=begin\>.*/ {
+        loop {
+            yield comment;
+            await input;
+            if /=end\>.*/ {
+                yield comment;
+                break;
+            }
+            if /.*/ {}
+        }
+        return;
+    }
+
+    until /$/ {
+        yield other;
+
+        if /#.*/ {
+            yield comment;
+        } else if /'/ {
+            single_quote_string();
+        } else if /"/ {
+            double_quote_string();
+        } else if /`/ {
+            until /$/ {
+                if /\\./ {
+                    // Escape sequences
+                } else if /`/ {
+                    yield string;
+                    break;
+                }
+            }
+        } else if /(?:begin|break|case|do|elsif|else|end|ensure|for|if|in|next|redo|rescue|retry|return|then|unless|until|when|while)\>/ {
+            yield keyword.control;
+        } else if /def\s+\w+\.(\w+[!?=]?)/ {
+            // Singleton method, as in `def self.foo`.
+            yield keyword.other;
+            yield $1 as method;
+        } else if /def\s+(\w+[!?=]?)/ {
+            yield keyword.other;
+            yield $1 as method;
+        } else if /(?:BEGIN|END|__ENCODING__|__FILE__|__LINE__|alias|and|class|defined\?|def|module|not|or|self|super|undef|yield)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|nil)\>/ {
+            yield constant.language;
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.[\d_]+(?:e[+-]?[\d_]+)?|[\d_]+(?:e[+-]?[\d_]+)?)r?i?)/ {
+            // Floats need digits on both sides of the dot, so that `1..2` and
+            // `1.upto(2)` don't swallow the dot.
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(?:@{1,2}|\$)[A-Za-z_]\w*/ {
+            yield variable;
+        } else if /::/ {
+            // Scope resolution, so that `Foo::Bar` isn't mistaken for a symbol.
+        } else if /:[A-Za-z_]\w*[!?=]?/ {
+            yield constant.language;
+        } else if /[A-Z]\w*/ {
+            yield storage.type;
+        } else if /(\w+[!?=]?)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+[!?=]?/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
