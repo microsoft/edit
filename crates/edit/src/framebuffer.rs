@@ -352,14 +352,14 @@ impl Framebuffer {
 
     /// Returns a color opposite to the brightness of the given `color`.
     pub fn contrasted(&self, color: StraightRgba) -> StraightRgba {
-        let idx = (color.to_bits() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
+        let idx = (color.to_rgba() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
         let slot = self.contrast_colors[idx].get();
         if slot.0 == color { slot.1 } else { self.contrasted_slow(color) }
     }
 
     #[cold]
     fn contrasted_slow(&self, color: StraightRgba) -> StraightRgba {
-        let idx = (color.to_bits() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
+        let idx = (color.to_rgba() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
         let is_dark = color.as_oklab().lightness() < self.auto_color_threshold;
         let contrast = self.auto_colors[is_dark as usize];
         self.contrast_colors[idx].set((color, contrast));
@@ -497,13 +497,13 @@ impl Framebuffer {
                         && back_attr[chunk_end] == attr
                 } {}
 
-                if last_bg != bg.to_bits() as u64 {
-                    last_bg = bg.to_bits() as u64;
+                if last_bg != bg.to_rgba() as u64 {
+                    last_bg = bg.to_rgba() as u64;
                     self.format_color(arena, &mut result, false, bg);
                 }
 
-                if last_fg != fg.to_bits() as u64 {
-                    last_fg = fg.to_bits() as u64;
+                if last_fg != fg.to_rgba() as u64 {
+                    last_fg = fg.to_rgba() as u64;
                     self.format_color(arena, &mut result, true, fg);
                 }
 
@@ -595,7 +595,7 @@ impl Framebuffer {
         // the output slightly and ensures that we keep "default foreground"
         // and "color that happens to be default foreground" separate.
         // (This also applies to the background color by the way.)
-        if color.to_bits() == 0 {
+        if color.to_rgba() == 0 {
             arena_write_fmt!(arena, dst, "\x1b[{typ}9m");
             return;
         }

@@ -23,39 +23,33 @@ impl StraightRgba {
     /// Constructs a color from a packed `0xRRGGBBAA` value, as commonly used in CSS.
     #[inline]
     pub const fn from_rgba(color: u32) -> Self {
-        StraightRgba(color.swap_bytes())
+        StraightRgba(color)
     }
 
     /// Returns the color as a packed `0xRRGGBBAA` value, as commonly used in CSS.
     #[inline]
     pub const fn to_rgba(self) -> u32 {
-        self.0.swap_bytes()
-    }
-
-    /// Returns the opaque internal representation. Only useful for hashing and comparisons.
-    #[inline]
-    pub const fn to_bits(self) -> u32 {
         self.0
     }
 
     #[inline]
     pub const fn red(self) -> u32 {
-        self.0 & 0xff
+        self.0 >> 24
     }
 
     #[inline]
     pub const fn green(self) -> u32 {
-        (self.0 >> 8) & 0xff
-    }
-
-    #[inline]
-    pub const fn blue(self) -> u32 {
         (self.0 >> 16) & 0xff
     }
 
     #[inline]
+    pub const fn blue(self) -> u32 {
+        (self.0 >> 8) & 0xff
+    }
+
+    #[inline]
     pub const fn alpha(self) -> u32 {
-        self.0 >> 24
+        self.0 & 0xff
     }
 
     pub fn oklab_blend(self, top: StraightRgba) -> StraightRgba {
@@ -89,7 +83,7 @@ impl StraightRgba {
 
 impl Debug for StraightRgba {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "#{:08x}", self.to_rgba()) // Display as a hex color
+        write!(f, "#{:08x}", self.0) // Display as a hex color
     }
 }
 
@@ -141,7 +135,7 @@ impl Oklab {
         let b = linear_to_srgb(b);
         let a = (alpha * 255.0) as u32;
 
-        StraightRgba(r | (g << 8) | (b << 16) | (a << 24))
+        StraightRgba((r << 24) | (g << 16) | (b << 8) | a)
     }
 
     /// Porter-Duff "over" composition. It's for Lab, but it works just like with RGB.
