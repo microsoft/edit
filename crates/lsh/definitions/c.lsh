@@ -1,0 +1,49 @@
+#[display_name = "C"]
+#[path = "**/*.c"]
+#[path = "**/*.i"]
+pub fn c() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /#\s*(?:define|elifdef|elifndef|elif|else|embed|endif|error|ifdef|ifndef|if|include|line|pragma|undef|warning)\>/ {
+            // Only the directive itself is highlighted. The remainder of the
+            // line is regular C, more or less, and lexed as such.
+            yield keyword.preprocessor;
+        } else if /'/ {
+            single_quote_string();
+        } else if /"/ {
+            double_quote_string();
+        } else if /(?:break|case|continue|default|do|else|for|goto|if|return|switch|while)\>/ {
+            yield keyword.control;
+        } else if /(?:alignas|alignof|auto|constexpr|const|enum|extern|inline|register|restrict|sizeof|static_assert|static|struct|thread_local|typedef|typeof_unqual|typeof|union|volatile|_Alignas|_Alignof|_Atomic|_Generic|_Noreturn|_Static_assert|_Thread_local)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|nullptr|NULL)\>/ {
+            yield constant.language;
+        } else if /(?:bool|char|double|float|int|long|short|signed|unsigned|void|_BitInt|_Bool|_Complex)\>/ {
+            yield storage.type;
+        } else if /(?i:-?(?:0x[\da-f']+|0b[01']+|[\d']+\.?[\d']*|\.[\d']+)(?:[ep][+-]?[\d']+)?[flu]*)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

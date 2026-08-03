@@ -21,7 +21,6 @@ use std::path::Path;
 
 use stdext::arena::Arena;
 use stdext::collections::BString;
-use stdext::opt_ptr_eq;
 
 pub use self::charset::{Charset, SerializedCharset};
 use self::frontend::*;
@@ -147,51 +146,37 @@ impl<'a> Compiler<'a> {
     fn visit_nodes_from(&self, root: IRCell<'a>) -> TreeVisitor<'a> {
         let mut stack = VecDeque::new();
         stack.push_back(root);
-        TreeVisitor { current: None, stack, visited: Default::default() }
+        TreeVisitor { current: None, stack, visited: Default::default(), follow_then: true }
+    }
+
+    /// Same as [`Self::visit_nodes_from`], but doesn't traverse `then` edges.
+    /// A `then` target is still visited if some node's `next` edge points at it too.
+    fn visit_fallthrough_nodes_from(&self, root: IRCell<'a>) -> TreeVisitor<'a> {
+        let mut visitor = self.visit_nodes_from(root);
+        visitor.follow_then = false;
+        visitor
     }
 
     /// Collect all "interesting" characters from conditions in a loop body.
     /// Returns a charset where true = interesting character that should be checked.
     fn collect_interesting_charset(&self, loop_body: IRCell<'a>) -> Charset {
-        let mut iter = self.visit_nodes_from(loop_body);
         let mut charset = Charset::no();
 
-        #[allow(clippy::while_let_loop)]
-        loop {
-            // Can't use `while let`, because that borrows `iter`
-            // and that prevents us from calling `skip_node()`.
-            let Some(node) = iter.next() else {
-                break;
-            };
-
+        // Only conditions reachable without consuming input matter here,
+        // so we don't descend into if bodies. Let's assume:
+        //   loop { if /a/ { loop { if /b/ {} } } }
+        // The inner loop's inverted charset includes "a", and merging it into the
+        // outer loop would cover all characters and defeat fast-skips entirely.
+        //
+        // Conditions that a preceding optional/alternation can fall through to, as in
+        //   if /[ab]?c/ {}
+        //   --> if "a" .then -> if "c"
+        //              .else -> if "b" .then -> if "c"
+        //                              .else -> if "c"
+        // are still reached, because `if "c"` sits on the `next` chain.
+        for node in self.visit_fallthrough_nodes_from(loop_body) {
             let node = node.borrow();
-            if let IRI::If { condition, then } = node.instr {
-                // For the purpose of computing fast-skips the contents of if conditions are irrelevant,
-                // so skip the subtree. This is actually quite important. This this as an example:
-                //   loop {
-                //     if /a/ {
-                //       loop {
-                //         if /b/ {
-                //         }
-                //       }
-                //     }
-                //   }
-                // The inverted charset of the inner /b/ includes "a". If we merge that into the outer
-                // loop's charset we get one that covers all characters, making fast-skips impossible.
-                // --> Skip the "then" subtree.
-                //
-                // HOWEVER, imagine a condition like this:
-                //   if /a?b/ {}
-                // This compiles to something like:
-                //   if "a"
-                //     .then -> if "b" {}
-                //     .else -> if "b" {}      (aka: .next)
-                // In other words, "then" and "next" point to the same thing.
-                // --> Only skip "then" if it's not the same as "next".
-                if !opt_ptr_eq(Some(then), node.next) {
-                    iter.skip_node(then);
-                }
-
+            if let IRI::If { condition, .. } = node.instr {
                 match condition {
                     Condition::Cmp { .. } => {}
                     Condition::EndOfLine => {}
@@ -351,12 +336,7 @@ struct TreeVisitor<'a> {
     current: Option<IRCell<'a>>,
     stack: VecDeque<IRCell<'a>>,
     visited: HashSet<*const RefCell<IR<'a>>>,
-}
-
-impl<'a> TreeVisitor<'a> {
-    fn skip_node(&mut self, node: IRCell<'a>) {
-        self.visited.insert(node as *const _);
-    }
+    follow_then: bool,
 }
 
 impl<'a> Iterator for TreeVisitor<'a> {
@@ -366,7 +346,9 @@ impl<'a> Iterator for TreeVisitor<'a> {
         if let Some(cell) = self.current.take() {
             {
                 let ir = cell.borrow();
-                if let IRI::If { then, .. } = ir.instr {
+                if let IRI::If { then, .. } = ir.instr
+                    && self.follow_then
+                {
                     self.stack.push_back(then);
                 }
                 if let Some(next) = ir.next {

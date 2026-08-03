@@ -171,16 +171,11 @@ impl GapBuffer {
     }
 
     fn enlarge_gap(&mut self, len: usize) {
-        let gap_chunk;
-        let alloc_chunk;
-
-        if matches!(self.buffer, BackingBuffer::VirtualMemory(..)) {
-            gap_chunk = LARGE_GAP_CHUNK;
-            alloc_chunk = LARGE_ALLOC_CHUNK;
+        let (gap_chunk, alloc_chunk) = if matches!(self.buffer, BackingBuffer::VirtualMemory(..)) {
+            (LARGE_GAP_CHUNK, LARGE_ALLOC_CHUNK)
         } else {
-            gap_chunk = SMALL_GAP_CHUNK;
-            alloc_chunk = SMALL_ALLOC_CHUNK;
-        }
+            (SMALL_GAP_CHUNK, SMALL_ALLOC_CHUNK)
+        };
 
         let gap_len_old = self.gap_len;
         let gap_len_new = (len + gap_chunk + gap_chunk - 1) & !(gap_chunk - 1);
@@ -333,38 +328,28 @@ impl GapBuffer {
 impl ReadableDocument for GapBuffer {
     fn read_forward(&self, off: usize) -> &[u8] {
         let off = off.min(self.text_length);
-        let beg;
-        let len;
 
-        if off < self.gap_off {
+        let (beg, len) = if off < self.gap_off {
             // Cursor is before the gap: We can read until the start of the gap.
-            beg = off;
-            len = self.gap_off - off;
+            (off, self.gap_off - off)
         } else {
             // Cursor is after the gap: We can read until the end of the buffer.
-            beg = off + self.gap_len;
-            len = self.text_length - off;
-        }
+            (off + self.gap_len, self.text_length - off)
+        };
 
         unsafe { slice::from_raw_parts(self.text.add(beg).as_ptr(), len) }
     }
 
     fn read_backward(&self, off: usize) -> &[u8] {
         let off = off.min(self.text_length);
-        let beg;
-        let len;
 
-        if off <= self.gap_off {
+        let (beg, len) = if off <= self.gap_off {
             // Cursor is before the gap: We can read until the beginning of the buffer.
-            beg = 0;
-            len = off;
+            (0, off)
         } else {
             // Cursor is after the gap: We can read until the end of the gap.
-            beg = self.gap_off + self.gap_len;
-            // The cursor_off doesn't account of the gap_len.
-            // (This allows us to move the gap without recalculating the cursor position.)
-            len = off - self.gap_off;
-        }
+            (self.gap_off + self.gap_len, off - self.gap_off)
+        };
 
         unsafe { slice::from_raw_parts(self.text.add(beg).as_ptr(), len) }
     }

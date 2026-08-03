@@ -27,6 +27,7 @@
 //! | `foo`        | `Prefix("foo")` - single prefix check                    |
 //! | `\+\+\+`     | `Prefix("+++")` - escapes fused into literals            |
 //! | `(?i:foo)`   | `PrefixInsensitive("foo")`                               |
+//! | `(?i:[a-f])` | `Charset` with both cases folded in                      |
 //! | `[a-z]+`     | `Charset{cs, min=1, max=∞}` - greedy char class          |
 //! | `[a-z]?`     | `Charset{cs, min=0, max=1}` - optional char              |
 //! | `$`          | `EndOfLine` condition                                    |
@@ -45,6 +46,7 @@
 
 use std::slice;
 
+use stdext::arena::scratch_arena;
 use stdext::collections::BVec;
 
 use super::*;
@@ -402,7 +404,7 @@ impl<'a> RegexParser<'a> {
                 }
                 Atom::Meta(']') => break,
                 Atom::Meta(c) | Atom::Char(c) => {
-                    if !c.is_ascii() {
+                    if c as u32 > 0xff {
                         return unexpected_unicode(c);
                     }
 
@@ -425,7 +427,7 @@ impl<'a> RegexParser<'a> {
                                 end = b'>';
                             }
                             Atom::Meta(c) | Atom::Char(c) => {
-                                if !c.is_ascii() {
+                                if c as u32 > 0xff {
                                     return unexpected_unicode(c);
                                 }
                                 end = c as u8;
@@ -439,6 +441,10 @@ impl<'a> RegexParser<'a> {
                     charset.set_range(start..=end, true);
                 }
             }
+        }
+
+        if self.case_insensitive {
+            charset.fold_case();
         }
 
         if negated {
@@ -483,6 +489,16 @@ impl<'a> RegexParser<'a> {
                         Ok(Atom::Class(cs))
                     }
                     't' => Ok(Atom::Char('\t')),
+                    'x' => {
+                        if let Some(byte) =
+                            self.rest().get(..2).and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                        {
+                            self.pos += 2;
+                            Ok(Atom::Char(byte as char))
+                        } else {
+                            Err("invalid hex escape sequence".to_string())
+                        }
+                    }
                     c if !c.is_ascii_alphanumeric() => Ok(Atom::Char(c)),
                     c => Err(format!("unknown escape sequence '\\{c}'")),
                 }
@@ -570,7 +586,7 @@ impl<'a, 'c> CodeGen<'a, 'c> {
                 // We iterate in reverse because of continuation-passing style,
                 // as explained in the module doc.
                 for alt in alts.iter().rev() {
-                    current_fail = self.emit(alt, on_match, current_fail)?;
+                    current_fail = self.emit_for_backtracking(alt, on_match, current_fail)?;
                 }
 
                 Ok(current_fail)
@@ -606,6 +622,29 @@ impl<'a, 'c> CodeGen<'a, 'c> {
                 }
             }
         }
+    }
+
+    fn emit_for_backtracking(
+        &mut self,
+        inner: &Regex,
+        on_match: IRCell<'a>,
+        on_fail: IRCell<'a>,
+    ) -> Result<IRCell<'a>, String> {
+        // Since each alternative may fail, we need to save the offset for backtracking.
+        let off_reg = self.compiler.get_reg(Register::InputOffset);
+        let saved = self.compiler.alloc_vreg();
+
+        // Create the backtracking node (restores the offset = the on_fail for the self.emit() below).
+        let restore = self.compiler.alloc_iri(IRI::Mov { dst: off_reg, src: saved });
+        restore.borrow_mut().next = Some(on_fail);
+
+        // Recurse into the alternative.
+        let entry = self.emit(inner, on_match, restore)?;
+
+        // Create the save node whose target is the self.emit() above.
+        let save = self.compiler.alloc_iri(IRI::Mov { dst: saved, src: off_reg });
+        save.borrow_mut().next = Some(entry);
+        Ok(save)
     }
 
     /// Emit IR for repetition quantifiers (`?`, `+`, `*`, `{n,m}`).
@@ -678,7 +717,7 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         let mut current = on_match;
         // Optional: Both branches succeed go to `current`.
         for _ in min..max {
-            current = self.emit(inner, current, current)?;
+            current = self.emit_for_backtracking(inner, current, current)?;
         }
         // Required: Failure goes to `on_fail`.
         for _ in 0..min {
@@ -697,6 +736,16 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         if s.is_empty() {
             return Ok(on_match);
         }
+
+        let scratch = scratch_arena(Some(self.compiler.arena));
+        let s = if case_insensitive {
+            let mut lower = BString::from_str(&*scratch, s);
+            lower.make_ascii_lowercase();
+            lower.leak()
+        } else {
+            s
+        };
+
         let s = self.compiler.intern_string(s);
         let condition =
             if case_insensitive { Condition::PrefixInsensitive(s) } else { Condition::Prefix(s) };
