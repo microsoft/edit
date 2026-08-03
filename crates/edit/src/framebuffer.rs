@@ -4,16 +4,17 @@
 //! A shoddy framebuffer for terminal applications.
 
 use std::cell::Cell;
-use std::fmt::Write;
 use std::ops::{BitOr, BitXor};
 use std::ptr;
 use std::slice::ChunksExact;
 
-use stdext::arena::{Arena, ArenaString};
+use stdext::arena::Arena;
+use stdext::arena_write_fmt;
+use stdext::collections::BString;
+use stdext::simd::memset;
 
 use crate::helpers::{CoordType, Point, Rect, Size};
 use crate::oklab::StraightRgba;
-use crate::simd::{MemsetSafe, memset};
 use crate::unicode::MeasurementConfig;
 
 // Same constants as used in the PCG family of RNGs.
@@ -107,6 +108,8 @@ pub struct Framebuffer {
     /// of the palette as [dark, light], unless the palette is recognized
     /// as a light them, in which case it swaps them.
     auto_colors: [StraightRgba; 2],
+    /// Above this lightness value, we consider a color to be "light".
+    auto_color_threshold: f32,
     /// A cache table for previously contrasted colors.
     /// See: <https://fgiesen.wordpress.com/2019/02/11/cache-tables/>
     contrast_colors: [Cell<(StraightRgba, StraightRgba)>; CACHE_TABLE_SIZE],
@@ -125,6 +128,7 @@ impl Framebuffer {
                 DEFAULT_THEME[IndexedColor::Black as usize],
                 DEFAULT_THEME[IndexedColor::BrightWhite as usize],
             ],
+            auto_color_threshold: 0.5,
             contrast_colors: [const { Cell::new((StraightRgba::zero(), StraightRgba::zero())) };
                 CACHE_TABLE_SIZE],
             background_fill: DEFAULT_THEME[IndexedColor::Background as usize],
@@ -145,7 +149,17 @@ impl Framebuffer {
             self.indexed_colors[IndexedColor::Black as usize],
             self.indexed_colors[IndexedColor::BrightWhite as usize],
         ];
-        if !Self::is_dark(self.auto_colors[0]) {
+
+        // It's not guaranteed that Black is actually dark and BrightWhite light (vice versa for a light theme).
+        // Such is the case with macOS 26's "Clear Dark" theme (and probably a lot other themes).
+        // Its black is #35424C (l=0.3716; oof!) and bright white is #E5EFF5 (l=0.9464).
+        // If we have a color such as #43698A (l=0.5065), which is l>0.5 ("light") and need a contrasting color,
+        // we need that to be #E5EFF5, even though that's also l>0.5. With a midpoint of 0.659, we get that right.
+        let lightness = self.auto_colors.map(|c| c.as_oklab().lightness());
+        self.auto_color_threshold = (lightness[0] + lightness[1]) * 0.5;
+
+        // Ensure [0] is dark and [1] is light.
+        if lightness[0] > lightness[1] {
             self.auto_colors.swap(0, 1);
         }
     }
@@ -346,13 +360,10 @@ impl Framebuffer {
     #[cold]
     fn contrasted_slow(&self, color: StraightRgba) -> StraightRgba {
         let idx = (color.to_ne() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
-        let contrast = self.auto_colors[Self::is_dark(color) as usize];
+        let is_dark = color.as_oklab().lightness() < self.auto_color_threshold;
+        let contrast = self.auto_colors[is_dark as usize];
         self.contrast_colors[idx].set((color, contrast));
         contrast
-    }
-
-    fn is_dark(color: StraightRgba) -> bool {
-        color.as_oklab().lightness() < 0.5
     }
 
     /// Blends the given sRGB color onto the background bitmap.
@@ -414,7 +425,7 @@ impl Framebuffer {
 
     /// Renders the framebuffer contents accumulated since the
     /// last call to `flip()` and returns them serialized as VT.
-    pub fn render<'a>(&mut self, arena: &'a Arena) -> ArenaString<'a> {
+    pub fn render<'a>(&mut self, arena: &'a Arena) -> BString<'a> {
         let idx = self.frame_counter & 1;
         // Borrows the front/back buffers without letting Rust know that we have a reference to self.
         // SAFETY: Well this is certainly correct, but whether Rust and its strict rules likes it is another question.
@@ -435,7 +446,7 @@ impl Framebuffer {
         let mut back_fgs = back.fg_bitmap.iter();
         let mut back_attrs = back.attributes.iter();
 
-        let mut result = ArenaString::new_in(arena);
+        let mut result = BString::empty();
         let mut last_bg = u64::MAX;
         let mut last_fg = u64::MAX;
         let mut last_attr = Attributes::None;
@@ -468,9 +479,9 @@ impl Framebuffer {
             let mut chunk_end = 0;
 
             if result.is_empty() {
-                result.push_str("\x1b[m");
+                result.push_str(arena, "\x1b[m");
             }
-            _ = write!(result, "\x1b[{};1H", y + 1);
+            arena_write_fmt!(arena, result, "\x1b[{};1H", y + 1);
 
             while {
                 let bg = back_bg[chunk_end];
@@ -488,28 +499,42 @@ impl Framebuffer {
 
                 if last_bg != bg.to_ne() as u64 {
                     last_bg = bg.to_ne() as u64;
-                    self.format_color(&mut result, false, bg);
+                    self.format_color(arena, &mut result, false, bg);
                 }
 
                 if last_fg != fg.to_ne() as u64 {
                     last_fg = fg.to_ne() as u64;
-                    self.format_color(&mut result, true, fg);
+                    self.format_color(arena, &mut result, true, fg);
                 }
 
                 if last_attr != attr {
                     let diff = last_attr ^ attr;
+                    if diff.is(Attributes::Bold) {
+                        if attr.is(Attributes::Bold) {
+                            result.push_str(arena, "\x1b[1m");
+                        } else {
+                            result.push_str(arena, "\x1b[22m");
+                        }
+                    }
                     if diff.is(Attributes::Italic) {
                         if attr.is(Attributes::Italic) {
-                            result.push_str("\x1b[3m");
+                            result.push_str(arena, "\x1b[3m");
                         } else {
-                            result.push_str("\x1b[23m");
+                            result.push_str(arena, "\x1b[23m");
                         }
                     }
                     if diff.is(Attributes::Underlined) {
                         if attr.is(Attributes::Underlined) {
-                            result.push_str("\x1b[4m");
+                            result.push_str(arena, "\x1b[4m");
                         } else {
-                            result.push_str("\x1b[24m");
+                            result.push_str(arena, "\x1b[24m");
+                        }
+                    }
+                    if diff.is(Attributes::Strikethrough) {
+                        if attr.is(Attributes::Strikethrough) {
+                            result.push_str(arena, "\x1b[9m");
+                        } else {
+                            result.push_str(arena, "\x1b[29m");
                         }
                     }
                     last_attr = attr;
@@ -517,7 +542,7 @@ impl Framebuffer {
 
                 let beg = cfg.cursor().offset;
                 let end = cfg.goto_visual(Point { x: chunk_end as CoordType, y: 0 }).offset;
-                result.push_str(&back_line[beg..end]);
+                result.push_str(arena, &back_line[beg..end]);
 
                 chunk_end < back_bg.len()
             } {}
@@ -531,7 +556,8 @@ impl Framebuffer {
                 // CUP to the cursor position.
                 // DECSCUSR to set the cursor style.
                 // DECTCEM to show the cursor.
-                _ = write!(
+                arena_write_fmt!(
+                    arena,
                     result,
                     "\x1b[{};{}H\x1b[{} q\x1b[?25h",
                     back.cursor.pos.y + 1,
@@ -540,14 +566,20 @@ impl Framebuffer {
                 );
             } else {
                 // DECTCEM to hide the cursor.
-                result.push_str("\x1b[?25l");
+                result.push_str(arena, "\x1b[?25l");
             }
         }
 
         result
     }
 
-    fn format_color(&self, dst: &mut ArenaString, fg: bool, mut color: StraightRgba) {
+    fn format_color<'a>(
+        &self,
+        arena: &'a Arena,
+        dst: &mut BString<'a>,
+        fg: bool,
+        mut color: StraightRgba,
+    ) {
         let typ = if fg { '3' } else { '4' };
 
         // Some terminals support transparent backgrounds which are used
@@ -564,7 +596,7 @@ impl Framebuffer {
         // and "color that happens to be default foreground" separate.
         // (This also applies to the background color by the way.)
         if color.to_ne() == 0 {
-            _ = write!(dst, "\x1b[{typ}9m");
+            arena_write_fmt!(arena, dst, "\x1b[{typ}9m");
             return;
         }
 
@@ -577,7 +609,7 @@ impl Framebuffer {
         let r = color.red();
         let g = color.green();
         let b = color.blue();
-        _ = write!(dst, "\x1b[{typ}8;2;{r};{g};{b}m");
+        arena_write_fmt!(arena, dst, "\x1b[{typ}8;2;{r};{g};{b}m");
     }
 }
 
@@ -820,16 +852,16 @@ pub struct Attributes(u8);
 #[allow(non_upper_case_globals)]
 impl Attributes {
     pub const None: Self = Self(0);
-    pub const Italic: Self = Self(0b1);
-    pub const Underlined: Self = Self(0b10);
-    pub const All: Self = Self(0b11);
+    pub const Bold: Self = Self(1);
+    pub const Italic: Self = Self(2);
+    pub const Underlined: Self = Self(4);
+    pub const Strikethrough: Self = Self(8);
+    pub const All: Self = Self(16 - 1);
 
     pub const fn is(self, attr: Self) -> bool {
         (self.0 & attr.0) == attr.0
     }
 }
-
-unsafe impl MemsetSafe for Attributes {}
 
 impl BitOr for Attributes {
     type Output = Self;

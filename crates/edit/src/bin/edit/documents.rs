@@ -1,15 +1,18 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::collections::LinkedList;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
 use edit::helpers::{CoordType, Point};
-use edit::{apperr, path, sys};
+use edit::lsh::{FILE_ASSOCIATIONS, Language, process_file_associations};
+use edit::{path, sys};
 
+use crate::apperr;
+use crate::settings::Settings;
 use crate::state::DisplayablePathBuf;
 
 pub struct Document {
@@ -19,6 +22,7 @@ pub struct Document {
     pub filename: String,
     pub file_id: Option<sys::FileId>,
     pub new_file_counter: usize,
+    pub language_override: Option<Option<&'static Language>>,
 }
 
 impl Document {
@@ -61,21 +65,65 @@ impl Document {
     fn set_path(&mut self, path: PathBuf) {
         let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let dir = path.parent().map(ToOwned::to_owned).unwrap_or_default();
+
         self.filename = filename;
         self.dir = Some(DisplayablePathBuf::from_path(dir));
         self.path = Some(path);
-        self.update_file_mode();
+
+        self.buffer.borrow_mut().set_ruler(if self.filename == "COMMIT_EDITMSG" { 72 } else { 0 });
+        self.update_language();
     }
 
-    fn update_file_mode(&mut self) {
+    pub fn auto_detect_language(&mut self) {
+        self.language_override = None;
+        self.update_language();
+    }
+
+    pub fn override_language(&mut self, lang: Option<&'static Language>) {
+        self.language_override = Some(lang);
+        self.update_language();
+    }
+
+    fn update_language(&mut self) {
+        self.buffer.borrow_mut().set_language(self.get_language());
+    }
+
+    fn get_language(&self) -> Option<&'static Language> {
+        if let Some(lang) = self.language_override {
+            return lang;
+        }
+
+        if let Some(path) = &self.path {
+            let settings = Settings::borrow();
+            if let Some(lang) = process_file_associations(&settings.file_associations, path) {
+                return Some(lang);
+            }
+            if let Some(lang) = process_file_associations(FILE_ASSOCIATIONS, path) {
+                return Some(lang);
+            }
+        }
+
+        None
+    }
+
+    /// Moves the cursor to a 1-based line/char position.
+    /// A negative line counts backwards from the end
+    /// of the document, e.g. -1 is the last line.
+    pub fn cursor_move_to_goto(&self, goto: Point) {
         let mut tb = self.buffer.borrow_mut();
-        tb.set_ruler(if self.filename == "COMMIT_EDITMSG" { 72 } else { 0 });
+        let x = goto.x.saturating_sub(1);
+        let y = if goto.y < 0 {
+            tb.logical_line_count().saturating_add(goto.y)
+        } else {
+            goto.y.saturating_sub(1)
+        };
+        tb.cursor_move_to_logical(Point { x, y });
     }
 }
 
 #[derive(Default)]
 pub struct DocumentManager {
-    list: LinkedList<Document>,
+    list: Vec<Document>,
 }
 
 impl DocumentManager {
@@ -86,30 +134,48 @@ impl DocumentManager {
 
     #[inline]
     pub fn active(&self) -> Option<&Document> {
-        self.list.front()
+        self.list.last()
     }
 
     #[inline]
     pub fn active_mut(&mut self) -> Option<&mut Document> {
-        self.list.front_mut()
+        self.list.last_mut()
     }
 
-    #[inline]
     pub fn update_active<F: FnMut(&Document) -> bool>(&mut self, mut func: F) -> bool {
-        let mut cursor = self.list.cursor_front_mut();
-        while let Some(doc) = cursor.current() {
-            if func(doc) {
-                let list = cursor.remove_current_as_list().unwrap();
-                self.list.cursor_front_mut().splice_before(list);
-                return true;
-            }
-            cursor.move_next();
+        let Some(idx) = self.list.iter().rposition(&mut func) else {
+            return false;
+        };
+
+        // Already active (= last) document matched? Nothing to do.
+        if idx == self.list.len() - 1 {
+            return false;
         }
-        false
+
+        // Otherwise, move the matched document to the end of the list so it becomes active.
+        // Uses unsafe, because `rotate_left()` is horrendously bad with -Copt-level=s
+        // (it's really almost comical) and I just don't tolerate that.
+        // If I'm dead and you're looking to rewrite this use `list.push(list.remove(idx))`.
+        unsafe {
+            let beg = self.list.as_mut_ptr();
+            let doc = beg.add(idx);
+            let last = beg.add(self.list.len() - 1);
+            let amount = self.list.len() - idx - 1;
+            let mut temp = std::mem::MaybeUninit::<Document>::uninit();
+
+            // Make a backup of the document
+            std::ptr::copy_nonoverlapping(doc, temp.as_mut_ptr(), 1);
+            // Shift the rest to the front
+            std::ptr::copy(doc.add(1), doc, amount);
+            // Move the backup to the end
+            std::ptr::copy_nonoverlapping(temp.as_ptr(), last, 1);
+        }
+
+        true
     }
 
     pub fn remove_active(&mut self) {
-        self.list.pop_front();
+        self.list.pop();
     }
 
     pub fn add_untitled(&mut self) -> apperr::Result<&mut Document> {
@@ -121,11 +187,13 @@ impl DocumentManager {
             filename: Default::default(),
             file_id: None,
             new_file_counter: 0,
+            language_override: None,
         };
         self.gen_untitled_name(&mut doc);
 
-        self.list.push_front(doc);
-        Ok(self.list.front_mut().unwrap())
+        // In the future this could use push_mut, but it's unstable right now. As usual.
+        self.list.push(doc);
+        Ok(self.list.last_mut().unwrap())
     }
 
     pub fn gen_untitled_name(&self, doc: &mut Document) {
@@ -140,13 +208,12 @@ impl DocumentManager {
     }
 
     pub fn add_file_path(&mut self, path: &Path) -> apperr::Result<&mut Document> {
-        let (path, goto) = Self::parse_filename_goto(path);
         let path = path::normalize(path);
 
-        let mut file = match Self::open_for_reading(&path) {
+        let mut file = match File::open(&path) {
             Ok(file) => Some(file),
-            Err(err) if sys::apperr_is_not_found(err) => None,
-            Err(err) => return Err(err),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err.into()),
         };
 
         let file_id = if file.is_some() { Some(sys::file_id(file.as_ref(), &path)?) } else { None };
@@ -154,9 +221,6 @@ impl DocumentManager {
         // Check if the file is already open.
         if file_id.is_some() && self.update_active(|doc| doc.file_id == file_id) {
             let doc = self.active_mut().unwrap();
-            if let Some(goto) = goto {
-                doc.buffer.borrow_mut().cursor_move_to_logical(goto);
-            }
             return Ok(doc);
         }
 
@@ -165,12 +229,6 @@ impl DocumentManager {
             if let Some(file) = &mut file {
                 let mut tb = buffer.borrow_mut();
                 tb.read_file(file, None)?;
-
-                if let Some(goto) = goto
-                    && goto != Default::default()
-                {
-                    tb.cursor_move_to_logical(goto);
-                }
             }
         }
 
@@ -181,6 +239,7 @@ impl DocumentManager {
             filename: Default::default(),
             file_id,
             new_file_counter: 0,
+            language_override: None,
         };
         doc.set_path(path);
 
@@ -194,8 +253,8 @@ impl DocumentManager {
             self.remove_active();
         }
 
-        self.list.push_front(doc);
-        Ok(self.list.front_mut().unwrap())
+        self.list.push(doc);
+        Ok(self.list.last_mut().unwrap())
     }
 
     pub fn reflow_all(&self) {
@@ -210,6 +269,16 @@ impl DocumentManager {
     }
 
     pub fn open_for_writing(path: &Path) -> apperr::Result<File> {
+        // Error handling for directory creation and file writing
+
+        // It is worth doing an existence check because it is significantly
+        // faster than calling mkdir() and letting it fail (at least on Windows).
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent)?;
+        }
+
         File::create(path).map_err(apperr::Error::from)
     }
 
@@ -223,63 +292,67 @@ impl DocumentManager {
         }
         Ok(buffer)
     }
+}
 
-    // Parse a filename in the form of "filename:line:char".
-    // Returns the position of the first colon and the line/char coordinates.
-    fn parse_filename_goto(path: &Path) -> (&Path, Option<Point>) {
-        fn parse(s: &[u8]) -> Option<CoordType> {
-            if s.is_empty() {
+/// Parse a filename in the form of "filename:line:char".
+/// Returns the filename and the [`Document::cursor_move_to_goto`] coordinates.
+pub fn parse_filename_goto(path: &Path) -> (&Path, Option<Point>) {
+    fn parse(s: &[u8]) -> Option<CoordType> {
+        let (negative, digits) = match s {
+            [b'-', rest @ ..] => (true, rest),
+            _ => (false, s),
+        };
+        if digits.is_empty() {
+            return None;
+        }
+
+        let mut num: CoordType = 0;
+        for &b in digits {
+            if !b.is_ascii_digit() {
                 return None;
             }
-
-            let mut num: CoordType = 0;
-            for &b in s {
-                if !b.is_ascii_digit() {
-                    return None;
-                }
-                let digit = (b - b'0') as CoordType;
-                num = num.checked_mul(10)?.checked_add(digit)?;
-            }
-            Some(num)
+            let digit = (b - b'0') as CoordType;
+            num = num.checked_mul(10)?.checked_add(digit)?;
         }
-
-        fn find_colon_rev(bytes: &[u8], offset: usize) -> Option<usize> {
-            (0..offset.min(bytes.len())).rev().find(|&i| bytes[i] == b':')
-        }
-
-        let bytes = path.as_os_str().as_encoded_bytes();
-        let colend = match find_colon_rev(bytes, bytes.len()) {
-            // Reject filenames that would result in an empty filename after stripping off the :line:char suffix.
-            // For instance, a filename like ":123:456" will not be processed by this function.
-            Some(colend) if colend > 0 => colend,
-            _ => return (path, None),
-        };
-
-        let last = match parse(&bytes[colend + 1..]) {
-            Some(last) => last,
-            None => return (path, None),
-        };
-        let last = (last - 1).max(0);
-        let mut len = colend;
-        let mut goto = Point { x: 0, y: last };
-
-        if let Some(colbeg) = find_colon_rev(bytes, colend) {
-            // Same here: Don't allow empty filenames.
-            if colbeg != 0
-                && let Some(first) = parse(&bytes[colbeg + 1..colend])
-            {
-                let first = (first - 1).max(0);
-                len = colbeg;
-                goto = Point { x: last, y: first };
-            }
-        }
-
-        // Strip off the :line:char suffix.
-        let path = &bytes[..len];
-        let path = unsafe { OsStr::from_encoded_bytes_unchecked(path) };
-        let path = Path::new(path);
-        (path, Some(goto))
+        Some(if negative { -num } else { num })
     }
+
+    fn find_colon_rev(bytes: &[u8], offset: usize) -> Option<usize> {
+        (0..offset.min(bytes.len())).rev().find(|&i| bytes[i] == b':')
+    }
+
+    let bytes = path.as_os_str().as_encoded_bytes();
+    let colend = match find_colon_rev(bytes, bytes.len()) {
+        // Reject filenames that would result in an empty filename after stripping off the :line:char suffix.
+        // For instance, a filename like ":123:456" will not be processed by this function.
+        Some(colend) if colend > 0 => colend,
+        _ => return (path, None),
+    };
+
+    let last = match parse(&bytes[colend + 1..]) {
+        Some(last) => last,
+        None => return (path, None),
+    };
+    let mut len = colend;
+    let mut goto = Point { x: 1, y: last };
+
+    // Counting backwards is only supported for lines,
+    // so a negative `last` rules out a char position.
+    if last >= 0
+        && let Some(colbeg) = find_colon_rev(bytes, colend)
+        // Same here: Don't allow empty filenames.
+        && colbeg != 0
+        && let Some(first) = parse(&bytes[colbeg + 1..colend])
+    {
+        len = colbeg;
+        goto = Point { x: last, y: first };
+    }
+
+    // Strip off the :line:char suffix.
+    let path = &bytes[..len];
+    let path = unsafe { OsStr::from_encoded_bytes_unchecked(path) };
+    let path = Path::new(path);
+    (path, Some(goto))
 }
 
 #[cfg(test)]
@@ -289,27 +362,31 @@ mod tests {
     #[test]
     fn test_parse_last_numbers() {
         fn parse(s: &str) -> (&str, Option<Point>) {
-            let (p, g) = DocumentManager::parse_filename_goto(Path::new(s));
+            let (p, g) = parse_filename_goto(Path::new(s));
             (p.to_str().unwrap(), g)
         }
 
         assert_eq!(parse("123"), ("123", None));
         assert_eq!(parse("abc"), ("abc", None));
         assert_eq!(parse(":123"), (":123", None));
-        assert_eq!(parse("abc:123"), ("abc", Some(Point { x: 0, y: 122 })));
-        assert_eq!(parse("45:123"), ("45", Some(Point { x: 0, y: 122 })));
-        assert_eq!(parse(":45:123"), (":45", Some(Point { x: 0, y: 122 })));
-        assert_eq!(parse("abc:45:123"), ("abc", Some(Point { x: 122, y: 44 })));
-        assert_eq!(parse("abc:def:123"), ("abc:def", Some(Point { x: 0, y: 122 })));
-        assert_eq!(parse("1:2:3"), ("1", Some(Point { x: 2, y: 1 })));
-        assert_eq!(parse("::3"), (":", Some(Point { x: 0, y: 2 })));
-        assert_eq!(parse("1::3"), ("1:", Some(Point { x: 0, y: 2 })));
+        assert_eq!(parse("abc:123"), ("abc", Some(Point { x: 1, y: 123 })));
+        assert_eq!(parse("45:123"), ("45", Some(Point { x: 1, y: 123 })));
+        assert_eq!(parse(":45:123"), (":45", Some(Point { x: 1, y: 123 })));
+        assert_eq!(parse("abc:45:123"), ("abc", Some(Point { x: 123, y: 45 })));
+        assert_eq!(parse("abc:def:123"), ("abc:def", Some(Point { x: 1, y: 123 })));
+        assert_eq!(parse("1:2:3"), ("1", Some(Point { x: 3, y: 2 })));
+        assert_eq!(parse("::3"), (":", Some(Point { x: 1, y: 3 })));
+        assert_eq!(parse("1::3"), ("1:", Some(Point { x: 1, y: 3 })));
         assert_eq!(parse(""), ("", None));
         assert_eq!(parse(":"), (":", None));
         assert_eq!(parse("::"), ("::", None));
-        assert_eq!(parse("a:1"), ("a", Some(Point { x: 0, y: 0 })));
+        assert_eq!(parse("a:1"), ("a", Some(Point { x: 1, y: 1 })));
         assert_eq!(parse("1:a"), ("1:a", None));
-        assert_eq!(parse("file.txt:10"), ("file.txt", Some(Point { x: 0, y: 9 })));
-        assert_eq!(parse("file.txt:10:5"), ("file.txt", Some(Point { x: 4, y: 9 })));
+        assert_eq!(parse("file.txt:10"), ("file.txt", Some(Point { x: 1, y: 10 })));
+        assert_eq!(parse("file.txt:10:5"), ("file.txt", Some(Point { x: 5, y: 10 })));
+        assert_eq!(parse("file.txt:-1"), ("file.txt", Some(Point { x: 1, y: -1 })));
+        assert_eq!(parse("file.txt:-10:5"), ("file.txt", Some(Point { x: 5, y: -10 })));
+        assert_eq!(parse("file.txt:10:-5"), ("file.txt:10", Some(Point { x: 1, y: -5 })));
+        assert_eq!(parse("file.txt:-"), ("file.txt:-", None));
     }
 }

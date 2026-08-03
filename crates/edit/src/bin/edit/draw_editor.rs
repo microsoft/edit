@@ -1,13 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::num::ParseIntError;
-
 use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::icu;
 use edit::input::{kbmod, vk};
 use edit::tui::*;
+use stdext::string_from_utf8_lossy_owned;
 
 use crate::localization::*;
 use crate::state::*;
@@ -38,7 +37,7 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
 
 fn draw_search(ctx: &mut Context, state: &mut State) {
     if let Err(err) = icu::init() {
-        error_log_add(ctx, state, err);
+        error_log_add(ctx, state, err.into());
         state.wants_search.kind = StateSearchKind::Disabled;
         return;
     }
@@ -58,7 +57,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
         // If the selection is empty, focus the search input field.
         // Otherwise, focus the replace input field, if it exists.
         if let Some(selection) = doc.buffer.borrow_mut().extract_user_selection(false) {
-            state.search_needle = String::from_utf8_lossy_owned(selection);
+            state.search_needle = string_from_utf8_lossy_owned(selection);
             focus = state.wants_search.kind;
         }
     }
@@ -150,8 +149,6 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 
             if change {
                 action = change_action;
-                state.wants_search.focus = true;
-                ctx.needs_rerender();
             }
         }
         ctx.table_end();
@@ -320,14 +317,12 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
             ctx.steal_focus();
 
             if ctx.consume_shortcut(vk::RETURN) {
-                match validate_goto_point(&state.goto_target) {
-                    Ok(point) => {
-                        let mut buf = doc.buffer.borrow_mut();
-                        buf.cursor_move_to_logical(point);
-                        buf.make_cursor_visible();
-                        done = true;
-                    }
-                    Err(_) => state.goto_invalid = true,
+                if let Some(goto) = validate_goto_point(&state.goto_target) {
+                    doc.cursor_move_to_goto(goto);
+                    doc.buffer.borrow_mut().make_cursor_visible();
+                    done = true;
+                } else {
+                    state.goto_invalid = true;
                 }
                 ctx.needs_rerender();
             }
@@ -345,13 +340,17 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
     }
 }
 
-fn validate_goto_point(line: &str) -> Result<Point, ParseIntError> {
+fn validate_goto_point(line: &str) -> Option<Point> {
     let mut coords = [0; 2];
-    let (y, x) = line.split_once(':').unwrap_or((line, "0"));
+    let (y, x) = line.split_once(':').unwrap_or((line, "1"));
     // Using a loop here avoids 2 copies of the str->int code.
     // This makes the binary more compact.
     for (i, s) in [x, y].iter().enumerate() {
-        coords[i] = s.parse::<CoordType>()?.saturating_sub(1);
+        coords[i] = s.parse::<CoordType>().ok()?;
     }
-    Ok(Point { x: coords[0], y: coords[1] })
+    // Counting backwards is only supported for lines.
+    if coords[0] < 1 {
+        return None;
+    }
+    Some(Point { x: coords[0], y: coords[1] })
 }

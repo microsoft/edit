@@ -3,10 +3,20 @@
 
 //! Arena allocators. Small and fast.
 
-#![feature(allocator_api)]
+#![cfg_attr(
+    target_arch = "loongarch64",
+    feature(stdarch_loongarch),
+    allow(clippy::incompatible_msrv)
+)]
 
+pub mod alloc;
 pub mod arena;
-pub mod sys;
-
+pub mod collections;
+pub mod float;
+pub mod glob;
 mod helpers;
+pub mod simd;
+pub mod sys;
+pub mod unicode;
+
 pub use helpers::*;

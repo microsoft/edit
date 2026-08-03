@@ -2,23 +2,21 @@
 // Licensed under the MIT License.
 
 use std::ffi::{OsString, c_char, c_void};
-use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::mem::MaybeUninit;
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle};
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull, null, null_mut};
-use std::{mem, time};
+use std::{io, mem, time};
 
-use stdext::arena::{Arena, ArenaString, scratch_arena};
-use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
+use stdext::arena::{Arena, scratch_arena};
+use stdext::arena_write_fmt;
+use stdext::collections::{BString, BVec};
 use windows_sys::Win32::Storage::FileSystem;
-use windows_sys::Win32::System::Diagnostics::Debug;
 use windows_sys::Win32::System::{Console, IO, LibraryLoader, Threading};
 use windows_sys::Win32::{Foundation, Globalization};
 use windows_sys::core::*;
 
-use crate::apperr;
 use crate::helpers::*;
 
 macro_rules! w_env {
@@ -69,11 +67,7 @@ unsafe extern "system" fn read_console_input_ex_placeholder(
 }
 
 const CONSOLE_READ_NOWAIT: u16 = 0x0002;
-
 const INVALID_CONSOLE_MODE: u32 = u32::MAX;
-
-// Locally-defined error codes follow the HRESULT format, but they have bit 29 set to indicate that they are Customer error codes.
-const ERROR_UNSUPPORTED_LEGACY_CONSOLE: u32 = 0xE0010001;
 
 struct State {
     read_console_input_ex: ReadConsoleInputExW,
@@ -121,8 +115,40 @@ pub fn init() -> Deinit {
     }
 }
 
+/// Reopen stdin if it's redirected (= piped input).
+pub fn reopen_stdin_if_redirected() -> io::Result<Option<File>> {
+    unsafe {
+        let stdin = STATE.stdin;
+
+        if stdin != Foundation::INVALID_HANDLE_VALUE
+            && FileSystem::GetFileType(stdin) == FileSystem::FILE_TYPE_CHAR
+        {
+            return Ok(None); // stdin refers to a TTY
+        }
+
+        STATE.stdin = FileSystem::CreateFileW(
+            w!("CONIN$"),
+            Foundation::GENERIC_READ | Foundation::GENERIC_WRITE,
+            FileSystem::FILE_SHARE_READ | FileSystem::FILE_SHARE_WRITE,
+            null_mut(),
+            FileSystem::OPEN_EXISTING,
+            0,
+            null_mut(),
+        );
+        if STATE.stdin == Foundation::INVALID_HANDLE_VALUE {
+            return Err(last_os_error());
+        }
+
+        if stdin != Foundation::INVALID_HANDLE_VALUE {
+            Ok(Some(File::from_raw_handle(stdin)))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 /// Switches the terminal into raw mode, etc.
-pub fn switch_modes() -> apperr::Result<()> {
+pub fn switch_modes() -> io::Result<()> {
     unsafe {
         // `kernel32.dll` doesn't exist on OneCore variants of Windows.
         // NOTE: `kernelbase.dll` is NOT a stable API to rely on. In our case it's the best option though.
@@ -130,7 +156,7 @@ pub fn switch_modes() -> apperr::Result<()> {
         // This is written as two nested `match` statements so that we can return the error from the first
         // `load_read_func` call if it fails. The kernel32.dll lookup may contain some valid information,
         // while the kernelbase.dll lookup may not, since it's not a stable API.
-        unsafe fn load_read_func(module: *const u16) -> apperr::Result<ReadConsoleInputExW> {
+        unsafe fn load_read_func(module: *const u16) -> io::Result<ReadConsoleInputExW> {
             unsafe {
                 get_module(module)
                     .and_then(|m| get_proc_address(m, c"ReadConsoleInputExW".as_ptr()))
@@ -144,24 +170,10 @@ pub fn switch_modes() -> apperr::Result<()> {
             },
         };
 
-        // Reopen stdin if it's redirected (= piped input).
-        if ptr::eq(STATE.stdin, Foundation::INVALID_HANDLE_VALUE)
-            || !matches!(FileSystem::GetFileType(STATE.stdin), FileSystem::FILE_TYPE_CHAR)
-        {
-            STATE.stdin = FileSystem::CreateFileW(
-                w!("CONIN$"),
-                Foundation::GENERIC_READ | Foundation::GENERIC_WRITE,
-                FileSystem::FILE_SHARE_READ | FileSystem::FILE_SHARE_WRITE,
-                null_mut(),
-                FileSystem::OPEN_EXISTING,
-                0,
-                null_mut(),
-            );
-        }
         if ptr::eq(STATE.stdin, Foundation::INVALID_HANDLE_VALUE)
             || ptr::eq(STATE.stdout, Foundation::INVALID_HANDLE_VALUE)
         {
-            return Err(get_last_error());
+            return Err(last_os_error());
         }
 
         check_bool_return(Console::GetConsoleMode(STATE.stdin, &raw mut STATE.stdin_mode_old))?;
@@ -173,8 +185,8 @@ pub fn switch_modes() -> apperr::Result<()> {
                 | Console::ENABLE_EXTENDED_FLAGS
                 | Console::ENABLE_VIRTUAL_TERMINAL_INPUT,
         )) {
-            Err(e) if e == gle_to_apperr(ERROR_INVALID_PARAMETER) => {
-                Err(apperr::Error::Sys(ERROR_UNSUPPORTED_LEGACY_CONSOLE))
+            Err(e) if e.kind() == io::ErrorKind::InvalidInput => {
+                Err(io::Error::other("This application does not support the legacy console."))
             }
             other => other,
         }?;
@@ -254,7 +266,7 @@ fn get_console_size() -> Option<Size> {
 /// * `None` if there was an error reading from stdin.
 /// * `Some("")` if the given timeout was reached.
 /// * Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaString<'_>> {
+pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<'_>> {
     let scratch = scratch_arena(Some(arena));
 
     // On startup we're asked to inject a window size so that the UI system can layout the elements.
@@ -323,7 +335,8 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
                 Console::KEY_EVENT => {
                     let event = unsafe { &inp.Event.KeyEvent };
                     let ch = unsafe { event.uChar.UnicodeChar };
-                    if event.bKeyDown != 0 && ch != 0 {
+                    let sc = event.wVirtualScanCode;
+                    if event.bKeyDown != 0 && (ch != 0 || sc == 0) {
                         utf16_buf[utf16_buf_len] = MaybeUninit::new(ch);
                         utf16_buf_len += 1;
                     }
@@ -351,15 +364,15 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
     let resize_event_len = if resize_event.is_some() { RESIZE_EVENT_FMT_MAX_LEN } else { 0 };
     // +1 to account for a potential `STATE.leading_surrogate`.
     let utf8_max_len = (utf16_buf_len + 1) * 3;
-    let mut text = ArenaString::new_in(arena);
-    text.reserve(utf8_max_len + resize_event_len);
+    let mut text = BString::empty();
+    text.reserve(arena, utf8_max_len + resize_event_len);
 
     // Now prepend our previously extracted resize event.
     if let Some(resize_event) = resize_event {
         // If I read xterm's documentation correctly, CSI 18 t reports the window size in characters.
         // CSI 8 ; height ; width t is the response. Of course, we didn't send the request,
         // but we can use this fake response to trigger the editor to resize itself.
-        _ = write!(text, "\x1b[8;{};{}t", resize_event.height, resize_event.width);
+        arena_write_fmt!(arena, text, "\x1b[8;{};{}t", resize_event.height, resize_event.width);
     }
 
     // If the input ends with a lone lead surrogate, we need to remember it for the next read.
@@ -396,7 +409,6 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<ArenaStr
         }
     }
 
-    text.shrink_to_fit();
     Some(text)
 }
 
@@ -418,20 +430,6 @@ pub fn write_stdout(text: &str) {
                 break;
             }
         }
-    }
-}
-
-/// Check if the stdin handle is redirected to a file, etc.
-///
-/// # Returns
-///
-/// * `Some(file)` if stdin is redirected.
-/// * Otherwise, `None`.
-pub fn open_stdin_if_redirected() -> Option<File> {
-    unsafe {
-        let handle = Console::GetStdHandle(Console::STD_INPUT_HANDLE);
-        // Did we reopen stdin during `init()`?
-        if !std::ptr::eq(STATE.stdin, handle) { Some(File::from_raw_handle(handle)) } else { None }
     }
 }
 
@@ -475,7 +473,7 @@ impl PartialEq for FileId {
 impl Eq for FileId {}
 
 /// Returns a unique identifier for the given file by handle or path.
-pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
+pub fn file_id(file: Option<&File>, path: &Path) -> io::Result<FileId> {
     let file = match file {
         Some(f) => f,
         None => &File::open(path)?,
@@ -484,7 +482,7 @@ pub fn file_id(file: Option<&File>, path: &Path) -> apperr::Result<FileId> {
     file_id_from_handle(file).or_else(|_| Ok(FileId::Path(std::fs::canonicalize(path)?)))
 }
 
-fn file_id_from_handle(file: &File) -> apperr::Result<FileId> {
+fn file_id_from_handle(file: &File) -> io::Result<FileId> {
     unsafe {
         let mut info = MaybeUninit::<FileSystem::FILE_ID_INFO>::uninit();
         check_bool_return(FileSystem::GetFileInformationByHandleEx(
@@ -516,11 +514,11 @@ pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-unsafe fn get_module(name: *const u16) -> apperr::Result<NonNull<c_void>> {
+unsafe fn get_module(name: *const u16) -> io::Result<NonNull<c_void>> {
     unsafe { check_ptr_return(LibraryLoader::GetModuleHandleW(name)) }
 }
 
-unsafe fn load_library(name: *const u16) -> apperr::Result<NonNull<c_void>> {
+unsafe fn load_library(name: *const u16) -> io::Result<NonNull<c_void>> {
     unsafe {
         check_ptr_return(LibraryLoader::LoadLibraryExW(
             name,
@@ -538,13 +536,10 @@ unsafe fn load_library(name: *const u16) -> apperr::Result<NonNull<c_void>> {
 /// of the function you're loading. No type checks whatsoever are performed.
 //
 // It'd be nice to constrain T to std::marker::FnPtr, but that's unstable.
-pub unsafe fn get_proc_address<T>(
-    handle: NonNull<c_void>,
-    name: *const c_char,
-) -> apperr::Result<T> {
+pub unsafe fn get_proc_address<T>(handle: NonNull<c_void>, name: *const c_char) -> io::Result<T> {
     unsafe {
         let ptr = LibraryLoader::GetProcAddress(handle.as_ptr(), name as *const u8);
-        if let Some(ptr) = ptr { Ok(mem::transmute_copy(&ptr)) } else { Err(get_last_error()) }
+        if let Some(ptr) = ptr { Ok(mem::transmute_copy(&ptr)) } else { Err(last_os_error()) }
     }
 }
 
@@ -553,7 +548,7 @@ pub struct LibIcu {
     pub libicui18n: NonNull<c_void>,
 }
 
-pub fn load_icu() -> apperr::Result<LibIcu> {
+pub fn load_icu() -> io::Result<LibIcu> {
     const fn const_ptr_u16_eq(a: *const u16, b: *const u16) -> bool {
         unsafe {
             let mut a = a;
@@ -585,13 +580,12 @@ pub fn load_icu() -> apperr::Result<LibIcu> {
 }
 
 /// Returns a list of preferred languages for the current user.
-pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
+pub fn preferred_languages<'a>(arena: &'a Arena) -> BVec<'a, &'a str> {
     // If the GetUserPreferredUILanguages() don't fit into 512 characters,
     // honestly, just give up. How many languages do you realistically need?
     const LEN: usize = 512;
 
     let scratch = scratch_arena(Some(arena));
-    let mut res = Vec::new_in(arena);
 
     // Get the list of preferred languages via `GetUserPreferredUILanguages`.
     let langs = unsafe {
@@ -617,102 +611,25 @@ pub fn preferred_languages(arena: &Arena) -> Vec<ArenaString<'_>, &Arena> {
     };
 
     // Convert UTF16 to UTF8.
-    let langs = wide_to_utf8(&scratch, langs);
+    let langs = BString::from_utf16_lossy(arena, langs).leak();
 
     // Split the null-delimited string into individual chunks
     // and copy them into the given arena.
-    res.extend(
-        langs
-            .split_terminator('\0')
-            .filter(|s| !s.is_empty())
-            .map(|s| ArenaString::from_str(arena, s)),
-    );
+    let mut res = BVec::empty();
+    res.extend_sloppy(arena, langs.split_terminator('\0').filter(|s| !s.is_empty()));
     res
 }
 
-fn wide_to_utf8<'a>(arena: &'a Arena, wide: &[u16]) -> ArenaString<'a> {
-    let mut res = ArenaString::new_in(arena);
-    res.reserve(wide.len() * 3);
-
-    let len = unsafe {
-        Globalization::WideCharToMultiByte(
-            Globalization::CP_UTF8,
-            0,
-            wide.as_ptr(),
-            wide.len() as i32,
-            res.as_mut_ptr() as *mut _,
-            res.capacity() as i32,
-            null(),
-            null_mut(),
-        )
-    };
-    if len > 0 {
-        unsafe { res.as_mut_vec().set_len(len as usize) };
-    }
-
-    res.shrink_to_fit();
-    res
-}
-
+#[inline]
 #[cold]
-pub fn get_last_error() -> apperr::Error {
-    unsafe { gle_to_apperr(Foundation::GetLastError()) }
+fn last_os_error() -> io::Error {
+    io::Error::last_os_error()
 }
 
-#[inline]
-const fn gle_to_apperr(gle: u32) -> apperr::Error {
-    apperr::Error::new_sys(if gle == 0 { 0x8000FFFF } else { 0x80070000 | gle })
+fn check_bool_return(ret: BOOL) -> io::Result<()> {
+    if ret == 0 { Err(last_os_error()) } else { Ok(()) }
 }
 
-#[inline]
-pub(crate) fn io_error_to_apperr(err: std::io::Error) -> apperr::Error {
-    gle_to_apperr(err.raw_os_error().unwrap_or(0) as u32)
-}
-
-/// Formats a platform error code into a human-readable string.
-pub fn apperr_format(f: &mut std::fmt::Formatter<'_>, code: u32) -> std::fmt::Result {
-    match code {
-        ERROR_UNSUPPORTED_LEGACY_CONSOLE => {
-            write!(f, "This application does not support the legacy console.")
-        }
-        _ => unsafe {
-            let mut ptr: *mut u8 = null_mut();
-            let len = Debug::FormatMessageA(
-                Debug::FORMAT_MESSAGE_ALLOCATE_BUFFER
-                    | Debug::FORMAT_MESSAGE_FROM_SYSTEM
-                    | Debug::FORMAT_MESSAGE_IGNORE_INSERTS,
-                null(),
-                code,
-                0,
-                &mut ptr as *mut *mut _ as *mut _,
-                0,
-                null_mut(),
-            );
-
-            write!(f, "Error {code:#08x}")?;
-
-            if len > 0 {
-                let msg = str_from_raw_parts(ptr, len as usize);
-                let msg = msg.trim_ascii();
-                let msg = msg.replace(['\r', '\n'], " ");
-                write!(f, ": {msg}")?;
-                Foundation::LocalFree(ptr as *mut _);
-            }
-
-            Ok(())
-        },
-    }
-}
-
-/// Checks if the given error is a "file not found" error.
-pub fn apperr_is_not_found(err: apperr::Error) -> bool {
-    err == gle_to_apperr(Foundation::ERROR_FILE_NOT_FOUND)
-}
-
-fn check_bool_return(ret: BOOL) -> apperr::Result<()> {
-    if ret == 0 { Err(get_last_error()) } else { Ok(()) }
-}
-
-fn check_ptr_return<T>(ret: *mut T) -> apperr::Result<NonNull<T>> {
-    NonNull::new(ret).ok_or_else(get_last_error)
+fn check_ptr_return<T>(ret: *mut T) -> io::Result<NonNull<T>> {
+    NonNull::new(ret).ok_or_else(last_os_error)
 }

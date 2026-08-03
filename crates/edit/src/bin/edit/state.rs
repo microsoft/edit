@@ -10,8 +10,9 @@ use edit::framebuffer::IndexedColor;
 use edit::helpers::*;
 use edit::oklab::StraightRgba;
 use edit::tui::*;
-use edit::{apperr, buffer, icu, sys};
+use edit::{buffer, icu};
 
+use crate::apperr;
 use crate::documents::DocumentManager;
 use crate::localization::*;
 
@@ -27,10 +28,12 @@ impl From<apperr::Error> for FormatApperr {
 impl std::fmt::Display for FormatApperr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
-            apperr::APP_ICU_MISSING => f.write_str(loc(LocId::ErrorIcuMissing)),
-            apperr::Error::App(code) => write!(f, "Unknown app error code: {code}"),
-            apperr::Error::Icu(code) => icu::apperr_format(f, code),
-            apperr::Error::Sys(code) => sys::apperr_format(f, code),
+            apperr::Error::SettingsInvalid(what) => {
+                write!(f, "{}{}", loc(LocId::SettingsInvalid), what)
+            }
+            apperr::Error::Icu(icu::ICU_MISSING_ERROR) => f.write_str(loc(LocId::ErrorIcuMissing)),
+            apperr::Error::Icu(ref err) => err.fmt(f),
+            apperr::Error::Io(ref err) => err.fmt(f),
         }
     }
 }
@@ -152,6 +155,8 @@ pub struct State {
     pub search_options: buffer::SearchOptions,
     pub search_success: bool,
 
+    pub wants_language_picker: bool,
+
     pub wants_encoding_picker: bool,
     pub wants_encoding_change: StateEncodingChange,
     pub encoding_picker_needle: String,
@@ -200,6 +205,8 @@ impl State {
             search_options: Default::default(),
             search_success: true,
 
+            wants_language_picker: false,
+
             wants_encoding_picker: false,
             encoding_picker_needle: Default::default(),
             encoding_picker_results: Default::default(),
@@ -222,6 +229,18 @@ impl State {
             exit: false,
         })
     }
+
+    pub fn add_error(&mut self, err: apperr::Error) -> bool {
+        let msg = format!("{}", FormatApperr::from(err));
+        if msg.is_empty() {
+            return false;
+        }
+
+        self.error_log[self.error_log_index] = msg;
+        self.error_log_index = (self.error_log_index + 1) % self.error_log.len();
+        self.error_log_count = self.error_log.len().min(self.error_log_count + 1);
+        true
+    }
 }
 
 pub fn draw_add_untitled_document(ctx: &mut Context, state: &mut State) {
@@ -231,11 +250,7 @@ pub fn draw_add_untitled_document(ctx: &mut Context, state: &mut State) {
 }
 
 pub fn error_log_add(ctx: &mut Context, state: &mut State, err: apperr::Error) {
-    let msg = format!("{}", FormatApperr::from(err));
-    if !msg.is_empty() {
-        state.error_log[state.error_log_index] = msg;
-        state.error_log_index = (state.error_log_index + 1) % state.error_log.len();
-        state.error_log_count = state.error_log.len().min(state.error_log_count + 1);
+    if state.add_error(err) {
         ctx.needs_rerender();
     }
 }

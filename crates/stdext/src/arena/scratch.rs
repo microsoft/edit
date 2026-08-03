@@ -1,7 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use std::alloc::AllocError;
+use std::io;
+#[cfg(debug_assertions)]
+use std::marker::PhantomData;
 use std::ops::Deref;
 
 #[cfg(debug_assertions)]
@@ -16,7 +18,7 @@ use crate::helpers::*;
 pub struct ScratchArena<'a> {
     arena: debug::Arena,
     offset: usize,
-    _phantom: std::marker::PhantomData<&'a ()>,
+    _phantom: PhantomData<&'a ()>,
 }
 
 #[cfg(not(debug_assertions))]
@@ -29,7 +31,7 @@ pub struct ScratchArena<'a> {
 impl<'a> ScratchArena<'a> {
     fn new(arena: &'a release::Arena) -> Self {
         let offset = arena.offset();
-        ScratchArena { arena: Arena::delegated(arena), _phantom: std::marker::PhantomData, offset }
+        ScratchArena { arena: Arena::delegated(arena), _phantom: PhantomData, offset }
     }
 }
 
@@ -74,7 +76,7 @@ mod single_threaded {
     /// Initialize the scratch arenas with a given capacity.
     /// Call this before using [`scratch_arena`].
     #[allow(dead_code)]
-    pub fn init(capacity: usize) -> Result<(), AllocError> {
+    pub fn init(capacity: usize) -> io::Result<()> {
         unsafe {
             for s in &mut S_SCRATCH[..] {
                 *s = release::Arena::new(capacity)?;
@@ -120,6 +122,7 @@ mod single_threaded {
 mod multi_threaded {
     use std::cell::Cell;
     use std::ptr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
@@ -128,9 +131,14 @@ mod multi_threaded {
             const { [Cell::new(release::Arena::empty()), Cell::new(release::Arena::empty())] };
     }
 
-    /// Does nothing.
+    static INIT_SIZE: AtomicUsize = AtomicUsize::new(128 * MEBI);
+
+    /// Sets the default scratch arena size.
     #[allow(dead_code)]
-    pub fn init(_: usize) -> Result<(), AllocError> {
+    pub fn init(capacity: usize) -> io::Result<()> {
+        if capacity != 0 {
+            INIT_SIZE.store(capacity, Ordering::Relaxed);
+        }
         Ok(())
     }
 
@@ -142,23 +150,24 @@ mod multi_threaded {
 
         #[cold]
         fn init(s: &[Cell<release::Arena>; 2]) {
+            let capacity = INIT_SIZE.load(Ordering::Relaxed);
             for s in s {
-                s.set(release::Arena::new(128 * 1024 * 1024).unwrap());
+                s.set(release::Arena::new(capacity).unwrap());
             }
         }
 
-        S_SCRATCH.with(|s| {
-            let index = ptr::eq(opt_ptr(conflict), s[0].as_ptr()) as usize;
-            let arena = unsafe { &*s[index].as_ptr() };
+        S_SCRATCH.with(|arenas| {
+            let index = ptr::eq(opt_ptr(conflict), arenas[0].as_ptr()) as usize;
+            let arena = unsafe { &*arenas[index].as_ptr() };
             if arena.is_empty() {
-                init(s);
+                init(arenas);
             }
             ScratchArena::new(arena)
         })
     }
 }
 
-#[cfg(test)]
+#[cfg(not(feature = "single-threaded"))]
 pub use multi_threaded::*;
-#[cfg(not(test))]
+#[cfg(feature = "single-threaded")]
 pub use single_threaded::*;

@@ -1,6 +1,6 @@
 name: msedit
 base: core24
-version: '1.2.1'
+version: "2.0.0"
 summary: Edit is an MS-DOS inspired text editor from Microsoft
 description: |
   Edit pays homage to the classic MS-DOS Editor, but with a modern interface and input controls similar to VS Code. Learn more at https://github.com/microsoft/edit
