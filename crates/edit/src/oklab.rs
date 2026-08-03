@@ -12,67 +12,50 @@ use std::fmt::Debug;
 /// A sRGB color with straight (= not premultiplied) alpha.
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct StraightRgba([u8; 4]);
+pub struct StraightRgba(u32);
 
 impl StraightRgba {
     #[inline]
     pub const fn zero() -> Self {
-        StraightRgba([0, 0, 0, 0])
+        StraightRgba(0)
     }
 
+    /// Constructs a color from a packed `0xRRGGBBAA` value, as commonly used in CSS.
     #[inline]
-    pub const fn from_bytes(color: [u8; 4]) -> Self {
-        StraightRgba(color)
+    pub const fn from_rgba(color: u32) -> Self {
+        StraightRgba(color.swap_bytes())
     }
 
+    /// Returns the color as a packed `0xRRGGBBAA` value, as commonly used in CSS.
     #[inline]
-    pub const fn from_le(color: u32) -> Self {
-        StraightRgba(color.to_le_bytes())
+    pub const fn to_rgba(self) -> u32 {
+        self.0.swap_bytes()
     }
 
+    /// Returns the opaque internal representation. Only useful for hashing and comparisons.
     #[inline]
-    pub const fn from_be(color: u32) -> Self {
-        StraightRgba(color.to_be_bytes())
-    }
-
-    #[inline]
-    pub const fn to_ne(self) -> u32 {
-        u32::from_ne_bytes(self.0)
-    }
-
-    #[inline]
-    pub const fn to_le(self) -> u32 {
-        u32::from_le_bytes(self.0)
-    }
-
-    #[inline]
-    pub const fn to_be(self) -> u32 {
-        u32::from_be_bytes(self.0)
-    }
-
-    #[inline]
-    pub const fn to_bytes(self) -> [u8; 4] {
+    pub const fn to_bits(self) -> u32 {
         self.0
     }
 
     #[inline]
-    pub const fn red(self) -> u8 {
-        self.0[0]
+    pub const fn red(self) -> u32 {
+        self.0 & 0xff
     }
 
     #[inline]
-    pub const fn green(self) -> u8 {
-        self.0[1]
+    pub const fn green(self) -> u32 {
+        (self.0 >> 8) & 0xff
     }
 
     #[inline]
-    pub const fn blue(self) -> u8 {
-        self.0[2]
+    pub const fn blue(self) -> u32 {
+        (self.0 >> 16) & 0xff
     }
 
     #[inline]
-    pub const fn alpha(self) -> u8 {
-        self.0[3]
+    pub const fn alpha(self) -> u32 {
+        self.0 >> 24
     }
 
     pub fn oklab_blend(self, top: StraightRgba) -> StraightRgba {
@@ -106,7 +89,7 @@ impl StraightRgba {
 
 impl Debug for StraightRgba {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "#{:02x}{:02x}{:02x}{:02x}", self.red(), self.green(), self.blue(), self.alpha()) // Display as a hex color
+        write!(f, "#{:08x}", self.to_rgba()) // Display as a hex color
     }
 }
 
@@ -156,9 +139,9 @@ impl Oklab {
         let r = linear_to_srgb(r);
         let g = linear_to_srgb(g);
         let b = linear_to_srgb(b);
-        let a = (alpha * 255.0) as u8;
+        let a = (alpha * 255.0) as u32;
 
-        StraightRgba([r, g, b, a])
+        StraightRgba(r | (g << 8) | (b << 16) | (a << 24))
     }
 
     /// Porter-Duff "over" composition. It's for Lab, but it works just like with RGB.
@@ -181,16 +164,16 @@ impl Oklab {
     }
 }
 
-fn srgb_to_linear(c: u8) -> f32 {
+fn srgb_to_linear(c: u32) -> f32 {
     SRGB_TO_RGB_LUT[(c & 0xff) as usize]
 }
 
-fn linear_to_srgb(c: f32) -> u8 {
+fn linear_to_srgb(c: f32) -> u32 {
     (if c > 0.0031308 {
         255.0 * 1.055 * c.powf(1.0 / 2.4) - 255.0 * 0.055
     } else {
         255.0 * 12.92 * c
-    }) as u8
+    }) as u32
 }
 
 #[inline]
@@ -238,20 +221,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parsing() {
-        // Ensure that parsing a 0xRRGGBBAA colour is valid
-        let lower = StraightRgba::from_be(0xAABBCCDD);
-        assert_eq!(lower.red(), 0xAA);
-        assert_eq!(lower.green(), 0xBB);
-        assert_eq!(lower.blue(), 0xCC);
-        assert_eq!(lower.alpha(), 0xDD);
+    fn test_channels() {
+        let c = StraightRgba::from_rgba(0xaabbccdd);
+        assert_eq!(c.red(), 0xaa);
+        assert_eq!(c.green(), 0xbb);
+        assert_eq!(c.blue(), 0xcc);
+        assert_eq!(c.alpha(), 0xdd);
+        assert_eq!(c.to_rgba(), 0xaabbccdd);
     }
 
     #[test]
     fn test_blending() {
-        let lower = StraightRgba::from_be(0x3498dbff);
-        let upper = StraightRgba::from_be(0xe74c3c7f);
-        let expected = StraightRgba::from_be(0xa67f93ff);
+        let lower = StraightRgba::from_rgba(0x3498dbff);
+        let upper = StraightRgba::from_rgba(0xe74c3c7f);
+        let expected = StraightRgba::from_rgba(0xa67f93ff);
         let blended = lower.oklab_blend(upper);
         assert_eq!(blended, expected);
     }

@@ -677,11 +677,11 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
                                 // Round from 16 bits to 8 bits.
                                 val = (val * 0xff + 0x7fff) / 0xffff;
                             }
-                            rgb = (rgb >> 8) | ((val as u32) << 16);
+                            rgb = (rgb << 8) | (val as u32);
                         }
                     }
 
-                    *color = StraightRgba::from_le(rgb | 0xff000000);
+                    *color = StraightRgba::from_rgba(rgb << 8 | 0xff);
                     color_responses += 1;
                     osc_buffer.clear();
                 }

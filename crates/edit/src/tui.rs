@@ -1210,12 +1210,12 @@ impl Tui {
                     result.push_str(arena, "  bordered:     true\r\n");
                 }
 
-                if node.attributes.bg.to_ne() != 0 {
+                if node.attributes.bg.to_bits() != 0 {
                     result.push_repeat(arena, ' ', depth * 2);
                     arena_write_fmt!(arena, result, "  bg:           {:?}\r\n", node.attributes.bg);
                 }
 
-                if node.attributes.fg.to_ne() != 0 {
+                if node.attributes.fg.to_bits() != 0 {
                     result.push_repeat(arena, ' ', depth * 2);
                     arena_write_fmt!(arena, result, "  fg:           {:?}\r\n", node.attributes.fg);
                 }
