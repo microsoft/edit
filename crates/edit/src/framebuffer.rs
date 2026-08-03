@@ -541,7 +541,7 @@ impl Framebuffer {
                 }
 
                 let beg = cfg.cursor().offset;
-                let end = cfg.goto_visual(Point { x: chunk_end as CoordType, y: 0 }).offset;
+                let end = cfg.goto_visual_x(chunk_end as CoordType).offset;
                 result.push_str(arena, &back_line[beg..end]);
 
                 chunk_end < back_bg.len()
@@ -675,12 +675,12 @@ impl LineBuffer {
         // and figure out the parts that are inside.
         let mut left = origin_x;
         if left < 0 {
-            let mut cursor = cfg.goto_visual(Point { x: -left, y: 0 });
+            let mut cursor = cfg.goto_visual_x(-left);
 
             if left + cursor.visual_pos.x < 0 && cursor.offset < text.len() {
-                // `-left` must've intersected a wide glyph and since goto_visual stops _before_ reaching the target,
+                // `-left` must've intersected a wide glyph and since goto_visual_x stops _before_ reaching the target,
                 // we stopped before the wide glyph and thus must step forward to the next glyph.
-                cursor = cfg.goto_logical(Point { x: cursor.logical_pos.x + 1, y: 0 });
+                cursor = cfg.goto_logical_x(cursor.logical_pos.x + 1);
             }
 
             left += cursor.visual_pos.x;
@@ -694,19 +694,19 @@ impl LineBuffer {
 
         // Measure the width of the new text (= `res_new.visual_target.x`).
         let beg_off = cfg.cursor().offset;
-        let end = cfg.goto_visual(Point { x: layout_width, y: 0 });
+        let end = cfg.goto_visual_x(layout_width);
 
         // Figure out at which byte offset the new text gets inserted.
         let right = left + end.visual_pos.x;
         let line_bytes = line.as_bytes();
         let mut cfg_old = MeasurementConfig::new(&line_bytes);
-        let res_old_beg = cfg_old.goto_visual(Point { x: left, y: 0 });
-        let mut res_old_end = cfg_old.goto_visual(Point { x: right, y: 0 });
+        let res_old_beg = cfg_old.goto_visual_x(left);
+        let mut res_old_end = cfg_old.goto_visual_x(right);
 
         // Since the goto functions will always stop short of the target position,
         // we need to manually step beyond it if we intersect with a wide glyph.
         if res_old_end.visual_pos.x < right {
-            res_old_end = cfg_old.goto_logical(Point { x: res_old_end.logical_pos.x + 1, y: 0 });
+            res_old_end = cfg_old.goto_logical_x(res_old_end.logical_pos.x + 1);
         }
 
         // If we intersect a wide glyph, we need to pad the new text with spaces.

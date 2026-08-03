@@ -294,17 +294,26 @@ fn bench_unicode(c: &mut Criterion) {
     );
     let buffer = reference.repeat(10);
     let bytes = buffer.as_bytes();
+    // `MeasurementConfig` stops in front of line feeds, so it needs a single, long line.
+    let single_line = reference.replace('\n', " ").repeat(10);
+    let single_line_bytes = single_line.as_bytes();
 
-    c.benchmark_group("unicode::MeasurementConfig::goto_logical")
+    c.benchmark_group("unicode::MeasurementConfig::goto_logical_x")
+        .throughput(Throughput::Bytes(single_line_bytes.len() as u64))
+        .bench_function("basic", |b| {
+            b.iter(|| {
+                unicode::MeasurementConfig::new(black_box(&single_line_bytes))
+                    .goto_logical_x(CoordType::MAX)
+            })
+        });
+
+    c.benchmark_group("unicode::WordWrapper::next_row")
         .throughput(Throughput::Bytes(bytes.len() as u64))
         .bench_function("basic", |b| {
-            b.iter(|| unicode::MeasurementConfig::new(&bytes).goto_logical(Point::MAX))
-        })
-        .bench_function("word_wrap", |b| {
             b.iter(|| {
-                unicode::MeasurementConfig::new(black_box(&bytes))
-                    .with_word_wrap_column(50)
-                    .goto_logical(Point::MAX)
+                let mut wrapper = unicode::WordWrapper::new(black_box(&bytes), 50);
+                while wrapper.next_row().more {}
+                wrapper.cursor()
             })
         });
 

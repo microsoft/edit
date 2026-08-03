@@ -1075,20 +1075,20 @@ impl Tui {
             match overflow {
                 Overflow::Clip => unreachable!(),
                 Overflow::TruncateHead => {
-                    let beg = cfg.goto_visual(Point { x: actual_width - target_width + 1, y: 0 });
+                    let beg = cfg.goto_visual_x(actual_width - target_width + 1);
                     skipped = 0..beg.offset;
                     skipped_cols = beg.visual_pos.x - 1;
                 }
                 Overflow::TruncateMiddle => {
                     let mid_beg_x = (target_width - 1) / 2;
                     let mid_end_x = actual_width - target_width / 2;
-                    let beg = cfg.goto_visual(Point { x: mid_beg_x, y: 0 });
-                    let end = cfg.goto_visual(Point { x: mid_end_x, y: 0 });
+                    let beg = cfg.goto_visual_x(mid_beg_x);
+                    let end = cfg.goto_visual_x(mid_end_x);
                     skipped = beg.offset..end.offset;
                     skipped_cols = end.visual_pos.x - beg.visual_pos.x - 1;
                 }
                 Overflow::TruncateTail => {
-                    let end = cfg.goto_visual(Point { x: target_width - 1, y: 0 });
+                    let end = cfg.goto_visual_x(target_width - 1);
                     skipped_cols = actual_width - end.visual_pos.x - 1;
                     skipped = end.offset..text.len();
                 }
@@ -2033,7 +2033,7 @@ impl<'a> Context<'a, '_> {
             };
 
             let cursor = unicode::MeasurementConfig::new(&content.text.as_bytes())
-                .goto_visual(Point { x: CoordType::MAX, y: 0 });
+                .goto_visual_x(CoordType::MAX);
             last_node.intrinsic_size.width = cursor.visual_pos.x;
             last_node.intrinsic_size.height = 1;
             last_node.intrinsic_size_set = true;

@@ -498,10 +498,13 @@ impl<'a, 'i> Parser<'a, 'i> {
 
     #[cold]
     fn fail(&self, pos: usize, kind: ParseErrorKind) -> ParseError {
-        let mut cfg = MeasurementConfig::new(&self.bytes);
-        let pos = cfg.goto_offset(pos);
-        let line = pos.logical_pos.y.max(0) as usize + 1;
-        let column = pos.logical_pos.x.max(0) as usize + 1;
+        let head = &self.bytes[..pos];
+        let line_beg = head.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        let line = head.iter().filter(|&&b| b == b'\n').count() + 1;
+        let tail = &self.bytes[line_beg..];
+        let column = MeasurementConfig::new(&tail).goto_offset(pos - line_beg).logical_pos.x.max(0)
+            as usize
+            + 1;
         ParseError { kind, line, column }
     }
 }

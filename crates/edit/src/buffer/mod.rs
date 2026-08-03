@@ -1483,12 +1483,68 @@ impl TextBuffer {
     }
 
     fn measurement_config(&self) -> MeasurementConfig<'_> {
-        MeasurementConfig::new(&self.buffer)
-            .with_word_wrap_column(self.word_wrap_column)
-            .with_tab_size(self.tab_size)
+        MeasurementConfig::new(&self.buffer).with_tab_size(self.tab_size)
     }
 
-    fn goto_line_start(&self, cursor: Cursor, y: CoordType) -> Cursor {
+    fn word_wrapper(&self, cursor: Cursor) -> unicode::WordWrapper<'_> {
+        unicode::WordWrapper::new(&self.buffer, self.word_wrap_column)
+            .with_tab_size(self.tab_size)
+            .with_cursor(cursor)
+    }
+
+    /// Returns the start of the row that `cursor` sits on.
+    ///
+    /// Requires word wrap to be enabled, because otherwise rows are logical lines.
+    fn row_start(&self, cursor: Cursor) -> Cursor {
+        // A `visual_pos.x` of 0 only ever occurs at the start of a row.
+        if cursor.visual_pos.x == 0 {
+            return cursor;
+        }
+
+        // Within a row, `column` grows in lockstep with `visual_pos.x`, which lets
+        // us identify the row we're looking for by the column it starts at. It also
+        // resolves the ambiguity of a cursor that sits exactly on a wrap position.
+        let column = cursor.column - cursor.visual_pos.x;
+
+        let mut line_start = self.seek_line_start(cursor, cursor.logical_pos.y);
+        line_start.logical_pos.x = 0;
+        line_start.visual_pos = Point { x: 0, y: 0 };
+        line_start.column = 0;
+
+        let mut wrapper = self.word_wrapper(line_start);
+        while wrapper.cursor().column < column && wrapper.next_row().more {}
+
+        let mut result = wrapper.cursor();
+        // The row we just found is the one the cursor is on, so it shares its `visual_pos.y`.
+        result.visual_pos = Point { x: 0, y: cursor.visual_pos.y };
+        result
+    }
+
+    /// Lays out rows starting at `beg`, which must be the start of a row, for as
+    /// long as `accept` accepts the start of the following row. Returns the start
+    /// of the last accepted row and the offset at which its text ends.
+    ///
+    /// Requires word wrap to be enabled.
+    fn find_row(
+        &self,
+        mut beg: Cursor,
+        mut accept: impl FnMut(&Cursor) -> bool,
+    ) -> (Cursor, usize) {
+        let mut wrapper = self.word_wrapper(beg);
+        loop {
+            let row = wrapper.next_row();
+            if !row.more || !accept(&wrapper.cursor()) {
+                return (beg, row.end);
+            }
+            beg = wrapper.cursor();
+        }
+    }
+
+    /// Seeks to the start of the logical line `y` using SIMD.
+    ///
+    /// Only `offset` and `logical_pos.y` of the result are meaningful,
+    /// unless the cursor didn't move, in which case it's returned as-is.
+    fn seek_line_start(&self, cursor: Cursor, y: CoordType) -> Cursor {
         let mut result = cursor;
         let mut seek_to_line_start = true;
 
@@ -1528,44 +1584,36 @@ impl TextBuffer {
             }
         }
 
+        result
+    }
+
+    fn goto_line_start(&self, cursor: Cursor, y: CoordType) -> Cursor {
+        let mut result = self.seek_line_start(cursor, y);
         if result.offset == cursor.offset {
             return result;
         }
 
         result.logical_pos.x = 0;
-        result.visual_pos.x = 0;
-        result.visual_pos.y = result.logical_pos.y;
+        result.visual_pos = Point { x: 0, y: result.logical_pos.y };
         result.column = 0;
-        result.wrap_opp = false;
 
+        // Without word wrap, logical and visual lines are one and the same. With it,
+        // the only way to know the row index is to lay out everything in between.
         if self.word_wrap_column > 0 {
-            let upward = result.offset < cursor.offset;
-            let (top, bottom) = if upward { (result, cursor) } else { (cursor, result) };
-
-            let mut bottom_remeasured =
-                self.measurement_config().with_cursor(top).goto_logical(bottom.logical_pos);
-
-            // The second problem is that visual positions can be ambiguous. A single logical position
-            // can map to two visual positions: One at the end of the preceding line in front of
-            // a word wrap, and another at the start of the next line after the same word wrap.
-            //
-            // This, however, only applies if we go upwards, because only then `bottom ≅ cursor`,
-            // and thus only then this `bottom` is ambiguous. Otherwise, `bottom ≅ result`
-            // and `result` is at a line start which is never ambiguous.
-            if upward {
-                let a = bottom_remeasured.visual_pos.x;
-                let b = bottom.visual_pos.x;
-                bottom_remeasured.visual_pos.y = bottom_remeasured.visual_pos.y
-                    + (a != 0 && b == 0) as CoordType
-                    - (a == 0 && b != 0) as CoordType;
+            let anchor = self.row_start(cursor);
+            if result.offset > anchor.offset {
+                let mut wrapper = self.word_wrapper(anchor);
+                while wrapper.cursor().offset < result.offset && wrapper.next_row().more {}
+                result.visual_pos.y = wrapper.cursor().visual_pos.y;
+            } else {
+                // We're seeking backwards, so we have to count the rows in between
+                // and subtract them from where we came from.
+                let mut probe = result;
+                probe.visual_pos.y = 0;
+                let mut wrapper = self.word_wrapper(probe);
+                while wrapper.cursor().offset < anchor.offset && wrapper.next_row().more {}
+                result.visual_pos.y = anchor.visual_pos.y - wrapper.cursor().visual_pos.y;
             }
-
-            let mut delta = bottom_remeasured.visual_pos.y - top.visual_pos.y;
-            if upward {
-                delta = -delta;
-            }
-
-            result.visual_pos.y = cursor.visual_pos.y + delta;
         }
 
         result
@@ -1576,26 +1624,43 @@ impl TextBuffer {
             return cursor;
         }
 
-        // goto_line_start() is fast for seeking across lines _if_ line wrapping is disabled.
-        // For backward seeking we have to use it either way, so we're covered there.
-        // This implements the forward seeking portion, if it's approx. worth doing so.
-        if self.word_wrap_column <= 0 && offset.saturating_sub(cursor.offset) > 1024 {
-            // Replacing this with a more optimal, direct memchr() loop appears
-            // to improve performance only marginally by another 2% or so.
-            // Still, it's kind of "meh" looking at how poorly this is implemented...
-            loop {
-                let next = self.goto_line_start(cursor, cursor.logical_pos.y + 1);
-                // Stop when we either ran past the target offset,
-                // or when we hit the end of the buffer and `goto_line_start` backtracked to the line start.
-                if next.offset > offset || next.offset <= cursor.offset {
-                    break;
-                }
-                cursor = next;
-            }
+        // Neither of the two measurement primitives can seek backwards,
+        // so we hop backwards line by line until we're in front of the target.
+        while offset < cursor.offset {
+            let y = cursor.logical_pos.y - (cursor.logical_pos.x == 0) as CoordType;
+            cursor = self.goto_line_start(cursor, y);
         }
 
-        while offset < cursor.offset {
-            cursor = self.goto_line_start(cursor, cursor.logical_pos.y - 1);
+        if self.word_wrap_column > 0 {
+            let (beg, end) = self.find_row(self.row_start(cursor), |c| c.offset <= offset);
+            return self
+                .measurement_config()
+                .with_cursor(beg)
+                .with_end_offset(end)
+                .goto_offset(offset);
+        }
+
+        // `measure_forward` stops in front of line feeds, so we first skip past
+        // all lines in between. Bounding the search by the target offset ensures
+        // that a short hop doesn't scan an arbitrarily long line.
+        let mut probe = cursor.offset;
+        while probe < offset {
+            let chunk = self.read_forward(probe);
+            if chunk.is_empty() {
+                break;
+            }
+
+            let chunk = &chunk[..chunk.len().min(offset - probe)];
+            let (_, lines) = simd::lines_fwd(chunk, 0, 0, CoordType::MAX);
+            if lines > 0 {
+                let (delta, _) = simd::lines_bwd(chunk, chunk.len(), lines, lines);
+                cursor.offset = probe + delta;
+                cursor.logical_pos = Point { x: 0, y: cursor.logical_pos.y + lines };
+                cursor.visual_pos = cursor.logical_pos;
+                cursor.column = 0;
+            }
+
+            probe += chunk.len();
         }
 
         self.measurement_config().with_cursor(cursor).goto_offset(offset)
@@ -1610,12 +1675,22 @@ impl TextBuffer {
 
         // goto_line_start() is the fastest way for seeking across lines. As such we always
         // use it if the requested `.y` position is different. We still need to use it if the
-        // `.x` position is smaller, but only because `goto_logical()` cannot seek backwards.
+        // `.x` position is smaller, but only because measuring cannot seek backwards.
         if pos.y != cursor.logical_pos.y || pos.x < cursor.logical_pos.x {
             cursor = self.goto_line_start(cursor, pos.y);
         }
 
-        self.measurement_config().with_cursor(cursor).goto_logical(pos)
+        if self.word_wrap_column <= 0 {
+            // If the requested line doesn't exist, we stop at the end of the document.
+            let x = if cursor.logical_pos.y < pos.y { CoordType::MAX } else { pos.x };
+            return self.measurement_config().with_cursor(cursor).goto_logical_x(x);
+        }
+
+        // A logical position that falls onto a wrap position belongs to the row that
+        // follows it, because that's where the grapheme cluster is actually drawn.
+        let (beg, end) = self.find_row(self.row_start(cursor), |c| c.logical_pos <= pos);
+        let x = if beg.logical_pos.y < pos.y { CoordType::MAX } else { pos.x };
+        self.measurement_config().with_cursor(beg).with_end_offset(end).goto_logical_x(x)
     }
 
     fn cursor_move_to_visual_internal(&self, mut cursor: Cursor, pos: Point) -> Cursor {
@@ -1630,19 +1705,21 @@ impl TextBuffer {
             if pos.y != cursor.visual_pos.y || pos.x < cursor.visual_pos.x {
                 cursor = self.goto_line_start(cursor, pos.y);
             }
-        } else {
-            // `goto_visual()` can only seek forward, so we need to seek backward here if needed.
-            // NOTE that this intentionally doesn't use the `Eq` trait of `Point`, because if
-            // `pos.y == cursor.visual_pos.y` we don't need to go to `cursor.logical_pos.y - 1`.
-            while pos.y < cursor.visual_pos.y {
-                cursor = self.goto_line_start(cursor, cursor.logical_pos.y - 1);
-            }
-            if pos.y == cursor.visual_pos.y && pos.x < cursor.visual_pos.x {
-                cursor = self.goto_line_start(cursor, cursor.logical_pos.y);
-            }
+            let x = if cursor.visual_pos.y < pos.y { CoordType::MAX } else { pos.x };
+            return self.measurement_config().with_cursor(cursor).goto_visual_x(x);
         }
 
-        self.measurement_config().with_cursor(cursor).goto_visual(pos)
+        // Rows can only be laid out forwards, so we hop backwards line by line
+        // until we're at or above the row we're looking for.
+        cursor = self.row_start(cursor);
+        while pos.y < cursor.visual_pos.y && cursor.offset != 0 {
+            let y = cursor.logical_pos.y - (cursor.logical_pos.x == 0) as CoordType;
+            cursor = self.goto_line_start(cursor, y);
+        }
+
+        let (beg, end) = self.find_row(cursor, |c| c.visual_pos.y <= pos.y);
+        let x = if beg.visual_pos.y < pos.y { CoordType::MAX } else { pos.x };
+        self.measurement_config().with_cursor(beg).with_end_offset(end).goto_visual_x(x)
     }
 
     fn cursor_move_delta_internal(
@@ -1808,6 +1885,8 @@ impl TextBuffer {
             Some(TextBufferSelection { beg, end }) => minmax(beg, end),
         };
 
+        let mut logical_y_end = cursor.logical_pos.y + 1;
+
         for y in 0..height {
             let scratch = scratch_arena(None);
             let mut line = BString::empty();
@@ -1825,6 +1904,11 @@ impl TextBuffer {
             if y == 0 {
                 self.cursor_for_rendering = Some(cursor_beg);
             }
+
+            // The next row starts its search here. `cursor_beg` sits at the start of a
+            // row, which lets the search skip figuring that out all over again.
+            cursor = cursor_beg;
+            logical_y_end = cursor_end.logical_pos.y + 1;
 
             if line_number_width != 0 {
                 if visual_line >= self.stats.visual_lines {
@@ -1877,7 +1961,10 @@ impl TextBuffer {
                 && selection_beg <= cursor_end.logical_pos
                 && selection_end >= cursor_beg.logical_pos
             {
-                let mut cursor = cursor_beg;
+                let mut cfg = self
+                    .measurement_config()
+                    .with_cursor(cursor_beg)
+                    .with_end_offset(cursor_end.offset);
 
                 // By default, we assume the entire line is selected.
                 let mut selection_pos_beg = 0;
@@ -1889,7 +1976,7 @@ impl TextBuffer {
                 if selection_beg <= cursor_end.logical_pos
                     && selection_beg >= cursor_beg.logical_pos
                 {
-                    cursor = self.cursor_move_to_logical_internal(cursor, selection_beg);
+                    let cursor = cfg.goto_logical_x(selection_beg.x);
                     selection_off.start = cursor.offset;
                     selection_pos_beg = cursor.visual_pos.x;
                 }
@@ -1898,7 +1985,7 @@ impl TextBuffer {
                 if selection_end <= cursor_end.logical_pos
                     && selection_end >= cursor_beg.logical_pos
                 {
-                    cursor = self.cursor_move_to_logical_internal(cursor, selection_end);
+                    let cursor = cfg.goto_logical_x(selection_end.x);
                     selection_off.end = cursor.offset;
                     selection_pos_end = cursor.visual_pos.x;
                 }
@@ -1946,6 +2033,10 @@ impl TextBuffer {
 
                 let mut global_off = cursor_beg.offset;
                 let mut cursor_line = cursor_beg;
+                let mut cfg = self
+                    .measurement_config()
+                    .with_cursor(cursor_beg)
+                    .with_end_offset(cursor_end.offset);
 
                 while global_off < cursor_end.offset {
                     let chunk = self.read_forward(global_off);
@@ -1970,9 +2061,7 @@ impl TextBuffer {
                             if is_tab || visualize {
                                 // We need the character's visual position in order to either compute the tab size,
                                 // or set the foreground color of the visualizer, respectively.
-                                // TODO: Doing this char-by-char is of course also bad for performance.
-                                cursor_line =
-                                    self.cursor_move_to_offset_internal(cursor_line, global_off);
+                                cursor_line = cfg.goto_offset(global_off);
                             }
 
                             let tab_size =
@@ -2019,8 +2108,7 @@ impl TextBuffer {
                             });
 
                             // Highlight the control character yellow.
-                            cursor_line =
-                                self.cursor_move_to_offset_internal(cursor_line, global_off);
+                            cursor_line = cfg.goto_offset(global_off);
                             let visualizer_rect = {
                                 let left =
                                     destination.left + self.margin_width + cursor_line.visual_pos.x
@@ -2044,12 +2132,9 @@ impl TextBuffer {
             }
 
             fb.replace_text(destination.top + y, destination.left, destination.right, &line);
-
-            cursor = cursor_end;
         }
 
         let logical_y_beg = self.cursor_for_rendering.unwrap().logical_pos.y;
-        let logical_y_end = cursor.logical_pos.y + 1;
         self.render_apply_highlights(origin, destination, logical_y_beg..logical_y_end, fb);
 
         // Colorize the margin that we wrote above.
@@ -2921,7 +3006,7 @@ impl TextBuffer {
             let target = self.cursor.logical_pos;
 
             // From our safe position we can measure the actual visual position of the cursor.
-            self.set_cursor_internal(self.cursor_move_to_logical_internal(info.safe_start, target));
+            let cursor = self.cursor_move_to_logical_internal(info.safe_start, target);
 
             // If content is added at the insertion position, that's not a problem:
             // We can just remeasure the height of this one line and calculate the delta.
@@ -2932,15 +3017,17 @@ impl TextBuffer {
             // the entire buffer contents until the end to compute `self.stats.visual_lines`.
             if deleted_count < info.distance_next_line_start {
                 // Now we can measure how many more visual rows this logical line spans.
-                let next_line = self
-                    .cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: target.y + 1 });
+                let next_line =
+                    self.cursor_move_to_logical_internal(cursor, Point { x: 0, y: target.y + 1 });
                 let lines_before = info.line_height_in_rows;
                 let lines_after = next_line.visual_pos.y - info.safe_start.visual_pos.y;
                 self.stats.visual_lines += lines_after - lines_before;
             } else {
-                let end = self.cursor_move_to_logical_internal(self.cursor, Point::MAX);
+                let end = self.cursor_move_to_logical_internal(cursor, Point::MAX);
                 self.stats.visual_lines = end.visual_pos.y + 1;
             }
+
+            self.set_cursor_internal(cursor);
         } else {
             // If word-wrap is disabled the visual line count always matches the logical one.
             self.stats.visual_lines = self.stats.logical_lines;
