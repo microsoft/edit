@@ -100,6 +100,17 @@ impl Charset {
         }
     }
 
+    /// Adds the opposite case of every ASCII letter in the set.
+    pub fn fold_case(&mut self) {
+        for lower in b'a'..=b'z' {
+            let upper = lower.to_ascii_uppercase();
+            if self.get(lower) || self.get(upper) {
+                self.set(lower, true);
+                self.set(upper, true);
+            }
+        }
+    }
+
     pub fn is_superset_of(&self, other: &Charset) -> bool {
         for (&s, &o) in self.bits.iter().zip(other.bits.iter()) {
             // For self to be a superset, every bit in other must be in self

@@ -1216,12 +1216,12 @@ impl Tui {
                     result.push_str(arena, "  bordered:     true\r\n");
                 }
 
-                if node.attributes.bg.to_ne() != 0 {
+                if node.attributes.bg.to_rgba() != 0 {
                     result.push_repeat(arena, ' ', depth * 2);
                     arena_write_fmt!(arena, result, "  bg:           {:?}\r\n", node.attributes.bg);
                 }
 
-                if node.attributes.fg.to_ne() != 0 {
+                if node.attributes.fg.to_rgba() != 0 {
                     result.push_repeat(arena, ' ', depth * 2);
                     arena_write_fmt!(arena, result, "  fg:           {:?}\r\n", node.attributes.fg);
                 }
@@ -2263,11 +2263,19 @@ impl<'a> Context<'a, '_> {
         {
             let mouse = self.tui.mouse_position;
             let inner = node_prev.inner;
-            let text_rect = Rect {
-                left: inner.left + tb.margin_width(),
+            let select_rect = Rect {
+                left: inner.left,
                 top: inner.top,
+                // Multi-line areas have a 1-column scrollbar on the right.
                 right: inner.right - !single_line as CoordType,
                 bottom: inner.bottom,
+            };
+            let text_rect = Rect {
+                // The text area has a left margin for line numbers.
+                left: select_rect.left + tb.margin_width(),
+                top: select_rect.top,
+                right: select_rect.right,
+                bottom: select_rect.bottom,
             };
             let track_rect = Rect {
                 left: text_rect.right,
@@ -2280,7 +2288,7 @@ impl<'a> Context<'a, '_> {
                 y: mouse.y - inner.top + tc.scroll_offset.y,
             };
 
-            if text_rect.contains(self.tui.mouse_down_position) {
+            if select_rect.contains(self.tui.mouse_down_position) {
                 if self.tui.mouse_is_drag {
                     tb.selection_update_visual(pos);
                     tc.preferred_column = tb.cursor_visual_pos().x;
@@ -2319,6 +2327,17 @@ impl<'a> Context<'a, '_> {
                         if delta_x != 0 || delta_y != 0 {
                             self.tui.read_timeout = time::Duration::from_millis(25);
                         }
+                    }
+                } else if !text_rect.contains(self.tui.mouse_down_position) {
+                    if self.tui.mouse_state == InputMouseState::Left {
+                        let y = if tb.is_word_wrap_enabled() {
+                            tb.cursor_move_to_visual(Point { x: 0, y: pos.y });
+                            tb.cursor_logical_pos().y
+                        } else {
+                            pos.y
+                        };
+                        tb.cursor_move_to_logical(Point { x: 0, y });
+                        tb.selection_update_logical(Point { x: 0, y: y + 1 });
                     }
                 } else {
                     match self.input_mouse_click {

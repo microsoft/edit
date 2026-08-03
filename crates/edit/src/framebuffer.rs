@@ -66,25 +66,25 @@ pub const INDEXED_COLORS_COUNT: usize = 18;
 
 /// Fallback theme. Matches Windows Terminal's Ottosson theme.
 pub const DEFAULT_THEME: [StraightRgba; INDEXED_COLORS_COUNT] = [
-    StraightRgba::from_be(0x000000ff), // Black
-    StraightRgba::from_be(0xbe2c21ff), // Red
-    StraightRgba::from_be(0x3fae3aff), // Green
-    StraightRgba::from_be(0xbe9a4aff), // Yellow
-    StraightRgba::from_be(0x204dbeff), // Blue
-    StraightRgba::from_be(0xbb54beff), // Magenta
-    StraightRgba::from_be(0x00a7b2ff), // Cyan
-    StraightRgba::from_be(0xbebebeff), // White
-    StraightRgba::from_be(0x808080ff), // BrightBlack
-    StraightRgba::from_be(0xff3e30ff), // BrightRed
-    StraightRgba::from_be(0x58ea51ff), // BrightGreen
-    StraightRgba::from_be(0xffc944ff), // BrightYellow
-    StraightRgba::from_be(0x2f6affff), // BrightBlue
-    StraightRgba::from_be(0xfc74ffff), // BrightMagenta
-    StraightRgba::from_be(0x00e1f0ff), // BrightCyan
-    StraightRgba::from_be(0xffffffff), // BrightWhite
+    StraightRgba::from_rgba(0x000000ff), // Black
+    StraightRgba::from_rgba(0xbe2c21ff), // Red
+    StraightRgba::from_rgba(0x3fae3aff), // Green
+    StraightRgba::from_rgba(0xbe9a4aff), // Yellow
+    StraightRgba::from_rgba(0x204dbeff), // Blue
+    StraightRgba::from_rgba(0xbb54beff), // Magenta
+    StraightRgba::from_rgba(0x00a7b2ff), // Cyan
+    StraightRgba::from_rgba(0xbebebeff), // White
+    StraightRgba::from_rgba(0x808080ff), // BrightBlack
+    StraightRgba::from_rgba(0xff3e30ff), // BrightRed
+    StraightRgba::from_rgba(0x58ea51ff), // BrightGreen
+    StraightRgba::from_rgba(0xffc944ff), // BrightYellow
+    StraightRgba::from_rgba(0x2f6affff), // BrightBlue
+    StraightRgba::from_rgba(0xfc74ffff), // BrightMagenta
+    StraightRgba::from_rgba(0x00e1f0ff), // BrightCyan
+    StraightRgba::from_rgba(0xffffffff), // BrightWhite
     // --------
-    StraightRgba::from_be(0x000000ff), // Background
-    StraightRgba::from_be(0xbebebeff), // Foreground
+    StraightRgba::from_rgba(0x000000ff), // Background
+    StraightRgba::from_rgba(0xbebebeff), // Foreground
 ];
 
 /// A shoddy framebuffer for terminal applications.
@@ -176,7 +176,7 @@ impl Framebuffer {
 
             let front = &mut self.buffers[self.frame_counter & 1];
             // Trigger a full redraw. (Yes, it's a hack.)
-            front.fg_bitmap.fill(StraightRgba::from_le(1));
+            front.fg_bitmap.fill(StraightRgba::from_rgba(0x01000000));
             // Trigger a cursor update as well, just to be sure.
             front.cursor = Cursor::new_invalid();
         }
@@ -345,21 +345,21 @@ impl Framebuffer {
         numerator: u32,
         denominator: u32,
     ) -> StraightRgba {
-        let c = self.indexed_colors[index as usize].to_le();
+        let c = self.indexed_colors[index as usize].to_rgba();
         let a = 255 * numerator / denominator;
-        StraightRgba::from_le(a << 24 | (c & 0x00ffffff))
+        StraightRgba::from_rgba((c & 0xffffff00) | a)
     }
 
     /// Returns a color opposite to the brightness of the given `color`.
     pub fn contrasted(&self, color: StraightRgba) -> StraightRgba {
-        let idx = (color.to_ne() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
+        let idx = (color.to_rgba() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
         let slot = self.contrast_colors[idx].get();
         if slot.0 == color { slot.1 } else { self.contrasted_slow(color) }
     }
 
     #[cold]
     fn contrasted_slow(&self, color: StraightRgba) -> StraightRgba {
-        let idx = (color.to_ne() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
+        let idx = (color.to_rgba() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
         let is_dark = color.as_oklab().lightness() < self.auto_color_threshold;
         let contrast = self.auto_colors[is_dark as usize];
         self.contrast_colors[idx].set((color, contrast));
@@ -497,13 +497,13 @@ impl Framebuffer {
                         && back_attr[chunk_end] == attr
                 } {}
 
-                if last_bg != bg.to_ne() as u64 {
-                    last_bg = bg.to_ne() as u64;
+                if last_bg != bg.to_rgba() as u64 {
+                    last_bg = bg.to_rgba() as u64;
                     self.format_color(arena, &mut result, false, bg);
                 }
 
-                if last_fg != fg.to_ne() as u64 {
-                    last_fg = fg.to_ne() as u64;
+                if last_fg != fg.to_rgba() as u64 {
+                    last_fg = fg.to_rgba() as u64;
                     self.format_color(arena, &mut result, true, fg);
                 }
 
@@ -595,7 +595,7 @@ impl Framebuffer {
         // the output slightly and ensures that we keep "default foreground"
         // and "color that happens to be default foreground" separate.
         // (This also applies to the background color by the way.)
-        if color.to_ne() == 0 {
+        if color.to_rgba() == 0 {
             arena_write_fmt!(arena, dst, "\x1b[{typ}9m");
             return;
         }

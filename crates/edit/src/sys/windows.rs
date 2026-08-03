@@ -335,7 +335,8 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
                 Console::KEY_EVENT => {
                     let event = unsafe { &inp.Event.KeyEvent };
                     let ch = unsafe { event.uChar.UnicodeChar };
-                    if event.bKeyDown != 0 && ch != 0 {
+                    let sc = event.wVirtualScanCode;
+                    if event.bKeyDown != 0 && (ch != 0 || sc == 0) {
                         utf16_buf[utf16_buf_len] = MaybeUninit::new(ch);
                         utf16_buf_len += 1;
                     }
