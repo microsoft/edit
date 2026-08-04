@@ -16,7 +16,9 @@ pub fn memchr2(needle1: u8, needle2: u8, haystack: &[u8], offset: usize) -> usiz
         let end = beg.add(haystack.len());
         let it = beg.add(offset.min(haystack.len()));
         let it = memchr2_raw(needle1, needle2, it, end);
-        it.offset_from_unsigned(beg)
+        let offset = it.offset_from_unsigned(beg);
+        std::hint::assert_unchecked(offset <= haystack.len());
+        offset
     }
 }
 
@@ -195,7 +197,7 @@ unsafe fn memchr2_neon(needle1: u8, needle2: u8, mut beg: *const u8, end: *const
             let n2 = vdupq_n_u8(needle2);
 
             loop {
-                let v = vld1q_u8(beg as *const _);
+                let v = vld1q_u8(beg.cast());
                 let a = vceqq_u8(v, n1);
                 let b = vceqq_u8(v, n2);
                 let c = vorrq_u8(a, b);

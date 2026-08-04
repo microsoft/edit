@@ -228,7 +228,7 @@ impl Allocator for Arena {
             // Otherwise, we have to allocate a new area and copy it over.
             unsafe {
                 let new_ptr = self.alloc_raw(new_size, align);
-                ptr::copy_nonoverlapping(old_ptr.as_ptr(), new_ptr.as_ptr() as *mut _, old_size);
+                ptr::copy_nonoverlapping(old_ptr.as_ptr(), new_ptr.as_ptr().cast(), old_size);
                 new_ptr
             }
         } else {

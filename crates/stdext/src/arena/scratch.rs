@@ -134,6 +134,7 @@ mod multi_threaded {
     static INIT_SIZE: AtomicUsize = AtomicUsize::new(128 * MEBI);
 
     /// Sets the default scratch arena size.
+    #[allow(dead_code)]
     pub fn init(capacity: usize) -> io::Result<()> {
         if capacity != 0 {
             INIT_SIZE.store(capacity, Ordering::Relaxed);

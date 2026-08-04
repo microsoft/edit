@@ -1,0 +1,57 @@
+#[display_name = "Odin"]
+#[path = "**/*.odin"]
+pub fn odin() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /`/ {
+            loop {
+                yield string;
+                if /`/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /'/ {
+            single_quote_string();
+        } else if /"/ {
+            double_quote_string();
+        } else if /(?:break|case|continue|defer|do|else|fallthrough|for|if|in|not_in|or_break|or_continue|or_else|or_return|return|switch|when|where)\>/ {
+            yield keyword.control;
+        } else if /(?:asm|auto_cast|bit_field|bit_set|cast|context|distinct|dynamic|enum|foreign|import|map|matrix|package|proc|struct|transmute|union|using)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|nil)\>/ {
+            yield constant.language;
+        } else if /(?:any|bool|complex(?:32|64|128)|cstring|int|quaternion(?:64|128|256)|rawptr|rune|string|typeid|uintptr|uint|(?:[iu](?:8|16|32|64|128)|f(?:16|32|64)|b(?:8|16|32|64))(?:be|le)?)\>/ {
+            yield storage.type;
+        } else if /-?(?:0[xh][\da-fA-F_]+|0b[01_]+|0o[0-7_]+|\d[\d_]*\.[\d_]+|\d[\d_]*|\.\d[\d_]*)(?:[eE][+-]?[\d_]+)?[ijk]?/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /#\+?\w+/ {
+            yield keyword.other;
+        } else if /@\w*/ {
+            yield storage.annotation;
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
