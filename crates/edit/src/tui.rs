@@ -629,6 +629,7 @@ impl Tui {
                     // no matter whether the click was inside it or not.
                     if matches!(root.borrow().content, NodeContent::Modal(_)) {
                         break;
+                    }
                 }
 
                 // Update the hovered path and trigger redraw if it changed
