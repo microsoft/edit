@@ -161,6 +161,7 @@ pub mod vk {
     pub const Y: InputKey = InputKey::new('Y' as u32);
     pub const Z: InputKey = InputKey::new('Z' as u32);
 
+    pub const APPS: InputKey = InputKey::new(0x5D);
     pub const NUMPAD0: InputKey = InputKey::new(0x60);
     pub const NUMPAD1: InputKey = InputKey::new(0x61);
     pub const NUMPAD2: InputKey = InputKey::new(0x62);
@@ -212,11 +213,19 @@ pub mod kbmod {
     pub const CTRL: InputKeyMod = InputKeyMod::new(0x01000000);
     pub const ALT: InputKeyMod = InputKeyMod::new(0x02000000);
     pub const SHIFT: InputKeyMod = InputKeyMod::new(0x04000000);
+    pub const SUPER: InputKeyMod = InputKeyMod::new(0x08000000);
 
     pub const CTRL_ALT: InputKeyMod = InputKeyMod::new(0x03000000);
     pub const CTRL_SHIFT: InputKeyMod = InputKeyMod::new(0x05000000);
     pub const ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x06000000);
     pub const CTRL_ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x07000000);
+    pub const SUPER_CTRL: InputKeyMod = InputKeyMod::new(0x09000000);
+    pub const SUPER_ALT: InputKeyMod = InputKeyMod::new(0x0A000000);
+    pub const SUPER_CTRL_ALT: InputKeyMod = InputKeyMod::new(0x0B000000);
+    pub const SUPER_SHIFT: InputKeyMod = InputKeyMod::new(0x0C000000);
+    pub const SUPER_CTRL_SHIFT: InputKeyMod = InputKeyMod::new(0x0D000000);
+    pub const SUPER_ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x0E000000);
+    pub const SUPER_CTRL_ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x0F000000);
 }
 
 /// Mouse input state. Up/Down, Left/Right, etc.
@@ -467,7 +476,6 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                                 57385 => Some(vk::F22),
                                 57386 => Some(vk::F23),
                                 57387 => Some(vk::F24),
-                                57388 ..= 57398 => None, // Ignore F25-F35
 
                                 // Number pad keys
                                 57399 => Some(vk::NUMPAD0),
@@ -498,6 +506,7 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                                 57424 => Some(vk::END),
                                 57425 => Some(vk::INSERT),
                                 57426 => Some(vk::DELETE),
+                                57363 => Some(vk::APPS), // Menu
 
                                 // Keys to Ignore
                                 57358 => None, // Caps Lock
@@ -505,7 +514,7 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                                 57360 => None, // Num Lock
                                 57361 => None, // Print Screen
                                 57362 => None, // Pause
-                                57363 => None, // Menu
+                                57388 ..= 57398 => None, // F25-F35
                                 57428 ..= 57440 => None, // Media and Volume
                                 57441 ..= 57454 => None, // Left/Right Modifiers
 
@@ -603,6 +612,9 @@ impl<'input> Stream<'_, '_, 'input> {
         }
         if (p1 & 0x04) != 0 {
             modifiers |= kbmod::CTRL;
+        }
+        if (p1 & 0x08) != 0 {
+            modifiers |= kbmod::SUPER;
         }
         modifiers
     }
