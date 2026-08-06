@@ -363,8 +363,8 @@ pub struct Tui {
     /// need to scroll the node into view if it's within a scrollarea.
     focused_node_for_scrolling: u64,
 
-    /// Tracks the node ID of the menubar button that opened the current menu.
-    /// Used to implement toggle-close: clicking the same button again closes the menu.
+    /// The menubar button whose menu is open and can be closed by clicking it again.
+    /// Only set once the press that opened the menu has ended.
     menubar_toggle_id: u64,
 
     /// A list of cached text buffers used for [`Context::editline()`].
@@ -3214,20 +3214,16 @@ impl<'a> Context<'a, '_> {
             && self.consume_shortcut(kbmod::ALT | InputKey::new(accelerator as u32));
 
         let button_id = self.tree.last_node.borrow().id;
-        let mouse_clicked = self.input_mouse_click != 0 && self.button_activated();
 
-        if mouse_clicked && self.tui.menubar_toggle_id == button_id {
+        if self.button_activated() && self.tui.menubar_toggle_id == button_id {
             self.tui.menubar_toggle_id = 0;
-            self.tui.pop_focusable_node(1);
-
+            self.toss_focus_up();
             return false;
         }
 
-        if mouse_clicked {
-            self.tui.menubar_toggle_id = button_id;
-        }
-
         if contains_focus || keyboard_focus {
+            // Arming this only while no button is held keeps the press
+            // that opened the menu from closing it again right away.
             if self.tui.mouse_state != InputMouseState::Left {
                 self.tui.menubar_toggle_id = button_id;
             }
