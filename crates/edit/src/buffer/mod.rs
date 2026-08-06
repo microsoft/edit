@@ -2060,7 +2060,7 @@ impl TextBuffer {
                 right: destination.left + self.margin_width,
                 bottom: destination.bottom,
             };
-            fb.blend_fg(margin, StraightRgba::from_le(0x7f7f7f7f));
+            fb.blend_fg(margin, StraightRgba::from_rgba(0x7f7f7f7f));
         }
 
         if self.ruler > 0 {
@@ -2108,7 +2108,7 @@ impl TextBuffer {
                             right: destination.right,
                             bottom: cursor.y + 1,
                         },
-                        StraightRgba::from_le(0x7f7f7f7f),
+                        StraightRgba::from_rgba(0x7f7f7f7f),
                     );
                 }
             }
@@ -2177,6 +2177,7 @@ impl TextBuffer {
                     HighlightKind::ConstantNumeric => Some(IndexedColor::BrightGreen),
                     HighlightKind::KeywordControl => Some(IndexedColor::BrightMagenta),
                     HighlightKind::KeywordOther => Some(IndexedColor::BrightBlue),
+                    HighlightKind::KeywordPreprocessor => Some(IndexedColor::BrightBlue),
                     HighlightKind::MarkupBold => None,
                     HighlightKind::MarkupChanged => Some(IndexedColor::BrightBlue),
                     HighlightKind::MarkupDeleted => Some(IndexedColor::BrightRed),
@@ -2187,6 +2188,8 @@ impl TextBuffer {
                     HighlightKind::MarkupList => Some(IndexedColor::BrightBlue),
                     HighlightKind::MarkupStrikethrough => None,
                     HighlightKind::MetaHeader => Some(IndexedColor::BrightBlue),
+                    HighlightKind::StorageAnnotation => Some(IndexedColor::Cyan),
+                    HighlightKind::StorageType => Some(IndexedColor::Cyan),
                 };
                 let attr = match curr.kind {
                     HighlightKind::MarkupBold => Some(Attributes::Bold),

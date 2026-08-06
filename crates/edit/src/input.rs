@@ -333,7 +333,12 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                     return Some(Input::Text(text));
                 }
                 vt::Token::Ctrl(ch) => match ch {
-                    '\0' | '\t' | '\r' => return Some(Input::Keyboard(InputKey::new(ch as u32))),
+                    '\0' => {
+                        // Both Ctrl+Space and Ctrl+Shift+2 produce \0, and
+                        // Ctrl+Space is probably the more common of the two.
+                        return Some(Input::Keyboard(kbmod::CTRL | vk::SPACE));
+                    }
+                    '\t' | '\r' => return Some(Input::Keyboard(InputKey::new(ch as u32))),
                     '\n' => return Some(Input::Keyboard(kbmod::CTRL | vk::RETURN)),
                     ..='\x1a' => {
                         // Shift control code to A-Z
@@ -569,9 +574,9 @@ impl<'input> Stream<'_, '_, 'input> {
             // I know there's an InputMouseState::Release, but that's because the internals of tui.rs
             // have leaked into intput.rs. input.rs indicates release by the absence of buttons being
             // held, which is InputMouseState::None. This makes it more reliable in my opinion.
-        } else if (WHEEL..WHEEL + 4).contains(&kind) {
-            let delta = if (kind & 1) != 0 { 3 } else { -3 };
-            let idx = if (kind & 2) != 0 { 0 } else { 1 };
+        } else if (WHEEL..WHEEL + 0x04).contains(&kind) {
+            let delta = if (btn & 0x01) != 0 { 1 } else { -1 };
+            let idx = if (btn & (0x02 | SHIFT)) != 0 { 0 } else { 1 };
             mouse.scroll.as_array()[idx] += delta;
             mouse.state = InputMouseState::Scroll;
         } else if (kind & !MOTION) < 3 {

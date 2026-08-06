@@ -71,15 +71,17 @@ fn run() -> apperr::Result<()> {
     localization::init();
 
     let mut state = State::new()?;
+
+    // Load settings so user file associations are ready when opening files passed as args
+    if let Err(err) = Settings::reload() {
+        state.add_error(err);
+    }
+
     if handle_args(&mut state)? {
         return Ok(());
     }
 
     handle_stdin(&mut state)?;
-
-    if let Err(err) = Settings::reload() {
-        state.add_error(err);
-    }
 
     // Switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // `handle_args` may want to print a help message (must not fail),
@@ -241,17 +243,23 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     let cwd = env::current_dir()?;
     let mut dir = None;
     let mut parse_args = true;
+    let mut goto_next = false;
 
     // The best CLI argument parser in the world.
     for arg in env::args_os().skip(1) {
         if parse_args {
             if arg == "--" {
                 parse_args = false;
+                goto_next = false;
                 continue;
             }
             if arg == "-" {
                 paths.clear();
                 break;
+            }
+            if arg == "-g" || arg == "--goto" {
+                goto_next = true;
+                continue;
             }
             if arg == "-h" || arg == "--help" || (cfg!(windows) && arg == "/?") {
                 print_help();
@@ -263,22 +271,32 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
             }
         }
 
-        let p = cwd.join(Path::new(&arg));
+        let (arg, goto) = if goto_next {
+            goto_next = false;
+            documents::parse_filename_goto(Path::new(&arg))
+        } else {
+            (Path::new(&arg), None)
+        };
+
+        let p = cwd.join(arg);
         let p = path::normalize(&p);
         if p.is_dir() {
             state.wants_file_picker = StateFilePicker::Open;
             dir = Some(p);
         } else {
-            paths.push(&*scratch, p);
+            paths.push(&*scratch, (p, goto));
         }
     }
 
-    for p in &paths {
-        state.documents.add_file_path(p)?;
+    for (p, goto) in &paths {
+        let doc = state.documents.add_file_path(p)?;
+        if let Some(goto) = goto {
+            doc.cursor_move_to_goto(*goto);
+        }
     }
 
     if dir.is_none()
-        && let Some(parent) = paths.last().and_then(|p| p.parent())
+        && let Some(parent) = paths.last().and_then(|(p, _)| p.parent())
     {
         dir = Some(parent.to_path_buf());
     }
@@ -305,13 +323,12 @@ fn handle_stdin(state: &mut State) -> apperr::Result<()> {
 
 fn print_help() {
     sys::write_stdout(concat!(
-        "Usage: edit [OPTIONS] [FILE[:LINE[:COLUMN]]]\n",
+        "Usage: edit [OPTIONS] [FILE]...\n",
         "Options:\n",
-        "    -h, --help       Print this help message\n",
-        "    -v, --version    Print the version number\n",
-        "\n",
-        "Arguments:\n",
-        "    FILE[:LINE[:COLUMN]]    The file to open, optionally with line and column (e.g., foo.txt:123:45)\n",
+        "    -g, --goto <FILE:LINE[:CHARACTER]>    Open a file at the specified line and character position\n",
+        "    -h, --help                            Print this help message\n",
+        "    -v, --version                         Print the version number\n",
+        "\n"
     ));
 }
 
@@ -660,11 +677,11 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
                                 // Round from 16 bits to 8 bits.
                                 val = (val * 0xff + 0x7fff) / 0xffff;
                             }
-                            rgb = (rgb >> 8) | ((val as u32) << 16);
+                            rgb = (rgb << 8) | (val as u32);
                         }
                     }
 
-                    *color = StraightRgba::from_le(rgb | 0xff000000);
+                    *color = StraightRgba::from_rgba(rgb << 8 | 0xff);
                     color_responses += 1;
                     osc_buffer.clear();
                 }
