@@ -1,0 +1,75 @@
+#[display_name = "C#"]
+#[path = "**/*.cs"]
+#[path = "**/*.csx"]
+pub fn csharp() {
+    // Preprocessor directives always occupy the entire line.
+    if /\s*#\s*(?:define|elif|else|endif|endregion|error|if|line|nullable|pragma|region|undef|warning)\>.*/ {
+        yield keyword.preprocessor;
+        return;
+    }
+
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /\$*"""/ {
+            // Raw string literal. It has no escape sequences and may span lines.
+            loop {
+                yield string;
+                if /"""/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /\$?@\$?"/ {
+            // Verbatim string. `""` is the only escape sequence and it may span lines.
+            loop {
+                yield string;
+                if /""/ {
+                    // Escaped quote
+                } else if /"/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /\$?"/ {
+            double_quote_string();
+        } else if /'/ {
+            single_quote_string();
+        } else if /\[([A-Z]\w*)/ {
+            yield $1 as storage.annotation;
+        } else if /(?:break|case|catch|continue|default|do|else|finally|foreach|for|goto|if|return|switch|throw|try|while|yield)\>/ {
+            yield keyword.control;
+        } else if /(?:abstract|and|async|as|await|base|checked|class|const|delegate|dynamic|enum|event|explicit|extern|file|fixed|from|get|global|group|implicit|init|interface|internal|into|in|is|join|let|lock|nameof|namespace|new|notnull|not|operator|orderby|or|out|override|params|partial|private|protected|public|readonly|record|ref|required|scoped|sealed|select|set|sizeof|stackalloc|static|struct|this|typeof|unchecked|unmanaged|unsafe|using|var|virtual|volatile|when|where|with)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|null)\>/ {
+            yield constant.language;
+        } else if /(?:bool|byte|char|decimal|double|float|int|long|nint|nuint|object|sbyte|short|string|uint|ulong|ushort|void)\>/ {
+            yield storage.type;
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?[dflmu]{0,2})/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

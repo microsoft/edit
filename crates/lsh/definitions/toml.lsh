@@ -1,0 +1,88 @@
+#[display_name = "TOML"]
+#[path = "**/*.toml"]
+#[path = "**/Cargo.lock"]
+pub fn toml() {
+    yield other;
+
+    // Optional leading whitespace.
+    if /[ \t]+/ {
+        yield other;
+    }
+
+    // Table headers: [table], [a.b.c] and [[array.of.tables]].
+    if /\[\[([^\]]*)\]\]/ {
+        yield $1 as meta.header;
+    } else if /\[([^\]]*)\]/ {
+        yield $1 as meta.header;
+    }
+
+    yield other;
+
+    until /$/ {
+        yield other;
+
+        if /#.*/ {
+            yield comment;
+        } else if /"""/ {
+            // Multi-line basic string.
+            loop {
+                yield string;
+                if /\\./ {
+                } else if /"""/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /'''/ {
+            // Multi-line literal string (no escapes).
+            loop {
+                yield string;
+                if /'''/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        }
+        // Quoted key: "key" = ... or 'key' = ... (also matches inside inline tables).
+        else if /("[^"]*"|'[^']*')[ \t]*=/ {
+            yield $1 as variable;
+        }
+        // Bare or dotted key: key = ..., a.b.c = ... (also matches inside inline tables).
+        else if /([\w.-]+)[ \t]*=/ {
+            yield $1 as variable;
+        } else if /"/ {
+            double_quote_string();
+        } else if /'/ {
+            // Literal string: no escape sequences, so a trailing backslash
+            // (e.g. a Windows path like 'C:\dir\') still ends the string.
+            until /$/ {
+                if /'/ {
+                    yield string;
+                    break;
+                }
+            }
+        } else if /(?:true|false)\>/ {
+            yield constant.language;
+        } else if /\+?-?(?:inf|nan)\>/ {
+            yield constant.language;
+        } else if /(?i:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:z|[+-]\d{2}:\d{2})?)?)/ {
+            // Offset date-time, local date-time and local date.
+            yield constant.numeric;
+        } else if /\d{2}:\d{2}:\d{2}(?:\.\d+)?/ {
+            // Local time.
+            yield constant.numeric;
+        } else if /(?i:\+?-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)/ {
+            if /\w+/ {
+                // Not a number after all.
+            } else {
+                yield constant.numeric;
+            }
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

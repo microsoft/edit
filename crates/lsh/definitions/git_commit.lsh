@@ -1,7 +1,7 @@
 #[display_name = "Git Commit Message"]
 #[path = "**/COMMIT_EDITMSG"]
 #[path = "**/MERGE_MSG"]
-pub fn git_commit_message() {
+pub fn git_commit() {
     if /#\s*/ {
         yield comment;
         if /(?:modified:|renamed:).*/ {
