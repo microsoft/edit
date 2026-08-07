@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::ffi::{CStr, c_char};
 use std::mem::MaybeUninit;
 use std::ops::Range;
-use std::ptr::{null, null_mut};
+use std::ptr::{self, null, null_mut};
 use std::sync::OnceLock;
 use std::{fmt, mem};
 
@@ -348,7 +348,7 @@ impl Text {
 
         let ut = unsafe { &mut *ptr };
         ut.p_funcs = &FUNCS;
-        ut.context = tb as *const TextBuffer as *mut _;
+        ut.context = ptr::from_ref(tb).cast();
         ut.a = -1;
 
         Ok(Self(ut))
@@ -356,7 +356,7 @@ impl Text {
 }
 
 fn text_buffer_from_utext<'a>(ut: &icu_ffi::UText) -> &'a TextBuffer {
-    unsafe { &*(ut.context as *const TextBuffer) }
+    unsafe { &*(ut.context.cast()) }
 }
 
 fn double_cache_from_utext<'a>(ut: &icu_ffi::UText) -> &'a mut DoubleCache {
@@ -1261,12 +1261,12 @@ mod icu_ffi {
         pub chunk_offset: i32,
         pub chunk_length: i32,
         pub chunk_contents: *const u16,
-        pub p_funcs: &'static UTextFuncs,
+        pub p_funcs: *const UTextFuncs,
         pub p_extra: *mut c_void,
-        pub context: *mut c_void,
-        pub p: *mut c_void,
-        pub q: *mut c_void,
-        pub r: *mut c_void,
+        pub context: *const c_void,
+        pub p: *const c_void,
+        pub q: *const c_void,
+        pub r: *const c_void,
         pub priv_p: *mut c_void,
         pub a: i64,
         pub b: i32,
