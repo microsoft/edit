@@ -123,6 +123,8 @@ pub mod vk {
     pub const INSERT: InputKey = InputKey::new(0x2D);
     pub const DELETE: InputKey = InputKey::new(0x2E);
 
+    pub const BACKSLASH: InputKey = InputKey::new('\\' as u32);
+
     pub const N0: InputKey = InputKey::new('0' as u32);
     pub const N1: InputKey = InputKey::new('1' as u32);
     pub const N2: InputKey = InputKey::new('2' as u32);
