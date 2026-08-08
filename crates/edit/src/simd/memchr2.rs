@@ -86,7 +86,7 @@ unsafe fn memchr2_avx2(needle1: u8, needle2: u8, mut beg: *const u8, end: *const
         let mut remaining = end.offset_from_unsigned(beg);
 
         while remaining >= 32 {
-            let v = _mm256_loadu_si256(beg as *const _);
+            let v = _mm256_loadu_si256(beg.cast());
             let a = _mm256_cmpeq_epi8(v, n1);
             let b = _mm256_cmpeq_epi8(v, n2);
             let c = _mm256_or_si256(a, b);
@@ -134,7 +134,7 @@ unsafe fn memchr2_lasx(needle1: u8, needle2: u8, mut beg: *const u8, end: *const
         }
 
         while end.offset_from_unsigned(beg) >= 32 {
-            let v = lasx_xvld::<0>(beg as *const _);
+            let v = lasx_xvld::<0>(beg.cast());
             let a = lasx_xvseq_b(v, n1);
             let b = lasx_xvseq_b(v, n2);
             let c = lasx_xvor_v(a, b);
@@ -169,7 +169,7 @@ unsafe fn memchr2_lsx(needle1: u8, needle2: u8, mut beg: *const u8, end: *const 
         }
 
         while end.offset_from_unsigned(beg) >= 16 {
-            let v = lsx_vld::<0>(beg as *const _);
+            let v = lsx_vld::<0>(beg.cast());
             let a = lsx_vseq_b(v, n1);
             let b = lsx_vseq_b(v, n2);
             let c = lsx_vor_v(a, b);

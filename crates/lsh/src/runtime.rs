@@ -23,7 +23,7 @@
 //!   as used by the backend's relocation system.
 
 use std::fmt::{self, Debug};
-use std::mem;
+use std::{mem, ptr};
 
 use stdext::arena::Arena;
 use stdext::arena_write_fmt;
@@ -474,13 +474,13 @@ impl Registers {
     }
 
     #[inline(always)]
-    unsafe fn as_ptr(&self) -> *const u32 {
-        self as *const _ as *const u32
+    fn as_ptr(&self) -> *const u32 {
+        ptr::from_ref(self).cast()
     }
 
     #[inline(always)]
-    unsafe fn as_mut_ptr(&mut self) -> *mut u32 {
-        self as *mut _ as *mut u32
+    fn as_mut_ptr(&mut self) -> *mut u32 {
+        ptr::from_mut(self).cast()
     }
 }
 
@@ -570,7 +570,7 @@ macro_rules! instruction_decode {
         #[inline(always)]
         fn dec_u32(bytes: &[u8], off: usize) -> u32 {
             debug_assert!(off + 4 <= bytes.len());
-            unsafe { (bytes.as_ptr().add(off) as *const u32).read_unaligned() }
+            unsafe { (bytes.as_ptr().add(off).cast::<u32>()).read_unaligned() }
         }
 
         let __asm: &[u8] = $assembly;

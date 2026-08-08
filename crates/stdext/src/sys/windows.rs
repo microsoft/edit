@@ -48,7 +48,7 @@ pub unsafe fn virtual_release(base: NonNull<u8>, _size: usize) {
     unsafe {
         // NOTE: `VirtualFree` fails if the pointer isn't
         // a valid base address or if the size isn't zero.
-        VirtualFree(base.as_ptr() as *mut _, 0, MEM_RELEASE);
+        VirtualFree(base.as_ptr(), 0, MEM_RELEASE);
     }
 }
 
@@ -61,7 +61,7 @@ pub unsafe fn virtual_release(base: NonNull<u8>, _size: usize) {
 /// and to pass a size less than or equal to the size passed to [`virtual_reserve`].
 pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> io::Result<()> {
     unsafe {
-        let res = VirtualAlloc(base.as_ptr() as *mut _, size, MEM_COMMIT, PAGE_READWRITE);
+        let res = VirtualAlloc(base.as_ptr(), size, MEM_COMMIT, PAGE_READWRITE);
         if res.is_null() { Err(io::Error::last_os_error()) } else { Ok(()) }
     }
 }

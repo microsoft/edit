@@ -113,8 +113,8 @@ unsafe fn memset_sse2(mut beg: *mut u8, end: *mut u8, val: u64) {
             let fill = _mm_set1_epi64x(val as i64);
 
             while remaining >= 32 {
-                _mm_storeu_si128(beg as *mut _, fill);
-                _mm_storeu_si128(beg.add(16) as *mut _, fill);
+                _mm_storeu_si128(beg.cast(), fill);
+                _mm_storeu_si128(beg.add(16).cast(), fill);
 
                 beg = beg.add(32);
                 remaining -= 32;
@@ -122,24 +122,24 @@ unsafe fn memset_sse2(mut beg: *mut u8, end: *mut u8, val: u64) {
 
             if remaining >= 16 {
                 // 16-31 bytes remaining
-                _mm_storeu_si128(beg as *mut _, fill);
-                _mm_storeu_si128(end.sub(16) as *mut _, fill);
+                _mm_storeu_si128(beg.cast(), fill);
+                _mm_storeu_si128(end.sub(16).cast(), fill);
                 return;
             }
         }
 
         if remaining >= 8 {
             // 8-15 bytes remaining
-            (beg as *mut u64).write_unaligned(val);
-            (end.sub(8) as *mut u64).write_unaligned(val);
+            beg.cast::<u64>().write_unaligned(val);
+            end.sub(8).cast::<u64>().write_unaligned(val);
         } else if remaining >= 4 {
             // 4-7 bytes remaining
-            (beg as *mut u32).write_unaligned(val as u32);
-            (end.sub(4) as *mut u32).write_unaligned(val as u32);
+            beg.cast::<u32>().write_unaligned(val as u32);
+            end.sub(4).cast::<u32>().write_unaligned(val as u32);
         } else if remaining >= 2 {
             // 2-3 bytes remaining
-            (beg as *mut u16).write_unaligned(val as u16);
-            (end.sub(2) as *mut u16).write_unaligned(val as u16);
+            beg.cast::<u16>().write_unaligned(val as u16);
+            end.sub(2).cast::<u16>().write_unaligned(val as u16);
         } else if remaining >= 1 {
             // 1 byte remaining
             beg.write(val as u8);
@@ -163,10 +163,10 @@ fn memset_avx2(mut beg: *mut u8, end: *mut u8, val: u64) {
             let fill = _mm256_set1_epi64x(val as i64);
 
             loop {
-                _mm256_storeu_si256(beg as *mut _, fill);
-                _mm256_storeu_si256(beg.add(32) as *mut _, fill);
-                _mm256_storeu_si256(beg.add(64) as *mut _, fill);
-                _mm256_storeu_si256(beg.add(96) as *mut _, fill);
+                _mm256_storeu_si256(beg.cast(), fill);
+                _mm256_storeu_si256(beg.add(32).cast(), fill);
+                _mm256_storeu_si256(beg.add(64).cast(), fill);
+                _mm256_storeu_si256(beg.add(96).cast(), fill);
 
                 beg = beg.add(128);
                 remaining -= 128;
@@ -183,7 +183,7 @@ fn memset_avx2(mut beg: *mut u8, end: *mut u8, val: u64) {
                 // LLVM is _very_ eager to unroll loops. In the absence of an unroll attribute, black_box does the job.
                 // Note that this must not be applied to the intrinsic parameters, as they're otherwise misoptimized.
                 #[allow(clippy::unit_arg)]
-                black_box(_mm_storeu_si128(beg as *mut _, fill));
+                black_box(_mm_storeu_si128(beg.cast(), fill));
 
                 beg = beg.add(16);
                 remaining -= 16;
@@ -198,16 +198,16 @@ fn memset_avx2(mut beg: *mut u8, end: *mut u8, val: u64) {
         // can be seen in various libraries, such as wyhash which uses it for loading data in `wyr3`.
         if remaining >= 8 {
             // 8-15 bytes
-            (beg as *mut u64).write_unaligned(val);
-            (end.sub(8) as *mut u64).write_unaligned(val);
+            beg.cast::<u64>().write_unaligned(val);
+            end.sub(8).cast::<u64>().write_unaligned(val);
         } else if remaining >= 4 {
             // 4-7 bytes
-            (beg as *mut u32).write_unaligned(val as u32);
-            (end.sub(4) as *mut u32).write_unaligned(val as u32);
+            beg.cast::<u32>().write_unaligned(val as u32);
+            end.sub(4).cast::<u32>().write_unaligned(val as u32);
         } else if remaining >= 2 {
             // 2-3 bytes
-            (beg as *mut u16).write_unaligned(val as u16);
-            (end.sub(2) as *mut u16).write_unaligned(val as u16);
+            beg.cast::<u16>().write_unaligned(val as u16);
+            end.sub(2).cast::<u16>().write_unaligned(val as u16);
         } else if remaining >= 1 {
             // 1 byte
             beg.write(val as u8);
@@ -239,17 +239,17 @@ fn memset_lasx(mut beg: *mut u8, end: *mut u8, val: u64) {
         let fill = lasx_xvreplgr2vr_d(val as i64);
 
         if end.offset_from_unsigned(beg) >= 32 {
-            lasx_xvst::<0>(fill, beg as *mut _);
+            lasx_xvst::<0>(fill, beg.cast());
             let off = beg.align_offset(32);
             beg = beg.add(off);
         }
 
         if end.offset_from_unsigned(beg) >= 128 {
             loop {
-                lasx_xvst::<0>(fill, beg as *mut _);
-                lasx_xvst::<32>(fill, beg as *mut _);
-                lasx_xvst::<64>(fill, beg as *mut _);
-                lasx_xvst::<96>(fill, beg as *mut _);
+                lasx_xvst::<0>(fill, beg.cast());
+                lasx_xvst::<32>(fill, beg.cast());
+                lasx_xvst::<64>(fill, beg.cast());
+                lasx_xvst::<96>(fill, beg.cast());
 
                 beg = beg.add(128);
                 if end.offset_from_unsigned(beg) < 128 {
@@ -262,7 +262,7 @@ fn memset_lasx(mut beg: *mut u8, end: *mut u8, val: u64) {
             let fill = lsx_vreplgr2vr_d(val as i64);
 
             loop {
-                lsx_vst::<0>(fill, beg as *mut _);
+                lsx_vst::<0>(fill, beg.cast());
 
                 beg = beg.add(16);
                 if end.offset_from_unsigned(beg) < 16 {
@@ -273,16 +273,16 @@ fn memset_lasx(mut beg: *mut u8, end: *mut u8, val: u64) {
 
         if end.offset_from_unsigned(beg) >= 8 {
             // 8-15 bytes
-            (beg as *mut u64).write_unaligned(val);
-            (end.sub(8) as *mut u64).write_unaligned(val);
+            beg.cast::<u64>().write_unaligned(val);
+            end.sub(8).cast::<u64>().write_unaligned(val);
         } else if end.offset_from_unsigned(beg) >= 4 {
             // 4-7 bytes
-            (beg as *mut u32).write_unaligned(val as u32);
-            (end.sub(4) as *mut u32).write_unaligned(val as u32);
+            beg.cast::<u32>().write_unaligned(val as u32);
+            end.sub(4).cast::<u32>().write_unaligned(val as u32);
         } else if end.offset_from_unsigned(beg) >= 2 {
             // 2-3 bytes
-            (beg as *mut u16).write_unaligned(val as u16);
-            (end.sub(2) as *mut u16).write_unaligned(val as u16);
+            beg.cast::<u16>().write_unaligned(val as u16);
+            end.sub(2).cast::<u16>().write_unaligned(val as u16);
         } else if end.offset_from_unsigned(beg) >= 1 {
             // 1 byte
             beg.write(val as u8);
@@ -299,37 +299,37 @@ unsafe fn memset_lsx(mut beg: *mut u8, end: *mut u8, val: u64) {
         if end.offset_from_unsigned(beg) >= 16 {
             let fill = lsx_vreplgr2vr_d(val as i64);
 
-            lsx_vst::<0>(fill, beg as *mut _);
+            lsx_vst::<0>(fill, beg.cast());
             let off = beg.align_offset(16);
             beg = beg.add(off);
 
             while end.offset_from_unsigned(beg) >= 32 {
-                lsx_vst::<0>(fill, beg as *mut _);
-                lsx_vst::<16>(fill, beg as *mut _);
+                lsx_vst::<0>(fill, beg.cast());
+                lsx_vst::<16>(fill, beg.cast());
 
                 beg = beg.add(32);
             }
 
             if end.offset_from_unsigned(beg) >= 16 {
                 // 16-31 bytes remaining
-                lsx_vst::<0>(fill, beg as *mut _);
-                lsx_vst::<-16>(fill, end as *mut _);
+                lsx_vst::<0>(fill, beg.cast());
+                lsx_vst::<-16>(fill, end.cast());
                 return;
             }
         }
 
         if end.offset_from_unsigned(beg) >= 8 {
             // 8-15 bytes remaining
-            (beg as *mut u64).write_unaligned(val);
-            (end.sub(8) as *mut u64).write_unaligned(val);
+            beg.cast::<u64>().write_unaligned(val);
+            end.sub(8).cast::<u64>().write_unaligned(val);
         } else if end.offset_from_unsigned(beg) >= 4 {
             // 4-7 bytes remaining
-            (beg as *mut u32).write_unaligned(val as u32);
-            (end.sub(4) as *mut u32).write_unaligned(val as u32);
+            beg.cast::<u32>().write_unaligned(val as u32);
+            end.sub(4).cast::<u32>().write_unaligned(val as u32);
         } else if end.offset_from_unsigned(beg) >= 2 {
             // 2-3 bytes remaining
-            (beg as *mut u16).write_unaligned(val as u16);
-            (end.sub(2) as *mut u16).write_unaligned(val as u16);
+            beg.cast::<u16>().write_unaligned(val as u16);
+            end.sub(2).cast::<u16>().write_unaligned(val as u16);
         } else if end.offset_from_unsigned(beg) >= 1 {
             // 1 byte remaining
             beg.write(val as u8);

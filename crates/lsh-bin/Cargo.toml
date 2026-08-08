@@ -12,3 +12,6 @@ anyhow = "*"
 argh = "*"
 lsh.workspace = true
 stdext.workspace = true
+
+[lints]
+workspace = true

@@ -376,7 +376,7 @@ impl<'a, T: Copy> BVec<'a, T> {
             let dst = self.spare_mut_ptr();
             let src = self.ptr.as_ptr().add(beg);
             self.len += add;
-            ptr::copy_nonoverlapping(src as *const _, dst, add);
+            ptr::copy_nonoverlapping(src.cast(), dst, add);
         }
     }
 
@@ -455,7 +455,7 @@ impl<'a> BVec<'a, u16> {
         // MultiByteToWideChar is ~2x faster than the UTF8 loop below and saves space.
         #[cfg(windows)]
         unsafe {
-            let dst = self.spare_mut_ptr() as *mut u16;
+            let dst = self.spare_mut_ptr().cast();
             let len = MultiByteToWideChar(
                 65001,
                 0,
