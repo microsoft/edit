@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::borrow::Borrow;
 use std::hint::assert_unchecked;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
@@ -436,6 +437,28 @@ impl<'a, T: Copy> BVec<'a, T> {
     }
 }
 
+impl<'a> BVec<'a, u8> {
+    /// Appends a single `char`, encoding it as UTF-8.
+    pub fn push_char(&mut self, alloc: &'a dyn Allocator, ch: char) {
+        self.reserve(alloc, 4);
+        unsafe {
+            let len = self.len();
+            let dst = self.as_mut_ptr().add(len);
+            let add = ch.encode_utf8(slice::from_raw_parts_mut(dst, 4)).len();
+            self.set_len(len + add);
+        }
+    }
+
+    /// Pairs this instance with an allocator, making it possible to
+    /// use `write!` and `fmt::Write`, which are allocator-unaware.
+    pub fn formatter<A>(&mut self, alloc: &'a A) -> BVecFormatter<'_, 'a, A>
+    where
+        A: Allocator,
+    {
+        BVecFormatter { string: self, alloc }
+    }
+}
+
 #[cfg(windows)]
 unsafe extern "system" {
     fn MultiByteToWideChar(
@@ -508,6 +531,18 @@ impl<T> DerefMut for BVec<'_, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut [T] {
         self.as_mut_slice()
+    }
+}
+
+impl<T> AsRef<[T]> for BVec<'_, T> {
+    fn as_ref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+impl<T> Borrow<[T]> for BVec<'_, T> {
+    fn borrow(&self) -> &[T] {
+        self.as_slice()
     }
 }
 
@@ -677,3 +712,27 @@ impl<'a, T> ExactSizeIterator for IntoIter<'a, T> {
 }
 
 impl<'a, T> FusedIterator for IntoIter<'a, T> {}
+
+/// Pairs a [`BVec`] with an allocator so you can use `write!` on it.
+// (See `BStringFormatter` for more information, which is the original.)
+pub struct BVecFormatter<'s, 'a, A> {
+    string: &'s mut BVec<'a, u8>,
+    alloc: &'a A,
+}
+
+impl<A> fmt::Write for BVecFormatter<'_, '_, A>
+where
+    A: Allocator,
+{
+    #[inline]
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.string.extend_from_slice(self.alloc, s.as_bytes());
+        Ok(())
+    }
+
+    #[inline]
+    fn write_char(&mut self, c: char) -> fmt::Result {
+        self.string.push_char(self.alloc, c);
+        Ok(())
+    }
+}

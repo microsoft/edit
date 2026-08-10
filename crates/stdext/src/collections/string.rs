@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::borrow::Borrow;
 use std::fmt::{self};
 use std::ops::{Bound, Deref, DerefMut, RangeBounds};
-use std::slice;
 use std::str::Utf8Error;
 
 use crate::alloc::Allocator;
@@ -158,13 +158,7 @@ impl<'a> BString<'a> {
 
     /// Appends a single `char`, encoding it as UTF-8.
     pub fn push(&mut self, alloc: &'a dyn Allocator, ch: char) {
-        self.reserve(alloc, 4);
-        unsafe {
-            let len = self.vec.len();
-            let dst = self.vec.as_mut_ptr().add(len);
-            let add = ch.encode_utf8(slice::from_raw_parts_mut(dst, 4)).len();
-            self.vec.set_len(len + add);
-        }
+        self.vec.push_char(alloc, ch);
     }
 
     /// Empties the string. The allocation is kept.
@@ -172,8 +166,8 @@ impl<'a> BString<'a> {
         self.vec.clear();
     }
 
-    /// Returns a [`BorrowedStringFormatter`] pairing this string with an allocator,
-    /// enabling use with `write!` and `fmt::Write`.
+    /// Pairs this instance with an allocator, making it possible to
+    /// use `write!` and `fmt::Write`, which are allocator-unaware.
     pub fn formatter<A>(&mut self, alloc: &'a A) -> BStringFormatter<'_, 'a, A>
     where
         A: Allocator,
@@ -284,6 +278,27 @@ impl DerefMut for BString<'_> {
     #[inline]
     fn deref_mut(&mut self) -> &mut str {
         self.as_mut_str()
+    }
+}
+
+impl AsRef<str> for BString<'_> {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<[u8]> for BString<'_> {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl Borrow<str> for BString<'_> {
+    #[inline]
+    fn borrow(&self) -> &str {
+        self.as_str()
     }
 }
 

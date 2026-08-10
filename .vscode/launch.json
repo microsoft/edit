@@ -33,6 +33,8 @@
             //    "lldb-dap.environment": {
             //        "LLDB_LAUNCH_FLAG_LAUNCH_IN_TTY": "YES"
             //    }
+            // 3. Add the following to your ~/.lldbinit file (replace "stable" with "nightly" if needed):
+            //    command script import ~/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/etc/lldb_lookup.py
             "name": "Launch edit (lldb-dap, macOS)",
             "preLaunchTask": "rust: cargo build",
             "type": "lldb-dap",

@@ -3,6 +3,8 @@
 
 //! Everything related to Unicode lives here.
 
+mod sanitize;
 mod utf8;
 
+pub use sanitize::*;
 pub use utf8::*;

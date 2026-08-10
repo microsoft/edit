@@ -15,8 +15,10 @@ pub mod collections;
 pub mod float;
 pub mod glob;
 mod helpers;
+mod maybe_owned;
 pub mod simd;
 pub mod sys;
 pub mod unicode;
 
 pub use helpers::*;
+pub use maybe_owned::*;

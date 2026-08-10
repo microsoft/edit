@@ -11,7 +11,6 @@ mod localization;
 mod settings;
 mod state;
 
-use std::borrow::Cow;
 use std::path::Path;
 use std::time::Duration;
 use std::{env, process};
@@ -32,6 +31,7 @@ use state::*;
 use stdext::arena::{self, Arena, scratch_arena};
 use stdext::arena_format;
 use stdext::collections::{BString, BVec};
+use stdext::unicode::sanitize_control_chars;
 
 use crate::settings::Settings;
 
@@ -445,7 +445,9 @@ fn write_terminal_title<'a>(arena: &'a Arena, output: &mut BString<'a>, state: &
         if dirty {
             output.push_str(arena, "● ");
         }
-        output.push_str(arena, &sanitize_control_chars(filename));
+        let scratch = scratch_arena(Some(arena));
+        let sanitized = sanitize_control_chars(&scratch, filename);
+        output.push_str(arena, &sanitized);
         output.push_str(arena, " - ");
     }
     output.push_str(arena, "edit\x1b\\");
@@ -700,24 +702,4 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
     }
 
     RestoreModes
-}
-
-/// Strips all C0 control characters from the string and replaces them with "_".
-///
-/// Jury is still out on whether this should also strip C1 control characters.
-/// That requires parsing UTF8 codepoints, which is annoying.
-fn sanitize_control_chars(text: &str) -> Cow<'_, str> {
-    if let Some(off) = text.bytes().position(|b| (..0x20).contains(&b)) {
-        let mut sanitized = text.to_string();
-        // SAFETY: We only search for ASCII and replace it with ASCII.
-        let vec = unsafe { sanitized.as_bytes_mut() };
-
-        for i in &mut vec[off..] {
-            *i = if (..0x20).contains(i) { b'_' } else { *i }
-        }
-
-        Cow::Owned(sanitized)
-    } else {
-        Cow::Borrowed(text)
-    }
 }
