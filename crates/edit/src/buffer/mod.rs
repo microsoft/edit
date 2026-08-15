@@ -2518,7 +2518,12 @@ impl TextBuffer {
 
         self.edit_begin_grouping();
 
-        for y in selection_beg.y.min(selection_end.y)..=selection_beg.y.max(selection_end.y) {
+        let [first, last] = minmax(selection_beg, selection_end);
+        // A selection that stops at column 0 covers no character on that last line,
+        // so that line is not part of the selection and must not be (un)indented.
+        let last_y = if last.x == 0 && last.y > first.y { last.y - 1 } else { last.y };
+
+        for y in first.y..=last_y {
             self.cursor_move_to_logical(Point { x: 0, y });
 
             let line_start_offset = self.cursor.offset;
