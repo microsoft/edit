@@ -1,5 +1,8 @@
 name: Submit release to the WinGet community repository
 
+permissions:
+  contents: read
+
 on:
   release:
     types: [published]
