@@ -24,7 +24,7 @@ pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
             ctx.steal_focus();
         }
         if state.documents.active().is_some() {
-            if ctx.menubar_menu_begin(loc(LocId::Edit), 'E') {
+            if !state.markdown_preview_enabled() && ctx.menubar_menu_begin(loc(LocId::Edit), 'E') {
                 draw_menu_edit(ctx, state);
             }
             if ctx.menubar_menu_begin(loc(LocId::View), 'V') {
@@ -122,10 +122,18 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
 }
 
 fn draw_menu_view(ctx: &mut Context, state: &mut State) {
-    if let Some(doc) = state.documents.active() {
-        let mut tb = doc.buffer.borrow_mut();
-        let word_wrap = tb.is_word_wrap_enabled();
+    if state.markdown_preview_available()
+        && ctx.menubar_menu_checkbox(
+            loc(LocId::ViewMarkdownPreview),
+            'P',
+            kbmod::ALT | vk::P,
+            state.markdown_preview_enabled(),
+        )
+    {
+        state.toggle_markdown_preview();
+    }
 
+    if state.documents.active().is_some() {
         // All values on the statusbar are currently document specific.
         if ctx.menubar_menu_button(loc(LocId::ViewFocusStatusbar), 'S', vk::NULL) {
             state.wants_statusbar_focus = true;
@@ -134,8 +142,13 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
             state.wants_go_to_file = true;
         }
         if ctx.menubar_menu_button(loc(LocId::FileGoto), 'G', kbmod::CTRL | vk::G) {
+            state.disable_markdown_preview();
             state.wants_goto = true;
         }
+
+        let doc = state.documents.active().unwrap();
+        let mut tb = doc.buffer.borrow_mut();
+        let word_wrap = tb.is_word_wrap_enabled();
         if ctx.menubar_menu_checkbox(loc(LocId::ViewWordWrap), 'W', kbmod::ALT | vk::Z, word_wrap) {
             tb.set_word_wrap(!word_wrap);
             ctx.needs_rerender();

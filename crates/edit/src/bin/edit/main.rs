@@ -5,9 +5,11 @@ mod apperr;
 mod documents;
 mod draw_editor;
 mod draw_filepicker;
+mod draw_markdown_preview;
 mod draw_menubar;
 mod draw_statusbar;
 mod localization;
+mod markdown_preview;
 mod settings;
 mod state;
 
@@ -386,6 +388,8 @@ fn draw(ctx: &mut Context, state: &mut State) {
             state.wants_save = true;
         } else if key == kbmod::CTRL_SHIFT | vk::S {
             state.wants_file_picker = StateFilePicker::SaveAs;
+        } else if key == kbmod::ALT | vk::P {
+            state.toggle_markdown_preview();
         } else if key == kbmod::CTRL | vk::W {
             state.wants_close = true;
         } else if key == kbmod::CTRL | vk::P {
@@ -393,16 +397,20 @@ fn draw(ctx: &mut Context, state: &mut State) {
         } else if key == kbmod::CTRL | vk::Q {
             state.wants_exit = true;
         } else if key == kbmod::CTRL | vk::G {
+            state.disable_markdown_preview();
             state.wants_goto = true;
         } else if key == kbmod::CTRL | vk::F && state.wants_search.kind != StateSearchKind::Disabled
         {
+            state.disable_markdown_preview();
             state.wants_search.kind = StateSearchKind::Search;
             state.wants_search.focus = true;
         } else if key == kbmod::CTRL | vk::R && state.wants_search.kind != StateSearchKind::Disabled
         {
+            state.disable_markdown_preview();
             state.wants_search.kind = StateSearchKind::Replace;
             state.wants_search.focus = true;
         } else if key == vk::F3 {
+            state.disable_markdown_preview();
             search_execute(ctx, state, SearchAction::Search);
         } else {
             return;

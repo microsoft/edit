@@ -2951,6 +2951,11 @@ impl<'a> Context<'a, '_> {
                 && let Some(key) = self.input_keyboard
             {
                 match key {
+                    // Scrollareas already handle pagewise and boundary navigation here. Arrow
+                    // keys are the linewise counterparts; handling them at this layer also keeps
+                    // mouse, page, and arrow scrolling on the same persisted scroll offset.
+                    vk::UP => sc.scroll_offset.y -= 1,
+                    vk::DOWN => sc.scroll_offset.y += 1,
                     vk::PRIOR => sc.scroll_offset.y -= prev_container.inner_clipped.height(),
                     vk::NEXT => sc.scroll_offset.y += prev_container.inner_clipped.height(),
                     vk::END => sc.scroll_offset.y = CoordType::MAX,

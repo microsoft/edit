@@ -241,6 +241,38 @@ impl State {
         self.error_log_count = self.error_log.len().min(self.error_log_count + 1);
         true
     }
+
+    pub fn markdown_preview_available(&self) -> bool {
+        self.documents.active().is_some_and(|document| document.is_markdown())
+    }
+
+    pub fn markdown_preview_enabled(&self) -> bool {
+        self.documents.active().is_some_and(|document| document.markdown_preview_enabled())
+    }
+
+    pub fn toggle_markdown_preview(&mut self) {
+        let Some(document) = self.documents.active_mut() else {
+            return;
+        };
+        if !document.is_markdown() {
+            document.markdown_preview.set_enabled(false);
+            return;
+        }
+
+        let enabled = !document.markdown_preview.is_enabled();
+        document.markdown_preview.set_enabled(enabled);
+        if enabled
+            && matches!(self.wants_search.kind, StateSearchKind::Search | StateSearchKind::Replace)
+        {
+            self.wants_search.kind = StateSearchKind::Hidden;
+        }
+    }
+
+    pub fn disable_markdown_preview(&mut self) {
+        if let Some(document) = self.documents.active_mut() {
+            document.markdown_preview.set_enabled(false);
+        }
+    }
 }
 
 pub fn draw_add_untitled_document(ctx: &mut Context, state: &mut State) {

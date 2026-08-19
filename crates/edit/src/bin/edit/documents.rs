@@ -12,6 +12,7 @@ use edit::lsh::{FILE_ASSOCIATIONS, Language, process_file_associations};
 use edit::{path, sys};
 
 use crate::apperr;
+use crate::markdown_preview::MarkdownPreview;
 use crate::settings::Settings;
 use crate::state::DisplayablePathBuf;
 
@@ -23,9 +24,18 @@ pub struct Document {
     pub file_id: Option<sys::FileId>,
     pub new_file_counter: usize,
     pub language_override: Option<Option<&'static Language>>,
+    pub markdown_preview: MarkdownPreview,
 }
 
 impl Document {
+    pub fn is_markdown(&self) -> bool {
+        self.buffer.borrow().language().is_some_and(|language| language.id == "markdown")
+    }
+
+    pub fn markdown_preview_enabled(&self) -> bool {
+        self.is_markdown() && self.markdown_preview.is_enabled()
+    }
+
     pub fn save(&mut self, new_path: Option<PathBuf>) -> apperr::Result<()> {
         let path = new_path.as_deref().unwrap_or_else(|| self.path.as_ref().unwrap().as_path());
         let mut file = DocumentManager::open_for_writing(path)?;
@@ -171,11 +181,15 @@ impl DocumentManager {
             std::ptr::copy_nonoverlapping(temp.as_ptr(), last, 1);
         }
 
+        self.list.last_mut().unwrap().markdown_preview.active_document_changed();
         true
     }
 
     pub fn remove_active(&mut self) {
         self.list.pop();
+        if let Some(document) = self.list.last_mut() {
+            document.markdown_preview.active_document_changed();
+        }
     }
 
     pub fn add_untitled(&mut self) -> apperr::Result<&mut Document> {
@@ -188,6 +202,7 @@ impl DocumentManager {
             file_id: None,
             new_file_counter: 0,
             language_override: None,
+            markdown_preview: Default::default(),
         };
         self.gen_untitled_name(&mut doc);
 
@@ -240,6 +255,7 @@ impl DocumentManager {
             file_id,
             new_file_counter: 0,
             language_override: None,
+            markdown_preview: Default::default(),
         };
         doc.set_path(path);
 
@@ -358,6 +374,106 @@ pub fn parse_filename_goto(path: &Path) -> (&Path, Option<Point>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edit::lsh::LANGUAGES;
+
+    fn markdown_document(filename: &str, source: &str) -> Document {
+        let buffer = TextBuffer::new_rc(false).unwrap();
+        {
+            let mut tb = buffer.borrow_mut();
+            tb.write_raw(source.as_bytes());
+            let language = LANGUAGES.iter().find(|language| language.id == "markdown").unwrap();
+            tb.set_language(Some(language));
+        }
+
+        Document {
+            buffer,
+            path: None,
+            dir: None,
+            filename: filename.to_string(),
+            file_id: None,
+            new_file_counter: 0,
+            language_override: None,
+            markdown_preview: Default::default(),
+        }
+    }
+
+    fn preview_text(document: &Document) -> String {
+        document
+            .markdown_preview
+            .lines()
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn documents_keep_independent_preview_state_and_cache() {
+        let mut documents = DocumentManager::default();
+        documents.list.push(markdown_document("first.md", "# First"));
+        documents.list.push(markdown_document("second.md", "# Second"));
+
+        {
+            let second = documents.active_mut().unwrap();
+            second.markdown_preview.set_enabled(true);
+            second.markdown_preview.prepare(&second.buffer, 80);
+        }
+        assert!(documents.update_active(|document| document.filename == "first.md"));
+        {
+            let first = documents.active_mut().unwrap();
+            first.markdown_preview.set_enabled(true);
+            first.markdown_preview.prepare(&first.buffer, 80);
+        }
+        assert!(documents.update_active(|document| document.filename == "second.md"));
+        documents.active_mut().unwrap().markdown_preview.set_enabled(false);
+
+        assert!(documents.update_active(|document| document.filename == "first.md"));
+        let first = documents.active().unwrap();
+        assert!(first.markdown_preview_enabled());
+        assert_eq!(preview_text(first), "First");
+
+        assert!(documents.update_active(|document| document.filename == "second.md"));
+        let second = documents.active().unwrap();
+        assert!(!second.markdown_preview_enabled());
+        assert_eq!(preview_text(second), "Second");
+    }
+
+    #[test]
+    fn switching_documents_requests_independent_preview_scroll_resets() {
+        let mut documents = DocumentManager::default();
+        documents.list.push(markdown_document("first.md", "# First"));
+        documents.list.push(markdown_document("second.md", "# Second"));
+
+        {
+            let second = documents.active_mut().unwrap();
+            second.markdown_preview.set_enabled(true);
+            second.markdown_preview.prepare(&second.buffer, 80);
+            assert!(second.markdown_preview.take_scroll_reset());
+        }
+
+        assert!(documents.update_active(|document| document.filename == "first.md"));
+        {
+            let first = documents.active_mut().unwrap();
+            first.markdown_preview.set_enabled(true);
+            first.markdown_preview.prepare(&first.buffer, 80);
+            assert!(first.markdown_preview.take_scroll_reset());
+        }
+
+        assert!(documents.update_active(|document| document.filename == "second.md"));
+        assert!(documents.active_mut().unwrap().markdown_preview.take_scroll_reset());
+
+        assert!(documents.update_active(|document| document.filename == "first.md"));
+        assert!(documents.active_mut().unwrap().markdown_preview.take_scroll_reset());
+    }
+
+    #[test]
+    fn non_markdown_document_never_exposes_preview() {
+        let mut document = markdown_document("notes.txt", "plain text");
+        document.buffer.borrow_mut().set_language(None);
+        document.markdown_preview.set_enabled(true);
+
+        assert!(!document.markdown_preview_enabled());
+    }
 
     #[test]
     fn test_parse_last_numbers() {

@@ -999,6 +999,15 @@ vi = "Ngắt dòng tự động"
 zh-hans = "自动换行"
 zh-hant = "自動換行"
 
+[ViewMarkdownPreview]
+en = "Markdown Preview"
+
+[MarkdownPreviewUnavailableTooLarge]
+en = "Markdown preview unavailable: file exceeds the 1 MiB preview limit."
+
+[MarkdownPreviewUnavailableLineTooLong]
+en = "Markdown preview unavailable: a line exceeds the 32 KiB preview limit."
+
 [ViewGoToFile]
 en = "Go to File…"
 ar = "الانتقال إلى ملف…"

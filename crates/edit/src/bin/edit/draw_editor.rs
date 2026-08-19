@@ -8,6 +8,7 @@ use edit::input::{kbmod, vk};
 use edit::tui::*;
 use stdext::string_from_utf8_lossy_owned;
 
+use crate::draw_markdown_preview::draw_markdown_preview;
 use crate::localization::*;
 use crate::state::*;
 
@@ -24,8 +25,18 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         _ => 2,
     };
 
-    if let Some(doc) = state.documents.active() {
-        ctx.textarea("textarea", doc.buffer.clone());
+    if let Some(document) = state.documents.active_mut() {
+        let buffer = document.buffer.clone();
+        if document.markdown_preview_enabled() {
+            draw_markdown_preview(
+                ctx,
+                &buffer,
+                &mut document.markdown_preview,
+                size.height - height_reduction,
+            );
+        } else {
+            ctx.textarea("textarea", buffer);
+        }
         ctx.inherit_focus();
     } else {
         ctx.block_begin("empty");
