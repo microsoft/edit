@@ -27,12 +27,57 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
     if let Some(doc) = state.documents.active() {
         ctx.textarea("textarea", doc.buffer.clone());
         ctx.inherit_focus();
+        if let Some(position) = ctx.take_textarea_context_menu_position() {
+            state.editor_context_menu_position = Some(position);
+        }
     } else {
         ctx.block_begin("empty");
         ctx.block_end();
     }
 
     ctx.attr_intrinsic_size(Size { width: 0, height: size.height - height_reduction });
+
+    draw_editor_context_menu(ctx, state);
+}
+
+fn draw_editor_context_menu(ctx: &mut Context, state: &mut State) {
+    let Some(position) = state.editor_context_menu_position else {
+        return;
+    };
+    let Some(buffer) = state.documents.active().map(|doc| doc.buffer.clone()) else {
+        state.editor_context_menu_position = None;
+        return;
+    };
+
+    ctx.context_menu_begin("editor_context_menu", position);
+
+    if ctx.context_menu_button(loc(LocId::EditCut), 'T', kbmod::CTRL | vk::X) {
+        buffer.borrow_mut().cut(ctx.clipboard_mut());
+        ctx.needs_rerender();
+    }
+    if ctx.context_menu_button(loc(LocId::EditCopy), 'C', kbmod::CTRL | vk::C) {
+        buffer.borrow_mut().copy(ctx.clipboard_mut());
+        ctx.needs_rerender();
+    }
+    if ctx.context_menu_button(loc(LocId::EditPaste), 'P', kbmod::CTRL | vk::V) {
+        buffer.borrow_mut().paste(ctx.clipboard_ref(), false);
+        ctx.needs_rerender();
+    }
+    if ctx.context_menu_button(loc(LocId::EditSelectAll), 'A', kbmod::CTRL | vk::A) {
+        buffer.borrow_mut().select_all();
+        ctx.needs_rerender();
+    }
+    if state.wants_search.kind != StateSearchKind::Disabled
+        && ctx.context_menu_button(loc(LocId::EditFind), 'F', kbmod::CTRL | vk::F)
+    {
+        state.wants_search.kind = StateSearchKind::Search;
+        state.wants_search.focus = true;
+        ctx.needs_rerender();
+    }
+
+    if ctx.context_menu_end() {
+        state.editor_context_menu_position = None;
+    }
 }
 
 fn draw_search(ctx: &mut Context, state: &mut State) {
@@ -340,6 +385,21 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
     }
 }
 
+fn validate_goto_point(line: &str) -> Option<Point> {
+    let mut coords = [0; 2];
+    let (y, x) = line.split_once(':').unwrap_or((line, "1"));
+    // Using a loop here avoids 2 copies of the str->int code.
+    // This makes the binary more compact.
+    for (i, s) in [x, y].iter().enumerate() {
+        coords[i] = s.parse::<CoordType>().ok()?;
+    }
+    // Counting backwards is only supported for lines.
+    if coords[0] < 1 {
+        return None;
+    }
+    Some(Point { x: coords[0], y: coords[1] })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,11 +432,7 @@ mod tests {
             tb.selection_update_logical(Point { x: 8, y: 0 });
         }
 
-        draw_frame(
-            &mut tui,
-            &mut state,
-            Some(Input::Resize(Size { width: 80, height: 24 })),
-        );
+        draw_frame(&mut tui, &mut state, Some(Input::Resize(Size { width: 80, height: 24 })));
         settle(&mut tui, &mut state);
 
         let margin = buffer.borrow().margin_width();
@@ -399,20 +455,6 @@ mod tests {
             layout.contains("editor_context_menu"),
             "right-clicking selected text should open the context menu:\n{layout}"
         );
+        assert_eq!(layout.matches("classname:    menu_checkbox").count(), 5, "{layout}");
     }
-}
-
-fn validate_goto_point(line: &str) -> Option<Point> {
-    let mut coords = [0; 2];
-    let (y, x) = line.split_once(':').unwrap_or((line, "1"));
-    // Using a loop here avoids 2 copies of the str->int code.
-    // This makes the binary more compact.
-    for (i, s) in [x, y].iter().enumerate() {
-        coords[i] = s.parse::<CoordType>().ok()?;
-    }
-    // Counting backwards is only supported for lines.
-    if coords[0] < 1 {
-        return None;
-    }
-    Some(Point { x: coords[0], y: coords[1] })
 }
