@@ -340,6 +340,68 @@ pub fn draw_goto_menu(ctx: &mut Context, state: &mut State) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use edit::input::{Input, InputMouse, InputMouseState};
+    use stdext::arena;
+
+    fn draw_frame(tui: &mut Tui, state: &mut State, input: Option<Input<'_>>) {
+        let mut ctx = tui.create_context(input);
+        draw_editor(&mut ctx, state);
+    }
+
+    fn settle(tui: &mut Tui, state: &mut State) {
+        while tui.needs_settling() {
+            draw_frame(tui, state, None);
+        }
+    }
+
+    #[test]
+    fn right_clicking_selected_text_opens_context_menu() {
+        let _ = arena::init(128 * MEBI);
+        let mut tui = Tui::new().unwrap();
+        let mut state = State::new().unwrap();
+        let buffer = state.documents.add_untitled().unwrap().buffer.clone();
+
+        {
+            let mut tb = buffer.borrow_mut();
+            tb.copy_from_str(&String::from("selected text"));
+            tb.cursor_move_to_logical(Point { x: 0, y: 0 });
+            tb.start_selection();
+            tb.selection_update_logical(Point { x: 8, y: 0 });
+        }
+
+        draw_frame(
+            &mut tui,
+            &mut state,
+            Some(Input::Resize(Size { width: 80, height: 24 })),
+        );
+        settle(&mut tui, &mut state);
+
+        let margin = buffer.borrow().margin_width();
+        draw_frame(
+            &mut tui,
+            &mut state,
+            Some(Input::Mouse(InputMouse {
+                state: InputMouseState::Right,
+                modifiers: kbmod::NONE,
+                position: Point { x: margin + 1, y: 0 },
+                scroll: Point::default(),
+                drag: false,
+            })),
+        );
+        settle(&mut tui, &mut state);
+
+        let scratch = arena::scratch_arena(None);
+        let layout = tui.debug_layout(&scratch);
+        assert!(
+            layout.contains("editor_context_menu"),
+            "right-clicking selected text should open the context menu:\n{layout}"
+        );
+    }
+}
+
 fn validate_goto_point(line: &str) -> Option<Point> {
     let mut coords = [0; 2];
     let (y, x) = line.split_once(':').unwrap_or((line, "1"));
