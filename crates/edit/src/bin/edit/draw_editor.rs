@@ -455,6 +455,15 @@ mod tests {
             layout.contains("editor_context_menu"),
             "right-clicking selected text should open the context menu:\n{layout}"
         );
-        assert_eq!(layout.matches("classname:    menu_checkbox").count(), 5, "{layout}");
+        for id in [
+            LocId::EditCut,
+            LocId::EditCopy,
+            LocId::EditPaste,
+            LocId::EditSelectAll,
+            LocId::EditFind,
+        ] {
+            let label = format!("text:         \"  {}\"", loc(id));
+            assert!(layout.contains(&label), "missing context-menu label {label}:\n{layout}");
+        }
     }
 }
