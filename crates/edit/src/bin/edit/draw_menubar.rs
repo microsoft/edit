@@ -6,6 +6,7 @@ use edit::input::{kbmod, vk};
 use edit::tui::*;
 use stdext::arena_format;
 
+use crate::draw_navigation::document_is_markdown;
 use crate::localization::*;
 use crate::settings::Settings;
 use crate::state::*;
@@ -123,12 +124,26 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
 
 fn draw_menu_view(ctx: &mut Context, state: &mut State) {
     if let Some(doc) = state.documents.active() {
+        let markdown_path = doc.path.clone().filter(|_| document_is_markdown(doc));
         let mut tb = doc.buffer.borrow_mut();
         let word_wrap = tb.is_word_wrap_enabled();
 
         // All values on the statusbar are currently document specific.
         if ctx.menubar_menu_button(loc(LocId::ViewFocusStatusbar), 'S', vk::NULL) {
             state.wants_statusbar_focus = true;
+        }
+        // EN: Keep Navigation second in View, but disable it unless the active file is Markdown.
+        // 中文：「導覽視窗」固定為檢視選單第二項，非 Markdown 文件時僅反灰停用。
+        if let Some(markdown_path) = markdown_path {
+            if ctx.menubar_menu_button(loc(LocId::ViewNavigation), 'N', vk::NULL) {
+                if state.navigation_path.as_ref() != Some(&markdown_path) {
+                    state.navigation_collapsed.clear();
+                    state.navigation_path = Some(markdown_path);
+                }
+                state.wants_navigation = true;
+            }
+        } else {
+            ctx.menubar_menu_button_disabled(loc(LocId::ViewNavigation), 'N', vk::NULL);
         }
         if ctx.menubar_menu_button(loc(LocId::ViewGoToFile), 'F', kbmod::CTRL | vk::P) {
             state.wants_go_to_file = true;

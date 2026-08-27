@@ -6,6 +6,7 @@ mod documents;
 mod draw_editor;
 mod draw_filepicker;
 mod draw_menubar;
+mod draw_navigation;
 mod draw_statusbar;
 mod localization;
 mod settings;
@@ -18,6 +19,7 @@ use std::{env, process};
 use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
+use draw_navigation::*;
 use draw_statusbar::*;
 use edit::framebuffer::{self, IndexedColor};
 use edit::helpers::*;
@@ -364,6 +366,9 @@ fn draw(ctx: &mut Context, state: &mut State) {
     }
     if state.wants_go_to_file {
         draw_go_to_file(ctx, state);
+    }
+    if state.wants_navigation {
+        draw_dialog_navigation(ctx, state);
     }
     if state.wants_about {
         draw_dialog_about(ctx, state);

@@ -617,7 +617,7 @@ impl Tui {
 
                     // This root is modal and swallows all clicks,
                     // no matter whether the click was inside it or not.
-                    if matches!(root.borrow().content, NodeContent::Modal(_)) {
+                    if matches!(root.borrow().content, NodeContent::Modal(..)) {
                         break;
                     }
                 }
@@ -965,7 +965,7 @@ impl Tui {
 
             self.framebuffer.replace_attr(outer_clipped, Attributes::All, Attributes::None);
 
-            if matches!(node.content, NodeContent::Modal(_)) {
+            if matches!(node.content, NodeContent::Modal(..)) {
                 let rect =
                     Rect { left: 0, top: 0, right: self.size.width, bottom: self.size.height };
                 let dim = self.indexed_alpha(IndexedColor::Background, 1, 2);
@@ -988,10 +988,19 @@ impl Tui {
         }
 
         match &mut node.content {
-            NodeContent::Modal(title) if !title.is_empty() => {
+            NodeContent::Modal(title, centered) if !title.is_empty() => {
+                let title_left = if *centered {
+                    let title_width = unicode::MeasurementConfig::new(&title.as_bytes())
+                        .goto_visual(Point { x: CoordType::MAX, y: 0 })
+                        .visual_pos
+                        .x;
+                    node.outer.left + (node.outer.width() - title_width) / 2
+                } else {
+                    node.outer.left + 2
+                };
                 self.framebuffer.replace_text(
                     node.outer.top,
-                    node.outer.left + 2,
+                    title_left.max(node.outer.left + 1),
                     node.outer.right - 1,
                     title,
                 );
@@ -1781,6 +1790,16 @@ impl<'a> Context<'a, '_> {
 
     /// Begins a modal window. Call [`Context::modal_end()`].
     pub fn modal_begin(&mut self, classname: &'static str, title: &str) {
+        self.modal_begin_internal(classname, title, false);
+    }
+
+    /// EN: Begins a modal whose title is centered in the top border; call [`Context::modal_end()`].
+    /// 中文：建立標題置於上框線中央的對話框；結束時呼叫 [`Context::modal_end()`]。
+    pub fn modal_begin_centered_title(&mut self, classname: &'static str, title: &str) {
+        self.modal_begin_internal(classname, title, true);
+    }
+
+    fn modal_begin_internal(&mut self, classname: &'static str, title: &str, centered_title: bool) {
         self.block_begin(classname);
         self.attr_float(FloatSpec {
             anchor: Anchor::Root,
@@ -1801,7 +1820,7 @@ impl<'a> Context<'a, '_> {
         } else {
             arena_format!(self.arena(), " {} ", title)
         };
-        last_node.content = NodeContent::Modal(title);
+        last_node.content = NodeContent::Modal(title, centered_title);
         self.last_modal = Some(self.tree.last_node);
     }
 
@@ -3268,6 +3287,24 @@ impl<'a> Context<'a, '_> {
         self.menubar_menu_checkbox(text, accelerator, shortcut, false)
     }
 
+    /// EN: Appends a visible but non-interactive disabled button to the current menu.
+    /// 中文：在目前選單加入可見但不可互動的反灰按鈕。
+    pub fn menubar_menu_button_disabled(
+        &mut self,
+        text: &str,
+        accelerator: char,
+        shortcut: InputKey,
+    ) {
+        self.table_next_row();
+        self.attr_foreground_rgba(self.indexed(IndexedColor::BrightBlack));
+        self.button_label(
+            "menu_button_disabled",
+            text,
+            ButtonStyle::default().bracketed(false).checked(false).accelerator(accelerator),
+        );
+        self.menubar_shortcut(shortcut);
+    }
+
     /// Appends a checkbox to the current menu.
     /// Returns true if the checkbox was activated.
     pub fn menubar_menu_checkbox(
@@ -3793,7 +3830,7 @@ enum NodeContent<'a> {
     #[default]
     None,
     List(ListContent<'a>),
-    Modal(BString<'a>), // title
+    Modal(BString<'a>, bool), // title, centered
     Table(TableContent<'a>),
     Text(TextContent<'a>),
     Textarea(TextareaContent<'a>),
