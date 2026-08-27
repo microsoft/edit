@@ -109,10 +109,7 @@ extends:
               CARGO_TARGET_DIR: C:\cargo_target_dir
               # RUSTC_BOOTSTRAP=1 is required to make panic-immediate-abort work.
               RUSTC_BOOTSTRAP: 1
-              # `nuget install -ExcludeVersion` (see packages.config)
-              # restores Inno Setup here.
               InnoSetupRoot: "$(Build.SourcesDirectory)\\.tools\\Tools.InnoSetup\\tools"
-              # Holds the uninstaller .e32 that ISCC embeds into every installer.
               SignedUninstallerDir: "$(Build.SourcesDirectory)\\.signing"
             steps:
               # NOTE: Step objects have ordered keys and you MUST have "task" as the first key.
@@ -153,7 +150,7 @@ extends:
                     -OutputDirectory $(Build.SourcesDirectory)/.tools
                     -ExcludeVersion
                     -NonInteractive
-              # Used for `ob_createvpack_version`, the installer version and all output file names.
+              # Extract the version for `ob_createvpack_version`.
               - pwsh: |-
                   $cargoToml = Get-Content -Raw -LiteralPath crates/edit/Cargo.toml
                   $m = [regex]::Match($cargoToml, '(?m)^version\s*=\s*"([^"]+)"')
@@ -203,9 +200,8 @@ extends:
                         VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/arm64"
                     displayName: Produce ${{platform}} release archive
               # Run ISCC once to generate the uninstaller .e32 file.
-              # Rename .e32 → .exe so the signing task recognises the extension.
-              # The .e32 is arch-independent (confirmed: same hash for x64 and arm64).
-              # ISCC exits with code 1 because the file isn't signed yet.
+              # Rename .e32 -> .exe so the signing task recognises the extension.
+              # The uninstaller is always x86 on all architectures, so we only need to build it once.
               - pwsh: |-
                   $iscc = Join-Path $env:InnoSetupRoot 'ISCC.exe'
                   if (-not (Test-Path -LiteralPath $iscc)) {
@@ -216,7 +212,6 @@ extends:
                   & $iscc /Q `
                       "/DSignedUninstallerDir=$env:SIGNED_UNINSTALLER_DIR" `
                       "/DAppVersion=$env:EDIT_VERSION" `
-                      "/DArchitecturesAllowed=x64os" `
                       "/DSource=$env:VPACK_ROOT\edit.exe" `
                       "/O$env:AGENT_TEMPDIRECTORY" `
                       /Fdummy `

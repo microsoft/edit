@@ -23,11 +23,11 @@ $version = $versionMatch.Groups[1].Value
 cargo build --config $config --release --target aarch64-pc-windows-msvc
 cargo build --config $config --release --target x86_64-pc-windows-msvc
 
-$iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+$iscc = "C:\Program Files\Inno Setup 7\ISCC.exe"
 if (!(Test-Path $iscc)) {
-    $iscc = "$env:LocalAppData\Programs\Inno Setup 6\ISCC.exe"
+    $iscc = "$env:LocalAppData\Programs\Inno Setup 7\ISCC.exe"
     if (!(Test-Path $iscc)) {
-        throw "Please install Inno Setup 6: https://jrsoftware.org/isdl.php"
+        throw "Please install Inno Setup 7: https://jrsoftware.org/isdl.php"
     }
 }
 
