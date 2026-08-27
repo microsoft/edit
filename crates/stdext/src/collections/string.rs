@@ -38,6 +38,12 @@ impl<'a> BString<'a> {
         Ok(Self { vec })
     }
 
+    /// Converts this string into a byte vector.
+    #[inline]
+    pub fn into_bytes(self) -> BVec<'a, u8> {
+        self.vec
+    }
+
     /// Validates UTF-8, replacing invalid sequences with U+FFFD.
     pub fn from_utf8_lossy(alloc: &'a dyn Allocator, vec: BVec<'a, u8>) -> Self {
         let mut iter = vec.utf8_chunks();
