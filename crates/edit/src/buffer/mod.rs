@@ -1791,6 +1791,7 @@ impl TextBuffer {
         let line_number_width = self.margin_width.max(3) as usize - 3;
         let text_width = width - self.margin_width;
         let mut visual_pos_x_max = 0;
+        let mut selection_rects = Vec::new();
 
         // Pick the cursor closer to the `origin.y`.
         let mut cursor = {
@@ -1910,17 +1911,10 @@ impl TextBuffer {
                     bottom: top + 1,
                 };
 
-                let mut bg = fb.indexed(IndexedColor::Foreground).oklab_blend(fb.indexed_alpha(
-                    IndexedColor::BrightBlue,
-                    1,
-                    2,
-                ));
-                if !focused {
-                    bg = bg.oklab_blend(fb.indexed_alpha(IndexedColor::Background, 1, 2));
-                };
-                let fg = fb.contrasted(bg);
+                let (bg, fg) = fb.selection_colors(focused);
                 fb.blend_bg(rect, bg);
                 fb.blend_fg(rect, fg);
+                selection_rects.push(rect);
             }
 
             // Nothing to do if the entire line is empty.
@@ -2022,6 +2016,14 @@ impl TextBuffer {
         let logical_y_beg = self.cursor_for_rendering.unwrap().logical_pos.y;
         let logical_y_end = cursor.logical_pos.y + 1;
         self.render_apply_highlights(origin, destination, logical_y_beg..logical_y_end, fb);
+
+        // EN: Explicit selection colors take precedence over syntax highlighting.
+        // 中文：明確指定的反白色彩優先於語法醒目提示色彩。
+        let (selection_bg, selection_fg) = fb.selection_colors(focused);
+        for rect in selection_rects {
+            fb.blend_bg(rect, selection_bg);
+            fb.blend_fg(rect, selection_fg);
+        }
 
         // Colorize the margin that we wrote above.
         if self.margin_width > 0 {

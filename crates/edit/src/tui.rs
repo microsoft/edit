@@ -465,6 +465,12 @@ impl Tui {
         self.modal_default_fg = color;
     }
 
+    /// EN: Sets selected-text colors; `None` restores terminal-adaptive colors.
+    /// 中文：設定反白文字色彩；`None` 恢復依終端機調整的色彩。
+    pub fn set_selection_colors(&mut self, colors: Option<(StraightRgba, StraightRgba)>) {
+        self.framebuffer.set_selection_colors(colors);
+    }
+
     /// If the TUI is currently running animations, etc.,
     /// this will return a timeout smaller than [`time::Duration::MAX`].
     pub fn read_timeout(&mut self) -> time::Duration {
@@ -1441,6 +1447,20 @@ impl<'a> Context<'a, '_> {
     /// See [`Framebuffer::contrasted()`].
     pub fn contrasted(&self, color: StraightRgba) -> StraightRgba {
         self.tui.framebuffer.contrasted(color)
+    }
+
+    pub fn set_floater_default_colors(&mut self, bg: StraightRgba, fg: StraightRgba) {
+        self.tui.set_floater_default_bg(bg);
+        self.tui.set_floater_default_fg(fg);
+    }
+
+    pub fn set_modal_default_colors(&mut self, bg: StraightRgba, fg: StraightRgba) {
+        self.tui.set_modal_default_bg(bg);
+        self.tui.set_modal_default_fg(fg);
+    }
+
+    pub fn set_selection_colors(&mut self, colors: Option<(StraightRgba, StraightRgba)>) {
+        self.tui.set_selection_colors(colors);
     }
 
     /// Returns the clipboard.

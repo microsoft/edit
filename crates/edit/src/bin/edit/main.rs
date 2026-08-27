@@ -76,6 +76,7 @@ fn run() -> apperr::Result<()> {
     if let Err(err) = Settings::reload() {
         state.add_error(err);
     }
+    state.theme = Settings::borrow().theme;
 
     if handle_args(&mut state)? {
         return Ok(());
@@ -337,6 +338,7 @@ fn print_version() {
 }
 
 fn draw(ctx: &mut Context, state: &mut State) {
+    configure_theme(ctx, state);
     draw_menubar(ctx, state);
     draw_editor(ctx, state);
     draw_statusbar(ctx, state);
@@ -364,6 +366,9 @@ fn draw(ctx: &mut Context, state: &mut State) {
     }
     if state.wants_go_to_file {
         draw_go_to_file(ctx, state);
+    }
+    if state.wants_theme_picker {
+        draw_dialog_theme(ctx, state);
     }
     if state.wants_about {
         draw_dialog_about(ctx, state);
@@ -411,6 +416,26 @@ fn draw(ctx: &mut Context, state: &mut State) {
         // All of the above shortcuts happen to require a rerender.
         ctx.needs_rerender();
         ctx.set_input_consumed();
+    }
+}
+
+fn configure_theme(ctx: &mut Context, state: &mut State) {
+    // EN: Apply editor, modal, and selected-text colors; DEFAULT follows the terminal palette.
+    // 中文：套用編輯區、對話框及反白文字色彩；DEFAULT 維持依終端配色調整。
+    if let Some(colors) = state.theme.colors() {
+        ctx.attr_background_rgba(colors.background);
+        ctx.attr_foreground_rgba(colors.foreground);
+        ctx.set_floater_default_colors(colors.background, colors.foreground);
+        ctx.set_modal_default_colors(colors.background, colors.foreground);
+        ctx.set_selection_colors(Some((colors.selection_background, colors.selection_foreground)));
+    } else {
+        let floater_bg = ctx
+            .indexed_alpha(IndexedColor::Background, 2, 3)
+            .oklab_blend(ctx.indexed_alpha(IndexedColor::Foreground, 1, 3));
+        let floater_fg = ctx.contrasted(floater_bg);
+        ctx.set_floater_default_colors(floater_bg, floater_fg);
+        ctx.set_modal_default_colors(floater_bg, floater_fg);
+        ctx.set_selection_colors(None);
     }
 }
 

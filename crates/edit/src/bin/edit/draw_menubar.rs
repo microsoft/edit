@@ -7,7 +7,7 @@ use edit::tui::*;
 use stdext::arena_format;
 
 use crate::localization::*;
-use crate::settings::Settings;
+use crate::settings::{Settings, Theme};
 use crate::state::*;
 
 pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
@@ -68,6 +68,11 @@ fn draw_menu_file(ctx: &mut Context, state: &mut State) {
             }
             Err(err) => error_log_add(ctx, state, err),
         }
+    }
+    if ctx.menubar_menu_button(loc(LocId::FileTheme), 'T', vk::NULL) {
+        // EN: Theme selection is an independent persistent setting.
+        // 中文：主題選擇是一項獨立且可保存的設定。
+        state.wants_theme_picker = true;
     }
     if state.documents.active().is_some()
         && ctx.menubar_menu_button(loc(LocId::FileClose), 'C', kbmod::CTRL | vk::W)
@@ -195,5 +200,42 @@ pub fn draw_dialog_about(ctx: &mut Context, state: &mut State) {
     }
     if ctx.modal_end() {
         state.wants_about = false;
+    }
+}
+
+pub fn draw_dialog_theme(ctx: &mut Context, state: &mut State) {
+    // EN: Present the five persistent display themes in one independent modal.
+    // 中文：以獨立對話框提供五種可保存的畫面主題選擇。
+    let mut selected = None;
+
+    ctx.modal_begin("theme", loc(LocId::ThemeDialogTitle));
+    {
+        ctx.list_begin("themes");
+        ctx.inherit_focus();
+        ctx.focus_on_first_present();
+        ctx.attr_padding(Rect::three(1, 2, 1));
+        {
+            for theme in Theme::ALL {
+                if ctx.list_item(theme == state.theme, theme.display_name())
+                    == ListSelection::Activated
+                {
+                    selected = Some(theme);
+                }
+            }
+        }
+        ctx.list_end();
+    }
+    let close = ctx.modal_end();
+
+    if let Some(theme) = selected {
+        state.theme = theme;
+        state.wants_theme_picker = false;
+        if let Err(err) = Settings::set_theme(theme) {
+            error_log_add(ctx, state, err);
+        }
+        ctx.needs_rerender();
+    } else if close {
+        state.wants_theme_picker = false;
+        ctx.needs_rerender();
     }
 }

@@ -15,6 +15,7 @@ use edit::{buffer, icu};
 use crate::apperr;
 use crate::documents::DocumentManager;
 use crate::localization::*;
+use crate::settings::Theme;
 
 #[repr(transparent)]
 pub struct FormatApperr(apperr::Error);
@@ -133,6 +134,7 @@ pub struct OscTitleFileStatus {
 pub struct State {
     pub menubar_color_bg: StraightRgba,
     pub menubar_color_fg: StraightRgba,
+    pub theme: Theme,
 
     pub documents: DocumentManager,
 
@@ -166,6 +168,7 @@ pub struct State {
     pub wants_statusbar_focus: bool,
     pub wants_indentation_picker: bool,
     pub wants_go_to_file: bool,
+    pub wants_theme_picker: bool,
     pub wants_about: bool,
     pub wants_close: bool,
     pub wants_exit: bool,
@@ -184,6 +187,7 @@ impl State {
         Ok(Self {
             menubar_color_bg: StraightRgba::zero(),
             menubar_color_fg: StraightRgba::zero(),
+            theme: Theme::Default,
 
             documents: Default::default(),
 
@@ -216,6 +220,7 @@ impl State {
             wants_encoding_change: StateEncodingChange::None,
             wants_indentation_picker: false,
             wants_go_to_file: false,
+            wants_theme_picker: false,
             wants_about: false,
             wants_close: false,
             wants_exit: false,

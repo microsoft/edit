@@ -452,6 +452,11 @@ tr = "Tercihler"
 zh-hans = "设置"
 zh-hant = "設定"
 
+[FileTheme]
+en = "Theme…"
+zh-hans = "主题…"
+zh-hant = "主題…"
+
 [FileClose]
 en = "Close File"
 ar = "إغلاق الملف"
@@ -1288,6 +1293,11 @@ uk = "Про програму"
 vi = "Giới thiệu"
 zh-hans = "关于"
 zh-hant = "關於"
+
+[ThemeDialogTitle]
+en = "Select Theme"
+zh-hans = "选择主题"
+zh-hant = "選擇主題"
 
 [AboutDialogVersion]
 en = "Version: "
