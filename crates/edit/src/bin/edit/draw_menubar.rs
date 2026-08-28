@@ -3,6 +3,7 @@
 
 use edit::helpers::*;
 use edit::input::{kbmod, vk};
+use edit::oklab::StraightRgba;
 use edit::tui::*;
 use stdext::arena_format;
 
@@ -12,8 +13,10 @@ use crate::state::*;
 
 pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
     ctx.menubar_begin();
-    ctx.attr_background_rgba(state.menubar_color_bg);
-    ctx.attr_foreground_rgba(state.menubar_color_fg);
+    // EN: Keep the menu row visually distinct with a white background and black text.
+    // 中文：選單列固定使用白色背景與黑色文字，使其與編輯區清楚區隔。
+    ctx.attr_background_rgba(StraightRgba::from_rgba(0xffffffff));
+    ctx.attr_foreground_rgba(StraightRgba::from_rgba(0x000000ff));
     {
         let contains_focus = ctx.contains_focus();
 

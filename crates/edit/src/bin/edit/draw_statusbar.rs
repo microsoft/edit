@@ -7,6 +7,7 @@ use edit::helpers::*;
 use edit::icu;
 use edit::input::vk;
 use edit::lsh::LANGUAGES;
+use edit::oklab::StraightRgba;
 use edit::tui::*;
 use stdext::arena::scratch_arena;
 use stdext::arena_format;
@@ -18,8 +19,10 @@ use crate::state::*;
 pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
     ctx.table_begin("statusbar");
     ctx.attr_focus_well();
-    ctx.attr_background_rgba(state.menubar_color_bg);
-    ctx.attr_foreground_rgba(state.menubar_color_fg);
+    // EN: Use a green status row with white text for a consistent high-contrast footer.
+    // 中文：狀態列固定使用綠色背景與白色文字，形成一致且高對比的頁尾。
+    ctx.attr_background_rgba(StraightRgba::from_rgba(0x008000ff));
+    ctx.attr_foreground_rgba(StraightRgba::from_rgba(0xffffffff));
     ctx.table_set_cell_gap(Size { width: 2, height: 0 });
     ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
     ctx.attr_padding(Rect::two(0, 1));
