@@ -13,7 +13,7 @@
 #[path = "**/*.vcxproj"]
 #[path = "**/*.xaml"]
 #[path = "**/*.xml"]
-#[path = "**/*.xml"]
+#[path = "**/*.xhtml"]
 pub fn xml() {
     until /$/ {
         yield other;
