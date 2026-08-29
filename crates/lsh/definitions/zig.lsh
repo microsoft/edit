@@ -7,44 +7,33 @@ pub fn zig() {
 
         if /\/\/.*/ {
             yield comment;
-        } else if /\\\\.*/ {
-            yield string;
+        }
+        else if /'/ {
+            single_quote_string();
         } else if /"/ {
-            loop {
-                if /\\./ {
-                } else if /"/ {
-                    yield string;
-                    break;
-                } else if /$/ {
-                    yield string;
-                    break;
-                } else if /./ {}
-            }
-        } else if /'(\\.|[^'\\])'/ {
-            yield string;
-        } else if /@([a-zA-Z_]\w*)\s*\(/ {
-            yield $1 as method;
-        } else if /@[a-zA-Z_]\w*/ {
-            yield storage.annotation;
-        } else if /(?:break|continue|return|try|catch|orelse|if|else|switch|while|for|suspend|resume|async|await|defer|errdefer|unreachable)\>/ {
+            double_quote_string();
+        } else if /(?:break|continue|try|defer|else|errdefer|for|if|return|switch|unreachable|while)\>/ {
             yield keyword.control;
-        } else if /(?:const|var|fn|pub|usingnamespace|struct|enum|union|error|opaque|inline|noinline|comptime|callconv|volatile|allowzero|align|linksection|threadlocal|anytype)\>/ {
+        } else if /(?:addrspace|align|allowzero|and|anyframe|anytype|asm|callconv|catch|comptime|const|enum|error|export|extern|fn|inline|linksection|noalias|noinline|nosuspend|opaque|or|orelse|packed|pub|resume|struct|suspend|test|threadlocal|union|var|volatile)\>/ {
             yield keyword.other;
-        } else if /(?:true|false|null|undefined|nil)\>/ {
+        } else if /(?:true|false|null|undefined)\>/ {
             yield constant.language;
-        } else if /(?:i\d+|u\d+|f16|f32|f64|f128|isize|usize|bool|void|noreturn|type|anyerror)\>/ {
+        } else if /(?:bool|void|noreturn|type|anytype|anyerror|anyframe|anyopaque|isize|usize|comptime_int|comptime_float|f16|f32|f64|f80|f128)\>/ {
             yield storage.type;
-        } else if /-?(?:0x[0-9a-fA-F_]+|0b[01_]+|0o[0-7_]+|\d[\d_]*(?:\.\d[\d_]*)?)\>/ {
+        } else if /(?:c_char|c_short|c_ushort|c_int|c_uint|c_long|c_ulong|c_longlong|c_ulonglong|c_longdouble)\>/ {  // C ABI compatibility types
+	    yield storage.type;
+        } else if /(?:[iu]\d+)\>/ {  // i8, u32, i128, u7, etc.
+	    yield storage.type;
+	} else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+(?:\.[\d_]*)?|\.[\d_]+)(?:[eEpP][+-]?[\d_]+)?)/ {
             if /\w+/ {
+                // Invalid numeric literal
             } else {
                 yield constant.numeric;
             }
-        } else if /\.[a-zA-Z_]\w*/ {
-            yield variable; // Catches ZON field keys like .name, .version
         } else if /(\w+)\s*\(/ {
             yield $1 as method;
         } else if /\w+/ {
-            // Gobble word chars
+            // Gobble word chars to align the next iteration on a word boundary.
         }
 
         yield other;
