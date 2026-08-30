@@ -4,11 +4,23 @@
 pub fn zig() {
     until /$/ {
         yield other;
-
         if /\/\/.*/ {
             yield comment;
-        }
-        else if /'/ {
+        } else if /\s*\\\\/ {
+            // finish the rest of the current line
+            until /$/ {}
+
+            // keep consuming lines that start with optional spaces + \\
+            loop {
+                await input;
+                if /\s*\\\\/ {
+                    until /$/ {}
+                } else {
+                    break;
+                }
+            }
+            yield string;
+        } else if /'/ {
             single_quote_string();
         } else if /"/ {
             double_quote_string();
@@ -20,22 +32,23 @@ pub fn zig() {
             yield constant.language;
         } else if /(?:bool|void|noreturn|type|anytype|anyerror|anyframe|anyopaque|isize|usize|comptime_int|comptime_float|f16|f32|f64|f80|f128)\>/ {
             yield storage.type;
-        } else if /(?:c_char|c_short|c_ushort|c_int|c_uint|c_long|c_ulong|c_longlong|c_ulonglong|c_longdouble)\>/ {  // C ABI compatibility types
-	    yield storage.type;
-        } else if /(?:[iu]\d+)\>/ {  // i8, u32, i128, u7, etc.
-	    yield storage.type;
-	} else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+(?:\.[\d_]*)?|\.[\d_]+)(?:[eEpP][+-]?[\d_]+)?)/ {
+        } else if /(?:c_char|c_short|c_ushort|c_int|c_uint|c_long|c_ulong|c_ulonglong|c_longlong|c_longdouble)\>/ {
+            yield storage.type;
+        } else if /(?:[iu]\d+)\>/ {
+            yield storage.type;
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+(?:\.[\d_]*)?|\.[\d_]+)(?:[eEpP][+-]?[\d_]+)?)/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {
                 yield constant.numeric;
             }
+	} else if /@([a-zA-Z_]\w*)/ {
+    		yield method;
         } else if /(\w+)\s*\(/ {
             yield $1 as method;
         } else if /\w+/ {
             // Gobble word chars to align the next iteration on a word boundary.
         }
-
         yield other;
     }
 }
