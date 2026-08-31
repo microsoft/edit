@@ -448,6 +448,13 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                         'M' if csi.param_count == 0 => {
                             self.parser.x10_mouse_want = true;
                         }
+                        'u' if csi.param_count > 1 => {
+                            // Kitty keyboard events
+                            let char = csi.params[0] as u8;
+                            return Some(Input::Keyboard(
+                                InputKey::from_ascii(char as char)? | Self::parse_modifiers(csi),
+                            ));
+                        }
                         _ => {}
                     }
                 }
