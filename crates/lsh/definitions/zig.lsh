@@ -6,21 +6,20 @@ pub fn zig() {
         yield other;
         if /\/\/.*/ {
             yield comment;
-        } else if /\s*\\\\/ {
-            // finish the rest of the current line
-            until /$/ {}
-
-            // keep consuming lines that start with optional spaces + \\
-            loop {
-                await input;
-                if /\s*\\\\/ {
-                    until /$/ {}
-                } else {
-                    break;
-                }
-            }
-            yield string;
-        } else if /'/ {
+	} else if /\s*\\\\/ {
+	    until /$/ {}
+	    yield string;
+	
+  	  loop {
+  	      await input;
+    	    if /\s*\\\\/ {
+   	         until /$/ {}
+     	       yield string;
+    	    } else {
+  	          break;
+	        }
+ 	   }
+	} else if /'/ {
             single_quote_string();
         } else if /"/ {
             double_quote_string();
