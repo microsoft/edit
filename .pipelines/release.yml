@@ -48,6 +48,8 @@ extends:
   parameters:
     featureFlags:
       autoBaseline: false
+      networkisolation:
+        policy: Good
       WindowsHostVersion:
         Version: 2022
         Network: R1
@@ -107,6 +109,8 @@ extends:
               CARGO_TARGET_DIR: C:\cargo_target_dir
               # RUSTC_BOOTSTRAP=1 is required to make panic-immediate-abort work.
               RUSTC_BOOTSTRAP: 1
+              InnoSetupRoot: "$(Build.SourcesDirectory)\\.tools\\Tools.InnoSetup\\tools"
+              SignedUninstallerDir: "$(Build.SourcesDirectory)\\.signing"
             steps:
               # NOTE: Step objects have ordered keys and you MUST have "task" as the first key.
               # Objects with ordered keys... lol
@@ -133,6 +137,28 @@ extends:
               # fetching entirely prior to the build, and perform the build with the network disabled.
               - script: cargo fetch --config .cargo/release-windows-ms.toml
                 displayName: Fetch crates
+              # Pull Inno Setup from the internal Azure Artifacts NuGet feed.
+              - task: NuGetAuthenticate@1
+                displayName: Authenticate with Azure Artifacts (nuget)
+              - task: NuGetCommand@2
+                displayName: Restore Inno Setup
+                inputs:
+                  command: custom
+                  arguments: >-
+                    install $(Build.SourcesDirectory)/.pipelines/packages.config
+                    -ConfigFile $(Build.SourcesDirectory)/.pipelines/nuget.config
+                    -OutputDirectory $(Build.SourcesDirectory)/.tools
+                    -ExcludeVersion
+                    -NonInteractive
+              # Extract the version for `ob_createvpack_version`.
+              - pwsh: |-
+                  $cargoToml = Get-Content -Raw -LiteralPath crates/edit/Cargo.toml
+                  $m = [regex]::Match($cargoToml, '(?m)^version\s*=\s*"([^"]+)"')
+                  if (-not $m.Success) { throw 'Failed to extract version from crates/edit/Cargo.toml' }
+                  $version = $m.Groups[1].Value
+                  Write-Host "Edit version: $version"
+                  Write-Host "##vso[task.setvariable variable=EditVersion]$version"
+                displayName: Set EditVersion
               - ${{ each platform in parameters.buildPlatforms }}:
                   - script: cargo build --config .cargo/release-windows-ms.toml --frozen --release --target ${{platform}}
                     displayName: Build ${{platform}} Release
@@ -149,14 +175,6 @@ extends:
                       contents: |
                         *.exe
                         *.pdb
-              # Extract the version for `ob_createvpack_version`.
-              - script: |-
-                  @echo off
-                  for /f "tokens=3 delims=- " %%x in ('findstr /c:"version = " crates\edit\Cargo.toml') do (
-                      echo ##vso[task.setvariable variable=EditVersion]%%~x
-                      goto :EOF
-                  )
-                displayName: "Set EditVersion"
               - task: onebranch.pipeline.signing@1
                 displayName: "Sign files"
                 inputs:
@@ -166,19 +184,100 @@ extends:
                   search_root: "$(ob_createvpack_vpackdirectory)"
                   use_testsign: false
                   in_container: true
-
               - ${{ each platform in parameters.buildPlatforms }}:
-                - pwsh: |-
-                    $Dest = New-Item -Type Directory "_staging/${env:RELEASE_NAME}"
-                    Write-Host "Staging files from ${env:VPACK_ROOT} at $Dest"
-                    Get-ChildItem "${env:VPACK_ROOT}\*" -Include *.exe, *.pdb | Copy-Item -Destination $Dest -Verbose
-                    tar.exe -c -v --format=zip -f "$(ob_outputDirectory)\${env:RELEASE_NAME}.zip" -C _staging $env:RELEASE_NAME
-                  env:
-                    RELEASE_NAME: edit-$(EditVersion)-${{ replace(platform, 'pc-windows-msvc', 'windows') }}
-                    ${{ if eq(platform, 'i686-pc-windows-msvc') }}:
-                      VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/i386"
-                    ${{ elseif eq(platform, 'x86_64-pc-windows-msvc') }}:
-                      VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/amd64"
-                    ${{ else }}: # aarch64-pc-windows-msvc
-                      VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/arm64"
-                  displayName: Produce ${{platform}} release archive
+                  - pwsh: |-
+                      $Dest = New-Item -Type Directory "_staging/${env:RELEASE_NAME}"
+                      Write-Host "Staging files from ${env:VPACK_ROOT} at $Dest"
+                      Get-ChildItem "${env:VPACK_ROOT}\*" -Include *.exe, *.pdb | Copy-Item -Destination $Dest -Verbose
+                      tar.exe -c -v --format=zip -f "$(ob_outputDirectory)\${env:RELEASE_NAME}.zip" -C _staging $env:RELEASE_NAME
+                    env:
+                      RELEASE_NAME: edit-$(EditVersion)-${{ replace(platform, 'pc-windows-msvc', 'windows') }}
+                      ${{ if eq(platform, 'i686-pc-windows-msvc') }}:
+                        VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/i386"
+                      ${{ elseif eq(platform, 'x86_64-pc-windows-msvc') }}:
+                        VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/amd64"
+                      ${{ else }}: # aarch64-pc-windows-msvc
+                        VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/arm64"
+                    displayName: Produce ${{platform}} release archive
+              # Run ISCC once to generate the uninstaller .e32 file.
+              # Rename .e32 -> .exe so the signing task recognises the extension.
+              # The uninstaller is always x86 on all architectures, so we only need to build it once.
+              - pwsh: |-
+                  $iscc = Join-Path $env:InnoSetupRoot 'ISCC.exe'
+                  if (-not (Test-Path -LiteralPath $iscc)) {
+                      throw "ISCC.exe not found at $iscc"
+                  }
+                  New-Item -ItemType Directory -Force -Path $env:SIGNED_UNINSTALLER_DIR | Out-Null
+                  $ErrorActionPreference = 'Continue'
+                  & $iscc /Q `
+                      "/DSignedUninstallerDir=$env:SIGNED_UNINSTALLER_DIR" `
+                      "/DAppVersion=$env:EDIT_VERSION" `
+                      "/DSource=$env:VPACK_ROOT\edit.exe" `
+                      "/O$env:AGENT_TEMPDIRECTORY" `
+                      /Fdummy `
+                      assets\edit.iss
+                  $ErrorActionPreference = 'Stop'
+                  $e32 = Get-ChildItem "$env:SIGNED_UNINSTALLER_DIR\*.e32" | Select-Object -First 1
+                  if (-not $e32) { throw 'ISCC did not produce an uninstaller; see its output above' }
+                  Write-Host "Generated uninstaller: $($e32.Name)"
+                  Rename-Item $e32.FullName ($e32.FullName -replace '\.e32$', '.exe')
+                  exit 0
+                env:
+                  EDIT_VERSION: $(EditVersion)
+                  SIGNED_UNINSTALLER_DIR: $(SignedUninstallerDir)
+                  VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/amd64"
+                displayName: Generate unsigned uninstaller
+              - task: onebranch.pipeline.signing@1
+                displayName: Sign uninstaller
+                inputs:
+                  command: sign
+                  signing_profile: external_distribution
+                  files_to_sign: "*.exe"
+                  search_root: "$(SignedUninstallerDir)"
+                  use_testsign: false
+                  in_container: true
+              # Run ISCC a second time to create the actual installers.
+              - ${{ each platform in parameters.buildPlatforms }}:
+                  - pwsh: |-
+                      # ISCC only accepts the signed uninstaller under its original .e32 extension.
+                      Get-ChildItem "$env:SIGNED_UNINSTALLER_DIR\*.exe" | ForEach-Object {
+                          Rename-Item $_.FullName ($_.FullName -replace '\.exe$', '.e32')
+                      }
+
+                      $iscc = Join-Path $env:InnoSetupRoot 'ISCC.exe'
+                      New-Item -ItemType Directory -Force -Path $env:OB_OUTPUTDIRECTORY | Out-Null
+                      & $iscc `
+                          /Q `
+                          "/DSignedUninstallerDir=$env:SIGNED_UNINSTALLER_DIR" `
+                          "/DAppVersion=$env:EDIT_VERSION" `
+                          "/DArchitecturesAllowed=$env:ARCH" `
+                          "/DSource=$env:VPACK_ROOT\edit.exe" `
+                          "/O$env:OB_OUTPUTDIRECTORY" `
+                          "/F$env:OUTPUT_BASENAME" `
+                          assets\edit.iss
+                      if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+                      Write-Host "Produced $env:OB_OUTPUTDIRECTORY\$env:OUTPUT_BASENAME.exe"
+                    env:
+                      EDIT_VERSION: $(EditVersion)
+                      OB_OUTPUTDIRECTORY: $(ob_outputDirectory)
+                      OUTPUT_BASENAME: edit-$(EditVersion)-${{ replace(platform, 'pc-windows-msvc', 'windows') }}-setup
+                      SIGNED_UNINSTALLER_DIR: $(SignedUninstallerDir)
+                      ${{ if eq(platform, 'i686-pc-windows-msvc') }}:
+                        ARCH: x86
+                        VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/i386"
+                      ${{ elseif eq(platform, 'x86_64-pc-windows-msvc') }}:
+                        ARCH: x64os
+                        VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/amd64"
+                      ${{ else }}: # aarch64-pc-windows-msvc
+                        ARCH: arm64
+                        VPACK_ROOT: "$(ob_createvpack_vpackdirectory)/arm64"
+                    displayName: Build ${{platform}} installer
+              - task: onebranch.pipeline.signing@1
+                displayName: Sign installers
+                inputs:
+                  command: sign
+                  signing_profile: external_distribution
+                  files_to_sign: "edit-*.exe"
+                  search_root: "$(ob_outputDirectory)"
+                  use_testsign: false
+                  in_container: true

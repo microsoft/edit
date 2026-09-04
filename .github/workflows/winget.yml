@@ -26,8 +26,8 @@ jobs:
         run: |
           # Get installer info from release event
           $assets = '${{ toJSON(github.event.release.assets) }}' | ConvertFrom-Json
-          $x64InstallerUrl = $assets | Where-Object -Property name -like '*x86_64-windows.zip' | Select-Object -ExpandProperty browser_download_url
-          $arm64InstallerUrl = $assets | Where-Object -Property name -like '*aarch64-windows.zip' | Select-Object -ExpandProperty browser_download_url
+          $x64InstallerUrl = $assets | Where-Object -Property name -like '*x86_64-windows-setup.exe' | Select-Object -ExpandProperty browser_download_url
+          $arm64InstallerUrl = $assets | Where-Object -Property name -like '*aarch64-windows-setup.exe' | Select-Object -ExpandProperty browser_download_url
           $packageVersion = (${{ toJSON(github.event.release.tag_name) }}).Trim('v')
 
           # Update package using wingetcreate

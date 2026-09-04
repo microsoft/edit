@@ -167,6 +167,10 @@ impl Framebuffer {
 
     /// Begins a new frame with the given `size`.
     pub fn flip(&mut self, size: Size) {
+        if size.is_empty() {
+            return;
+        }
+
         if size != self.buffers[0].bg_bitmap.size {
             for buffer in &mut self.buffers {
                 buffer.text = LineBuffer::new(size);
@@ -479,6 +483,10 @@ impl Framebuffer {
             (back, front)
         };
 
+        if front.text.size.is_empty() {
+            return BString::empty();
+        }
+
         let mut front_lines = front.text.lines.iter(); // hahaha
         let mut front_bgs = front.bg_bitmap.iter();
         let mut front_fgs = front.fg_bitmap.iter();
@@ -674,6 +682,7 @@ struct LineBuffer {
 
 impl LineBuffer {
     fn new(size: Size) -> Self {
+        debug_assert!(!size.is_empty());
         Self { lines: vec![String::new(); size.height as usize], size }
     }
 
@@ -821,6 +830,7 @@ struct Bitmap {
 
 impl Bitmap {
     fn new(size: Size) -> Self {
+        debug_assert!(!size.is_empty());
         Self { data: vec![StraightRgba::zero(); (size.width * size.height) as usize], size }
     }
 
@@ -931,6 +941,7 @@ struct AttributeBuffer {
 
 impl AttributeBuffer {
     fn new(size: Size) -> Self {
+        debug_assert!(!size.is_empty());
         Self { data: vec![Default::default(); (size.width * size.height) as usize], size }
     }
 

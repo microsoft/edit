@@ -12,10 +12,9 @@ use std::mem::{self, ManuallyDrop, MaybeUninit};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
 use std::path::Path;
 use std::ptr::{NonNull, null_mut};
-use std::{io, thread, time};
+use std::{io, time};
 
-use stdext::arena::{Arena, scratch_arena};
-use stdext::arena_format;
+use stdext::arena::Arena;
 use stdext::collections::{BString, BVec};
 
 use crate::helpers::*;
@@ -25,7 +24,7 @@ struct State {
     stdin_flags: libc::c_int,
     stdout: libc::c_int,
     stdout_initial_termios: Option<libc::termios>,
-    inject_resize: bool,
+    resize_pending: bool,
     // Buffer for incomplete UTF-8 sequences (max 4 bytes needed)
     utf8_buf: [u8; 4],
     utf8_len: usize,
@@ -36,19 +35,26 @@ static mut STATE: State = State {
     stdin_flags: 0,
     stdout: libc::STDOUT_FILENO,
     stdout_initial_termios: None,
-    inject_resize: false,
+    resize_pending: false,
     utf8_buf: [0; 4],
     utf8_len: 0,
 };
 
 extern "C" fn sigwinch_handler(_: libc::c_int) {
     unsafe {
-        STATE.inject_resize = true;
+        STATE.resize_pending = true;
     }
 }
 
-pub fn init() -> Deinit {
-    Deinit
+pub fn init() -> io::Result<Deinit> {
+    unsafe {
+        // Set STATE.resize_pending to true whenever we get a SIGWINCH.
+        let mut sigwinch_action: libc::sigaction = mem::zeroed();
+        sigwinch_action.sa_sigaction = sigwinch_handler as *const () as libc::sighandler_t;
+        check_int_return(libc::sigaction(libc::SIGWINCH, &sigwinch_action, null_mut()))?;
+    }
+
+    Ok(Deinit)
 }
 
 /// Reopen stdin if it's redirected (= piped input).
@@ -67,11 +73,6 @@ pub fn switch_modes() -> io::Result<()> {
     unsafe {
         // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
         STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
-
-        // Set STATE.inject_resize to true whenever we get a SIGWINCH.
-        let mut sigwinch_action: libc::sigaction = mem::zeroed();
-        sigwinch_action.sa_sigaction = sigwinch_handler as *const () as libc::sighandler_t;
-        check_int_return(libc::sigaction(libc::SIGWINCH, &sigwinch_action, null_mut()))?;
 
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
@@ -144,42 +145,29 @@ impl Drop for Deinit {
     }
 }
 
-pub fn inject_window_size_into_stdin() {
-    unsafe {
-        STATE.inject_resize = true;
-    }
-}
-
-fn get_window_size() -> (u16, u16) {
+pub fn get_window_size() -> io::Result<Size> {
     let mut winsz: libc::winsize = unsafe { mem::zeroed() };
-
-    for attempt in 1.. {
-        let ret = unsafe { libc::ioctl(STATE.stdout, libc::TIOCGWINSZ, &raw mut winsz) };
-        if ret == -1 || (winsz.ws_col != 0 && winsz.ws_row != 0) {
-            break;
-        }
-
-        if attempt == 10 {
-            winsz.ws_col = 80;
-            winsz.ws_row = 24;
-            break;
-        }
-
-        // Some terminals are bad emulators and don't report TIOCGWINSZ immediately.
-        thread::sleep(time::Duration::from_millis(10 * attempt));
+    let ret = unsafe { libc::ioctl(STATE.stdout, libc::TIOCGWINSZ, &raw mut winsz) };
+    if ret != 0 {
+        Err(last_os_error())
+    } else if winsz.ws_row == 0 || winsz.ws_col == 0 {
+        Err(io::Error::other("invalid terminal size"))
+    } else {
+        Ok(Size { width: winsz.ws_col as CoordType, height: winsz.ws_row as CoordType })
     }
-
-    (winsz.ws_col, winsz.ws_row)
 }
 
 /// Reads from stdin.
 ///
 /// Returns `None` if there was an error reading from stdin.
-/// Returns `Some("")` if the given timeout was reached.
-/// Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<'_>> {
+/// Returns `Some((_, ""))` if the given timeout was reached.
+/// Otherwise, it returns a pending resize and the read string.
+pub fn read_stdin(
+    arena: &Arena,
+    mut timeout: time::Duration,
+) -> Option<(Option<Size>, BString<'_>)> {
     unsafe {
-        if STATE.inject_resize {
+        if STATE.resize_pending {
             timeout = time::Duration::ZERO;
         }
 
@@ -242,7 +230,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
             }
             if ret < 0 {
                 match errno() {
-                    libc::EINTR if STATE.inject_resize => break,
+                    libc::EINTR if STATE.resize_pending => break,
                     libc::EAGAIN if timeout == time::Duration::ZERO => break,
                     libc::EINTR | libc::EAGAIN => {}
                     _ => return None,
@@ -279,21 +267,14 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
             }
         }
 
-        let mut result = BString::from_utf8_lossy(arena, buf);
+        let resize = if STATE.resize_pending {
+            STATE.resize_pending = false;
+            Some(get_window_size().ok()?)
+        } else {
+            None
+        };
 
-        // We received a SIGWINCH? Add a fake window size sequence for our input parser.
-        // I prepend it so that on startup, the TUI system gets first initialized with a size.
-        if STATE.inject_resize {
-            STATE.inject_resize = false;
-            let (w, h) = get_window_size();
-            if w > 0 && h > 0 {
-                let scratch = scratch_arena(Some(arena));
-                let seq = arena_format!(&*scratch, "\x1b[8;{h};{w}t");
-                result.replace_range(arena, 0..0, &seq);
-            }
-        }
-
-        Some(result)
+        Some((resize, BString::from_utf8_lossy(arena, buf)))
     }
 }
 

@@ -84,6 +84,10 @@ pub struct Size {
 }
 
 impl Size {
+    pub fn is_empty(&self) -> bool {
+        self.width <= 0 || self.height <= 0
+    }
+
     pub fn as_rect(&self) -> Rect {
         Rect { left: 0, top: 0, right: self.width, bottom: self.height }
     }
