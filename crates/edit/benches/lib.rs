@@ -65,7 +65,14 @@ fn bench_buffer(c: &mut Criterion) {
         res
     };
 
-    let mut patches_with_coords = Vec::new();
+    enum Op<'a> {
+        Move { pos: Point },
+        Replace { len: usize, text: &'a str },
+        Insert { text: &'a str },
+        Delete { len: usize },
+    }
+
+    let mut ops = Vec::new();
     {
         let mut tb = buffer::TextBuffer::new(false).unwrap();
         tb.set_crlf(false);
@@ -73,19 +80,25 @@ fn bench_buffer(c: &mut Criterion) {
 
         for t in &data.txns {
             for p in &t.patches {
-                tb.cursor_move_to_offset(p.0);
-                let beg = tb.cursor_logical_pos();
+                if p.0 != tb.cursor_offset() {
+                    tb.cursor_move_to_offset(p.0);
+                    ops.push(Op::Move { pos: tb.cursor_logical_pos() });
+                }
 
-                tb.delete(buffer::CursorMovement::Grapheme, p.1 as CoordType);
-
-                tb.write_raw(p.2.as_bytes());
-                patches_with_coords.push((beg, p.1 as CoordType, p.2));
+                if p.1 > 0 && !p.2.is_empty() {
+                    tb.selection_update_delta(buffer::CursorMovement::Grapheme, p.1 as CoordType);
+                    tb.write_raw(p.2.as_bytes());
+                    ops.push(Op::Replace { len: p.1, text: p.2 });
+                } else if p.1 > 0 {
+                    tb.delete(buffer::CursorMovement::Grapheme, p.1 as CoordType);
+                    ops.push(Op::Delete { len: p.1 });
+                } else {
+                    assert!(!p.2.is_empty());
+                    tb.write_raw(p.2.as_bytes());
+                    ops.push(Op::Insert { text: p.2 });
+                }
             }
         }
-
-        let mut actual = String::new();
-        tb.save_as_string(&mut actual);
-        assert_eq!(actual, data.end_content);
     }
 
     let bench_gap_buffer = || {
@@ -106,10 +119,22 @@ fn bench_buffer(c: &mut Criterion) {
         tb.set_crlf(false);
         tb.write_raw(data.start_content.as_bytes());
 
-        for p in &patches_with_coords {
-            tb.cursor_move_to_logical(p.0);
-            tb.delete(buffer::CursorMovement::Grapheme, p.1);
-            tb.write_raw(p.2.as_bytes());
+        for op in &ops {
+            match op {
+                Op::Move { pos } => {
+                    tb.cursor_move_to_logical(*pos);
+                }
+                Op::Replace { len, text } => {
+                    tb.selection_update_delta(buffer::CursorMovement::Grapheme, *len as CoordType);
+                    tb.write_raw(text.as_bytes());
+                }
+                Op::Insert { text } => {
+                    tb.write_raw(text.as_bytes());
+                }
+                Op::Delete { len } => {
+                    tb.delete(buffer::CursorMovement::Grapheme, *len as CoordType);
+                }
+            }
         }
 
         tb

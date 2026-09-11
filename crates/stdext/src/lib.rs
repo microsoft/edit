@@ -17,6 +17,7 @@ pub mod glob;
 mod helpers;
 mod maybe_owned;
 pub mod simd;
+pub mod superluminal;
 pub mod sys;
 pub mod unicode;
 

@@ -631,7 +631,14 @@ name = "stdext"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "superluminal-perf-sys",
 ]
+
+[[package]]
+name = "superluminal-perf-sys"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c83d163f90b68349a742c75793727483b4d90a7bc77b7db434c79650f0b127e7"
 
 [[package]]
 name = "syn"

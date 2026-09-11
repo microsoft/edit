@@ -17,6 +17,7 @@ harness = false
 [features]
 # Display editor latency in the top-right corner
 debug-latency = []
+superluminal = ["stdext/superluminal"]
 
 [dependencies]
 lsh.workspace = true

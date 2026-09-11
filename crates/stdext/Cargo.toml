@@ -9,6 +9,10 @@ rust-version.workspace = true
 
 [features]
 single-threaded = []
+superluminal = ["superluminal-perf-sys"]
+
+[dependencies]
+superluminal-perf-sys = { version = "0.4", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
