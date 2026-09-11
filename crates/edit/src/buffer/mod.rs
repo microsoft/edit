@@ -470,6 +470,11 @@ impl TextBuffer {
         self.overtype = overtype;
     }
 
+    /// Gets the byte offset of the cursor.
+    pub fn cursor_offset(&self) -> usize {
+        self.cursor.offset
+    }
+
     /// Gets the logical cursor position, that is,
     /// the position in lines and graphemes per line.
     pub fn cursor_logical_pos(&self) -> Point {
@@ -688,7 +693,7 @@ impl TextBuffer {
         // If the buffer was changed, nothing we previously saved can be relied upon.
         self.undo_stack.clear();
         self.redo_stack.clear();
-        self.last_history_type = HistoryType::Other;
+        self.undo_barrier();
         self.cursor = Default::default();
         self.set_selection(None);
         self.mark_as_clean();
@@ -1183,7 +1188,10 @@ impl TextBuffer {
                     Self::find_parse_replacement(&scratch, &mut *search, replacement);
                 let replacement =
                     self.find_fill_replacement(&mut *search, replacement, &parsed_replacements);
+
+                self.undo_barrier();
                 self.write_raw(&replacement);
+                self.undo_barrier();
 
                 // After replacing a zero-width match, advance past it so that find_and_select wraps to the
                 // next match rather than finding the same anchor (e.g. `$`) again at the same line end.
@@ -1214,7 +1222,10 @@ impl TextBuffer {
         while let Some(range) = self.find_select_next(&mut search, offset, false) {
             let replacement =
                 self.find_fill_replacement(&mut search, replacement, &parsed_replacements);
+
+            self.undo_barrier();
             self.write_raw(&replacement);
+            self.undo_barrier();
 
             // The `active_edit_off` points to the end of the last edit made by `write_raw()`.
             // This differs from the self.cursor.offset, if `write_raw()` did an `insert_final_newline`.
@@ -1743,7 +1754,7 @@ impl TextBuffer {
     /// that the TextBuffer has not been modified since you received the cursor from this class.
     pub unsafe fn set_cursor(&mut self, cursor: Cursor) {
         self.set_cursor_internal(cursor);
-        self.last_history_type = HistoryType::Other;
+        self.undo_barrier();
         self.set_selection(None);
     }
 
@@ -1754,7 +1765,7 @@ impl TextBuffer {
         };
 
         self.set_cursor_internal(cursor);
-        self.last_history_type = HistoryType::Other;
+        self.undo_barrier();
 
         let end = self.cursor.logical_pos;
         self.set_selection(if beg == end { None } else { Some(TextBufferSelection { beg, end }) });
@@ -2295,13 +2306,12 @@ impl TextBuffer {
     }
 
     fn write(&mut self, text: &[u8], at: Cursor, raw: bool) {
-        let history_type = if raw { HistoryType::Other } else { HistoryType::Write };
         let mut edit_begun = false;
 
         // If we have an active selection, writing an empty `text`
         // will still delete the selection. As such, we check this first.
         if let Some((beg, end)) = self.selection_range_internal(false) {
-            self.edit_begin(history_type, beg);
+            self.edit_begin(HistoryType::Write, beg);
             self.edit_delete(end);
             self.set_selection(None);
             edit_begun = true;
@@ -2318,7 +2328,7 @@ impl TextBuffer {
         }
 
         if !edit_begun {
-            self.edit_begin(history_type, at);
+            self.edit_begin(HistoryType::Write, at);
         }
 
         let mut offset = 0;
@@ -2928,6 +2938,10 @@ impl TextBuffer {
     /// Redo the last undo operation.
     pub fn redo(&mut self) {
         self.undo_redo(false);
+    }
+
+    fn undo_barrier(&mut self) {
+        self.last_history_type = HistoryType::Other;
     }
 
     fn undo_redo(&mut self, undo: bool) {
