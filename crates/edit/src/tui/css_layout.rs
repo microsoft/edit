@@ -43,7 +43,10 @@ impl<'a> Layout<'a> {
             bottom: css::length((padding.bottom + border) as f32),
         };
         if !is_container(node) {
-            return self.tree.new_leaf_with_context(style, node.intrinsic_size).expect("New CSS leaf");
+            return self
+                .tree
+                .new_leaf_with_context(style, node.intrinsic_size)
+                .expect("New CSS leaf");
         }
 
         let id = self.tree.new_with_children(style, &[]).expect("New CSS container");
@@ -87,13 +90,17 @@ pub(super) fn measure(node: &Node<'_>, styles: &[css::Style]) -> Size {
     let root = layout.insert(node, styles);
     layout.compute(
         root,
-        css::Size { width: css::AvailableSpace::MaxContent, height: css::AvailableSpace::MaxContent },
+        css::Size {
+            width: css::AvailableSpace::MaxContent,
+            height: css::AvailableSpace::MaxContent,
+        },
     );
     let result = layout.tree.layout(root).expect("Measured CSS root");
     let insets = node.intrinsic_to_outer();
     Size {
         width: (result.size.width as CoordType - insets.width + node.intrinsic_size.width).max(0),
-        height: (result.size.height as CoordType - insets.height + node.intrinsic_size.height).max(0),
+        height: (result.size.height as CoordType - insets.height + node.intrinsic_size.height)
+            .max(0),
     }
 }
 
@@ -439,16 +446,15 @@ mod tests {
             overflow: super::super::Overflow::Clip,
         });
         let scrollarea = child(&arena, root, None, 0, 10);
-        scrollarea.borrow_mut().content = NodeContent::Scrollarea(super::super::ScrollareaContent {
-            scroll_offset: Point { x: 0, y: 2 },
-            scroll_offset_y_drag_start: CoordType::MIN,
-            thumb_height: 0,
-        });
+        scrollarea.borrow_mut().content =
+            NodeContent::Scrollarea(super::super::ScrollareaContent {
+                scroll_offset: Point { x: 0, y: 2 },
+                scroll_offset_y_drag_start: CoordType::MIN,
+                thumb_height: 0,
+            });
         let content = child(&arena, scrollarea, None, 5, 10);
-        let styles = [css::Style {
-            grid_template_rows: vec![css::auto(), css::flex(1.0)],
-            ..grid()
-        }];
+        let styles =
+            [css::Style { grid_template_rows: vec![css::auto(), css::flex(1.0)], ..grid() }];
         place(&arena, root, &styles, Size { width: 5, height: 4 });
         assert_eq!(label.borrow().outer, Rect { left: 0, top: 0, right: 5, bottom: 1 });
         assert_eq!(scrollarea.borrow().inner, Rect { left: 0, top: 1, right: 4, bottom: 4 });

@@ -796,7 +796,10 @@ impl Tui {
 
         for root in Tree::iterate_siblings(Some(self.prev_tree.root_first)) {
             let mut root = root.borrow_mut();
-            root.compute_intrinsic_size(unsafe { mem::transmute(&self.arena_next) }, &ctx.css_styles);
+            root.compute_intrinsic_size(
+                unsafe { mem::transmute(&self.arena_next) },
+                &ctx.css_styles,
+            );
         }
 
         let viewport = self.size.as_rect();
