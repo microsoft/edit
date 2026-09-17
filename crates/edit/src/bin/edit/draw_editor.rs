@@ -457,8 +457,8 @@ mod tests {
             settle(&mut tui, &mut state);
         }
         crate::draw(&mut tui, Some(edit::input::Input::Text("typed")), &mut state);
-        let buffer = state.documents.active().unwrap().buffer.borrow();
-        assert_eq!(buffer.text_length(), 5);
-        assert_eq!(buffer.read_forward(0), b"typed");
+        let mut text = String::new();
+        state.documents.active().unwrap().buffer.borrow_mut().save_as_string(&mut text);
+        assert_eq!(text, if cfg!(windows) { "typed" } else { "typed\n" });
     }
 }
