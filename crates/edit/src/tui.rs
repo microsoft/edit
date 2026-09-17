@@ -162,6 +162,9 @@ use crate::input::{InputKeyMod, kbmod, vk};
 use crate::oklab::StraightRgba;
 use crate::{input, simd, unicode};
 
+mod css_layout;
+pub use taffy::prelude as css;
+
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
 const KBMOD_FOR_WORD_NAV: InputKeyMod =
@@ -725,6 +728,7 @@ impl Tui {
             input_consumed,
 
             tree,
+            css_styles: Vec::new(),
             last_modal: None,
             focused_node: None,
             next_block_id_mixin: 0,
@@ -792,7 +796,7 @@ impl Tui {
 
         for root in Tree::iterate_siblings(Some(self.prev_tree.root_first)) {
             let mut root = root.borrow_mut();
-            root.compute_intrinsic_size(unsafe { mem::transmute(&self.arena_next) });
+            root.compute_intrinsic_size(unsafe { mem::transmute(&self.arena_next) }, &ctx.css_styles);
         }
 
         let viewport = self.size.as_rect();
@@ -830,7 +834,7 @@ impl Tui {
             root.inner_clipped = root.inner;
 
             let outer = root.outer;
-            root.layout_children(outer);
+            root.layout_children(outer, &ctx.css_styles);
         }
     }
 
@@ -1391,6 +1395,8 @@ pub struct Context<'a, 'input> {
     input_consumed: bool,
 
     tree: Tree<'a>,
+    // Styles own heap allocations; unlike Tree and Node, Context is dropped normally.
+    css_styles: Vec<css::Style>,
     last_modal: Option<&'a NodeCell<'a>>,
     focused_node: Option<&'a NodeCell<'a>>,
     next_block_id_mixin: u64,
@@ -1654,6 +1660,26 @@ impl<'a> Context<'a, '_> {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.intrinsic_size = size;
         last_node.intrinsic_size_set = true;
+    }
+
+    /// Opts this node into CSS Grid or Flexbox sizing, in terminal cells.
+    ///
+    /// Styled blocks lay out their children with Taffy. Other widgets remain opaque,
+    /// intrinsically measured boxes with their existing rendering and internal layout.
+    /// Labels do not wrap; textareas keep their own scrolling/wrapping behavior.
+    /// Use `attr_border` for borders: CSS border widths are reserved for legacy
+    /// padding, borders and scrollbar space. CSS padding and margins are supported.
+    /// This is a geometry API, not a CSS parser or browser renderer.
+    pub fn attr_css_style(&mut self, style: css::Style) {
+        assert!(matches!(style.display, css::Display::Grid | css::Display::Flex));
+        assert_eq!(style.border, css::Rect::zero(), "Use attr_border, not CSS border widths");
+        let mut node = self.tree.last_node.borrow_mut();
+        if let Some(index) = node.css_style {
+            self.css_styles[index] = style;
+        } else {
+            node.css_style = Some(self.css_styles.len());
+            self.css_styles.push(style);
+        }
     }
 
     /// Turns the current node into a floating node,
@@ -3869,6 +3895,7 @@ struct Node<'a> {
 
     intrinsic_size: Size,
     intrinsic_size_set: bool,
+    css_style: Option<usize>,
     outer: Rect,         // in screen-space, calculated during layout
     inner: Rect,         // in screen-space, calculated during layout
     outer_clipped: Rect, // in screen-space, calculated during layout, restricted to the viewport
@@ -3888,6 +3915,8 @@ impl<'a> Node<'a> {
         outer.top += self.attributes.padding.top + t as CoordType;
         outer.right -= self.attributes.padding.right + r as CoordType;
         outer.bottom -= self.attributes.padding.bottom + b as CoordType;
+        outer.right = outer.right.max(outer.left);
+        outer.bottom = outer.bottom.max(outer.top);
         outer
     }
 
@@ -3912,7 +3941,7 @@ impl<'a> Node<'a> {
     }
 
     /// Computes the intrinsic size of this node and its children.
-    fn compute_intrinsic_size(&mut self, arena: &'a Arena) {
+    fn compute_intrinsic_size(&mut self, arena: &'a Arena, styles: &[css::Style]) {
         match &mut self.content {
             NodeContent::Table(spec) => {
                 // Calculate each row's height and the maximum width of each of its columns.
@@ -3922,7 +3951,7 @@ impl<'a> Node<'a> {
 
                     for (column, cell) in Tree::iterate_siblings(row.children.first).enumerate() {
                         let mut cell = cell.borrow_mut();
-                        cell.compute_intrinsic_size(arena);
+                        cell.compute_intrinsic_size(arena, styles);
 
                         let size = cell.intrinsic_to_outer();
 
@@ -3982,16 +4011,18 @@ impl<'a> Node<'a> {
 
                 for child in Tree::iterate_siblings(self.children.first) {
                     let mut child = child.borrow_mut();
-                    child.compute_intrinsic_size(arena);
+                    child.compute_intrinsic_size(arena, styles);
 
                     let size = child.intrinsic_to_outer();
                     max_width = max_width.max(size.width);
                     total_height += size.height;
                 }
-
                 if !self.intrinsic_size_set {
-                    self.intrinsic_size.width = max_width;
-                    self.intrinsic_size.height = total_height;
+                    self.intrinsic_size = if css_layout::is_container(self) {
+                        css_layout::measure(self, styles)
+                    } else {
+                        Size { width: max_width, height: total_height }
+                    };
                     self.intrinsic_size_set = true;
                 }
             }
@@ -4000,7 +4031,11 @@ impl<'a> Node<'a> {
 
     /// Lays out the children of this node.
     /// The clip rect restricts "rendering" to a certain area (the viewport).
-    fn layout_children(&mut self, clip: Rect) {
+    fn layout_children(&mut self, clip: Rect, styles: &[css::Style]) {
+        if css_layout::is_container(self) {
+            css_layout::layout(self, clip, styles);
+            return;
+        }
         if self.children.first.is_none() || self.inner.is_empty() {
             return;
         }
@@ -4042,7 +4077,7 @@ impl<'a> Node<'a> {
                         x += size.width + spec.cell_gap.width;
                         row_height = row_height.max(size.height);
 
-                        cell.layout_children(clip);
+                        cell.layout_children(clip, styles);
                     }
 
                     x = self.inner.left;
@@ -4074,7 +4109,7 @@ impl<'a> Node<'a> {
                 content.inner_clipped = content.inner.intersect(self.inner_clipped);
 
                 let clip = content.inner_clipped;
-                content.layout_children(clip);
+                content.layout_children(clip, styles);
             }
             _ => {
                 let width = self.inner.right - self.inner.left;
@@ -4109,7 +4144,7 @@ impl<'a> Node<'a> {
 
                 for child in Tree::iterate_siblings(self.children.first) {
                     let mut child = child.borrow_mut();
-                    child.layout_children(clip);
+                    child.layout_children(clip, styles);
                 }
             }
         }

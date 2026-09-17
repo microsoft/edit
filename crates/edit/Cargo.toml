@@ -21,6 +21,7 @@ debug-latency = []
 [dependencies]
 lsh.workspace = true
 stdext.workspace = true
+taffy = { version = "=0.14.0", default-features = false, features = ["std", "grid", "flexbox", "taffy_tree"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
