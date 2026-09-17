@@ -6,9 +6,13 @@
 //! It's designed for parsing our small settings files,
 //! but its performance is rather competitive in general.
 
-use std::fmt;
 use std::hint::unreachable_unchecked;
+use std::marker::PhantomData;
+use std::mem::MaybeUninit;
+use std::ptr::NonNull;
+use std::{fmt, slice};
 
+use stdext::alloc::Allocator;
 use stdext::arena::Arena;
 use stdext::collections::{BString, BVec};
 
@@ -44,7 +48,7 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Value<'a> {
     Null,
     Bool(bool),
@@ -223,9 +227,10 @@ impl<'a, 'i> Parser<'a, 'i> {
     }
 
     fn parse_string(&mut self) -> Result<Value<'a>, ParseError> {
-        self.expect(b'"')?;
+        stack_alloc!(stack, u8, 64);
+        let mut result = stack.string();
 
-        let mut result = BString::empty();
+        self.expect(b'"')?;
 
         loop {
             if self.pos >= self.bytes.len() {
@@ -257,12 +262,14 @@ impl<'a, 'i> Parser<'a, 'i> {
             }
         }
 
-        let str = result.leak();
-        Ok(Value::String(str))
+        Ok(Value::String(stack.finish_string(self.arena, result)))
     }
 
     #[cold]
-    fn parse_escape(&mut self, result: &mut BString<'a>) -> Result<(), ParseError> {
+    fn parse_escape<'b>(&mut self, result: &mut BString<'b>) -> Result<(), ParseError>
+    where
+        'a: 'b,
+    {
         if self.pos >= self.bytes.len() {
             // Unterminated escape sequence
             return Err(self.fail(self.pos, ParseErrorKind::Syntax));
@@ -292,7 +299,10 @@ impl<'a, 'i> Parser<'a, 'i> {
     }
 
     #[cold]
-    fn parse_unicode_escape(&mut self, result: &mut BString<'a>) -> Result<(), ParseError> {
+    fn parse_unicode_escape<'b>(&mut self, result: &mut BString<'b>) -> Result<(), ParseError>
+    where
+        'a: 'b,
+    {
         let start = self.pos - 2; // parse_escape() already advanced past "\u"
         let mut code = self.parse_hex4()?;
 
@@ -333,7 +343,8 @@ impl<'a, 'i> Parser<'a, 'i> {
     }
 
     fn parse_array(&mut self, depth: usize) -> Result<Value<'a>, ParseError> {
-        let mut values = BVec::empty();
+        stack_alloc!(stack, Value, 4); // 4 * 24 = 96 bytes of stack
+        let mut values = stack.vec();
         let mut expects_comma = false;
 
         self.expect(b'[')?;
@@ -368,11 +379,12 @@ impl<'a, 'i> Parser<'a, 'i> {
         }
 
         self.expect(b']')?;
-        Ok(Value::Array(values.leak()))
+        Ok(Value::Array(stack.finish_vec(self.arena, values)))
     }
 
     fn parse_object(&mut self, depth: usize) -> Result<Value<'a>, ParseError> {
-        let mut entries = BVec::empty();
+        stack_alloc!(stack, (&str, Value), 4); // 4 * 40 = 160 bytes of stack
+        let mut entries = stack.vec();
         let mut expects_comma = false;
 
         self.expect(b'{')?;
@@ -418,7 +430,7 @@ impl<'a, 'i> Parser<'a, 'i> {
         }
 
         self.expect(b'}')?;
-        Ok(Value::Object(entries.leak()))
+        Ok(Value::Object(stack.finish_vec(self.arena, entries)))
     }
 
     fn skip_bom(&mut self) {
@@ -504,6 +516,83 @@ impl<'a, 'i> Parser<'a, 'i> {
         let column = pos.logical_pos.x.max(0) as usize + 1;
         ParseError { kind, line, column }
     }
+}
+
+/// A stack allocator helps us avoid over-allocating small JSON
+/// values (strings, arrays, objects). Those are rather common.
+macro_rules! stack_alloc {
+    ($name:ident, $ty:ty, $count:expr) => {
+        const _: () = assert!(
+            (size_of::<$ty>() * $count) % size_of::<u128>() == 0,
+            "choose a multiple of 16 bytes; don't waste stack space"
+        );
+        let mut storage =
+            [MaybeUninit::<u128>::uninit();
+                const { (size_of::<$ty>() * $count) / size_of::<u128>() }];
+        let $name = StackAlloc::new(&mut storage);
+    };
+}
+use stack_alloc;
+
+struct StackAlloc<'b> {
+    ptr: NonNull<u8>,
+    len: usize,
+    _marker: PhantomData<&'b mut [u128]>,
+}
+
+impl<'b> StackAlloc<'b> {
+    fn new(storage: &'b mut [MaybeUninit<u128>]) -> Self {
+        Self {
+            len: size_of_val(&*storage),
+            ptr: NonNull::from_mut(storage).cast(),
+            _marker: PhantomData,
+        }
+    }
+
+    fn vec<T>(&self) -> BVec<'_, T> {
+        let mut vec = BVec::empty();
+        vec.reserve_exact(self, self.len / size_of::<T>());
+        vec
+    }
+
+    fn string(&self) -> BString<'_> {
+        let mut string = BString::empty();
+        string.reserve_exact(self, self.len);
+        string
+    }
+
+    fn finish_vec<'a, 's, T: Copy>(&'s self, arena: &'a Arena, vec: BVec<'s, T>) -> &'a [T] {
+        if vec.as_ptr().cast() == self.ptr.as_ptr() {
+            arena.alloc_uninit_slice(vec.len()).write_copy_of_slice(&vec)
+        } else {
+            // "SAFETY": The buffer was seeded by `self` and every growth
+            // since then used `self.arena`, so we won't own it anymore.
+            unsafe { slice::from_raw_parts(vec.as_ptr(), vec.len()) }
+        }
+    }
+
+    fn finish_string<'a, 's>(&'s self, arena: &'a Arena, string: BString<'s>) -> &'a str {
+        // SAFETY: `BString` only ever contains valid UTF-8.
+        unsafe { str::from_utf8_unchecked(self.finish_vec(arena, string.into_bytes())) }
+    }
+}
+
+impl Allocator for StackAlloc<'_> {
+    unsafe fn realloc(
+        &self,
+        _old_ptr: NonNull<u8>,
+        old_size: usize,
+        new_size: usize,
+        _align: usize,
+    ) -> NonNull<[u8]> {
+        debug_assert!(
+            old_size == 0 && new_size == self.len,
+            "reserve_exact() above should be perfectly in sync with this allocator"
+        );
+        NonNull::slice_from_raw_parts(self.ptr, self.len)
+    }
+
+    unsafe fn dealloc(&self, _ptr: NonNull<u8>, _size: usize, _align: usize) {}
 }
 
 #[allow(non_snake_case)]

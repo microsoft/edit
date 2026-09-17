@@ -404,7 +404,7 @@ impl Tui {
             modal_default_bg: StraightRgba::zero(),
             modal_default_fg: StraightRgba::zero(),
 
-            size: Size { width: 0, height: 0 },
+            size: Size { width: 80, height: 24 },
             mouse_position: Point::MIN,
             mouse_down_position: Point::MIN,
             left_mouse_down_target: 0,
@@ -427,7 +427,7 @@ impl Tui {
 
             settling_have: 0,
             settling_want: 0,
-            read_timeout: time::Duration::MAX,
+            read_timeout: time::Duration::ZERO,
         };
         Self::clean_node_path(&mut tui.mouse_hover_node_path);
         Self::clean_node_path(&mut tui.mouse_down_node_path);
@@ -476,6 +476,11 @@ impl Tui {
         // We don't use the size stored in the framebuffer, because until
         // `render()` is called, the framebuffer will use a stale size.
         self.size
+    }
+
+    /// Set the viewport size.
+    pub fn set_size(&mut self, size: Size) {
+        self.size = size;
     }
 
     /// Returns an indexed color from the framebuffer.
