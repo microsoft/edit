@@ -12,17 +12,25 @@ use crate::localization::*;
 use crate::state::*;
 
 pub fn draw_editor(ctx: &mut Context, state: &mut State) {
+    ctx.block_begin("editor");
+    ctx.inherit_focus();
+    ctx.attr_css_style(css::Style {
+        display: css::Display::Flex,
+        flex_direction: css::FlexDirection::Column,
+        min_size: css::Size { width: css::length(0.0), height: css::length(0.0) },
+        ..Default::default()
+    });
+
+    ctx.block_begin("search-container");
+    ctx.attr_css_style(css::Style {
+        flex_direction: css::FlexDirection::Column,
+        flex_shrink: 0.0,
+        ..Default::default()
+    });
     if !matches!(state.wants_search.kind, StateSearchKind::Hidden | StateSearchKind::Disabled) {
         draw_search(ctx, state);
     }
-
-    let size = ctx.size();
-    // TODO: The layout code should be able to just figure out the height on its own.
-    let height_reduction = match state.wants_search.kind {
-        StateSearchKind::Search => 4,
-        StateSearchKind::Replace => 5,
-        _ => 2,
-    };
+    ctx.block_end();
 
     if let Some(doc) = state.documents.active() {
         ctx.textarea("textarea", doc.buffer.clone());
@@ -32,7 +40,13 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         ctx.block_end();
     }
 
-    ctx.attr_intrinsic_size(Size { width: 0, height: size.height - height_reduction });
+    ctx.attr_css_style(css::Style {
+        flex_grow: 1.0,
+        flex_basis: css::length(0.0),
+        min_size: css::Size { width: css::length(0.0), height: css::length(0.0) },
+        ..Default::default()
+    });
+    ctx.block_end();
 }
 
 fn draw_search(ctx: &mut Context, state: &mut State) {
@@ -353,4 +367,98 @@ fn validate_goto_point(line: &str) -> Option<Point> {
         return None;
     }
     Some(Point { x: coords[0], y: coords[1] })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outer(layout: &str, classname: &str) -> Rect {
+        let node = layout.split_once(&format!("classname:    {classname}\r\n")).unwrap().1;
+        let values = node.split_once("outer:        {").unwrap().1.split_once('}').unwrap().0;
+        let values: Vec<CoordType> =
+            values.split(", ").map(|value| value.parse().unwrap()).collect();
+        Rect { left: values[0], top: values[1], right: values[2], bottom: values[3] }
+    }
+
+    fn settle(tui: &mut Tui, state: &mut State) {
+        for _ in 0..10 {
+            if !tui.needs_settling() {
+                return;
+            }
+            crate::draw(tui, None, state);
+        }
+        assert!(!tui.needs_settling(), "Editor layout did not settle");
+    }
+
+    #[test]
+    fn css_editor_geometry_tracks_search_documents_and_resize() {
+        let _sys = edit::sys::init().unwrap();
+        stdext::arena::init(32 * MEBI).unwrap();
+        icu::init().unwrap();
+        for lines in [None, Some(0), Some(1000)] {
+            let mut state = State::new().unwrap();
+            if let Some(lines) = lines {
+                let doc = state.documents.add_untitled().unwrap();
+                doc.buffer.borrow_mut().write_raw(&b"line\n".repeat(lines));
+            }
+            let mut tui = Tui::new().unwrap();
+            for width in [1, 2, 80] {
+                for search in [
+                    StateSearchKind::Hidden,
+                    StateSearchKind::Disabled,
+                    StateSearchKind::Search,
+                    StateSearchKind::Replace,
+                ] {
+                    for height in [24, 8, 7, 6, 5, 4, 3, 2, 1, 80, 32767] {
+                        state.wants_search.kind = search;
+                        crate::draw(
+                            &mut tui,
+                            Some(edit::input::Input::Resize(Size { width, height })),
+                            &mut state,
+                        );
+                        settle(&mut tui, &mut state);
+                        assert_eq!(state.error_log_count, 0);
+                        let scratch = stdext::arena::scratch_arena(None);
+                        let layout = tui.debug_layout(&scratch);
+                        let name = if lines.is_some() { "textarea" } else { "empty" };
+                        let editor = outer(&layout, name);
+                        let search_height = match state.wants_search.kind {
+                            StateSearchKind::Search => 2,
+                            StateSearchKind::Replace => 3,
+                            _ => 0,
+                        };
+                        assert_eq!(
+                            editor.height(),
+                            (height - 2 - search_height).max(0),
+                            "width={width} height={height} search_height={search_height}",
+                        );
+                        assert!(editor.width() >= 0);
+                        assert_eq!(outer(&layout, "statusbar").bottom, height);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn css_editor_keeps_focus_through_small_viewports() {
+        let _sys = edit::sys::init().unwrap();
+        stdext::arena::init(16 * MEBI).unwrap();
+        let mut state = State::new().unwrap();
+        state.documents.add_untitled().unwrap();
+        let mut tui = Tui::new().unwrap();
+        for height in [24, 1, 24] {
+            crate::draw(
+                &mut tui,
+                Some(edit::input::Input::Resize(Size { width: 80, height })),
+                &mut state,
+            );
+            settle(&mut tui, &mut state);
+        }
+        crate::draw(&mut tui, Some(edit::input::Input::Text("typed")), &mut state);
+        let buffer = state.documents.active().unwrap().buffer.borrow();
+        assert_eq!(buffer.text_length(), 5);
+        assert_eq!(buffer.read_forward(0), b"typed");
+    }
 }
