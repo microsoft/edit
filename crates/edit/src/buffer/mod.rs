@@ -2519,8 +2519,7 @@ impl TextBuffer {
         self.edit_begin_grouping();
 
         let [first, last] = minmax(selection_beg, selection_end);
-        // A selection that stops at column 0 covers no character on that last line,
-        // so that line is not part of the selection and must not be (un)indented.
+        // Just like in VS Code, if the selections ends at a line start, it is not included.
         let last_y = if last.x == 0 && last.y > first.y { last.y - 1 } else { last.y };
 
         for y in first.y..=last_y {
