@@ -2418,12 +2418,15 @@ impl<'a> Context<'a, '_> {
 
             match key {
                 vk::BACK => {
-                    if modifiers == kbmod::CTRL {
-                        tb.delete(CursorMovement::Word, -1);
-                    } else if modifiers == kbmod::NONE && tb.backspace_unindent() {
-                        return false;
+                    let granularity = if modifiers == kbmod::CTRL {
+                        CursorMovement::Word
                     } else {
-                        tb.delete(CursorMovement::Grapheme, -1);
+                        CursorMovement::Grapheme
+                    };
+                    if single_line {
+                        tb.delete(granularity, -1);
+                    } else {
+                        tb.backspace_with_auto_unindent(granularity);
                     }
                 }
                 vk::TAB => {
