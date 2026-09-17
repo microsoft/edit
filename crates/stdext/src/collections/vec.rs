@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::borrow::Borrow;
 use std::hint::assert_unchecked;
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
@@ -149,7 +150,7 @@ impl<'a, T> BVec<'a, T> {
 
     #[inline]
     fn spare_mut_ptr(&mut self) -> *mut MaybeUninit<T> {
-        unsafe { (self.ptr.as_ptr() as *mut MaybeUninit<T>).add(self.len) }
+        unsafe { self.ptr.as_ptr().cast::<MaybeUninit<T>>().add(self.len) }
     }
 
     /// View as a shared slice.
@@ -184,7 +185,7 @@ impl<'a, T> BVec<'a, T> {
         let len = self.len;
         let cap = self.cap;
         if additional > cap - len {
-            self.grow(alloc, self.cap, additional);
+            self.grow(alloc, self.cap, additional, 8);
         }
         unsafe {
             // Right now the following asserts are somewhat useless, because they only work
@@ -205,7 +206,7 @@ impl<'a, T> BVec<'a, T> {
         let len = self.len;
         let cap = self.cap;
         if additional > cap - len {
-            self.grow(alloc, 0, additional);
+            self.grow(alloc, 0, additional, 0);
         }
         unsafe {
             // See reserve().
@@ -219,7 +220,7 @@ impl<'a, T> BVec<'a, T> {
         let len = self.len;
         let cap = self.cap;
         if len >= cap {
-            self.grow(alloc, cap, 1);
+            self.grow(alloc, cap, 1, 8);
         }
         unsafe {
             // See reserve().
@@ -229,7 +230,7 @@ impl<'a, T> BVec<'a, T> {
     }
 
     #[cold]
-    fn grow(&mut self, alloc: &'a dyn Allocator, cap: usize, add: usize) {
+    fn grow(&mut self, alloc: &'a dyn Allocator, cap: usize, add: usize, min: usize) {
         debug_assert!(add > 0, "growing by zero makes no sense");
 
         #[cfg(debug_assertions)]
@@ -238,7 +239,7 @@ impl<'a, T> BVec<'a, T> {
             "switching between allocators on a single BVec heavily suggests you're about to leak memory"
         );
 
-        let new_cap = (cap * 2).max(self.len + add).max(8);
+        let new_cap = (cap * 2).max(self.len + add).max(min);
         let new_ptr = unsafe {
             alloc.realloc(
                 self.ptr.cast(),
@@ -342,7 +343,7 @@ impl<'a, T: Copy> BVec<'a, T> {
         unsafe {
             let dst = self.spare_mut_ptr();
             self.len += add;
-            ptr::copy_nonoverlapping(other.as_ptr() as *const _, dst, add);
+            ptr::copy_nonoverlapping(other.as_ptr().cast(), dst, add);
         }
     }
 
@@ -436,6 +437,28 @@ impl<'a, T: Copy> BVec<'a, T> {
     }
 }
 
+impl<'a> BVec<'a, u8> {
+    /// Appends a single `char`, encoding it as UTF-8.
+    pub fn push_char(&mut self, alloc: &'a dyn Allocator, ch: char) {
+        self.reserve(alloc, 4);
+        unsafe {
+            let len = self.len();
+            let dst = self.as_mut_ptr().add(len);
+            let add = ch.encode_utf8(slice::from_raw_parts_mut(dst, 4)).len();
+            self.set_len(len + add);
+        }
+    }
+
+    /// Pairs this instance with an allocator, making it possible to
+    /// use `write!` and `fmt::Write`, which are allocator-unaware.
+    pub fn formatter<A>(&mut self, alloc: &'a A) -> BVecFormatter<'_, 'a, A>
+    where
+        A: Allocator,
+    {
+        BVecFormatter { string: self, alloc }
+    }
+}
+
 #[cfg(windows)]
 unsafe extern "system" {
     fn MultiByteToWideChar(
@@ -508,6 +531,18 @@ impl<T> DerefMut for BVec<'_, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut [T] {
         self.as_mut_slice()
+    }
+}
+
+impl<T> AsRef<[T]> for BVec<'_, T> {
+    fn as_ref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+impl<T> Borrow<[T]> for BVec<'_, T> {
+    fn borrow(&self) -> &[T] {
+        self.as_slice()
     }
 }
 
@@ -677,3 +712,27 @@ impl<'a, T> ExactSizeIterator for IntoIter<'a, T> {
 }
 
 impl<'a, T> FusedIterator for IntoIter<'a, T> {}
+
+/// Pairs a [`BVec`] with an allocator so you can use `write!` on it.
+// (See `BStringFormatter` for more information, which is the original.)
+pub struct BVecFormatter<'s, 'a, A> {
+    string: &'s mut BVec<'a, u8>,
+    alloc: &'a A,
+}
+
+impl<A> fmt::Write for BVecFormatter<'_, '_, A>
+where
+    A: Allocator,
+{
+    #[inline]
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.string.extend_from_slice(self.alloc, s.as_bytes());
+        Ok(())
+    }
+
+    #[inline]
+    fn write_char(&mut self, c: char) -> fmt::Result {
+        self.string.push_char(self.alloc, c);
+        Ok(())
+    }
+}

@@ -1,0 +1,81 @@
+#[display_name = "F#"]
+#[path = "**/*.fs"]
+#[path = "**/*.fsi"]
+#[path = "**/*.fsx"]
+pub fn fsharp() {
+    // Compiler and script directives always occupy the entire line.
+    if /\s*#(?:if|else|endif|light|line|load|nowarn|time|help|quit|r|I)\>.*/ {
+        yield keyword.preprocessor;
+        return;
+    }
+
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\(\*/ {
+            // F# block comments nest, but LSH can't count, so we stop at the first `*)`.
+            loop {
+                yield comment;
+                await input;
+                if /\*\)/ {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /\$*"""/ {
+            // Triple-quoted string. It has no escape sequences and may span lines.
+            loop {
+                yield string;
+                if /"""/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /\$?@"/ {
+            // Verbatim string. `""` is the only escape sequence and it may span lines.
+            loop {
+                yield string;
+                if /""/ {
+                    // Escaped quote
+                } else if /"/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /\$?"/ {
+            double_quote_string();
+        } else if /'\\?.'/ {
+            // A lone `'` starts a generic type parameter, so a character literal
+            // must only match if the closing quote is present as well.
+            yield string;
+        } else if /``[^`]+``/ {
+            yield variable;
+        } else if /\[<([A-Z]\w*)/ {
+            yield $1 as storage.annotation;
+        } else if /(?:if|then|elif|else|match|with|function|fun|try|finally|for|downto|done|do|to|while|return|yield|begin|end|in)\>/ {
+            yield keyword.control;
+        } else if /(?:abstract|and|assert|as|base|class|default|delegate|downcast|enum|exception|extern|global|inherit|inline|interface|internal|lazy|let|member|module|mutable|namespace|new|not|of|open|or|override|private|protected|public|rec|sig|static|struct|type|upcast|use|val|when)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|null)\>/ {
+            yield constant.language;
+        } else if /(?:bigint|bool|byte|char|decimal|double|exn|float32|float|int8|int16|int32|int64|int|nativeint|obj|sbyte|single|string|uint8|uint16|uint32|uint64|unativeint|uint|unit|void)\>/ {
+            yield storage.type;
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?[filmnsuy]{0,2})/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

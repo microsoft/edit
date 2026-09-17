@@ -219,12 +219,12 @@ fn bench_lsh(c: &mut Criterion) {
 fn bench_oklab(c: &mut Criterion) {
     c.benchmark_group("oklab")
         .bench_function("StraightRgba::as_oklab", |b| {
-            b.iter(|| black_box(oklab::StraightRgba::from_le(0xff212cbe)).as_oklab())
+            b.iter(|| black_box(oklab::StraightRgba::from_rgba(0xbe2c21ff)).as_oklab())
         })
         .bench_function("StraightRgba::oklab_blend", |b| {
             b.iter(|| {
-                black_box(oklab::StraightRgba::from_le(0x7f212cbe))
-                    .oklab_blend(black_box(oklab::StraightRgba::from_le(0x7f3aae3f)))
+                black_box(oklab::StraightRgba::from_rgba(0xbe2c217f))
+                    .oklab_blend(black_box(oklab::StraightRgba::from_rgba(0x3fae3a7f)))
             })
         });
 }

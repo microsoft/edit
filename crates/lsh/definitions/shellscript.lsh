@@ -1,0 +1,87 @@
+#[display_name = "Shell Script"]
+#[path = "**/*.sh"]
+#[path = "**/*.bash"]
+#[path = "**/*.bashrc"]
+#[path = "**/*.bash_profile"]
+#[path = "**/*.profile"]
+#[path = "**/*.zsh"]
+#[path = "**/*.zshrc"]
+#[path = "**/APKBUILD"]
+#[path = "**/PKGBUILD"]
+#[path = "**/zshrc"]
+pub fn shellscript() {
+    until /$/ {
+        yield other;
+
+        if /#.*/ {
+            yield comment;
+        } else if /'/ {
+            until /$/ {
+                yield string;
+                if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /\$'/ {
+            // ANSI C quoting $'...\n...'
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /'/ { yield string; break; }
+                await input;
+            }
+        } else if /"/ {
+            // TODO: Handle nested evaluation via $(...) and $((...)).
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /\$(?:\{[^}]+\}|\(\([^)]*\)\)|\([^)]*\)|[A-Za-z_]\w*|\d+|[#?*!@$-])/ {
+                    yield variable;
+                }
+                else if /"/ { yield string; break; }
+                await input;
+            }
+        } else if /`/ {
+            until /$/ {
+                yield string;
+                if /\\./ {}
+                else if /`/ { yield string; break; }
+                await input;
+            }
+        } else if /<<-?\s*['"]?(?:EOF|END|HEREDOC)\>['"]?.*/ {
+            // TODO: We need proper capturing to support arbitrary delimiters + lookbehind across lines.
+            yield other;
+            loop {
+                await input;
+                if /\t*(?:EOF|END|HEREDOC)\>.*/ {
+                    yield other;
+                    break;
+                }
+                if /.*/ {}
+                yield string;
+            }
+        } else if /\$(?:\{[^}]+\}|\(\([^)]*\)\)|\([^)]*\)|[A-Za-z_]\w*|\d+|[#?*!@$-])/ {
+            // $var, ${var:-default}, $(cmd), $((1+2)), etc.
+            yield variable;
+        } else if /(?:break|case|continue|done|do|elif|else|esac|fi|for|if|in|return|select|then|time|until|while)\>/ {
+            yield keyword.control;
+        } else if /function\>/ {
+            yield keyword.other;
+            if /\s+(\w+)/ {
+                yield $1 as method;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /(?:alias|declare|export|local|readonly|source|typeset)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false)\>/ {
+            yield constant.language;
+        } else if /(?:(?i:0x[\da-fA-F]+)|-?\d+(?:\.\d+)?)\>/ {
+            // NOTE: The somewhat niche base#value notation (e.g. 2#1010) is missing.
+            yield constant.numeric;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

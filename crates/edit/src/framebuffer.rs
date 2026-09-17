@@ -8,10 +8,11 @@ use std::ops::{BitOr, BitXor};
 use std::ptr;
 use std::slice::ChunksExact;
 
-use stdext::arena::Arena;
-use stdext::arena_write_fmt;
+use stdext::arena::{Arena, scratch_arena};
 use stdext::collections::BString;
 use stdext::simd::memset;
+use stdext::unicode::{SanitizedControlChars, sanitize_control_chars};
+use stdext::{MaybeOwned, arena_write_fmt};
 
 use crate::helpers::{CoordType, Point, Rect, Size};
 use crate::oklab::StraightRgba;
@@ -66,25 +67,25 @@ pub const INDEXED_COLORS_COUNT: usize = 18;
 
 /// Fallback theme. Matches Windows Terminal's Ottosson theme.
 pub const DEFAULT_THEME: [StraightRgba; INDEXED_COLORS_COUNT] = [
-    StraightRgba::from_be(0x000000ff), // Black
-    StraightRgba::from_be(0xbe2c21ff), // Red
-    StraightRgba::from_be(0x3fae3aff), // Green
-    StraightRgba::from_be(0xbe9a4aff), // Yellow
-    StraightRgba::from_be(0x204dbeff), // Blue
-    StraightRgba::from_be(0xbb54beff), // Magenta
-    StraightRgba::from_be(0x00a7b2ff), // Cyan
-    StraightRgba::from_be(0xbebebeff), // White
-    StraightRgba::from_be(0x808080ff), // BrightBlack
-    StraightRgba::from_be(0xff3e30ff), // BrightRed
-    StraightRgba::from_be(0x58ea51ff), // BrightGreen
-    StraightRgba::from_be(0xffc944ff), // BrightYellow
-    StraightRgba::from_be(0x2f6affff), // BrightBlue
-    StraightRgba::from_be(0xfc74ffff), // BrightMagenta
-    StraightRgba::from_be(0x00e1f0ff), // BrightCyan
-    StraightRgba::from_be(0xffffffff), // BrightWhite
+    StraightRgba::from_rgba(0x000000ff), // Black
+    StraightRgba::from_rgba(0xbe2c21ff), // Red
+    StraightRgba::from_rgba(0x3fae3aff), // Green
+    StraightRgba::from_rgba(0xbe9a4aff), // Yellow
+    StraightRgba::from_rgba(0x204dbeff), // Blue
+    StraightRgba::from_rgba(0xbb54beff), // Magenta
+    StraightRgba::from_rgba(0x00a7b2ff), // Cyan
+    StraightRgba::from_rgba(0xbebebeff), // White
+    StraightRgba::from_rgba(0x808080ff), // BrightBlack
+    StraightRgba::from_rgba(0xff3e30ff), // BrightRed
+    StraightRgba::from_rgba(0x58ea51ff), // BrightGreen
+    StraightRgba::from_rgba(0xffc944ff), // BrightYellow
+    StraightRgba::from_rgba(0x2f6affff), // BrightBlue
+    StraightRgba::from_rgba(0xfc74ffff), // BrightMagenta
+    StraightRgba::from_rgba(0x00e1f0ff), // BrightCyan
+    StraightRgba::from_rgba(0xffffffff), // BrightWhite
     // --------
-    StraightRgba::from_be(0x000000ff), // Background
-    StraightRgba::from_be(0xbebebeff), // Foreground
+    StraightRgba::from_rgba(0x000000ff), // Background
+    StraightRgba::from_rgba(0xbebebeff), // Foreground
 ];
 
 /// A shoddy framebuffer for terminal applications.
@@ -166,6 +167,10 @@ impl Framebuffer {
 
     /// Begins a new frame with the given `size`.
     pub fn flip(&mut self, size: Size) {
+        if size.is_empty() {
+            return;
+        }
+
         if size != self.buffers[0].bg_bitmap.size {
             for buffer in &mut self.buffers {
                 buffer.text = LineBuffer::new(size);
@@ -176,7 +181,7 @@ impl Framebuffer {
 
             let front = &mut self.buffers[self.frame_counter & 1];
             // Trigger a full redraw. (Yes, it's a hack.)
-            front.fg_bitmap.fill(StraightRgba::from_le(1));
+            front.fg_bitmap.fill(StraightRgba::from_rgba(0x01000000));
             // Trigger a cursor update as well, just to be sure.
             front.cursor = Cursor::new_invalid();
         }
@@ -195,15 +200,61 @@ impl Framebuffer {
     /// Replaces text contents in a single line of the framebuffer.
     /// All coordinates are in viewport coordinates.
     /// Assumes that control characters have been replaced or escaped.
+    #[inline]
     pub fn replace_text(
         &mut self,
         y: CoordType,
         origin_x: CoordType,
         clip_right: CoordType,
-        text: &str,
+        text: &(impl AsRef<[u8]> + ?Sized),
     ) {
+        self.replace_text_impl(y, origin_x, clip_right, text.as_ref());
+    }
+
+    fn replace_text_impl(
+        &mut self,
+        y: CoordType,
+        origin_x: CoordType,
+        clip_right: CoordType,
+        text: &[u8],
+    ) {
+        let scratch = scratch_arena(None);
+        let sanitized = sanitize_control_chars(&scratch, text);
+
         let back = &mut self.buffers[self.frame_counter & 1];
-        back.text.replace_text(y, origin_x, clip_right, text)
+        back.text.replace_text(y, origin_x, clip_right, &sanitized);
+
+        if let MaybeOwned::Owned(sanitized) = &sanitized {
+            self.highlight_sanitized(y, origin_x, clip_right, sanitized);
+        }
+    }
+
+    /// Highlights the replacements that [`sanitize_control_chars`] made in yellow.
+    #[cold]
+    fn highlight_sanitized(
+        &mut self,
+        y: CoordType,
+        origin_x: CoordType,
+        clip_right: CoordType,
+        sanitized: &SanitizedControlChars,
+    ) {
+        let bg = self.indexed(IndexedColor::Yellow);
+        let fg = self.contrasted(bg);
+        let text = sanitized.text.as_bytes();
+        let mut cfg = MeasurementConfig::new(&text);
+
+        for range in sanitized.unsane_ranges.iter() {
+            // The ranges are sorted, so once we're past the right edge we're done.
+            let left = origin_x + cfg.goto_offset(range.start).visual_pos.x;
+            if left >= clip_right {
+                break;
+            }
+
+            let right = origin_x + cfg.goto_offset(range.end).visual_pos.x;
+            let rect = Rect { left, top: y, right: right.min(clip_right), bottom: y + 1 };
+            self.blend_bg(rect, bg);
+            self.blend_fg(rect, fg);
+        }
     }
 
     /// Draws a scrollbar in the given `track` rectangle.
@@ -307,15 +358,11 @@ impl Framebuffer {
         let mut fract_buf = [0xE2, 0x96, 0x88];
         if top_fract != 0 {
             fract_buf[2] = (0x88 - top_fract) as u8;
-            self.replace_text(thumb_top - 1, track_clipped.left, track_clipped.right, unsafe {
-                std::str::from_utf8_unchecked(&fract_buf)
-            });
+            self.replace_text(thumb_top - 1, track_clipped.left, track_clipped.right, &fract_buf);
         }
         if bottom_fract != 0 {
             fract_buf[2] = (0x88 - bottom_fract) as u8;
-            self.replace_text(thumb_bottom, track_clipped.left, track_clipped.right, unsafe {
-                std::str::from_utf8_unchecked(&fract_buf)
-            });
+            self.replace_text(thumb_bottom, track_clipped.left, track_clipped.right, &fract_buf);
             let rect = Rect {
                 left: track_clipped.left,
                 top: thumb_bottom,
@@ -345,21 +392,21 @@ impl Framebuffer {
         numerator: u32,
         denominator: u32,
     ) -> StraightRgba {
-        let c = self.indexed_colors[index as usize].to_le();
+        let c = self.indexed_colors[index as usize].to_rgba();
         let a = 255 * numerator / denominator;
-        StraightRgba::from_le(a << 24 | (c & 0x00ffffff))
+        StraightRgba::from_rgba((c & 0xffffff00) | a)
     }
 
     /// Returns a color opposite to the brightness of the given `color`.
     pub fn contrasted(&self, color: StraightRgba) -> StraightRgba {
-        let idx = (color.to_ne() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
+        let idx = (color.to_rgba() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
         let slot = self.contrast_colors[idx].get();
         if slot.0 == color { slot.1 } else { self.contrasted_slow(color) }
     }
 
     #[cold]
     fn contrasted_slow(&self, color: StraightRgba) -> StraightRgba {
-        let idx = (color.to_ne() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
+        let idx = (color.to_rgba() as usize).wrapping_mul(HASH_MULTIPLIER) >> CACHE_TABLE_SHIFT;
         let is_dark = color.as_oklab().lightness() < self.auto_color_threshold;
         let contrast = self.auto_colors[is_dark as usize];
         self.contrast_colors[idx].set((color, contrast));
@@ -436,6 +483,10 @@ impl Framebuffer {
             (back, front)
         };
 
+        if front.text.size.is_empty() {
+            return BString::empty();
+        }
+
         let mut front_lines = front.text.lines.iter(); // hahaha
         let mut front_bgs = front.bg_bitmap.iter();
         let mut front_fgs = front.fg_bitmap.iter();
@@ -497,13 +548,13 @@ impl Framebuffer {
                         && back_attr[chunk_end] == attr
                 } {}
 
-                if last_bg != bg.to_ne() as u64 {
-                    last_bg = bg.to_ne() as u64;
+                if last_bg != bg.to_rgba() as u64 {
+                    last_bg = bg.to_rgba() as u64;
                     self.format_color(arena, &mut result, false, bg);
                 }
 
-                if last_fg != fg.to_ne() as u64 {
-                    last_fg = fg.to_ne() as u64;
+                if last_fg != fg.to_rgba() as u64 {
+                    last_fg = fg.to_rgba() as u64;
                     self.format_color(arena, &mut result, true, fg);
                 }
 
@@ -595,7 +646,7 @@ impl Framebuffer {
         // the output slightly and ensures that we keep "default foreground"
         // and "color that happens to be default foreground" separate.
         // (This also applies to the background color by the way.)
-        if color.to_ne() == 0 {
+        if color.to_rgba() == 0 {
             arena_write_fmt!(arena, dst, "\x1b[{typ}9m");
             return;
         }
@@ -631,6 +682,7 @@ struct LineBuffer {
 
 impl LineBuffer {
     fn new(size: Size) -> Self {
+        debug_assert!(!size.is_empty());
         Self { lines: vec![String::new(); size.height as usize], size }
     }
 
@@ -778,6 +830,7 @@ struct Bitmap {
 
 impl Bitmap {
     fn new(size: Size) -> Self {
+        debug_assert!(!size.is_empty());
         Self { data: vec![StraightRgba::zero(); (size.width * size.height) as usize], size }
     }
 
@@ -888,6 +941,7 @@ struct AttributeBuffer {
 
 impl AttributeBuffer {
     fn new(size: Size) -> Self {
+        debug_assert!(!size.is_empty());
         Self { data: vec![Default::default(); (size.width * size.height) as usize], size }
     }
 

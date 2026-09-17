@@ -9,9 +9,14 @@ edit is a simple text editor inspired by MS-DOS edit.
 Edit is an interactive mode-less editor. Use F10 to access the menus.
 .SH ARGUMENTS
 .TP
-\fIFILE[:LINE[:COLUMN]]\fP
-The file to open, optionally with line and column (e.g., \fBfoo.txt:123:45\fP).
+\fIFILE\fP
+The file to open.
 .SH OPTIONS
+.TP
+\fB\-g\fP, \fB\-\-goto\fP \fIFILE:LINE[:CHARACTER]\fP
+Open a file at the specified line and character position.
+The option applies only to the next file.
+Repeat it to open multiple files at specified positions.
 .TP
 \fB\-h\fP, \fB\-\-help\fP
 Print the help message.

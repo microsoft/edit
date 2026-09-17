@@ -10,7 +10,6 @@ use std::ptr::{self, NonNull, null, null_mut};
 use std::{io, mem, time};
 
 use stdext::arena::{Arena, scratch_arena};
-use stdext::arena_write_fmt;
 use stdext::collections::{BString, BVec};
 use windows_sys::Win32::Storage::FileSystem;
 use windows_sys::Win32::System::{Console, IO, LibraryLoader, Threading};
@@ -78,7 +77,6 @@ struct State {
     stdin_mode_old: u32,
     stdout_mode_old: u32,
     leading_surrogate: u16,
-    inject_resize: bool,
     wants_exit: bool,
 }
 
@@ -91,7 +89,6 @@ static mut STATE: State = State {
     stdin_mode_old: INVALID_CONSOLE_MODE,
     stdout_mode_old: INVALID_CONSOLE_MODE,
     leading_surrogate: 0,
-    inject_resize: false,
     wants_exit: false,
 };
 
@@ -104,14 +101,46 @@ extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> BOOL {
 }
 
 /// Initializes the platform-specific state.
-pub fn init() -> Deinit {
+pub fn init() -> io::Result<Deinit> {
     unsafe {
         // Get the stdin and stdout handles first, so that if this function fails,
         // we at least got something to use for `write_stdout`.
         STATE.stdin = Console::GetStdHandle(Console::STD_INPUT_HANDLE);
         STATE.stdout = Console::GetStdHandle(Console::STD_OUTPUT_HANDLE);
 
-        Deinit
+        Ok(Deinit)
+    }
+}
+
+/// Reopen stdin if it's redirected (= piped input).
+pub fn reopen_stdin_if_redirected() -> io::Result<Option<File>> {
+    unsafe {
+        let stdin = STATE.stdin;
+
+        if stdin != Foundation::INVALID_HANDLE_VALUE
+            && FileSystem::GetFileType(stdin) == FileSystem::FILE_TYPE_CHAR
+        {
+            return Ok(None); // stdin refers to a TTY
+        }
+
+        STATE.stdin = FileSystem::CreateFileW(
+            w!("CONIN$"),
+            Foundation::GENERIC_READ | Foundation::GENERIC_WRITE,
+            FileSystem::FILE_SHARE_READ | FileSystem::FILE_SHARE_WRITE,
+            null_mut(),
+            FileSystem::OPEN_EXISTING,
+            0,
+            null_mut(),
+        );
+        if STATE.stdin == Foundation::INVALID_HANDLE_VALUE {
+            return Err(last_os_error());
+        }
+
+        if stdin != Foundation::INVALID_HANDLE_VALUE {
+            Ok(Some(File::from_raw_handle(stdin)))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -138,20 +167,6 @@ pub fn switch_modes() -> io::Result<()> {
             },
         };
 
-        // Reopen stdin if it's redirected (= piped input).
-        if ptr::eq(STATE.stdin, Foundation::INVALID_HANDLE_VALUE)
-            || !matches!(FileSystem::GetFileType(STATE.stdin), FileSystem::FILE_TYPE_CHAR)
-        {
-            STATE.stdin = FileSystem::CreateFileW(
-                w!("CONIN$"),
-                Foundation::GENERIC_READ | Foundation::GENERIC_WRITE,
-                FileSystem::FILE_SHARE_READ | FileSystem::FILE_SHARE_WRITE,
-                null_mut(),
-                FileSystem::OPEN_EXISTING,
-                0,
-                null_mut(),
-            );
-        }
         if ptr::eq(STATE.stdin, Foundation::INVALID_HANDLE_VALUE)
             || ptr::eq(STATE.stdout, Foundation::INVALID_HANDLE_VALUE)
         {
@@ -217,27 +232,21 @@ impl Drop for Deinit {
     }
 }
 
-/// During startup we need to get the window size from the terminal.
-/// Because I didn't want to type a bunch of code, this function tells
-/// [`read_stdin`] to inject a fake sequence, which gets picked up by
-/// the input parser and provided to the TUI code.
-pub fn inject_window_size_into_stdin() {
-    unsafe {
-        STATE.inject_resize = true;
-    }
-}
-
-fn get_console_size() -> Option<Size> {
+pub fn get_window_size() -> io::Result<Size> {
     unsafe {
         let mut info: Console::CONSOLE_SCREEN_BUFFER_INFOEX = mem::zeroed();
         info.cbSize = mem::size_of::<Console::CONSOLE_SCREEN_BUFFER_INFOEX>() as u32;
         if Console::GetConsoleScreenBufferInfoEx(STATE.stdout, &mut info) == 0 {
-            return None;
+            return Err(last_os_error());
         }
 
-        let w = (info.srWindow.Right - info.srWindow.Left + 1).max(1) as CoordType;
-        let h = (info.srWindow.Bottom - info.srWindow.Top + 1).max(1) as CoordType;
-        Some(Size { width: w, height: h })
+        let width = info.srWindow.Right as CoordType - info.srWindow.Left as CoordType + 1;
+        let height = info.srWindow.Bottom as CoordType - info.srWindow.Top as CoordType + 1;
+        if width <= 0 || height <= 0 {
+            Err(io::Error::other("invalid terminal size"))
+        } else {
+            Ok(Size { width, height })
+        }
     }
 }
 
@@ -246,19 +255,14 @@ fn get_console_size() -> Option<Size> {
 /// # Returns
 ///
 /// * `None` if there was an error reading from stdin.
-/// * `Some("")` if the given timeout was reached.
-/// * Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<'_>> {
+/// * `Some((_, ""))` if the given timeout was reached.
+/// * Otherwise, it returns a pending resize and the read string.
+pub fn read_stdin(
+    arena: &Arena,
+    mut timeout: time::Duration,
+) -> Option<(Option<Size>, BString<'_>)> {
     let scratch = scratch_arena(Some(arena));
-
-    // On startup we're asked to inject a window size so that the UI system can layout the elements.
-    // --> Inject a fake sequence for our input parser.
     let mut resize_event = None;
-    if unsafe { STATE.inject_resize } {
-        unsafe { STATE.inject_resize = false };
-        timeout = time::Duration::ZERO;
-        resize_event = get_console_size();
-    }
 
     let read_poll = timeout != time::Duration::MAX; // there is a timeout -> don't block in read()
     let input_buf = scratch.alloc_uninit_slice(4 * KIBI);
@@ -294,7 +298,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
 
         // Read from stdin.
         let input = unsafe {
-            // If we had a `inject_resize`, we don't want to block indefinitely for other pending input on startup,
+            // If we had a pending resize, we don't want to block indefinitely for other input on startup,
             // but are still interested in any other pending input that may be waiting for us.
             let flags = if read_poll { CONSOLE_READ_NOWAIT } else { 0 };
             let mut read = 0;
@@ -317,7 +321,8 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
                 Console::KEY_EVENT => {
                     let event = unsafe { &inp.Event.KeyEvent };
                     let ch = unsafe { event.uChar.UnicodeChar };
-                    if event.bKeyDown != 0 && ch != 0 {
+                    let sc = event.wVirtualScanCode;
+                    if event.bKeyDown != 0 && (ch != 0 || sc == 0) {
                         utf16_buf[utf16_buf_len] = MaybeUninit::new(ch);
                         utf16_buf_len += 1;
                     }
@@ -341,20 +346,10 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
         }
     }
 
-    const RESIZE_EVENT_FMT_MAX_LEN: usize = 16; // "\x1b[8;65535;65535t"
-    let resize_event_len = if resize_event.is_some() { RESIZE_EVENT_FMT_MAX_LEN } else { 0 };
     // +1 to account for a potential `STATE.leading_surrogate`.
     let utf8_max_len = (utf16_buf_len + 1) * 3;
     let mut text = BString::empty();
-    text.reserve(arena, utf8_max_len + resize_event_len);
-
-    // Now prepend our previously extracted resize event.
-    if let Some(resize_event) = resize_event {
-        // If I read xterm's documentation correctly, CSI 18 t reports the window size in characters.
-        // CSI 8 ; height ; width t is the response. Of course, we didn't send the request,
-        // but we can use this fake response to trigger the editor to resize itself.
-        arena_write_fmt!(arena, text, "\x1b[8;{};{}t", resize_event.height, resize_event.width);
-    }
+    text.reserve(arena, utf8_max_len);
 
     // If the input ends with a lone lead surrogate, we need to remember it for the next read.
     if utf16_buf_len > 0 {
@@ -390,7 +385,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
         }
     }
 
-    Some(text)
+    Some((resize_event, text))
 }
 
 /// Writes a string to stdout.
@@ -411,20 +406,6 @@ pub fn write_stdout(text: &str) {
                 break;
             }
         }
-    }
-}
-
-/// Check if the stdin handle is redirected to a file, etc.
-///
-/// # Returns
-///
-/// * `Some(file)` if stdin is redirected.
-/// * Otherwise, `None`.
-pub fn open_stdin_if_redirected() -> Option<File> {
-    unsafe {
-        let handle = Console::GetStdHandle(Console::STD_INPUT_HANDLE);
-        // Did we reopen stdin during `init()`?
-        if !std::ptr::eq(STATE.stdin, handle) { Some(File::from_raw_handle(handle)) } else { None }
     }
 }
 

@@ -36,7 +36,6 @@ use std::str;
 pub use gap_buffer::GapBuffer;
 use stdext::arena::{Arena, scratch_arena};
 use stdext::collections::{BString, BVec};
-use stdext::unicode::Utf8Chars;
 use stdext::{ReplaceRange as _, arena_write_fmt, minmax, slice_as_uninit_mut, slice_copy_safe};
 
 use crate::cell::SemiRefCell;
@@ -54,13 +53,13 @@ use crate::{icu, simd};
 /// The margin template is used for line numbers.
 /// The max. line number we should ever expect is probably 64-bit,
 /// and so this template fits 19 digits, followed by " │ ".
-const MARGIN_TEMPLATE: &str = "                    │ ";
+const MARGIN_TEMPLATE: &[u8] = "                    │ ".as_bytes();
 /// Just a bunch of whitespace you can use for turning tabs into spaces.
 /// Happens to reuse MARGIN_TEMPLATE, because it has sufficient whitespace.
-const TAB_WHITESPACE: &str = MARGIN_TEMPLATE;
-const VISUAL_SPACE: &str = "･";
+const TAB_WHITESPACE: &[u8] = MARGIN_TEMPLATE;
+const VISUAL_SPACE: &[u8] = "･".as_bytes();
 const VISUAL_SPACE_PREFIX_ADD: usize = '･'.len_utf8() - 1;
-const VISUAL_TAB: &str = "￫       ";
+const VISUAL_TAB: &[u8] = "￫       ".as_bytes();
 const VISUAL_TAB_PREFIX_ADD: usize = '￫'.len_utf8() - 1;
 
 pub enum IoError {
@@ -316,7 +315,7 @@ impl TextBuffer {
             ruler: 0,
             encoding: "UTF-8",
             newlines_are_crlf: cfg!(windows), // Windows users want CRLF
-            insert_final_newline: false,
+            insert_final_newline: false, // NOTE: Even with POSIX, single-line buffers need this to be false
             overtype: false,
 
             wants_cursor_visibility: false,
@@ -1152,15 +1151,15 @@ impl TextBuffer {
 
         // If the user moved the cursor since the last search, but the needle remained the same,
         // we still need to move the start of the search to the new cursor position.
-        let next_search_offset = match self.selection {
-            Some(TextBufferSelection { beg, end }) => {
-                if self.selection_generation == search.selection_generation {
-                    search.next_search_offset
-                } else {
+        let next_search_offset = if self.selection_generation == search.selection_generation {
+            search.next_search_offset
+        } else {
+            match self.selection {
+                Some(TextBufferSelection { beg, end }) => {
                     self.cursor_move_to_logical_internal(self.cursor, beg.min(end)).offset
                 }
+                _ => self.cursor.offset,
             }
-            _ => self.cursor.offset,
         };
 
         self.find_select_next(search, next_search_offset, true);
@@ -1175,15 +1174,23 @@ impl TextBuffer {
         replacement: &[u8],
     ) -> icu::Result<()> {
         // Editors traditionally replace the previous search hit, not the next possible one.
-        if let (Some(search), Some(..)) = (&self.search, &self.selection) {
+        if let Some(search) = &self.search {
             let search = unsafe { &mut *search.get() };
             if search.selection_generation == self.selection_generation {
                 let scratch = scratch_arena(None);
+                let zero_width = self.selection.is_none();
                 let parsed_replacements =
                     Self::find_parse_replacement(&scratch, &mut *search, replacement);
                 let replacement =
                     self.find_fill_replacement(&mut *search, replacement, &parsed_replacements);
-                self.write(&replacement, self.cursor, true);
+                self.write_raw(&replacement);
+
+                // After replacing a zero-width match, advance past it so that find_and_select wraps to the
+                // next match rather than finding the same anchor (e.g. `$`) again at the same line end.
+                if zero_width {
+                    search.next_search_offset =
+                        self.find_advance_past_zero_width(self.active_edit_off).unwrap_or(0);
+                }
             }
         }
 
@@ -1197,24 +1204,46 @@ impl TextBuffer {
         options: SearchOptions,
         replacement: &[u8],
     ) -> icu::Result<()> {
+        self.edit_begin_grouping();
+
         let scratch = scratch_arena(None);
         let mut search = self.find_construct_search(pattern, options)?;
         let mut offset = 0;
         let parsed_replacements = Self::find_parse_replacement(&scratch, &mut search, replacement);
 
-        loop {
-            self.find_select_next(&mut search, offset, false);
-            if !self.has_selection() {
-                break;
-            }
-
+        while let Some(range) = self.find_select_next(&mut search, offset, false) {
             let replacement =
                 self.find_fill_replacement(&mut search, replacement, &parsed_replacements);
-            self.write(&replacement, self.cursor, true);
-            offset = self.cursor.offset;
+            self.write_raw(&replacement);
+
+            // The `active_edit_off` points to the end of the last edit made by `write_raw()`.
+            // This differs from the self.cursor.offset, if `write_raw()` did an `insert_final_newline`.
+            offset = self.active_edit_off;
+
+            // Avoid infinite loops when hitting zero-length matches
+            // by advancing past the zero-length match location.
+            //
+            // This is technically not entirely correct. For instance imagine replacing
+            // "^|f" with "x" in "foo". It should technically produce "xxoo", but I
+            // found that other editors also do it wrong, so it can't matter too much.
+            if range.is_empty() {
+                offset = match self.find_advance_past_zero_width(offset) {
+                    Some(next) => next,
+                    None => break,
+                };
+            }
         }
 
+        self.edit_end_grouping();
         Ok(())
+    }
+
+    /// After replacing a zero-width match, compute the offset to resume
+    /// searching from. Returns `None` if we're at the end of the buffer.
+    fn find_advance_past_zero_width(&self, offset: usize) -> Option<usize> {
+        let cursor = self.cursor_move_to_offset_internal(self.cursor, offset);
+        let next = self.cursor_move_delta_internal(cursor, CursorMovement::Grapheme, 1);
+        (next.offset > offset).then_some(next.offset)
     }
 
     fn find_construct_search(
@@ -1277,7 +1306,12 @@ impl TextBuffer {
         })
     }
 
-    fn find_select_next(&mut self, search: &mut ActiveSearch, offset: usize, wrap: bool) {
+    fn find_select_next(
+        &mut self,
+        search: &mut ActiveSearch,
+        offset: usize,
+        wrap: bool,
+    ) -> Option<Range<usize>> {
         if search.buffer_generation != self.buffer.generation() {
             unsafe { search.regex.set_text(&mut search.text, offset) };
             search.buffer_generation = self.buffer.generation();
@@ -1297,7 +1331,7 @@ impl TextBuffer {
             hit = search.regex.next();
         }
 
-        search.selection_generation = if let Some(range) = hit {
+        search.selection_generation = if let Some(range) = &hit {
             // Now the search offset is no more at the start of the buffer.
             search.next_search_offset = range.end;
 
@@ -1316,6 +1350,8 @@ impl TextBuffer {
             search.no_matches = true;
             self.set_selection(None)
         };
+
+        hit
     }
 
     fn find_parse_replacement<'a>(
@@ -1754,7 +1790,6 @@ impl TextBuffer {
         let height = destination.height();
         let line_number_width = self.margin_width.max(3) as usize - 3;
         let text_width = width - self.margin_width;
-        let mut visualizer_buf = [0xE2, 0x90, 0x80]; // U+2400 in UTF8
         let mut visual_pos_x_max = 0;
 
         // Pick the cursor closer to the `origin.y`.
@@ -1773,7 +1808,7 @@ impl TextBuffer {
 
         for y in 0..height {
             let scratch = scratch_arena(None);
-            let mut line = BString::empty();
+            let mut line = BVec::empty();
             line.reserve(&*scratch, width as usize * 2);
 
             let visual_line = origin.y + y;
@@ -1797,7 +1832,7 @@ impl TextBuffer {
                     // because `line_number_width` can't possibly be larger than 19.
                     let off = 19 - line_number_width;
                     unsafe { std::hint::assert_unchecked(off < MARGIN_TEMPLATE.len()) };
-                    line.push_str(&*scratch, &MARGIN_TEMPLATE[off..]);
+                    line.extend_from_slice(&*scratch, &MARGIN_TEMPLATE[off..]);
                 } else if self.word_wrap_column <= 0 || cursor_beg.logical_pos.x == 0 {
                     // Regular line? Place "123 | " in the margin.
                     arena_write_fmt!(
@@ -1902,7 +1937,7 @@ impl TextBuffer {
                     if cursor_next.visual_pos.x > origin.x {
                         let overlap = cursor_next.visual_pos.x - origin.x;
                         debug_assert!((1..=7).contains(&overlap));
-                        line.push_str(&*scratch, &TAB_WHITESPACE[..overlap as usize]);
+                        line.extend_from_slice(&*scratch, &TAB_WHITESPACE[..overlap as usize]);
                         cursor_beg = cursor_next;
                     }
                 }
@@ -1913,19 +1948,19 @@ impl TextBuffer {
                 while global_off < cursor_end.offset {
                     let chunk = self.read_forward(global_off);
                     let chunk = &chunk[..chunk.len().min(cursor_end.offset - global_off)];
-                    let mut it = Utf8Chars::new(chunk, 0);
+                    let mut off = 0;
 
-                    // TODO: Looping char-by-char is bad for performance.
-                    // >25% of the total rendering time is spent here.
-                    loop {
-                        let chunk_off = it.offset();
-                        let global_off = global_off + chunk_off;
-                        let Some(ch) = it.next() else {
-                            break;
-                        };
+                    while off < chunk.len() {
+                        let beg = off;
+                        off = memchr2(b' ', b'\t', chunk, off);
 
-                        if ch == ' ' || ch == '\t' {
-                            let is_tab = ch == '\t';
+                        // Anything that isn't whitespace is copied as-is.
+                        // The framebuffer takes care of sanitizing it.
+                        line.extend_from_slice(&*scratch, &chunk[beg..off]);
+
+                        while off < chunk.len() && matches!(chunk[off], b' ' | b'\t') {
+                            let is_tab = chunk[off] == b'\t';
+                            let global_off = global_off + off;
                             let visualize = selection_off.contains(&global_off);
                             let mut whitespace = TAB_WHITESPACE;
                             let mut prefix_add = 0;
@@ -1933,7 +1968,7 @@ impl TextBuffer {
                             if is_tab || visualize {
                                 // We need the character's visual position in order to either compute the tab size,
                                 // or set the foreground color of the visualizer, respectively.
-                                // TODO: Doing this char-by-char is of course also bad for performance.
+                                // TODO: Doing this char-by-char is bad for performance.
                                 cursor_line =
                                     self.cursor_move_to_offset_internal(cursor_line, global_off);
                             }
@@ -1965,38 +2000,11 @@ impl TextBuffer {
                                 );
                             }
 
-                            line.push_str(&*scratch, &whitespace[..prefix_add + tab_size as usize]);
-                        } else if ch <= '\x1f' || ('\u{7f}'..='\u{9f}').contains(&ch) {
-                            // Append a Unicode representation of the C0 or C1 control character.
-                            visualizer_buf[2] = if ch <= '\x1f' {
-                                0x80 | ch as u8 // U+2400..=U+241F
-                            } else if ch == '\x7f' {
-                                0xA1 // U+2421
-                            } else {
-                                0xA6 // U+2426, because there are no pictures for C1 control characters.
-                            };
-
-                            // Our manually constructed UTF8 is never going to be invalid. Trust.
-                            line.push_str(&*scratch, unsafe {
-                                str::from_utf8_unchecked(&visualizer_buf)
-                            });
-
-                            // Highlight the control character yellow.
-                            cursor_line =
-                                self.cursor_move_to_offset_internal(cursor_line, global_off);
-                            let visualizer_rect = {
-                                let left =
-                                    destination.left + self.margin_width + cursor_line.visual_pos.x
-                                        - origin.x;
-                                let top = destination.top + cursor_line.visual_pos.y - origin.y;
-                                Rect { left, top, right: left + 1, bottom: top + 1 }
-                            };
-                            let bg = fb.indexed(IndexedColor::Yellow);
-                            let fg = fb.contrasted(bg);
-                            fb.blend_bg(visualizer_rect, bg);
-                            fb.blend_fg(visualizer_rect, fg);
-                        } else {
-                            line.push(&*scratch, ch);
+                            line.extend_from_slice(
+                                &*scratch,
+                                &whitespace[..prefix_add + tab_size as usize],
+                            );
+                            off += 1;
                         }
                     }
 
@@ -2023,7 +2031,7 @@ impl TextBuffer {
                 right: destination.left + self.margin_width,
                 bottom: destination.bottom,
             };
-            fb.blend_fg(margin, StraightRgba::from_le(0x7f7f7f7f));
+            fb.blend_fg(margin, StraightRgba::from_rgba(0x7f7f7f7f));
         }
 
         if self.ruler > 0 {
@@ -2071,7 +2079,7 @@ impl TextBuffer {
                             right: destination.right,
                             bottom: cursor.y + 1,
                         },
-                        StraightRgba::from_le(0x7f7f7f7f),
+                        StraightRgba::from_rgba(0x7f7f7f7f),
                     );
                 }
             }
@@ -2140,6 +2148,7 @@ impl TextBuffer {
                     HighlightKind::ConstantNumeric => Some(IndexedColor::BrightGreen),
                     HighlightKind::KeywordControl => Some(IndexedColor::BrightMagenta),
                     HighlightKind::KeywordOther => Some(IndexedColor::BrightBlue),
+                    HighlightKind::KeywordPreprocessor => Some(IndexedColor::BrightBlue),
                     HighlightKind::MarkupBold => None,
                     HighlightKind::MarkupChanged => Some(IndexedColor::BrightBlue),
                     HighlightKind::MarkupDeleted => Some(IndexedColor::BrightRed),
@@ -2150,6 +2159,8 @@ impl TextBuffer {
                     HighlightKind::MarkupList => Some(IndexedColor::BrightBlue),
                     HighlightKind::MarkupStrikethrough => None,
                     HighlightKind::MetaHeader => Some(IndexedColor::BrightBlue),
+                    HighlightKind::StorageAnnotation => Some(IndexedColor::Cyan),
+                    HighlightKind::StorageType => Some(IndexedColor::Cyan),
                 };
                 let attr = match curr.kind {
                     HighlightKind::MarkupBold => Some(Attributes::Bold),
@@ -2242,8 +2253,17 @@ impl TextBuffer {
         clipboard.write_was_line_copy(line_copy);
     }
 
-    pub fn paste(&mut self, clipboard: &Clipboard) {
+    pub fn paste(&mut self, clipboard: &Clipboard, single_line: bool) {
         let data = clipboard.read();
+
+        let data = if single_line {
+            // Can't use `unicode::newlines_forward` because bracketed paste uses CR instead of LF/CRLF.
+            let off = memchr2(b'\r', b'\n', data, 0);
+            unicode::strip_newline(&data[..off])
+        } else {
+            data
+        };
+
         if data.is_empty() {
             return;
         }
@@ -2328,7 +2348,7 @@ impl TextBuffer {
                 // Now replace tabs with spaces.
                 while line_off < line.len() && line[line_off] == b'\t' {
                     let spaces = self.tab_size_eval(self.cursor.column);
-                    let spaces = &TAB_WHITESPACE.as_bytes()[..spaces as usize];
+                    let spaces = &TAB_WHITESPACE[..spaces as usize];
                     self.edit_write(spaces);
                     line_off += 1;
                 }
@@ -2529,7 +2549,11 @@ impl TextBuffer {
 
         self.edit_begin_grouping();
 
-        for y in selection_beg.y.min(selection_end.y)..=selection_beg.y.max(selection_end.y) {
+        let [first, last] = minmax(selection_beg, selection_end);
+        // Just like in VS Code, if the selections ends at a line start, it is not included.
+        let last_y = if last.x == 0 && last.y > first.y { last.y - 1 } else { last.y };
+
+        for y in first.y..=last_y {
             self.cursor_move_to_logical(Point { x: 0, y });
 
             let line_start_offset = self.cursor.offset;
@@ -3116,4 +3140,52 @@ fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SearchOptions, TextBuffer};
+
+    fn buffer_contents(buf: &mut TextBuffer) -> String {
+        let mut str = String::new();
+        buf.save_as_string(&mut str);
+        str
+    }
+
+    #[test]
+    fn replace_one_zero_width() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.set_insert_final_newline(true);
+        buf.write_raw(b"a\nb\n");
+        buf.cursor_move_to_logical(Default::default());
+
+        for _ in 0..6 {
+            buf.find_and_replace(
+                "$",
+                SearchOptions { use_regex: true, ..Default::default() },
+                b"x",
+            )
+            .unwrap();
+        }
+
+        assert_eq!(buffer_contents(&mut buf), "axx\nbxx\nx\n");
+    }
+
+    #[test]
+    fn replace_all_zero_width() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.set_insert_final_newline(true);
+        buf.write_raw(b"a\nb\n");
+
+        buf.find_and_replace_all(
+            "$",
+            SearchOptions { use_regex: true, ..Default::default() },
+            b"x",
+        )
+        .unwrap();
+
+        assert_eq!(buffer_contents(&mut buf), "ax\nbx\nx\n");
+    }
 }

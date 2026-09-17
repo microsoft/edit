@@ -11,7 +11,6 @@ mod localization;
 mod settings;
 mod state;
 
-use std::borrow::Cow;
 use std::path::Path;
 use std::time::Duration;
 use std::{env, process};
@@ -32,6 +31,7 @@ use state::*;
 use stdext::arena::{self, Arena, scratch_arena};
 use stdext::arena_format;
 use stdext::collections::{BString, BVec};
+use stdext::unicode::sanitize_control_chars;
 
 use crate::settings::Settings;
 
@@ -64,31 +64,35 @@ fn main() -> process::ExitCode {
 
 fn run() -> apperr::Result<()> {
     // Init `sys` first, as everything else may depend on its functionality (IO, function pointers, etc.).
-    let _sys_deinit = sys::init();
+    let _sys_deinit = sys::init()?;
     // Next init `arena`, so that `scratch_arena` works. `loc` depends on it.
     arena::init(SCRATCH_ARENA_CAPACITY)?;
     // Init the `loc` module, so that error messages are localized.
     localization::init();
 
     let mut state = State::new()?;
-    if handle_args(&mut state)? {
-        return Ok(());
-    }
 
+    // Load settings so user file associations are ready when opening files passed as args
     if let Err(err) = Settings::reload() {
         state.add_error(err);
     }
 
-    // This will reopen stdin if it's redirected (which may fail) and switch
-    // the terminal to raw mode which prevents the user from pressing Ctrl+C.
-    // `handle_args` may want to print a help message (must not fail),
-    // and reads files (may hang; should be cancelable with Ctrl+C).
-    // As such, we call this after `handle_args`.
-    sys::switch_modes()?;
+    if handle_args(&mut state)? {
+        return Ok(());
+    }
+
+    handle_stdin(&mut state)?;
 
     let mut vt_parser = vt::Parser::new();
     let mut input_parser = input::Parser::new();
     let mut tui = Tui::new()?;
+    tui.set_size(sys::get_window_size()?);
+
+    // Switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
+    // `handle_args` may want to print a help message (must not fail),
+    // and reads files (may hang; should be cancelable with Ctrl+C).
+    // As such, we call this after `handle_args`.
+    sys::switch_modes()?;
 
     let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
 
@@ -112,8 +116,6 @@ fn run() -> apperr::Result<()> {
     tui.set_modal_default_bg(floater_bg);
     tui.set_modal_default_fg(floater_fg);
 
-    sys::inject_window_size_into_stdin();
-
     #[cfg(feature = "debug-latency")]
     let mut last_latency_width = 0;
 
@@ -127,7 +129,7 @@ fn run() -> apperr::Result<()> {
         {
             let scratch = scratch_arena(None);
             let read_timeout = vt_parser.read_timeout().min(tui.read_timeout());
-            let Some(input) = sys::read_stdin(&scratch, read_timeout) else {
+            let Some((resize, input)) = sys::read_stdin(&scratch, read_timeout) else {
                 break;
             };
 
@@ -137,15 +139,21 @@ fn run() -> apperr::Result<()> {
                 passes = 0usize;
             }
 
+            if let Some(size) = resize {
+                draw(&mut tui, Some(input::Input::Resize(size)), &mut state);
+                #[cfg(feature = "debug-latency")]
+                {
+                    passes += 1;
+                }
+            }
+
             let vt_iter = vt_parser.parse(&input);
             let mut input_iter = input_parser.parse(vt_iter);
 
             while {
                 let input = input_iter.next();
                 let more = input.is_some();
-                let mut ctx = tui.create_context(input);
-
-                draw(&mut ctx, &mut state);
+                draw(&mut tui, input, &mut state);
 
                 #[cfg(feature = "debug-latency")]
                 {
@@ -159,9 +167,7 @@ fn run() -> apperr::Result<()> {
         // Continue rendering until the layout has settled.
         // This can take >1 frame, if the input focus is tossed between different controls.
         while tui.needs_settling() {
-            let mut ctx = tui.create_context(None);
-
-            draw(&mut ctx, &mut state);
+            draw(&mut tui, None, &mut state);
 
             #[cfg(feature = "debug-latency")]
             {
@@ -240,17 +246,23 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     let cwd = env::current_dir()?;
     let mut dir = None;
     let mut parse_args = true;
+    let mut goto_next = false;
 
     // The best CLI argument parser in the world.
     for arg in env::args_os().skip(1) {
         if parse_args {
             if arg == "--" {
                 parse_args = false;
+                goto_next = false;
                 continue;
             }
             if arg == "-" {
                 paths.clear();
                 break;
+            }
+            if arg == "-g" || arg == "--goto" {
+                goto_next = true;
+                continue;
             }
             if arg == "-h" || arg == "--help" || (cfg!(windows) && arg == "/?") {
                 print_help();
@@ -262,32 +274,32 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
             }
         }
 
-        let p = cwd.join(Path::new(&arg));
+        let (arg, goto) = if goto_next {
+            goto_next = false;
+            documents::parse_filename_goto(Path::new(&arg))
+        } else {
+            (Path::new(&arg), None)
+        };
+
+        let p = cwd.join(arg);
         let p = path::normalize(&p);
         if p.is_dir() {
             state.wants_file_picker = StateFilePicker::Open;
             dir = Some(p);
         } else {
-            paths.push(&*scratch, p);
+            paths.push(&*scratch, (p, goto));
         }
     }
 
-    for p in &paths {
-        state.documents.add_file_path(p)?;
-    }
-
-    if let Some(mut file) = sys::open_stdin_if_redirected() {
-        let doc = state.documents.add_untitled()?;
-        let mut tb = doc.buffer.borrow_mut();
-        tb.read_file(&mut file, None)?;
-        tb.mark_as_dirty();
-    } else if paths.is_empty() {
-        // No files were passed, and stdin is not redirected.
-        state.documents.add_untitled()?;
+    for (p, goto) in &paths {
+        let doc = state.documents.add_file_path(p)?;
+        if let Some(goto) = goto {
+            doc.cursor_move_to_goto(*goto);
+        }
     }
 
     if dir.is_none()
-        && let Some(parent) = paths.last().and_then(|p| p.parent())
+        && let Some(parent) = paths.last().and_then(|(p, _)| p.parent())
     {
         dir = Some(parent.to_path_buf());
     }
@@ -296,15 +308,30 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     Ok(false)
 }
 
+// Read any redirected (piped) stdin into a new document.
+// This doubles as a stdin handle validation. We do this after `handle_args`
+// (may exit early) and before `switch_modes` (needs a console stdin).
+fn handle_stdin(state: &mut State) -> apperr::Result<()> {
+    if let Some(mut file) = sys::reopen_stdin_if_redirected()? {
+        let doc = state.documents.add_untitled()?;
+        let mut tb = doc.buffer.borrow_mut();
+        tb.read_file(&mut file, None)?;
+        tb.mark_as_dirty();
+    } else if state.documents.len() == 0 {
+        // No files were passed, and stdin is not redirected.
+        state.documents.add_untitled()?;
+    }
+    Ok(())
+}
+
 fn print_help() {
     sys::write_stdout(concat!(
-        "Usage: edit [OPTIONS] [FILE[:LINE[:COLUMN]]]\n",
+        "Usage: edit [OPTIONS] [FILE]...\n",
         "Options:\n",
-        "    -h, --help       Print this help message\n",
-        "    -v, --version    Print the version number\n",
-        "\n",
-        "Arguments:\n",
-        "    FILE[:LINE[:COLUMN]]    The file to open, optionally with line and column (e.g., foo.txt:123:45)\n",
+        "    -g, --goto <FILE:LINE[:CHARACTER]>    Open a file at the specified line and character position\n",
+        "    -h, --help                            Print this help message\n",
+        "    -v, --version                         Print the version number\n",
+        "\n"
     ));
 }
 
@@ -312,7 +339,9 @@ fn print_version() {
     sys::write_stdout(concat!("edit version ", env!("CARGO_PKG_VERSION"), "\n"));
 }
 
-fn draw(ctx: &mut Context, state: &mut State) {
+fn draw(tui: &mut Tui, input: Option<input::Input>, state: &mut State) {
+    let ctx = &mut tui.create_context(input);
+
     draw_menubar(ctx, state);
     draw_editor(ctx, state);
     draw_statusbar(ctx, state);
@@ -421,7 +450,9 @@ fn write_terminal_title<'a>(arena: &'a Arena, output: &mut BString<'a>, state: &
         if dirty {
             output.push_str(arena, "● ");
         }
-        output.push_str(arena, &sanitize_control_chars(filename));
+        let scratch = scratch_arena(Some(arena));
+        let sanitized = sanitize_control_chars(&scratch, filename);
+        output.push_str(arena, &sanitized);
         output.push_str(arena, " - ");
     }
     output.push_str(arena, "edit\x1b\\");
@@ -597,9 +628,13 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         // We explicitly set a high read timeout, because we're not
         // waiting for user keyboard input. If we encounter a lone ESC,
         // it's unlikely to be from a ESC keypress, but rather from a VT sequence.
-        let Some(input) = sys::read_stdin(&scratch, Duration::from_secs(3)) else {
+        let Some((resize, input)) = sys::read_stdin(&scratch, Duration::from_secs(3)) else {
             break;
         };
+
+        if let Some(size) = resize {
+            tui.set_size(size);
+        }
 
         let mut vt_stream = vt_parser.parse(&input);
         while let Some(token) = vt_stream.next() {
@@ -653,11 +688,11 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
                                 // Round from 16 bits to 8 bits.
                                 val = (val * 0xff + 0x7fff) / 0xffff;
                             }
-                            rgb = (rgb >> 8) | ((val as u32) << 16);
+                            rgb = (rgb << 8) | (val as u32);
                         }
                     }
 
-                    *color = StraightRgba::from_le(rgb | 0xff000000);
+                    *color = StraightRgba::from_rgba(rgb << 8 | 0xff);
                     color_responses += 1;
                     osc_buffer.clear();
                 }
@@ -668,6 +703,8 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
 
     if ambiguous_width == 2 {
         unicode::setup_ambiguous_width(2);
+        // The text buffer cursor caches the visual column, which
+        // may change if ambiguous width characters are now wide.
         state.documents.reflow_all();
     }
 
@@ -676,24 +713,4 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
     }
 
     RestoreModes
-}
-
-/// Strips all C0 control characters from the string and replaces them with "_".
-///
-/// Jury is still out on whether this should also strip C1 control characters.
-/// That requires parsing UTF8 codepoints, which is annoying.
-fn sanitize_control_chars(text: &str) -> Cow<'_, str> {
-    if let Some(off) = text.bytes().position(|b| (..0x20).contains(&b)) {
-        let mut sanitized = text.to_string();
-        // SAFETY: We only search for ASCII and replace it with ASCII.
-        let vec = unsafe { sanitized.as_bytes_mut() };
-
-        for i in &mut vec[off..] {
-            *i = if (..0x20).contains(i) { b'_' } else { *i }
-        }
-
-        Cow::Owned(sanitized)
-    } else {
-        Cow::Borrowed(text)
-    }
 }

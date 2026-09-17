@@ -1,7 +1,7 @@
 #[display_name = "Git Rebase Message"]
 #[path = "**/git-rebase-todo"]
 #[path = "**/rebase-merge/done"]
-pub fn git_rebase_todo() {
+pub fn git_rebase() {
     if /#.*/ {
         yield comment;
     } else if /(?:break|exec|b|x)\>/ {

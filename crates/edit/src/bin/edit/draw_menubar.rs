@@ -101,7 +101,7 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
         ctx.needs_rerender();
     }
     if ctx.menubar_menu_button(loc(LocId::EditPaste), 'P', kbmod::CTRL | vk::V) {
-        tb.paste(ctx.clipboard_ref());
+        tb.paste(ctx.clipboard_ref(), false);
         ctx.needs_rerender();
     }
     if state.wants_search.kind != StateSearchKind::Disabled {

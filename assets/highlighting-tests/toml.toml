@@ -1,0 +1,45 @@
+title = "TOML Example"          # inline comment
+enabled = true
+disabled = false
+
+[owner]
+name = "Tom Preston-Werner"
+"quoted key" = "value"
+dob = 1979-05-27T07:32:00-08:00
+bare-key = 'literal string'
+winpath = 'C:\Users\me\'
+dotted.nested.key = 42
+
+[database]
+ports = [8000, 8001, 8002]
+data = [["delta", "phi"], [3.14]]
+temp_targets = { cpu = 79.5, case = 72.0 }
+hex = 0xDEAD_BEEF
+octal = 0o755
+binary = 0b1101_0010
+negative = -17
+positive = +99
+scientific = 6.626e-34
+infinity = inf
+plus_infinity = +inf
+not_a_number = -nan
+
+[servers.alpha]
+ip = "10.0.0.1"
+local_date = 1979-05-27
+local_time = 07:32:00.999999
+
+multiline = """
+a multi-line basic string \
+with an escape and a "quote" inside
+"""
+
+regex = '''\d{4}-\d{2}-\d{2}'''
+
+[[products]]
+name = "Hammer"
+sku = 777777777
+
+[[products]]
+name = "Nail"
+color = "gray"
