@@ -20,9 +20,6 @@ jobs:
       security-events: write
       # required to fetch internal or private CodeQL packs
       packages: read
-      # only required for workflows in private repositories
-      actions: read
-      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
