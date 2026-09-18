@@ -1503,6 +1503,11 @@ impl<'a> Context<'a, '_> {
         // At this point, it's more like "focus_well?" instead of "focus_well!".
         let focus_well = self.tree.last_node;
 
+        // Only blocks containing the focus participate in focus traversal.
+        if !self.tui.is_subtree_focused(&focus_well.borrow()) {
+            return;
+        }
+
         // Remember the focused node, if any, because once the code below runs,
         // we need it for the `Tree::visit_all` call.
         if self.is_focused() {
@@ -1515,14 +1520,9 @@ impl<'a> Context<'a, '_> {
             return;
         };
 
-        // Filter down to nodes that are focus wells and contain the focus. They're
-        // basically the "tab container". We test for the node depth to ensure that
-        // we don't accidentally pick a focus well next to or inside the focused node.
-        {
-            let n = focus_well.borrow();
-            if !n.attributes.focus_well || n.depth > focused.borrow().depth {
-                return;
-            }
+        // Focus wells are the containers within which Tab traversal wraps.
+        if !focus_well.borrow().attributes.focus_well {
+            return;
         }
 
         // Filter down to Tab/Shift+Tab inputs.
