@@ -260,6 +260,7 @@ pub struct TextBuffer {
     margin_enabled: bool,
     word_wrap_column: CoordType,
     word_wrap_enabled: bool,
+    unusual_whitespace_highlight_enabled: bool,
     tab_size: CoordType,
     indent_with_tabs: bool,
     line_highlight_enabled: bool,
@@ -310,6 +311,7 @@ impl TextBuffer {
             margin_enabled: false,
             word_wrap_column: 0,
             word_wrap_enabled: false,
+            unusual_whitespace_highlight_enabled: false,
             tab_size: 4,
             indent_with_tabs: false,
             line_highlight_enabled: false,
@@ -538,6 +540,19 @@ impl TextBuffer {
             self.width = 0; // Force a reflow.
             self.make_cursor_visible();
         }
+    }
+
+    /// Is highlighting of unusual Unicode whitespace enabled?
+    pub fn is_unusual_whitespace_highlight_enabled(&self) -> bool {
+        self.unusual_whitespace_highlight_enabled
+    }
+
+    /// Enable or disable highlighting of unusual Unicode whitespace.
+    ///
+    /// This only affects how characters are visualized (a stand-in glyph plus a
+    /// yellow background), not the layout, so no reflow is necessary.
+    pub fn set_unusual_whitespace_highlight_enabled(&mut self, enabled: bool) {
+        self.unusual_whitespace_highlight_enabled = enabled;
     }
 
     /// Set the width available for layout.
@@ -1792,6 +1807,7 @@ impl TextBuffer {
         let height = destination.height();
         let line_number_width = self.margin_width.max(3) as usize - 3;
         let text_width = width - self.margin_width;
+        let highlight_unusual_whitespace = self.unusual_whitespace_highlight_enabled;
         let mut visual_pos_x_max = 0;
 
         // Pick the cursor closer to the `origin.y`.
@@ -1871,6 +1887,7 @@ impl TextBuffer {
             }
 
             let mut selection_off = 0..0;
+            let mut selection_highlight = None;
 
             // Figure out the selection range on this line, if any.
             if cursor_beg.visual_pos.y == visual_line
@@ -1921,8 +1938,12 @@ impl TextBuffer {
                     bg = bg.oklab_blend(fb.indexed_alpha(IndexedColor::Background, 1, 2));
                 };
                 let fg = fb.contrasted(bg);
-                fb.blend_bg(rect, bg);
-                fb.blend_fg(rect, fg);
+                if highlight_unusual_whitespace {
+                    selection_highlight = Some((rect, bg, fg));
+                } else {
+                    fb.blend_bg(rect, bg);
+                    fb.blend_fg(rect, fg);
+                }
             }
 
             // Nothing to do if the entire line is empty.
@@ -1967,7 +1988,7 @@ impl TextBuffer {
                             let mut whitespace = TAB_WHITESPACE;
                             let mut prefix_add = 0;
 
-                            if is_tab || visualize {
+                            if is_tab || (visualize && !highlight_unusual_whitespace) {
                                 // We need the character's visual position in order to either compute the tab size,
                                 // or set the foreground color of the visualizer, respectively.
                                 // TODO: Doing this char-by-char is bad for performance.
@@ -1987,19 +2008,22 @@ impl TextBuffer {
                                     (VISUAL_SPACE, VISUAL_SPACE_PREFIX_ADD)
                                 };
 
-                                // Make the visualized characters slightly gray.
-                                let visualizer_rect = {
-                                    let left = destination.left
-                                        + self.margin_width
-                                        + cursor_line.visual_pos.x
-                                        - origin.x;
-                                    let top = destination.top + cursor_line.visual_pos.y - origin.y;
-                                    Rect { left, top, right: left + 1, bottom: top + 1 }
-                                };
-                                fb.blend_fg(
-                                    visualizer_rect,
-                                    fb.indexed_alpha(IndexedColor::Foreground, 1, 2),
-                                );
+                                if !highlight_unusual_whitespace {
+                                    // Make the visualized characters slightly gray.
+                                    let visualizer_rect = {
+                                        let left = destination.left
+                                            + self.margin_width
+                                            + cursor_line.visual_pos.x
+                                            - origin.x;
+                                        let top =
+                                            destination.top + cursor_line.visual_pos.y - origin.y;
+                                        Rect { left, top, right: left + 1, bottom: top + 1 }
+                                    };
+                                    fb.blend_fg(
+                                        visualizer_rect,
+                                        fb.indexed_alpha(IndexedColor::Foreground, 1, 2),
+                                    );
+                                }
                             }
 
                             line.extend_from_slice(
@@ -2016,7 +2040,23 @@ impl TextBuffer {
                 visual_pos_x_max = visual_pos_x_max.max(cursor_end.visual_pos.x);
             }
 
-            fb.replace_text(destination.top + y, destination.left, destination.right, &line);
+            if highlight_unusual_whitespace {
+                fb.replace_text_with_unusual_whitespace_highlight(
+                    destination.top + y,
+                    destination.left,
+                    destination.right,
+                    &line,
+                );
+            } else {
+                fb.replace_text(destination.top + y, destination.left, destination.right, &line);
+            }
+
+            // Selection takes precedence over sanitizer highlights, so unusual
+            // whitespace remains visibly selected instead of staying solid yellow.
+            if let Some((rect, bg, fg)) = selection_highlight {
+                fb.blend_bg(rect, bg);
+                fb.blend_fg(rect, fg);
+            }
 
             cursor = cursor_end;
         }

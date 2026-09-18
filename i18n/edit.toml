@@ -999,6 +999,11 @@ vi = "Ngắt dòng tự động"
 zh-hans = "自动换行"
 zh-hant = "自動換行"
 
+[ViewHighlightUnusualWhitespace]
+en = "Highlight Unusual Whitespace"
+zh-hans = "高亮特殊空白字符"
+zh-hant = "高亮特殊空白字元"
+
 [ViewGoToFile]
 en = "Go to File…"
 ar = "الانتقال إلى ملف…"

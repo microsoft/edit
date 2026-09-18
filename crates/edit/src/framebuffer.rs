@@ -11,7 +11,9 @@ use std::slice::ChunksExact;
 use stdext::arena::{Arena, scratch_arena};
 use stdext::collections::BString;
 use stdext::simd::memset;
-use stdext::unicode::{SanitizedControlChars, sanitize_control_chars};
+use stdext::unicode::{
+    SanitizedControlChars, sanitize_control_chars, sanitize_control_chars_with_unusual_whitespace,
+};
 use stdext::{MaybeOwned, arena_write_fmt};
 
 use crate::helpers::{CoordType, Point, Rect, Size};
@@ -199,7 +201,7 @@ impl Framebuffer {
 
     /// Replaces text contents in a single line of the framebuffer.
     /// All coordinates are in viewport coordinates.
-    /// Assumes that control characters have been replaced or escaped.
+    /// Control characters and invalid UTF-8 are visualized before rendering.
     #[inline]
     pub fn replace_text(
         &mut self,
@@ -208,7 +210,20 @@ impl Framebuffer {
         clip_right: CoordType,
         text: &(impl AsRef<[u8]> + ?Sized),
     ) {
-        self.replace_text_impl(y, origin_x, clip_right, text.as_ref());
+        self.replace_text_impl(y, origin_x, clip_right, text.as_ref(), false);
+    }
+
+    /// Replaces text and highlights unusual Unicode whitespace in a single line.
+    /// All coordinates are in viewport coordinates.
+    #[inline]
+    pub fn replace_text_with_unusual_whitespace_highlight(
+        &mut self,
+        y: CoordType,
+        origin_x: CoordType,
+        clip_right: CoordType,
+        text: &(impl AsRef<[u8]> + ?Sized),
+    ) {
+        self.replace_text_impl(y, origin_x, clip_right, text.as_ref(), true);
     }
 
     fn replace_text_impl(
@@ -217,9 +232,14 @@ impl Framebuffer {
         origin_x: CoordType,
         clip_right: CoordType,
         text: &[u8],
+        highlight_unusual_whitespace: bool,
     ) {
         let scratch = scratch_arena(None);
-        let sanitized = sanitize_control_chars(&scratch, text);
+        let sanitized = if highlight_unusual_whitespace {
+            sanitize_control_chars_with_unusual_whitespace(&scratch, text)
+        } else {
+            sanitize_control_chars(&scratch, text)
+        };
 
         let back = &mut self.buffers[self.frame_counter & 1];
         back.text.replace_text(y, origin_x, clip_right, &sanitized);
@@ -229,7 +249,7 @@ impl Framebuffer {
         }
     }
 
-    /// Highlights the replacements that [`sanitize_control_chars`] made in yellow.
+    /// Highlights the sanitizer's visual replacements in yellow.
     #[cold]
     fn highlight_sanitized(
         &mut self,
@@ -996,5 +1016,91 @@ impl Cursor {
 
     const fn new_disabled() -> Self {
         Self { pos: Point { x: -1, y: -1 }, overtype: false }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::buffer::TextBuffer;
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn unusual_whitespace_visualization_is_opt_in_and_preserves_width() {
+        fn width(text: &str) -> CoordType {
+            let bytes = text.as_bytes();
+            let mut cfg = MeasurementConfig::new(&bytes);
+            cfg.goto_offset(bytes.len()).visual_pos.x
+        }
+
+        const CODEPOINTS: &[u32] = &[
+            0x00A0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008,
+            0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
+        ];
+
+        for &codepoint in CODEPOINTS {
+            let ch = char::from_u32(codepoint).unwrap();
+            let mut input_buffer = [0; 4];
+            let input = ch.encode_utf8(&mut input_buffer);
+            let scratch = scratch_arena(None);
+            let unchanged = sanitize_control_chars(&scratch, input);
+            let sanitized = sanitize_control_chars_with_unusual_whitespace(&scratch, input);
+            let expected = match ch {
+                '\u{2028}' | '\u{2029}' => "\u{2424}",
+                '\u{3000}' => "\u{2423} ",
+                _ => "\u{2423}",
+            };
+
+            assert!(matches!(&unchanged, MaybeOwned::Borrowed(_)), "U+{codepoint:04X}");
+            assert_eq!(&*unchanged, input, "U+{codepoint:04X}");
+            let MaybeOwned::Owned(sanitized) = &sanitized else {
+                panic!("U+{codepoint:04X} was not visualized");
+            };
+            assert_eq!(&*sanitized.text, expected, "U+{codepoint:04X}");
+            assert_eq!(
+                sanitized.unsane_ranges.as_slice(),
+                &[0..expected.len()],
+                "U+{codepoint:04X}"
+            );
+            assert_eq!(width(input), width(&sanitized.text), "U+{codepoint:04X}");
+        }
+
+        const NON_TARGETS: &str = " \u{00A1}\u{167F}\u{1681}\u{180E}\u{1FFF}\u{200B}\u{2027}\
+            \u{202A}\u{202E}\u{2030}\u{205E}\u{2060}\u{2FFF}\u{3001}\u{FEFF}";
+        let scratch = scratch_arena(None);
+        let sanitized = sanitize_control_chars_with_unusual_whitespace(&scratch, NON_TARGETS);
+
+        assert!(matches!(&sanitized, MaybeOwned::Borrowed(_)));
+        assert_eq!(&*sanitized, NON_TARGETS);
+    }
+
+    #[test]
+    fn text_selection_takes_precedence_over_unusual_whitespace_highlight() {
+        let mut text_buffer = TextBuffer::new(true).unwrap();
+        text_buffer.write_canon("\u{00A0}".as_bytes());
+        text_buffer.select_all();
+        text_buffer.set_width(4);
+        text_buffer.set_unusual_whitespace_highlight_enabled(true);
+
+        let mut framebuffer = Framebuffer::new();
+        framebuffer.flip(Size { width: 4, height: 1 });
+        assert!(
+            text_buffer
+                .render(
+                    Point::default(),
+                    Rect { left: 0, top: 0, right: 4, bottom: 1 },
+                    true,
+                    &mut framebuffer,
+                )
+                .is_some()
+        );
+
+        let expected_selection_bg = framebuffer
+            .indexed(IndexedColor::Foreground)
+            .oklab_blend(framebuffer.indexed_alpha(IndexedColor::BrightBlue, 1, 2));
+        let back = &framebuffer.buffers[framebuffer.frame_counter & 1];
+
+        assert!(back.text.lines[0].starts_with("\u{2423}"));
+        assert_eq!(back.bg_bitmap.data[0], expected_selection_bg);
     }
 }

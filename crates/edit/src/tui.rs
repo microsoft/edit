@@ -2758,6 +2758,12 @@ impl<'a> Context<'a, '_> {
                     kbmod::CTRL => tb.delete(CursorMovement::Word, -1),
                     _ => return false,
                 },
+                vk::I => match modifiers {
+                    kbmod::ALT => tb.set_unusual_whitespace_highlight_enabled(
+                        !tb.is_unusual_whitespace_highlight_enabled(),
+                    ),
+                    _ => return false,
+                },
                 vk::L => match modifiers {
                     kbmod::CTRL => tb.select_line(),
                     _ => return false,
@@ -4117,5 +4123,41 @@ impl<'a> Node<'a> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alt_i_toggles_unusual_whitespace_highlighting() -> io::Result<()> {
+        let mut tui = Tui::new()?;
+        let buffer = TextBuffer::new_rc(true)?;
+        let mut content = TextareaContent {
+            buffer: &buffer,
+            scroll_offset: Point::default(),
+            scroll_offset_y_drag_start: CoordType::MIN,
+            scroll_offset_x_max: 0,
+            thumb_height: 0,
+            preferred_column: 0,
+            single_line: false,
+            has_focus: true,
+        };
+        let node = Node::default();
+
+        {
+            let mut ctx = tui.create_context(Some(Input::Keyboard(vk::I)));
+            assert!(!ctx.textarea_handle_input(&mut content, &node, false));
+        }
+        assert!(!buffer.borrow().is_unusual_whitespace_highlight_enabled());
+
+        for expected in [true, false] {
+            let mut ctx = tui.create_context(Some(Input::Keyboard(kbmod::ALT | vk::I)));
+            assert!(ctx.textarea_handle_input(&mut content, &node, false));
+            assert_eq!(buffer.borrow().is_unusual_whitespace_highlight_enabled(), expected);
+        }
+
+        Ok(())
     }
 }

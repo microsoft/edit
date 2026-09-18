@@ -140,6 +140,16 @@ fn draw_menu_view(ctx: &mut Context, state: &mut State) {
             tb.set_word_wrap(!word_wrap);
             ctx.needs_rerender();
         }
+        let highlight_unusual_whitespace = tb.is_unusual_whitespace_highlight_enabled();
+        if ctx.menubar_menu_checkbox(
+            loc(LocId::ViewHighlightUnusualWhitespace),
+            'I',
+            kbmod::ALT | vk::I,
+            highlight_unusual_whitespace,
+        ) {
+            tb.set_unusual_whitespace_highlight_enabled(!highlight_unusual_whitespace);
+            ctx.needs_rerender();
+        }
     }
 
     ctx.menubar_menu_end();
