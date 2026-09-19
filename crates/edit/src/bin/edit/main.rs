@@ -3,6 +3,7 @@
 
 mod apperr;
 mod documents;
+mod draw_boundary;
 mod draw_editor;
 mod draw_filepicker;
 mod draw_menubar;
@@ -15,6 +16,7 @@ use std::path::Path;
 use std::time::Duration;
 use std::{env, process};
 
+use draw_boundary::*;
 use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
@@ -369,6 +371,9 @@ fn draw(tui: &mut Tui, input: Option<input::Input>, state: &mut State) {
     }
     if state.wants_go_to_file {
         draw_go_to_file(ctx, state);
+    }
+    if state.wants_boundary_align {
+        draw_dialog_boundary_align(ctx, state);
     }
     if state.wants_about {
         draw_dialog_about(ctx, state);

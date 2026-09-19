@@ -118,6 +118,15 @@ fn draw_menu_edit(ctx: &mut Context, state: &mut State) {
         tb.select_all();
         ctx.needs_rerender();
     }
+    drop(tb);
+    // EN: Boundary Alignment is the final Edit-menu command and starts at column 80.
+    // 中文：「邊界對齊」位於編輯選單末項，輸入欄預設為第 80 字元。
+    if ctx.menubar_menu_button(loc(LocId::EditBoundaryAlign), 'B', vk::NULL) {
+        state.wants_boundary_align = true;
+        state.boundary_align_column.clear();
+        state.boundary_align_column.push_str("80");
+        state.boundary_align_invalid = false;
+    }
     ctx.menubar_menu_end();
 }
 
