@@ -2768,6 +2768,7 @@ impl<'a> Context<'a, '_> {
                 },
                 vk::C => match modifiers {
                     kbmod::CTRL => tb.copy(self.clipboard_mut()),
+                    kbmod::CTRL_SHIFT => tb.copy(self.clipboard_mut()),
                     _ => return false,
                 },
                 vk::V => match modifiers {
