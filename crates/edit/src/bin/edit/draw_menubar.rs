@@ -43,14 +43,14 @@ fn draw_menu_file(ctx: &mut Context, state: &mut State) {
         draw_add_untitled_document(ctx, state);
     }
     if ctx.menubar_menu_button(loc(LocId::FileOpen), 'O', kbmod::CTRL | vk::O) {
-        state.wants_file_picker = StateFilePicker::Open;
+        show_file_picker(state, StateFilePicker::Open);
     }
     if state.documents.active().is_some() {
         if ctx.menubar_menu_button(loc(LocId::FileSave), 'S', kbmod::CTRL | vk::S) {
             state.wants_save = true;
         }
         if ctx.menubar_menu_button(loc(LocId::FileSaveAs), 'A', vk::NULL) {
-            state.wants_file_picker = StateFilePicker::SaveAs;
+            show_file_picker(state, StateFilePicker::SaveAs);
         }
     }
     #[allow(irrefutable_let_patterns)]

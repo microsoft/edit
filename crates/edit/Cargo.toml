@@ -19,6 +19,7 @@ harness = false
 debug-latency = []
 
 [dependencies]
+dirs = "6.0.0"
 lsh.workspace = true
 stdext.workspace = true
 

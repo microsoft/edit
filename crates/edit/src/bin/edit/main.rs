@@ -304,7 +304,10 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
         dir = Some(parent.to_path_buf());
     }
 
-    state.file_picker_pending_dir = DisplayablePathBuf::from_path(dir.unwrap_or(cwd));
+    // EN: With no explicit file or directory, file dialogs begin on the desktop.
+    // 中文：未指定檔案或目錄時，檔案對話框預設由桌面開始。
+    let default_dir = sys::desktop_dir().unwrap_or(cwd);
+    state.file_picker_pending_dir = DisplayablePathBuf::from_path(dir.unwrap_or(default_dir));
     Ok(false)
 }
 
@@ -386,11 +389,11 @@ fn draw(tui: &mut Tui, input: Option<input::Input>, state: &mut State) {
         if key == kbmod::CTRL | vk::N {
             draw_add_untitled_document(ctx, state);
         } else if key == kbmod::CTRL | vk::O {
-            state.wants_file_picker = StateFilePicker::Open;
+            show_file_picker(state, StateFilePicker::Open);
         } else if key == kbmod::CTRL | vk::S {
             state.wants_save = true;
         } else if key == kbmod::CTRL_SHIFT | vk::S {
-            state.wants_file_picker = StateFilePicker::SaveAs;
+            show_file_picker(state, StateFilePicker::SaveAs);
         } else if key == kbmod::CTRL | vk::W {
             state.wants_close = true;
         } else if key == kbmod::CTRL | vk::P {

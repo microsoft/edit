@@ -15,6 +15,7 @@ use edit::{buffer, icu};
 use crate::apperr;
 use crate::documents::DocumentManager;
 use crate::localization::*;
+use crate::sys;
 
 #[repr(transparent)]
 pub struct FormatApperr(apperr::Error);
@@ -241,6 +242,41 @@ impl State {
         self.error_log_count = self.error_log.len().min(self.error_log_count + 1);
         true
     }
+}
+
+/// EN: Opens a file picker and selects a useful cross-platform starting directory.
+/// 中文：開啟檔案選擇器，並選擇適用於各平台的起始資料夾。
+pub fn show_file_picker(state: &mut State, picker: StateFilePicker) {
+    debug_assert!(matches!(picker, StateFilePicker::Open | StateFilePicker::SaveAs));
+
+    // EN: Open starts on the desktop. Save As keeps a named document beside its source,
+    // EN: while a new untitled document starts on the desktop as well.
+    // 中文：開啟舊檔由桌面開始；另存已命名檔案時沿用來源目錄，未命名檔案則由桌面開始。
+    let target_dir = if picker == StateFilePicker::Open {
+        sys::desktop_dir().ok()
+    } else {
+        state
+            .documents
+            .active()
+            .and_then(|doc| doc.path.as_deref())
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .or_else(|| sys::desktop_dir().ok())
+    };
+
+    if let Some(target_dir) = target_dir
+        && state.file_picker_pending_dir.as_path() != target_dir
+    {
+        state.file_picker_pending_dir = DisplayablePathBuf::from_path(target_dir);
+        state.file_picker_pending_dir_revision =
+            state.file_picker_pending_dir_revision.wrapping_add(1);
+    }
+
+    state.wants_file_picker = picker;
+    state.file_picker_pending_name.clear();
+    state.file_picker_entries = None;
+    state.file_picker_overwrite_warning = None;
+    state.file_picker_autocomplete.clear();
 }
 
 pub fn draw_add_untitled_document(ctx: &mut Context, state: &mut State) {

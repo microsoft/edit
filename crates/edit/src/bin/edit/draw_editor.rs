@@ -199,7 +199,7 @@ pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
             }
         } else {
             // No path? Show the file picker.
-            state.wants_file_picker = StateFilePicker::SaveAs;
+            show_file_picker(state, StateFilePicker::SaveAs);
             state.wants_save = false;
             ctx.needs_rerender();
         }
