@@ -341,6 +341,12 @@ fn print_version() {
 
 fn draw(tui: &mut Tui, input: Option<input::Input>, state: &mut State) {
     let ctx = &mut tui.create_context(input);
+    ctx.attr_css_style(css::Style {
+        display: css::Display::Grid,
+        grid_template_columns: vec![css::flex(1.0)],
+        grid_template_rows: vec![css::auto(), css::flex(1.0), css::auto()],
+        ..Default::default()
+    });
 
     draw_menubar(ctx, state);
     draw_editor(ctx, state);
