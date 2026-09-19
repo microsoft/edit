@@ -4,6 +4,9 @@
 #[path = "**/*.cxx"]
 #[path = "**/*.hpp"]
 #[path = "**/*.h"]
+#[path = "**/*.hh"]
+#[path = "**/*.hxx"]
+#[path = "**/*.ixx"]
 pub fn cpp() {
     until /$/ {
         yield other;
