@@ -14,6 +14,7 @@ use stdext::arena::scratch_arena;
 use stdext::collections::BVec;
 
 use crate::localization::*;
+use crate::settings::Settings;
 use crate::state::*;
 
 pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
@@ -27,9 +28,21 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         }
     }
 
+    // EN: Only Open receives a lower MRU pane; Save As keeps the original layout.
+    // 中文：僅「開啟舊檔」加入下方最近檔案欄；另存新檔維持原配置。
+    let opening_file = state.wants_file_picker == StateFilePicker::Open;
+    let recent_files =
+        if opening_file { Settings::borrow().recent_files.clone() } else { Vec::new() };
     let width = (ctx.size().width - 20).max(10);
-    let height = (ctx.size().height - 10).max(10);
+    let height = if opening_file {
+        (ctx.size().height - 4).max(12)
+    } else {
+        (ctx.size().height - 10).max(10)
+    };
+    let recent_pane_height = if opening_file { (height / 3).clamp(1, 5) } else { 0 };
+    let recent_reserved_rows = if opening_file { recent_pane_height + 3 } else { 0 };
     let mut doit = None;
+    let mut recent_open = None;
     let mut done = false;
 
     ctx.modal_begin(
@@ -144,7 +157,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 // -1 for the label (top)
                 // -1 for the label (bottom)
                 // -1 for the editline (bottom)
-                height: height - 3,
+                height: (height - 3 - recent_reserved_rows).max(3),
             },
         );
         ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
@@ -170,6 +183,40 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         }
         ctx.scrollarea_end();
 
+        if opening_file {
+            // EN: Every absolute path is a clickable entry in the lower pane.
+            // 中文：每一筆絕對路徑都是下方窗格中可點選開啟的項目。
+            ctx.label("recent-files-label", loc(LocId::FileOpenRecentFiles));
+            ctx.attr_padding(Rect::three(1, 1, 0));
+            ctx.scrollarea_begin(
+                "recent-files-pane",
+                Size { width: 0, height: recent_pane_height },
+            );
+            ctx.attr_border();
+            ctx.attr_focus_well();
+            ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
+            {
+                if recent_files.is_empty() {
+                    ctx.label("recent-files-empty", loc(LocId::FileOpenRecentEmpty));
+                    ctx.attr_padding(Rect::two(0, 1));
+                } else {
+                    for recent in &recent_files {
+                        let display = recent.to_string_lossy();
+                        if ctx.button(
+                            "recent-file",
+                            &display,
+                            ButtonStyle::default().bracketed(false),
+                        ) {
+                            recent_open = Some(recent.clone());
+                        }
+                        ctx.attr_overflow(Overflow::TruncateMiddle);
+                        ctx.attr_padding(Rect::two(0, 1));
+                    }
+                }
+            }
+            ctx.scrollarea_end();
+        }
+
         if contains_focus
             && (ctx.consume_shortcut(vk::BACK) || ctx.consume_shortcut(kbmod::ALT | vk::UP))
         {
@@ -187,6 +234,10 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             {
                 state.file_picker_overwrite_warning = doit.take();
             }
+        }
+
+        if let Some(path) = recent_open.take() {
+            doit = Some(path);
         }
     }
     if ctx.modal_end() {
@@ -241,15 +292,19 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     }
 
     if let Some(path) = doit {
-        let res = if state.wants_file_picker == StateFilePicker::Open {
+        let opening_file = state.wants_file_picker == StateFilePicker::Open;
+        let res = if opening_file {
             state.documents.add_file_path(&path).map(|_| ())
         } else if let Some(doc) = state.documents.active_mut() {
-            doc.save(Some(path))
+            doc.save(Some(path.clone()))
         } else {
             Ok(())
         };
         match res {
             Ok(..) => {
+                if opening_file && let Err(err) = Settings::record_recent_file(&path) {
+                    error_log_add(ctx, state, err);
+                }
                 ctx.needs_rerender();
                 done = true;
             }
