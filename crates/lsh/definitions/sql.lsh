@@ -1,0 +1,79 @@
+#[display_name = "SQL"]
+#[path = "**/*.sql"]
+#[path = "**/*.mssql"]
+#[path = "**/*.pgsql"]
+pub fn sql() {
+    until /$/ {
+        yield other;
+
+        // Single-line comments.
+        if /--.*/ {
+            yield comment;
+        // Multi-line comments.
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /'/ {
+            // Single-quoted strings.
+            loop {
+                yield string;
+                if /''/ {
+                    // SQL escapes a single quote by doubling it.
+                } else if /'/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /"/ {
+            // Double-quoted identifiers.
+            loop {
+                yield string;
+                if /""/ {
+                    // SQL escapes a double quote by doubling it.
+                } else if /"/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /`/ {
+            // Backtick-quoted identifiers.
+            loop {
+                yield string;
+                if /``/ {
+                    // SQL escapes a backtick by doubling it.
+                } else if /`/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /(?i:(?:SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|CALL|RETURNING|WITH|RECURSIVE|UNION|INTERSECT|EXCEPT|CASE|WHEN|THEN|ELSE|END|BEGIN|COMMIT|ROLLBACK))\>/ {
+            // Query and control-flow keywords.
+            yield keyword.control;
+        } else if /(?i:(?:AS|AND|OR|NOT|IS|IN|BETWEEN|LIKE|ILIKE|EXISTS|ALL|ANY|DISTINCT|GROUP|BY|HAVING|ORDER|ASC|DESC|LIMIT|OFFSET|FETCH|JOIN|INNER|LEFT|RIGHT|FULL|CROSS|OUTER|ON|USING|PRIMARY|KEY|FOREIGN|REFERENCES|UNIQUE|CHECK|DEFAULT|CONSTRAIT|TABLE|VIEW|INDEX|DATABASE|SCHEMA|GRANT|REVOKE|CASCADE|RESTRICT|ADD|COLUMN))\>/ {
+            // Other SQL keywords.
+            yield keyword.other;
+        } else if /(?i:(?:TRUE|FALSE|NULL))\>/ {
+            // Boolean and NULL literals.
+            yield constant.language;
+        } else if /-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\>/ {
+            // Numeric literals.
+            yield constant.numeric;
+        } else if /(?i:(COUNT|SUM|AVG|MIN|MAX|COALESCE|NULLIF|CAST|CONVERT|LOWER|UPPER|LENGTH|SUBSTRING|ROUND|ABS|NOW|CURRENT_DATE|CURRENT_TIME|CURRENT_TIMESTAMP))\s*\(/ {
+            // Common SQL functions.
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
