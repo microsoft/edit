@@ -2459,6 +2459,10 @@ impl TextBuffer {
             self.edit_write(if self.newlines_are_crlf { b"\r\n" } else { b"\n" });
             // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
             self.cursor = cursor;
+            // The next write lands before this final newline, so its bytes would not be
+            // contiguous with this entry's recorded `added` bytes. Undo coalescing assumes
+            // contiguity (redo replays `added` as one string), so stop merging into this entry.
+            self.last_history_type = HistoryType::Other;
         }
 
         self.edit_end();
@@ -3218,5 +3222,137 @@ mod tests {
         .unwrap();
 
         assert_eq!(buffer_contents(&mut buf), "ax\nbx\nx\n");
+    }
+
+    // Regression tests for issue #834 (undo/redo corrupts text containing
+    // newlines). Each one asserts a round-trip property: whatever a sequence of
+    // undos removes, the same number of redos must restore, byte for byte.
+
+    /// Undo until the buffer stops changing, then redo the same number of times.
+    /// Returns the content low-water mark (after all undos). Written this way so the
+    /// tests do not depend on how many undo entries a typing sequence produces.
+    fn undo_all_redo_all(buf: &mut TextBuffer) -> String {
+        let mut steps = 0;
+        let mut prev = buffer_contents(buf);
+        loop {
+            buf.undo();
+            let now = buffer_contents(buf);
+            if now == prev {
+                break;
+            }
+            prev = now;
+            steps += 1;
+            assert!(steps <= 100, "runaway undo loop");
+        }
+        let low = prev;
+        for _ in 0..steps {
+            buf.redo();
+        }
+        low
+    }
+
+    /// The coalescing/final-newline interaction: with insert_final_newline enabled
+    /// (default on non-Windows, and on any platform for files that end in a newline),
+    /// typing "a" then "b" at the end of the buffer produces "ab\n" via coalesced
+    /// writes, but the undo entry records the bytes in WRITE order ("a", "\n", "b"),
+    /// not buffer order. Redo replays the recorded string.
+    #[test]
+    fn undo_redo_coalesced_writes_with_final_newline_lf() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.set_insert_final_newline(true);
+
+        buf.write_canon(b"a");
+        buf.write_canon(b"b");
+        assert_eq!(buffer_contents(&mut buf), "ab\n", "precondition: typing produces ab\\n");
+
+        let low = undo_all_redo_all(&mut buf);
+        assert_eq!(low, "", "undoing everything should empty the buffer");
+        assert_eq!(buffer_contents(&mut buf), "ab\n", "redo must restore what undo removed");
+    }
+
+    /// Same as above under CRLF (a Windows file that ends in a newline).
+    #[test]
+    fn undo_redo_coalesced_writes_with_final_newline_crlf() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(true);
+        buf.set_insert_final_newline(true);
+
+        buf.write_canon(b"a");
+        buf.write_canon(b"b");
+        assert_eq!(buffer_contents(&mut buf), "ab\r\n", "precondition: typing produces ab\\r\\n");
+
+        let low = undo_all_redo_all(&mut buf);
+        assert_eq!(low, "", "undoing everything should empty the buffer");
+        assert_eq!(buffer_contents(&mut buf), "ab\r\n", "redo must restore what undo removed");
+    }
+
+    /// A single multi-line write (one paste), covering the redo path that has to
+    /// reinsert the whole recorded string rather than only its first line.
+    #[test]
+    fn undo_redo_single_multiline_write_lf() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+
+        buf.write_canon(b"foo\nbar\nbaz");
+        let expected = buffer_contents(&mut buf);
+        assert!(expected.contains("bar"), "precondition: all lines present");
+
+        let low = undo_all_redo_all(&mut buf);
+        assert_eq!(low, "", "undoing everything should empty the buffer");
+        assert_eq!(buffer_contents(&mut buf), expected, "redo must restore the full paste");
+    }
+
+    /// The same paste in a CRLF buffer.
+    #[test]
+    fn undo_redo_single_multiline_write_crlf() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(true);
+
+        buf.write_canon(b"foo\r\nbar\r\nbaz");
+        let expected = buffer_contents(&mut buf);
+
+        let low = undo_all_redo_all(&mut buf);
+        assert_eq!(low, "", "undoing everything should empty the buffer");
+        assert_eq!(buffer_contents(&mut buf), expected, "redo must restore the full paste");
+    }
+
+    /// Typing across a newline WITHOUT the final-newline feature: coalesced writes
+    /// whose bytes are contiguous in buffer order. Control for the coalescing
+    /// mechanism itself.
+    #[test]
+    fn undo_redo_coalesced_writes_across_newline_no_final_newline() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.set_insert_final_newline(false);
+
+        buf.write_canon(b"foo");
+        buf.write_canon(b"\n");
+        buf.write_canon(b"bar");
+        let expected = buffer_contents(&mut buf);
+
+        let low = undo_all_redo_all(&mut buf);
+        assert_eq!(low, "", "undoing everything should empty the buffer");
+        assert_eq!(buffer_contents(&mut buf), expected, "redo must restore the typed text");
+    }
+
+    /// Two full undo/redo cycles on the final-newline case: if the first redo
+    /// corrupts the buffer, the second cycle shows whether the corruption compounds.
+    #[test]
+    fn undo_redo_double_roundtrip_final_newline_lf() {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(false);
+        buf.set_insert_final_newline(true);
+
+        buf.write_canon(b"a");
+        buf.write_canon(b"b");
+
+        let low = undo_all_redo_all(&mut buf);
+        assert_eq!(low, "", "first cycle: undoing everything should empty the buffer");
+        assert_eq!(buffer_contents(&mut buf), "ab\n", "first cycle: redo must restore ab\\n");
+
+        let low = undo_all_redo_all(&mut buf);
+        assert_eq!(low, "", "second cycle: undoing everything should empty the buffer");
+        assert_eq!(buffer_contents(&mut buf), "ab\n", "second cycle: redo must restore ab\\n");
     }
 }
