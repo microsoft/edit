@@ -855,6 +855,23 @@ impl TextBuffer {
         first_chunk_len: usize,
         done: bool,
     ) -> io::Result<()> {
+        // Get the length of the file. 0 = not a file.
+        let file_len = if done {
+            // But if the first 4KiB read already contains the entire file, we won't need
+            // the file length below (we early return). The value here doesn't matter.
+            0
+        } else {
+            // We can't acquire the length on pipes, for instance.
+            file.metadata().ok().and_then(|m| m.len().try_into().ok()).unwrap_or(0)
+        };
+
+        // If we have a file length, reserve enough space for it.
+        // The call is a no-op for small files (currently <4GiB).
+        if file_len > 0 {
+            self.buffer.try_reserve(file_len);
+        }
+
+        // Handle the first chunk we already read for encoding detection.
         {
             let mut first_chunk = unsafe { buf[..first_chunk_len].assume_init_ref() };
             if first_chunk.starts_with(b"\xEF\xBB\xBF") {
@@ -864,27 +881,22 @@ impl TextBuffer {
 
             self.buffer.replace(0..0, first_chunk);
         }
-
         if done {
             return Ok(());
         }
 
-        // If we don't have file metadata, the input may be a pipe or a socket.
-        // Every read will have the same size until we hit the end.
-        let mut chunk_size = 128 * KIBI;
-        let mut extra_chunk_size = 128 * KIBI;
-
-        if let Ok(m) = file.metadata() {
-            // Usually the next read of size `chunk_size` will read the entire file,
-            // but if the size has changed for some reason, then `extra_chunk_size`
-            // should be large enough to read the rest of the file.
-            // 4KiB is not too large and not too slow.
-            let len = m.len() as usize;
-            chunk_size = len.saturating_sub(first_chunk_len);
-            extra_chunk_size = 4 * KIBI;
-        }
-
         loop {
+            let chunk_size = if file_len > 0 {
+                // If we know the file length:
+                // * Read the file until the end
+                // * And if we're still reading at that point, read in 4KiB chunks (e.g. if someone wrote
+                //   to the file concurrently; typically this won't happen, so the chunk size is small).
+                file_len.checked_sub(self.text_length()).unwrap_or(4 * KIBI)
+            } else {
+                // For pipes, sockets, etc., read in 128KiB chunks, because anything smaller has poor perf.
+                128 * KIBI
+            };
+
             let gap = self.buffer.allocate_gap(self.text_length(), chunk_size, 0);
             if gap.is_empty() {
                 break;
@@ -896,7 +908,6 @@ impl TextBuffer {
             }
 
             self.buffer.commit_gap(read);
-            chunk_size = extra_chunk_size;
         }
 
         Ok(())
