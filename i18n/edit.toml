@@ -359,6 +359,16 @@ vi = "Mở tệp…"
 zh-hans = "打开文件…"
 zh-hant = "開啟舊檔…"
 
+[FileOpenRecentFiles]
+en = "Recent files (last 5; click to open)"
+zh-hans = "最近打开的文件（最多5笔，单击打开）"
+zh-hant = "最近開啟的檔案（最多5筆，單擊開啟）"
+
+[FileOpenRecentEmpty]
+en = "No recently opened files"
+zh-hans = "没有最近打开的文件"
+zh-hant = "沒有最近開啟的檔案"
+
 [FileSave]
 en = "Save"
 ar = "حفظ"

@@ -292,9 +292,16 @@ fn handle_args(state: &mut State) -> apperr::Result<bool> {
     }
 
     for (p, goto) in &paths {
-        let doc = state.documents.add_file_path(p)?;
-        if let Some(goto) = goto {
-            doc.cursor_move_to_goto(*goto);
+        {
+            let doc = state.documents.add_file_path(p)?;
+            if let Some(goto) = goto {
+                doc.cursor_move_to_goto(*goto);
+            }
+        }
+        // EN: Command-line and shell opens participate in the same recent-file list.
+        // 中文：命令列與系統殼層開啟的檔案也納入同一份最近檔案清單。
+        if let Err(err) = Settings::record_recent_file(p) {
+            state.add_error(err);
         }
     }
 
