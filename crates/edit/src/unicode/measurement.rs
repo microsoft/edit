@@ -51,6 +51,9 @@ pub struct Cursor {
     /// a hard-wrap is required; otherwise, the word that is being laid-out is
     /// moved to the next line. This boolean carries this state between calls.
     pub wrap_opp: bool,
+    /// The number of visual columns the cursor is past the end of the line.
+    /// This is used for "virtual space".
+    pub virtual_off: CoordType,
 }
 
 /// Your entrypoint to navigating inside a [`ReadableDocument`].
@@ -462,6 +465,7 @@ impl<'doc> MeasurementConfig<'doc> {
         self.cursor.visual_pos = Point { x: visual_pos_x, y: visual_pos_y };
         self.cursor.column = column;
         self.cursor.wrap_opp = wrap_opp;
+        self.cursor.virtual_off = 0;
         self.cursor
     }
 
@@ -547,6 +551,7 @@ mod test {
                 visual_pos: Point { x: 0, y: 1 },
                 column: 0,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
     }
@@ -562,6 +567,7 @@ mod test {
                 visual_pos: Point { x: 1, y: 0 },
                 column: 1,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
     }
@@ -584,6 +590,7 @@ mod test {
                 visual_pos: Point { x: 1, y: 1 },
                 column: 5,
                 wrap_opp: true,
+                virtual_off: 0,
             }
         );
 
@@ -598,6 +605,7 @@ mod test {
                 visual_pos: Point { x: 4, y: 0 },
                 column: 4,
                 wrap_opp: true,
+                virtual_off: 0,
             }
         );
 
@@ -608,6 +616,7 @@ mod test {
             visual_pos: Point { x: 1, y: 0 },
             column: 1,
             wrap_opp: false,
+            virtual_off: 0,
         });
         let cursor = cfg.goto_visual(Point { x: 5, y: 0 });
         assert_eq!(
@@ -618,6 +627,7 @@ mod test {
                 visual_pos: Point { x: 4, y: 0 },
                 column: 4,
                 wrap_opp: true,
+                virtual_off: 0,
             }
         );
 
@@ -630,6 +640,7 @@ mod test {
                 visual_pos: Point { x: 0, y: 1 },
                 column: 4,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
 
@@ -642,6 +653,7 @@ mod test {
                 visual_pos: Point { x: 4, y: 1 },
                 column: 8,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
 
@@ -654,6 +666,7 @@ mod test {
                 visual_pos: Point { x: 0, y: 2 },
                 column: 0,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
 
@@ -666,6 +679,7 @@ mod test {
                 visual_pos: Point { x: 3, y: 2 },
                 column: 3,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
     }
@@ -683,6 +697,7 @@ mod test {
                 visual_pos: Point { x: 4, y: 0 },
                 column: 4,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
     }
@@ -719,6 +734,7 @@ mod test {
                 visual_pos: Point { x: 4, y: 0 },
                 column: 4,
                 wrap_opp: true,
+                virtual_off: 0,
             }
         );
 
@@ -731,6 +747,7 @@ mod test {
                 visual_pos: Point { x: 0, y: 1 },
                 column: 4,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
 
@@ -743,6 +760,7 @@ mod test {
                 visual_pos: Point { x: 4, y: 1 },
                 column: 8,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
 
@@ -755,6 +773,7 @@ mod test {
                 visual_pos: Point { x: 0, y: 2 },
                 column: 0,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
 
@@ -767,6 +786,7 @@ mod test {
                 visual_pos: Point { x: 3, y: 2 },
                 column: 3,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
     }
@@ -790,6 +810,7 @@ mod test {
                 visual_pos: Point { x: 3, y: 0 },
                 column: 3,
                 wrap_opp: true,
+                virtual_off: 0,
             }
         );
 
@@ -803,6 +824,7 @@ mod test {
                 visual_pos: Point { x: 0, y: 1 },
                 column: 3,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
 
@@ -819,6 +841,7 @@ mod test {
                 visual_pos: Point { x: 1, y: 1 },
                 column: 4,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
 
@@ -832,6 +855,7 @@ mod test {
                 visual_pos: Point { x: 8, y: 1 },
                 column: 11,
                 wrap_opp: true,
+                virtual_off: 0,
             }
         );
 
@@ -845,6 +869,7 @@ mod test {
                 visual_pos: Point { x: 4, y: 2 },
                 column: 15,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
     }
@@ -889,6 +914,7 @@ mod test {
                 visual_pos: Point { x: 3, y: 0 },
                 column: 3,
                 wrap_opp: true,
+                virtual_off: 0,
             }
         );
 
@@ -901,6 +927,7 @@ mod test {
                 visual_pos: Point { x: 3, y: 1 },
                 column: 6,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
 
@@ -913,6 +940,7 @@ mod test {
                 visual_pos: Point { x: 3, y: 2 },
                 column: 14,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
     }
@@ -934,6 +962,7 @@ mod test {
                 visual_pos: Point { x: 8, y: 0 },
                 column: 8,
                 wrap_opp: true,
+                virtual_off: 0,
             }
         );
 
@@ -946,6 +975,7 @@ mod test {
                 visual_pos: Point { x: 7, y: 1 },
                 column: 15,
                 wrap_opp: true,
+                virtual_off: 0,
             }
         );
     }
@@ -987,6 +1017,7 @@ mod test {
                 visual_pos: Point { x: 4, y: 0 },
                 column: 4,
                 wrap_opp: true,
+                virtual_off: 0,
             },
         );
 
@@ -999,6 +1030,7 @@ mod test {
                 visual_pos: Point { x: 0, y: 1 },
                 column: 4,
                 wrap_opp: false,
+                virtual_off: 0,
             },
         );
 
@@ -1011,6 +1043,7 @@ mod test {
                 visual_pos: Point { x: 6, y: 1 },
                 column: 10,
                 wrap_opp: true,
+                virtual_off: 0,
             },
         );
     }
@@ -1027,6 +1060,7 @@ mod test {
                 visual_pos: Point { x: 3, y: 1 },
                 column: 3,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
     }
@@ -1047,6 +1081,7 @@ mod test {
                 visual_pos: Point { x: 2, y: 1 },
                 column: 8,
                 wrap_opp: false,
+                virtual_off: 0,
             }
         );
     }
