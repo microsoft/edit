@@ -1,11 +1,26 @@
 [package]
 name = "lsh"
-version = "0.0.0"
+description = "Lightweight Syntax Highlighter"
+version = "0.1.0"
 
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+categories = ["syntax", "highlighter", "highlighting"]
+
+[[bin]]
+name = "lshc"
+path = "src/main.rs"
+required-features = ["lshc"]
+
+[features]
+default = ["lshc"]
+compiler = []
+glob = []
+lshc = ["compiler", "glob", "dep:anyhow", "dep:argh"]
+
 [dependencies]
-stdext.workspace = true
+anyhow = { version = "1.0", optional = true }
+argh = { version = "0.1", optional = true, default-features = false, features = ["help"] }

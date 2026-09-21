@@ -23,11 +23,7 @@
 //!   as used by the backend's relocation system.
 
 use std::fmt::{self, Debug};
-use std::mem;
-
-use stdext::arena::Arena;
-use stdext::arena_write_fmt;
-use stdext::collections::{BString, BVec};
+use std::mem::{self, Discriminant, MaybeUninit, discriminant, transmute};
 
 /// A compiled language definition with its bytecode entrypoint.
 pub struct Language {
@@ -59,6 +55,18 @@ pub struct Highlight<T> {
 impl<T: Debug> Debug for Highlight<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}, {:?})", self.start, self.kind)
+    }
+}
+
+/// ...because it was impossible for the stdlib to
+/// stabilize [`Extend::extend_one`] after 6+ years.
+pub trait ExtendOne<A> {
+    fn extend_one(&mut self, value: A);
+}
+
+impl<A> ExtendOne<A> for &mut Vec<A> {
+    fn extend_one(&mut self, value: A) {
+        Vec::push(self, value);
     }
 }
 
@@ -111,22 +119,19 @@ impl<'pa, 'ps, 'pc> Runtime<'pa, 'ps, 'pc> {
     /// Executes bytecode until the line is fully consumed or a `Return` resets the VM.
     /// The returned spans partition the line into highlighted regions.
     ///
-    /// # Returns
-    /// A vector of [`Highlight`] spans. Always contains at least two spans:
+    /// Fills `res` with [`Highlight`] spans. Always contains at least two spans:
     /// one at offset 0 and one at `line.len()` as a sentinel.
-    pub fn parse_next_line<'a, T: PartialEq + TryFrom<u32>>(
+    pub fn parse_next_line<T: PartialEq + TryFrom<u32>, R: ExtendOne<Highlight<T>>>(
         &mut self,
-        arena: &'a Arena,
         line: &[u8],
-    ) -> BVec<'a, Highlight<T>> {
-        let mut res: BVec<'a, Highlight<T>> = BVec::empty();
-
+        mut res: R,
+    ) {
         self.registers.off = 0;
         self.registers.hs = 0;
 
         // By default, any line starts with HighlightKind::Other.
         // If the DSL yields anything, this will be overwritten.
-        res.push(arena, Highlight { start: 0, kind: unsafe { mem::zeroed() } });
+        let mut last = Highlight { start: 0, kind: unsafe { mem::zeroed() } };
 
         loop {
             instruction_decode!(self.assembly, self.registers.pc, {
@@ -240,12 +245,11 @@ impl<'pa, 'ps, 'pc> Runtime<'pa, 'ps, 'pc> {
                     let kind = unsafe { kind.try_into().unwrap_unchecked() };
                     let start = (self.registers.hs as usize).min(line.len());
 
-                    if let Some(last) = res.last_mut()
-                        && (last.start == start || last.kind == kind)
-                    {
+                    if last.start == start || last.kind == kind {
                         last.kind = kind;
                     } else {
-                        res.push(arena, Highlight { start, kind });
+                        res.extend_one(last);
+                        last = Highlight { start, kind };
                     }
 
                     self.registers.hs = self.registers.off;
@@ -262,11 +266,11 @@ impl<'pa, 'ps, 'pc> Runtime<'pa, 'ps, 'pc> {
         }
 
         // Ensure that there's a past-the-end highlight.
-        if res.last().is_none_or(|last| last.start < line.len()) {
-            res.push(arena, Highlight { start: line.len(), kind: unsafe { mem::zeroed() } });
+        let needs_sentinel = last.start < line.len();
+        res.extend_one(last);
+        if needs_sentinel {
+            res.extend_one(Highlight { start: line.len(), kind: unsafe { mem::zeroed() } });
         }
-
-        res
     }
 
     // TODO: http://0x80.pl/notesen/2018-10-18-simd-byte-lookup.html#alternative-implementation
@@ -757,38 +761,61 @@ impl Instruction {
     }
 
     #[allow(clippy::identity_op)]
-    pub fn encode<'a>(&self, arena: &'a Arena) -> BVec<'a, u8> {
-        fn enc_reg_pair(lo: Register, hi: Register) -> u8 {
-            ((hi as u8) << 4) | (lo as u8)
+    pub fn encode(&self, bytes: &mut Vec<u8>) {
+        struct Buf {
+            bytes: [MaybeUninit<u8>; Instruction::MAX_ENCODED_SIZE],
+            len: usize,
         }
 
-        fn enc_reg_single(lo: Register) -> u8 {
-            lo as u8
+        impl Buf {
+            const fn new() -> Self {
+                Self { bytes: [MaybeUninit::uninit(); Instruction::MAX_ENCODED_SIZE], len: 0 }
+            }
+
+            fn enc_opcode(&mut self, opcode: Discriminant<Instruction>) {
+                #[allow(clippy::missing_transmute_annotations)]
+                self.bytes[self.len].write(unsafe { transmute(opcode) });
+                self.len += 1;
+            }
+
+            fn enc_reg_pair(&mut self, lo: Register, hi: Register) {
+                self.bytes[self.len].write(((hi as u8) << 4) | (lo as u8));
+                self.len += 1;
+            }
+
+            fn enc_reg_single(&mut self, lo: Register) {
+                self.bytes[self.len].write(lo as u8);
+                self.len += 1;
+            }
+
+            fn enc_u32(&mut self, val: u32) {
+                self.bytes[self.len..self.len + 4].write_copy_of_slice(&val.to_le_bytes()[..]);
+                self.len += 4;
+            }
+
+            fn as_slice(&self) -> &[u8] {
+                unsafe { self.bytes[..self.len].assume_init_ref() }
+            }
         }
 
-        fn enc_u32(val: u32) -> [u8; 4] {
-            val.to_le_bytes()
-        }
-
-        let mut bytes = BVec::empty();
-        #[allow(clippy::missing_transmute_annotations)]
-        bytes.push(arena, unsafe { std::mem::transmute(std::mem::discriminant(self)) });
+        let mut buf = Buf::new();
+        buf.enc_opcode(discriminant(self));
 
         match *self {
             Instruction::Mov { dst, src }
             | Instruction::Add { dst, src }
             | Instruction::Sub { dst, src } => {
-                bytes.push(arena, enc_reg_pair(dst, src));
+                buf.enc_reg_pair(dst, src);
             }
             Instruction::MovImm { dst, imm }
             | Instruction::AddImm { dst, imm }
             | Instruction::SubImm { dst, imm } => {
-                bytes.push(arena, enc_reg_single(dst));
-                bytes.extend_from_slice(arena, &enc_u32(imm));
+                buf.enc_reg_single(dst);
+                buf.enc_u32(imm);
             }
 
             Instruction::Call { tgt } => {
-                bytes.extend_from_slice(arena, &enc_u32(tgt));
+                buf.enc_u32(tgt);
             }
             Instruction::Return => {}
 
@@ -798,32 +825,32 @@ impl Instruction {
             | Instruction::JumpLE { lhs, rhs, tgt }
             | Instruction::JumpGT { lhs, rhs, tgt }
             | Instruction::JumpGE { lhs, rhs, tgt } => {
-                bytes.push(arena, enc_reg_pair(lhs, rhs));
-                bytes.extend_from_slice(arena, &enc_u32(tgt));
+                buf.enc_reg_pair(lhs, rhs);
+                buf.enc_u32(tgt);
             }
 
             Instruction::JumpIfEndOfLine { tgt } => {
-                bytes.extend_from_slice(arena, &enc_u32(tgt));
+                buf.enc_u32(tgt);
             }
             Instruction::JumpIfMatchCharset { idx, min, max, tgt } => {
-                bytes.extend_from_slice(arena, &enc_u32(idx));
-                bytes.extend_from_slice(arena, &enc_u32(min));
-                bytes.extend_from_slice(arena, &enc_u32(max));
-                bytes.extend_from_slice(arena, &enc_u32(tgt));
+                buf.enc_u32(idx);
+                buf.enc_u32(min);
+                buf.enc_u32(max);
+                buf.enc_u32(tgt);
             }
             Instruction::JumpIfMatchPrefix { idx, tgt }
             | Instruction::JumpIfMatchPrefixInsensitive { idx, tgt } => {
-                bytes.extend_from_slice(arena, &enc_u32(idx));
-                bytes.extend_from_slice(arena, &enc_u32(tgt));
+                buf.enc_u32(idx);
+                buf.enc_u32(tgt);
             }
 
             Instruction::FlushHighlight { kind } => {
-                bytes.push(arena, enc_reg_single(kind));
+                buf.enc_reg_single(kind);
             }
             Instruction::AwaitInput => {}
         }
 
-        bytes
+        bytes.extend_from_slice(buf.as_slice());
     }
 
     pub fn decode(bytes: &[u8]) -> (Option<Self>, usize) {
@@ -894,8 +921,7 @@ impl Instruction {
         (Some(instr), pc)
     }
 
-    pub fn mnemonic<'a>(&self, arena: &'a Arena, config: &MnemonicFormattingConfig) -> BString<'a> {
-        let mut str = BString::empty();
+    pub fn mnemonic(&self, config: &MnemonicFormattingConfig) -> String {
         let _i = config.instruction_prefix;
         let i_ = config.instruction_suffix;
         let _r = config.register_prefix;
@@ -907,104 +933,74 @@ impl Instruction {
 
         match *self {
             Instruction::Mov { dst, src } => {
-                arena_write_fmt!(arena, str, "{_i}mov{i_}    {_r}{dst}{r_}, {_r}{src}{r_}");
+                format!("{_i}mov{i_}    {_r}{dst}{r_}, {_r}{src}{r_}")
             }
             Instruction::Add { dst, src } => {
-                arena_write_fmt!(arena, str, "{_i}add{i_}    {_r}{dst}{r_}, {_r}{src}{r_}");
+                format!("{_i}add{i_}    {_r}{dst}{r_}, {_r}{src}{r_}")
             }
             Instruction::Sub { dst, src } => {
-                arena_write_fmt!(arena, str, "{_i}sub{i_}    {_r}{dst}{r_}, {_r}{src}{r_}");
+                format!("{_i}sub{i_}    {_r}{dst}{r_}, {_r}{src}{r_}")
             }
             Instruction::MovImm { dst, imm } => {
                 if dst == Register::ProgramCounter {
-                    arena_write_fmt!(arena, str, "{_i}movi{i_}   {_r}{dst}{r_}, {_a}{imm}{a_}");
+                    format!("{_i}movi{i_}   {_r}{dst}{r_}, {_a}{imm}{a_}")
                 } else {
-                    arena_write_fmt!(arena, str, "{_i}movi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
+                    format!("{_i}movi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}")
                 }
             }
             Instruction::AddImm { dst, imm } => {
-                arena_write_fmt!(arena, str, "{_i}addi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
+                format!("{_i}addi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}")
             }
             Instruction::SubImm { dst, imm } => {
-                arena_write_fmt!(arena, str, "{_i}subi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}");
+                format!("{_i}subi{i_}   {_r}{dst}{r_}, {_n}{imm}{n_}")
             }
 
             Instruction::Call { tgt } => {
-                arena_write_fmt!(arena, str, "{_i}call{i_}   {_a}{tgt}{a_}");
+                format!("{_i}call{i_}   {_a}{tgt}{a_}")
             }
             Instruction::Return => {
-                arena_write_fmt!(arena, str, "{_i}ret{i_}");
+                format!("{_i}ret{i_}")
             }
 
             Instruction::JumpEQ { lhs, rhs, tgt } => {
-                arena_write_fmt!(
-                    arena,
-                    str,
-                    "{_i}jeq{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}"
-                );
+                format!("{_i}jeq{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}")
             }
             Instruction::JumpNE { lhs, rhs, tgt } => {
-                arena_write_fmt!(
-                    arena,
-                    str,
-                    "{_i}jne{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}"
-                );
+                format!("{_i}jne{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}")
             }
             Instruction::JumpLT { lhs, rhs, tgt } => {
-                arena_write_fmt!(
-                    arena,
-                    str,
-                    "{_i}jlt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}"
-                );
+                format!("{_i}jlt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}")
             }
             Instruction::JumpLE { lhs, rhs, tgt } => {
-                arena_write_fmt!(
-                    arena,
-                    str,
-                    "{_i}jle{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}"
-                );
+                format!("{_i}jle{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}")
             }
             Instruction::JumpGT { lhs, rhs, tgt } => {
-                arena_write_fmt!(
-                    arena,
-                    str,
-                    "{_i}jgt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}"
-                );
+                format!("{_i}jgt{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}")
             }
             Instruction::JumpGE { lhs, rhs, tgt } => {
-                arena_write_fmt!(
-                    arena,
-                    str,
-                    "{_i}jge{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}"
-                );
+                format!("{_i}jge{i_}    {_r}{lhs}{r_}, {_r}{rhs}{r_}, {_a}{tgt}{a_}")
             }
 
             Instruction::JumpIfEndOfLine { tgt } => {
-                arena_write_fmt!(arena, str, "{_i}jeol{i_}   {_a}{tgt}{a_}");
+                format!("{_i}jeol{i_}   {_a}{tgt}{a_}")
             }
             Instruction::JumpIfMatchCharset { idx, min, max, tgt } => {
-                arena_write_fmt!(
-                    arena,
-                    str,
-                    "{_i}jc{i_}     {_n}{idx}{n_}, {_n}{min}{n_}, {_n}{max}{n_}, {_a}{tgt}{a_}"
-                );
+                format!("{_i}jc{i_}     {_n}{idx}{n_}, {_n}{min}{n_}, {_n}{max}{n_}, {_a}{tgt}{a_}")
             }
             Instruction::JumpIfMatchPrefix { idx, tgt } => {
-                arena_write_fmt!(arena, str, "{_i}jp{i_}     {_n}{idx}{n_}, {_a}{tgt}{a_}");
+                format!("{_i}jp{i_}     {_n}{idx}{n_}, {_a}{tgt}{a_}")
             }
             Instruction::JumpIfMatchPrefixInsensitive { idx, tgt } => {
-                arena_write_fmt!(arena, str, "{_i}jpi{i_}    {_n}{idx}{n_}, {_a}{tgt}{a_}");
+                format!("{_i}jpi{i_}    {_n}{idx}{n_}, {_a}{tgt}{a_}")
             }
 
             Instruction::FlushHighlight { kind } => {
-                arena_write_fmt!(arena, str, "{_i}flush{i_}  {_r}{kind}{r_}");
+                format!("{_i}flush{i_}  {_r}{kind}{r_}")
             }
             Instruction::AwaitInput => {
-                arena_write_fmt!(arena, str, "{_i}await{i_}");
+                format!("{_i}await{i_}")
             }
         }
-
-        str
     }
 }
 

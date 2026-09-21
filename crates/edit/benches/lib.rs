@@ -6,13 +6,13 @@ use std::io::Cursor;
 use std::path::Path;
 use std::{mem, vec};
 
+use ::lsh::glob;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use edit::helpers::*;
 use edit::{buffer, hash, json, lsh, oklab, simd, unicode};
 use stdext::arena::{self, scratch_arena};
 use stdext::collections::BVec;
 use stdext::float::parse_f64_approx;
-use stdext::glob;
 use stdext::unicode::Utf8Chars;
 
 struct EditingTracePatch<'a>(usize, usize, &'a str);
