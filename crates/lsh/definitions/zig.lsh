@@ -1,0 +1,53 @@
+#[display_name = "Zig"]
+#[path = "**/*.zig"]
+#[path = "**/*.zon"]
+pub fn zig() {
+    until /$/ {
+        yield other;
+        if /\/\/.*/ {
+            yield comment;
+	} else if /\s*\\\\/ {
+	    until /$/ {}
+	    yield string;
+	
+  	  loop {
+  	      await input;
+    	    if /\s*\\\\/ {
+   	         until /$/ {}
+     	       yield string;
+    	    } else {
+  	          break;
+	        }
+ 	   }
+	} else if /'/ {
+            single_quote_string();
+        } else if /"/ {
+            double_quote_string();
+        } else if /(?:break|continue|try|defer|else|errdefer|for|if|return|switch|unreachable|while)\>/ {
+            yield keyword.control;
+        } else if /(?:addrspace|align|allowzero|and|anyframe|anytype|asm|callconv|catch|comptime|const|enum|error|export|extern|fn|inline|linksection|noalias|noinline|nosuspend|opaque|or|orelse|packed|pub|resume|struct|suspend|test|threadlocal|union|var|volatile)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|null|undefined)\>/ {
+            yield constant.language;
+        } else if /(?:bool|void|noreturn|type|anytype|anyerror|anyframe|anyopaque|isize|usize|comptime_int|comptime_float|f16|f32|f64|f80|f128)\>/ {
+            yield storage.type;
+        } else if /(?:c_char|c_short|c_ushort|c_int|c_uint|c_long|c_ulong|c_ulonglong|c_longlong|c_longdouble)\>/ {
+            yield storage.type;
+        } else if /(?:[iu]\d+)\>/ {
+            yield storage.type;
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+(?:\.[\d_]*)?|\.[\d_]+)(?:[eEpP][+-]?[\d_]+)?)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+	} else if /@([a-zA-Z_]\w*)/ {
+    		yield method;
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+        yield other;
+    }
+}
