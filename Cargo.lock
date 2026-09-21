@@ -74,9 +74,6 @@ name = "argh_shared"
 version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ade012bac4db278517a0132c8c10c6427025868dca16c801087c28d5a411f1"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "autocfg"
@@ -382,19 +379,10 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "lsh"
-version = "0.0.0"
-dependencies = [
- "stdext",
-]
-
-[[package]]
-name = "lsh-bin"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "argh",
- "lsh",
- "stdext",
 ]
 
 [[package]]

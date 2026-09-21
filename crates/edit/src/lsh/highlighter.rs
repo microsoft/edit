@@ -12,6 +12,17 @@ use crate::{simd, unicode};
 
 const MAX_LINE_LEN: usize = 32 * KIBI;
 
+struct VecWithAlloc<'a, 'b, T> {
+    arena: &'a Arena,
+    vec: &'b mut BVec<'a, T>,
+}
+
+impl<'a, 'b, T> ExtendOne<T> for VecWithAlloc<'a, 'b, T> {
+    fn extend_one(&mut self, value: T) {
+        self.vec.push(self.arena, value);
+    }
+}
+
 #[derive(Clone)]
 pub struct Highlighter<'a> {
     doc: &'a dyn ReadableDocument,
@@ -71,7 +82,8 @@ impl<'doc> Highlighter<'doc> {
         }
 
         let line = unicode::strip_newline(line);
-        let mut res = self.runtime.parse_next_line(arena, line);
+        let mut res: BVec<'a, Highlight<HighlightKind>> = BVec::empty();
+        self.runtime.parse_next_line(line, VecWithAlloc { arena, vec: &mut res });
 
         // Adjust the range to account for the line offset.
         for h in res.iter_mut() {

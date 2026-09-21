@@ -13,58 +13,52 @@
 //! - Could merge consecutive `Add { off, off, 1 }` instructions.
 //! - Could eliminate unreachable code after `Return`.
 
-use std::ptr;
+use std::collections::HashSet;
 
-use stdext::arena::scratch_arena;
-use stdext::collections::BVec;
+use super::ir::*;
+use crate::runtime::Register;
 
-use super::*;
-
-pub fn optimize<'a>(compiler: &mut Compiler<'a>) {
+pub fn optimize(program: &mut Program) {
     // Remove noops first, such that analyzing instruction chains becomes easier for the other passes.
-    optimize_noop(compiler);
-    optimize_redundant_offset_backup_restore(compiler);
-    optimize_highlight_kind_values(compiler);
+    optimize_noop(program);
+    optimize_redundant_offset_backup_restore(program);
+    optimize_highlight_kind_values(program);
 }
 
 /// Removes no-op instructions from the IR.
-fn optimize_noop<'a>(compiler: &mut Compiler<'a>) {
-    // Remove noops from the function entrypoint (the trunk of the tree).
-    for function in &mut compiler.functions {
-        while let body = function.body.borrow()
-            && let Some(next) = body.next
-            && matches!(body.instr, IRI::Noop)
+fn optimize_noop(program: &mut Program) {
+    fn skip_noops(graph: &Graph, mut target: NodeId) -> NodeId {
+        while matches!(graph[target].instr, Op::Noop)
+            && let Some(next) = graph[target].next
         {
-            function.body = next;
+            target = next;
         }
+        target
     }
 
-    for function in &compiler.functions {
-        for current_cell in compiler.visit_nodes_from(function.body) {
-            // First, filter down to nodes that are not no-ops.
-            if let mut current = current_cell.borrow_mut()
-                && !matches!(current.instr, IRI::Noop)
-            {
-                // `IRI::If` nodes have an additional "next" pointer.
-                let current = &mut *current;
-                let nexts = [
-                    current.next.as_mut(),
-                    match &mut current.instr {
-                        IRI::If { then, .. } => Some(then),
-                        _ => None,
-                    },
-                ];
+    // Remove noops from the function entrypoint (the trunk of the tree).
+    for function in &mut program.functions {
+        function.body = skip_noops(&program.graph, function.body);
+    }
 
-                // Now, "pop_front" no-ops from the next pointer, until it
-                // points to a real op (or None, but that shouldn't happen).
-                for next_ref in nexts.into_iter().flatten() {
-                    while !ptr::eq(*next_ref, current_cell)
-                        && let next = next_ref.borrow()
-                        && matches!(next.instr, IRI::Noop)
-                        && let Some(skip_next) = next.next
-                    {
-                        *next_ref = skip_next;
-                    }
+    for function in &program.functions {
+        let mut visitor = program.visit_nodes_from(function.body);
+        while let Some(current) = visitor.next(&program.graph) {
+            // First, filter down to nodes that are not no-ops.
+            if matches!(program.graph[current].instr, Op::Noop) {
+                continue;
+            }
+
+            if let Some(next) = program.graph[current].next {
+                let next = skip_noops(&program.graph, next);
+                program.graph[current].next = Some(next);
+            }
+
+            // `Op::If` nodes have an additional "then" branch.
+            if let Op::If { then, .. } = program.graph[current].instr {
+                let target = skip_noops(&program.graph, then);
+                if let Op::If { then, .. } = &mut program.graph[current].instr {
+                    *then = target;
                 }
             }
         }
@@ -74,42 +68,44 @@ fn optimize_noop<'a>(compiler: &mut Compiler<'a>) {
 // Conditions in the VM advance the offset only if they match. The frontend doesn't
 // care about this and emits pointless backup/restore instructions for the offset.
 // This code is responsible for turning this chain of `.next` pointers:
-//   IRI::Add { off -> backup }
-//   IRI::If { .. }
-//   IRI::Add { backup -> off }
-//   IRI::If { .. }
-//   IRI::Add { backup -> off }
-//   IRI::If { .. }
-//   IRI::Add { backup -> off }
+//   Op::Add { off -> backup }
+//   Op::If { .. }
+//   Op::Add { backup -> off }
+//   Op::If { .. }
+//   Op::Add { backup -> off }
+//   Op::If { .. }
+//   Op::Add { backup -> off }
 // into this:
-//   IRI::Add { off -> backup }
-//   IRI::If { .. }
-//   IRI::If { .. }
-//   IRI::If { .. }
-fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
-    let off_reg = compiler.get_reg(Register::InputOffset);
+//   Op::Add { off -> backup }
+//   Op::If { .. }
+//   Op::If { .. }
+//   Op::If { .. }
+fn optimize_redundant_offset_backup_restore(program: &mut Program) {
+    let off_reg = program.get_reg(Register::InputOffset);
 
     // Remove pointless offset restore chains.
-    for function in &compiler.functions {
-        for current_cell in compiler.visit_nodes_from(function.body) {
+    for function in &program.functions {
+        let mut visitor = program.visit_nodes_from(function.body);
+        while let Some(current_cell) = visitor.next(&program.graph) {
             // First, filter down to nodes that assign the `off` to a virtual register.
-            if let save = current_cell.borrow()
-                && let IRI::Mov { dst: backup_reg, src } = save.instr
-                && ptr::eq(src, off_reg)
-                && backup_reg.borrow().physical.is_none()
+            if let save = &program.graph[current_cell]
+                && let Op::Mov { dst: backup_reg, src } = save.instr
+                && src == off_reg
+                && !backup_reg.is_physical()
             {
                 let mut next_cond = save.next;
 
                 // Next optimize an entire chain of `if` conditions that pointlessly restore `off`.
-                while let Some(cond) = next_cond
-                    && let mut cond = cond.borrow_mut()
-                    && matches!(cond.instr, IRI::If { .. })
+                while let Some(cond_id) = next_cond
+                    && let cond = &program.graph[cond_id]
+                    && matches!(cond.instr, Op::If { .. })
                     && let Some(restore) = cond.next
-                    && let restore = restore.borrow()
-                    && matches!(restore.instr, IRI::Mov { dst, src } if ptr::eq(dst, off_reg) && ptr::eq(src, backup_reg))
+                    && let restore = &program.graph[restore]
+                    && matches!(restore.instr, Op::Mov { dst, src } if dst == off_reg && src == backup_reg)
                 {
-                    cond.next = restore.next;
-                    next_cond = restore.next;
+                    let next = restore.next;
+                    program.graph[cond_id].next = next;
+                    next_cond = next;
                 }
             }
         }
@@ -117,55 +113,51 @@ fn optimize_redundant_offset_backup_restore<'a>(compiler: &mut Compiler<'a>) {
 
     // Remove pointless offset backups.
     // A backup is pointless if the destination vreg is never read.
-    for function in &compiler.functions {
+    for function in &program.functions {
         // First, collect all vregs that are read anywhere in the function.
         let mut used_vregs = HashSet::new();
-        for current_cell in compiler.visit_nodes_from(function.body) {
-            let current = current_cell.borrow();
+        let mut visitor = program.visit_nodes_from(function.body);
+        while let Some(current_cell) = visitor.next(&program.graph) {
+            let current = &program.graph[current_cell];
             match current.instr {
-                IRI::Mov { src, .. } => {
-                    let id = src.borrow().id;
-                    used_vregs.insert(id);
+                Op::Mov { src, .. } => {
+                    used_vregs.insert(src);
                 }
-                IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
-                    used_vregs.insert(lhs.borrow().id);
-                    used_vregs.insert(rhs.borrow().id);
+                Op::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
+                    used_vregs.insert(lhs);
+                    used_vregs.insert(rhs);
                 }
                 _ => {}
             }
         }
 
         // Now remove dead stores (assignments to vregs that are never read).
-        for current_cell in compiler.visit_nodes_from(function.body) {
+        let mut visitor = program.visit_nodes_from(function.body);
+        while let Some(current_cell) = visitor.next(&program.graph) {
             // First, filter down to nodes that assign the `off` to a virtual register.
-            if let mut cell = current_cell.borrow_mut()
-                && let IRI::Mov { dst, src } = cell.instr
-                && let src = src.borrow()
-                && let dst = dst.borrow()
+            if let cell = &program.graph[current_cell]
+                && let Op::Mov { dst, src } = cell.instr
                 // TODO: Technically we could also optimize vreg --> vreg assignments, but for that we
                 // need to be able to call `count_register_uses` multiple times, so that the count is
                 // accurate after removing an assignment. Physical registers don't care about that.
-                && src.physical.is_some()
+                && src.is_physical()
                 // We can't optimize physical register --> physical register assignments.
-                && dst.physical.is_none()
-                && !used_vregs.contains(&dst.id)
+                && !dst.is_physical()
+                && !used_vregs.contains(&dst)
             {
-                cell.instr = IRI::Noop;
+                program.graph[current_cell].instr = Op::Noop;
             }
         }
     }
-    optimize_noop(compiler);
+    optimize_noop(program);
 }
 
 /// This isn't an optimization for the VM, it's one for my pedantic side.
 /// I like it if the identifiers are sorted and the values contiguous.
-fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
-    let scratch = scratch_arena(None);
-    let mut mapping = BVec::empty();
-
-    compiler.highlight_kinds.sort_unstable_by(|a, b| {
-        let a = a.identifier;
-        let b = b.identifier;
+fn optimize_highlight_kind_values(program: &mut Program) {
+    program.highlight_kinds.sort_unstable_by(|a, b| {
+        let a = a.identifier.as_str();
+        let b = b.identifier.as_str();
 
         // Global identifiers without a dot come first.
         let nested_a = a.contains('.');
@@ -190,18 +182,19 @@ fn optimize_highlight_kind_values<'a>(compiler: &mut Compiler<'a>) {
         a.split('.').cmp(b.split('.'))
     });
 
-    mapping.push_repeat(&*scratch, u32::MAX, compiler.highlight_kinds.len());
-    for (idx, hk) in compiler.highlight_kinds.iter_mut().enumerate() {
+    let mut mapping = vec![u32::MAX; program.highlight_kinds.len()];
+    for (idx, hk) in program.highlight_kinds.iter_mut().enumerate() {
         let idx = idx as u32;
         mapping[hk.value as usize] = idx;
         hk.value = idx;
     }
 
-    for function in &compiler.functions {
-        for current in compiler.visit_nodes_from(function.body) {
-            let mut current = current.borrow_mut();
+    for function in &program.functions {
+        let mut visitor = program.visit_nodes_from(function.body);
+        while let Some(current) = visitor.next(&program.graph) {
+            let current = &mut program.graph[current];
 
-            if let IRI::MovKind { kind, .. } = &mut current.instr {
+            if let Op::MovKind { kind, .. } = &mut current.instr {
                 *kind = mapping[*kind as usize];
             }
         }

@@ -13,7 +13,6 @@ pub mod alloc;
 pub mod arena;
 pub mod collections;
 pub mod float;
-pub mod glob;
 mod helpers;
 mod maybe_owned;
 pub mod simd;
