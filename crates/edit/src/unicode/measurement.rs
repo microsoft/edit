@@ -357,6 +357,10 @@ impl<'doc> MeasurementConfig<'doc> {
                 // Of course we only need to do this if the cursor isn't on a wrap opportunity already.
 
                 // The loop below should not modify the target we already found.
+                let mut chunk_iter = Utf8Chars::new(self.buffer.read_forward(offset), 0);
+                let mut chunk_range = offset..offset + chunk_iter.len();
+                let mut props_next_cluster = ucd_start_of_text_properties();
+                let mut offset_lookahead = offset;
                 let mut visual_pos_x_lookahead = visual_pos_x;
 
                 loop {
@@ -407,7 +411,7 @@ impl<'doc> MeasurementConfig<'doc> {
                         }
                     }
 
-                    if offset_next_cluster == offset {
+                    if offset_next_cluster == offset_lookahead {
                         // No advance and the iterator is empty? End of text reached.
                         if chunk_iter.is_empty() {
                             break;
@@ -441,6 +445,8 @@ impl<'doc> MeasurementConfig<'doc> {
                     } else if !ucd_line_break_joins(props_current_cluster, props_next_cluster) {
                         break;
                     }
+
+                    offset_lookahead = offset_next_cluster;
                 }
             }
 
