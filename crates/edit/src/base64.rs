@@ -3,8 +3,8 @@
 
 //! Base64 facilities.
 
-use stdext::arena::Arena;
-use stdext::collections::BString;
+use crate::arena::Arena;
+use crate::collections::BString;
 
 const CHARSET: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -80,10 +80,9 @@ pub fn encode<'a>(arena: &'a Arena, dst: &mut BString<'a>, src: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use stdext::arena::scratch_arena;
-    use stdext::collections::BString;
-
     use super::encode;
+    use crate::arena::scratch_arena;
+    use crate::collections::BString;
 
     #[test]
     fn test_basic() {

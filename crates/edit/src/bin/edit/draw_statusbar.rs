@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use edit::arena::{arena_format, scratch_arena};
+use edit::collections::BVec;
 use edit::framebuffer::{Attributes, IndexedColor};
 use edit::fuzzy::score_fuzzy;
 use edit::helpers::*;
@@ -8,9 +10,6 @@ use edit::icu;
 use edit::input::vk;
 use edit::lsh::LANGUAGES;
 use edit::tui::*;
-use stdext::arena::scratch_arena;
-use stdext::arena_format;
-use stdext::collections::BVec;
 
 use crate::localization::*;
 use crate::state::*;

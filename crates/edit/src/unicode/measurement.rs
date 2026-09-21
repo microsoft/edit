@@ -1,12 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use stdext::cold_path;
-use stdext::unicode::Utf8Chars;
-
 use super::tables::*;
 use crate::document::ReadableDocument;
-use crate::helpers::{CoordType, Point};
+use crate::helpers::{CoordType, Point, cold_path};
+use crate::unicode::Utf8Chars;
 
 // On one hand it's disgusting that I wrote this as a global variable, but on the
 // other hand, this isn't a public library API, and it makes the code a lot cleaner,

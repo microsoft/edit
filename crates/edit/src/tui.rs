@@ -89,10 +89,10 @@
 //! # Example
 //!
 //! ```
+//! use edit::arena::{self, arena_format};
 //! use edit::helpers::Size;
 //! use edit::input::Input;
 //! use edit::tui::*;
-//! use stdext::{arena, arena_format};
 //!
 //! struct State {
 //!     counter: i32,
@@ -147,13 +147,11 @@
 use std::collections::HashSet;
 use std::{io, iter, mem, ptr, time};
 
-use stdext::arena::{Arena, scratch_arena};
-use stdext::collections::{BString, BVec};
-use stdext::{ReplaceRange, arena_format, arena_write_fmt, opt_ptr_eq, str_from_raw_parts};
-
+use crate::arena::{Arena, arena_format, arena_write_fmt, scratch_arena};
 use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
 use crate::clipboard::Clipboard;
+use crate::collections::{BString, BVec};
 use crate::document::WriteableDocument;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::hash::*;

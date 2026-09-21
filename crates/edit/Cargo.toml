@@ -18,10 +18,11 @@ harness = false
 [features]
 # Display editor latency in the top-right corner
 debug-latency = []
+# Use a process-global instead of thread-local scratch arenas
+single-threaded = []
 
 [dependencies]
 lsh = { path = "../lsh", default-features = false, features = ["compiler", "glob"] }
-stdext = { path = "../stdext" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -44,6 +45,7 @@ features = [
     "Win32_System_Console",
     "Win32_System_IO",
     "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
     "Win32_System_Threading",
 ]
 

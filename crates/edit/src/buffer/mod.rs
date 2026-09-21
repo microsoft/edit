@@ -34,12 +34,11 @@ use std::rc::Rc;
 use std::str;
 
 pub use gap_buffer::GapBuffer;
-use stdext::arena::{Arena, scratch_arena};
-use stdext::collections::{BString, BVec};
-use stdext::{ReplaceRange as _, arena_write_fmt, minmax, slice_as_uninit_mut, slice_copy_safe};
 
+use crate::arena::{Arena, arena_write_fmt, scratch_arena};
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;
+use crate::collections::{BString, BVec};
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::framebuffer::{Attributes, Framebuffer, IndexedColor};
 use crate::helpers::*;

@@ -8,12 +8,12 @@ use std::{mem, vec};
 
 use ::lsh::glob;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use edit::arena::{self, scratch_arena};
+use edit::collections::BVec;
+use edit::float::parse_f64_approx;
 use edit::helpers::*;
+use edit::unicode::Utf8Chars;
 use edit::{buffer, hash, json, lsh, oklab, simd, unicode};
-use stdext::arena::{self, scratch_arena};
-use stdext::collections::BVec;
-use stdext::float::parse_f64_approx;
-use stdext::unicode::Utf8Chars;
 
 struct EditingTracePatch<'a>(usize, usize, &'a str);
 
@@ -279,7 +279,7 @@ fn bench_simd_memset<T: Copy + Default>(c: &mut Criterion) {
             &bytes,
             |b, &bytes| {
                 let slice = unsafe { buf.get_unchecked_mut(..bytes / size) };
-                b.iter(|| stdext::simd::memset(black_box(slice), Default::default()));
+                b.iter(|| edit::simd::memset(black_box(slice), Default::default()));
             },
         );
     }

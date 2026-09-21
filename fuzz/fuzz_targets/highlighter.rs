@@ -1,8 +1,8 @@
 #![no_main]
 
+use edit::arena::scratch_arena;
 use edit::lsh::{Highlighter, LANGUAGES};
 use libfuzzer_sys::fuzz_target;
-use stdext::arena::scratch_arena;
 
 fuzz_target!(|data: &[u8]| {
     if data.is_empty() {

@@ -5,11 +5,9 @@ use std::ops::Range;
 use std::ptr::{self, NonNull};
 use std::{io, slice};
 
-use stdext::sys::{virtual_commit, virtual_release, virtual_reserve};
-use stdext::{ReplaceRange as _, slice_copy_safe};
-
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::helpers::*;
+use crate::sys::{virtual_commit, virtual_release, virtual_reserve};
 
 #[cfg(target_pointer_width = "32")]
 const LARGE_CAPACITY: usize = 128 * MEBI;
