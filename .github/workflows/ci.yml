@@ -44,8 +44,8 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install nightly --no-self-update --profile minimal --component rust-src,rustfmt,clippy
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: cargo +nightly fmt --all -- --check
       - name: Run tests
-        run: cargo test --all-features --all-targets
+        run: cargo +nightly test --all-features --all-targets
       - name: Run clippy
-        run: cargo clippy --workspace --all-features --all-targets -- --no-deps --deny warnings
+        run: cargo +nightly clippy --workspace --all-features --all-targets -- --no-deps --deny warnings
