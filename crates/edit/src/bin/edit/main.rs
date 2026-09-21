@@ -19,19 +19,18 @@ use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
 use draw_statusbar::*;
+use edit::arena::{self, Arena, arena_format, scratch_arena};
+use edit::collections::{BString, BVec};
 use edit::framebuffer::{self, IndexedColor};
 use edit::helpers::*;
 use edit::input::{self, kbmod, vk};
 use edit::oklab::StraightRgba;
 use edit::tui::*;
+use edit::unicode::sanitize_control_chars;
 use edit::vt::{self, Token};
 use edit::{base64, path, sys, unicode};
 use localization::*;
 use state::*;
-use stdext::arena::{self, Arena, scratch_arena};
-use stdext::arena_format;
-use stdext::collections::{BString, BVec};
-use stdext::unicode::sanitize_control_chars;
 
 use crate::settings::Settings;
 
@@ -192,7 +191,7 @@ fn run() -> apperr::Result<()> {
 
             #[cfg(feature = "debug-latency")]
             {
-                use stdext::arena_write_fmt;
+                use edit::arena::arena_write_fmt;
 
                 // Print the number of passes and latency in the top right corner.
                 let time_end = std::time::Instant::now();

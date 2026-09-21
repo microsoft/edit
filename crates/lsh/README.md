@@ -11,16 +11,16 @@ For debugging and optimizing language definitions use `lsh`'s executable, `lshc`
 To see the generated assembly, for example:
 ```sh
 # Show the generated assembly of a file or directory
-cargo run -p lsc -- assembly crates/lsh/definitions/diff.lsh
+cargo run -p lsh -- assembly crates/lsh/definitions/diff.lsh
 
 # Due to the lack of include statements, you must specify included files manually.
 # Here, git_commit.lsh implicitly relies on diff() from diff.lsh.
-cargo run -p lsc -- assembly crates/lsh/definitions/git_commit.lsh crates/lsh/definitions/diff.lsh
+cargo run -p lsh -- assembly crates/lsh/definitions/git_commit.lsh crates/lsh/definitions/diff.lsh
 ```
 
 Or to render a file:
 ```sh
-cargo run -p lsc -- render --input assets/highlighting-tests/html.html crates/lsh/definitions
+cargo run -p lsh -- render --input assets/highlighting-tests/html.html crates/lsh/definitions
 ```
 
 ## Language

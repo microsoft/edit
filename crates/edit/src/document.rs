@@ -8,7 +8,7 @@ use std::mem;
 use std::ops::Range;
 use std::path::PathBuf;
 
-use stdext::ReplaceRange as _;
+use crate::helpers::ReplaceRange as _;
 
 /// An abstraction over reading from text containers.
 pub trait ReadableDocument {

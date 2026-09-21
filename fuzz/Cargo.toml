@@ -11,7 +11,6 @@ cargo-fuzz = true
 
 [dependencies]
 edit = { path = "../crates/edit" }
-stdext = { path = "../crates/stdext" }
 libfuzzer-sys = "0.4"
 
 [[bin]]

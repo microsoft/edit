@@ -2,9 +2,9 @@
 // Licensed under the MIT License.
 
 use lsh::runtime::Highlight;
-use stdext::arena::{Arena, scratch_arena};
-use stdext::collections::BVec;
 
+use crate::arena::{Arena, scratch_arena};
+use crate::collections::BVec;
 use crate::helpers::CoordType;
 use crate::lsh::{HighlightKind, Highlighter, HighlighterState};
 

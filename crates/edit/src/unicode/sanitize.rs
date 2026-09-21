@@ -1,9 +1,9 @@
 use std::borrow::Borrow;
 use std::ops::Range;
 
-use crate::MaybeOwned;
 use crate::arena::Arena;
 use crate::collections::{BString, BVec};
+use crate::maybe_owned::MaybeOwned;
 use crate::unicode::Utf8Chars;
 
 pub struct SanitizedControlChars<'a> {
