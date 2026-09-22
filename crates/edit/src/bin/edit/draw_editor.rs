@@ -12,17 +12,16 @@ use crate::localization::*;
 use crate::state::*;
 
 pub fn draw_editor(ctx: &mut Context, state: &mut State) {
+    ctx.block_begin("editor");
+    ctx.inherit_focus();
+    ctx.attr_display(Display::Grid);
+    ctx.attr_grid_template_columns(&[GridTrack::Fraction(1)]);
+    ctx.attr_grid_template_rows(&[GridTrack::Auto, GridTrack::Fraction(1)]);
+    ctx.block_begin("search-container");
     if !matches!(state.wants_search.kind, StateSearchKind::Hidden | StateSearchKind::Disabled) {
         draw_search(ctx, state);
     }
-
-    let size = ctx.size();
-    // TODO: The layout code should be able to just figure out the height on its own.
-    let height_reduction = match state.wants_search.kind {
-        StateSearchKind::Search => 4,
-        StateSearchKind::Replace => 5,
-        _ => 2,
-    };
+    ctx.block_end();
 
     if let Some(doc) = state.documents.active() {
         ctx.textarea("textarea", doc.buffer.clone());
@@ -32,7 +31,7 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         ctx.block_end();
     }
 
-    ctx.attr_intrinsic_size(Size { width: 0, height: size.height - height_reduction });
+    ctx.block_end();
 }
 
 fn draw_search(ctx: &mut Context, state: &mut State) {
