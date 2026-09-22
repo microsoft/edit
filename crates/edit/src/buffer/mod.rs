@@ -25,7 +25,6 @@ mod navigation;
 
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
-use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read as _, Write as _};
 use std::mem::{self, MaybeUninit};
@@ -84,6 +83,7 @@ impl From<icu::Error> for IoError {
 #[derive(Copy, Clone)]
 pub struct TextBufferStatistics {
     logical_lines: CoordType,
+    /// History snapshots use 0 if their visual layout needs to be remeasured.
     visual_lines: CoordType,
 }
 
@@ -115,7 +115,7 @@ struct HistoryEntry {
     selection_before: Option<TextBufferSelection>,
     /// [`TextBuffer::stats`] before the change was made.
     stats_before: TextBufferStatistics,
-    /// [`GapBuffer::generation`] before the change was made.
+    /// [`TextBuffer::generation`] before the change was made.
     ///
     /// **NOTE:** Entries with the same generation are grouped together.
     generation_before: u32,
@@ -193,7 +193,7 @@ struct ActiveEditGroupInfo {
     selection_before: Option<TextBufferSelection>,
     /// [`TextBuffer::stats`] before the change was made.
     stats_before: TextBufferStatistics,
-    /// [`GapBuffer::generation`] before the change was made.
+    /// [`TextBuffer::generation`] before the change was made.
     ///
     /// **NOTE:** Entries with the same generation are grouped together.
     generation_before: u32,
@@ -232,8 +232,8 @@ pub type RcTextBuffer = Rc<TextBufferCell>;
 pub struct TextBuffer {
     buffer: GapBuffer,
 
-    undo_stack: VecDeque<SemiRefCell<HistoryEntry>>,
-    redo_stack: VecDeque<SemiRefCell<HistoryEntry>>,
+    undo_stack: Vec<SemiRefCell<HistoryEntry>>,
+    redo_stack: Vec<SemiRefCell<HistoryEntry>>,
     last_history_type: HistoryType,
     last_save_generation: u32,
 
@@ -345,21 +345,23 @@ impl TextBuffer {
         self.last_save_generation != self.buffer.generation()
     }
 
-    /// The buffer generation changes on every edit.
-    /// With this you can check if it has changed since
-    /// the last time you called this function.
+    /// The current document revision.
+    ///
+    /// Undo/redo restores historical generations.
     pub fn generation(&self) -> u32 {
         self.buffer.generation()
     }
 
     /// Force the buffer to be dirty (needs to be saved to disk).
     pub fn mark_as_dirty(&mut self) {
-        self.last_save_generation = self.buffer.generation().wrapping_sub(1);
+        // NOTE: This technically may collide after 2^32 edits. Is that a realistic concern?
+        self.last_save_generation = u32::MAX;
     }
 
     /// Force the buffer to be clean (has been saved to disk).
     /// Use this with caution. It's called automatically on write().
     pub fn mark_as_clean(&mut self) {
+        self.undo_barrier();
         self.last_save_generation = self.buffer.generation();
     }
 
@@ -390,6 +392,8 @@ impl TextBuffer {
     ///
     /// NOTE: Cannot be undone.
     pub fn normalize_newlines(&mut self, crlf: bool) {
+        // TODO: Preserve undo/redo across conversion. Recorded byte lengths and saved-state
+        // identities become stale; translating only the reinserted text during replay is insufficient.
         let newline: &[u8] = if crlf { b"\r\n" } else { b"\n" };
         let mut off = 0;
 
@@ -469,6 +473,11 @@ impl TextBuffer {
     /// Set the overtype mode.
     pub fn set_overtype(&mut self, overtype: bool) {
         self.overtype = overtype;
+    }
+
+    /// Gets the byte offset of the cursor.
+    pub fn cursor_offset(&self) -> usize {
+        self.cursor.offset
     }
 
     /// Gets the logical cursor position, that is,
@@ -650,7 +659,17 @@ impl TextBuffer {
 
         self.cursor_for_rendering = None;
 
-        if force || self.word_wrap_column != word_wrap_column_before {
+        let layout_changed = force || self.word_wrap_column != word_wrap_column_before;
+        if layout_changed {
+            for entry in self.undo_stack.iter().chain(&self.redo_stack) {
+                entry.borrow_mut().stats_before.visual_lines = 0;
+            }
+            if let Some(group) = &mut self.active_edit_group {
+                group.stats_before.visual_lines = 0;
+            }
+        }
+
+        if layout_changed || self.stats.visual_lines == 0 {
             // Recalculate the cursor position.
             self.cursor = self.cursor_move_to_logical_internal(
                 if self.word_wrap_column > 0 {
@@ -689,7 +708,7 @@ impl TextBuffer {
         // If the buffer was changed, nothing we previously saved can be relied upon.
         self.undo_stack.clear();
         self.redo_stack.clear();
-        self.last_history_type = HistoryType::Other;
+        self.undo_barrier();
         self.cursor = Default::default();
         self.set_selection(None);
         self.mark_as_clean();
@@ -1195,7 +1214,10 @@ impl TextBuffer {
                     Self::find_parse_replacement(&scratch, &mut *search, replacement);
                 let replacement =
                     self.find_fill_replacement(&mut *search, replacement, &parsed_replacements);
+
+                self.undo_barrier();
                 self.write_raw(&replacement);
+                self.undo_barrier();
 
                 // After replacing a zero-width match, advance past it so that find_and_select wraps to the
                 // next match rather than finding the same anchor (e.g. `$`) again at the same line end.
@@ -1216,17 +1238,19 @@ impl TextBuffer {
         options: SearchOptions,
         replacement: &[u8],
     ) -> icu::Result<()> {
-        self.edit_begin_grouping();
-
         let scratch = scratch_arena(None);
         let mut search = self.find_construct_search(pattern, options)?;
         let mut offset = 0;
         let parsed_replacements = Self::find_parse_replacement(&scratch, &mut search, replacement);
 
+        self.edit_begin_grouping();
         while let Some(range) = self.find_select_next(&mut search, offset, false) {
             let replacement =
                 self.find_fill_replacement(&mut search, replacement, &parsed_replacements);
+
+            self.undo_barrier();
             self.write_raw(&replacement);
+            self.undo_barrier();
 
             // The `active_edit_off` points to the end of the last edit made by `write_raw()`.
             // This differs from the self.cursor.offset, if `write_raw()` did an `insert_final_newline`.
@@ -1755,7 +1779,7 @@ impl TextBuffer {
     /// that the TextBuffer has not been modified since you received the cursor from this class.
     pub unsafe fn set_cursor(&mut self, cursor: Cursor) {
         self.set_cursor_internal(cursor);
-        self.last_history_type = HistoryType::Other;
+        self.undo_barrier();
         self.set_selection(None);
     }
 
@@ -1766,7 +1790,7 @@ impl TextBuffer {
         };
 
         self.set_cursor_internal(cursor);
-        self.last_history_type = HistoryType::Other;
+        self.undo_barrier();
 
         let end = self.cursor.logical_pos;
         self.set_selection(if beg == end { None } else { Some(TextBufferSelection { beg, end }) });
@@ -2307,13 +2331,12 @@ impl TextBuffer {
     }
 
     fn write(&mut self, text: &[u8], at: Cursor, raw: bool) {
-        let history_type = if raw { HistoryType::Other } else { HistoryType::Write };
         let mut edit_begun = false;
 
         // If we have an active selection, writing an empty `text`
         // will still delete the selection. As such, we check this first.
         if let Some((beg, end)) = self.selection_range_internal(false) {
-            self.edit_begin(history_type, beg);
+            self.edit_begin(HistoryType::Write, beg);
             self.edit_delete(end);
             self.set_selection(None);
             edit_begun = true;
@@ -2330,7 +2353,7 @@ impl TextBuffer {
         }
 
         if !edit_begun {
-            self.edit_begin(history_type, at);
+            self.edit_begin(HistoryType::Write, at);
         }
 
         let mut offset = 0;
@@ -2813,6 +2836,8 @@ impl TextBuffer {
     }
 
     fn edit_begin_grouping(&mut self) {
+        debug_assert!(self.active_edit_group.is_none());
+        self.undo_barrier();
         self.active_edit_group = Some(ActiveEditGroupInfo {
             cursor_before: self.cursor.logical_pos,
             selection_before: self.selection,
@@ -2823,6 +2848,7 @@ impl TextBuffer {
 
     fn edit_end_grouping(&mut self) {
         self.active_edit_group = None;
+        self.undo_barrier();
     }
 
     /// Starts a new edit operation.
@@ -2835,18 +2861,14 @@ impl TextBuffer {
 
         let cursor_before = self.cursor;
         self.set_cursor_internal(cursor);
+        self.redo_stack.clear();
 
         // If both the last and this are a Write/Delete operation, we skip allocating a new undo history item.
         if history_type != self.last_history_type
             || !matches!(history_type, HistoryType::Write | HistoryType::Delete)
         {
-            self.redo_stack.clear();
-            while self.undo_stack.len() > 1000 {
-                self.undo_stack.pop_front();
-            }
-
             self.last_history_type = history_type;
-            self.undo_stack.push_back(SemiRefCell::new(HistoryEntry {
+            self.undo_stack.push(SemiRefCell::new(HistoryEntry {
                 cursor_before: cursor_before.logical_pos,
                 selection_before: self.selection,
                 stats_before: self.stats,
@@ -2857,7 +2879,7 @@ impl TextBuffer {
             }));
 
             if let Some(info) = &self.active_edit_group
-                && let Some(entry) = self.undo_stack.back()
+                && let Some(entry) = self.undo_stack.last()
             {
                 let mut entry = entry.borrow_mut();
                 entry.cursor_before = info.cursor_before;
@@ -2895,7 +2917,7 @@ impl TextBuffer {
 
         // Copy the written portion into the undo entry.
         {
-            let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
+            let mut undo = self.undo_stack.last_mut().unwrap().borrow_mut();
             undo.added.extend_from_slice(text);
         }
 
@@ -2918,7 +2940,7 @@ impl TextBuffer {
         let off = self.active_edit_off;
         let mut out_off = usize::MAX;
 
-        let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
+        let mut undo = self.undo_stack.last_mut().unwrap().borrow_mut();
 
         // If this is a continued backspace operation,
         // we need to prepend the deleted portion to the undo entry.
@@ -2949,12 +2971,12 @@ impl TextBuffer {
 
         #[cfg(debug_assertions)]
         {
-            let entry = self.undo_stack.back_mut().unwrap().borrow_mut();
+            let entry = self.undo_stack.last_mut().unwrap().borrow_mut();
             debug_assert!(!entry.deleted.is_empty() || !entry.added.is_empty());
         }
 
         if let Some(info) = self.active_edit_line_info.take() {
-            let deleted_count = self.undo_stack.back_mut().unwrap().borrow_mut().deleted.len();
+            let deleted_count = self.undo_stack.last_mut().unwrap().borrow_mut().deleted.len();
             let target = self.cursor.logical_pos;
 
             // From our safe position we can measure the actual visual position of the cursor.
@@ -2996,7 +3018,12 @@ impl TextBuffer {
         self.undo_redo(false);
     }
 
+    fn undo_barrier(&mut self) {
+        self.last_history_type = HistoryType::Other;
+    }
+
     fn undo_redo(&mut self, undo: bool) {
+        self.undo_barrier();
         let buffer_generation = self.buffer.generation();
         let mut entry_buffer_generation = None;
         let mut damage_start = CoordType::MAX;
@@ -3010,22 +3037,22 @@ impl TextBuffer {
                     (&mut self.redo_stack, &mut self.undo_stack)
                 };
 
-                // Only pop the entry if its buffer generation matches the previous one
-                let Some(g) = from.pop_back_if(|c| {
+                // Only pop the entry if its generation matches the previous one.
+                let Some(g) = from.pop_if(|c| {
                     entry_buffer_generation.is_none_or(|g| g == c.borrow().generation_before)
                 }) else {
                     break;
                 };
 
-                to.push_back(g);
+                to.push(g);
             }
 
             let change = {
                 let to = if undo { &self.redo_stack } else { &self.undo_stack };
-                to.back().unwrap()
+                to.last().unwrap()
             };
 
-            // Remember the buffer generation of the change so we can stop popping undos/redos.
+            // Remember the generation of the change so we can stop popping undos/redos.
             // Also, move to the point where the modification took place.
             let cursor = {
                 let change = change.borrow();
@@ -3105,10 +3132,6 @@ impl TextBuffer {
                 change.cursor_before = self.cursor.logical_pos;
                 // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
                 self.cursor = cursor_before;
-
-                if self.undo_stack.is_empty() {
-                    self.last_history_type = HistoryType::Other;
-                }
             }
         }
 
@@ -3175,12 +3198,438 @@ fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SearchOptions, TextBuffer};
+    use super::{CoordType, CursorMovement, MoveLineDirection, Point, SearchOptions, TextBuffer};
 
-    fn buffer_contents(buf: &mut TextBuffer) -> String {
+    fn buffer_contents(buf: &TextBuffer) -> String {
         let mut str = String::new();
-        buf.save_as_string(&mut str);
+        buf.buffer.copy_into(&mut str);
         str
+    }
+
+    fn test_buffer(text: &str, crlf: bool) -> TextBuffer {
+        let mut buf = TextBuffer::new(false).unwrap();
+        buf.set_crlf(crlf);
+        buf.write_raw(text.as_bytes());
+        buf.recalc_after_content_swap();
+        buf
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct BufferState {
+        text: String,
+        cursor_offset: usize,
+        cursor: Point,
+        selection: Option<(Point, Point)>,
+    }
+
+    fn buffer_state(buf: &TextBuffer) -> BufferState {
+        BufferState {
+            text: buffer_contents(buf),
+            cursor_offset: buf.cursor_offset(),
+            cursor: buf.cursor_logical_pos(),
+            selection: buf.selection.map(|s| (s.beg, s.end)),
+        }
+    }
+
+    fn assert_layout(buf: &TextBuffer) {
+        let end = buf.measurement_config().goto_logical(Point::MAX);
+        assert_eq!(buf.logical_line_count(), end.logical_pos.y + 1, "logical line count");
+        assert_eq!(buf.visual_line_count(), end.visual_pos.y + 1, "visual line count");
+        let cursor = buf.measurement_config().goto_offset(buf.cursor_offset());
+        assert_eq!(buf.cursor_logical_pos(), cursor.logical_pos, "logical cursor");
+    }
+
+    #[track_caller]
+    fn assert_round_trip(buf: &mut TextBuffer, before: &BufferState, expected: &str) {
+        assert_eq!(buffer_contents(buf), expected);
+        assert_layout(buf);
+        let after = buffer_state(buf);
+
+        for cycle in 0..3 {
+            buf.undo();
+            assert_eq!(&buffer_state(buf), before, "undo cycle {cycle}");
+            assert_layout(buf);
+            buf.redo();
+            assert_eq!(buffer_state(buf), after, "redo cycle {cycle}");
+            assert_layout(buf);
+        }
+    }
+
+    #[test]
+    fn undo_redo_coalesced_writes() {
+        let cases: &[(&str, &[(usize, &str)], &str)] = &[
+            ("abcd", &[(2, "X"), (3, "Y")], "abXYcd"),
+            ("abcd", &[(0, "X"), (5, "Y")], "XabcdY"),
+            ("abcd", &[(4, "X"), (0, "Y")], "YabcdX"),
+            ("abcd", &[(2, "XYZ"), (3, "!")], "abX!YZcd"),
+            ("abcd", &[(2, "X"), (2, "Y"), (2, "Z")], "abZYXcd"),
+            ("a\nb\nc", &[(0, "X"), (5, "Y"), (3, "Z")], "Xa\nZb\nYc"),
+            ("", &[(0, "a\n"), (1, "b")], "ab\n"),
+            ("", &[(0, "\u{754c}"), (3, "\u{1f600}"), (0, "!")], "!\u{754c}\u{1f600}"),
+        ];
+
+        for &(initial, writes, expected) in cases {
+            let mut buf = test_buffer(initial, false);
+            let before = buffer_state(&buf);
+            for &(offset, text) in writes {
+                // Internal edit positions need not follow the cursor or introduce an undo barrier.
+                let at = buf.cursor_move_to_offset_internal(buf.cursor, offset);
+                buf.write(text.as_bytes(), at, true);
+            }
+            assert_round_trip(&mut buf, &before, expected);
+        }
+    }
+
+    #[test]
+    fn undo_redo_coalesced_deletes() {
+        let cases: &[(&str, usize, &[CoordType], &str)] = &[
+            ("abcdef", 3, &[-1, -1, -1], "def"),
+            ("abcdef", 3, &[1, 1, 1], "abc"),
+            ("abcdef", 3, &[-1, 1, -1], "aef"),
+            ("abcdef", 3, &[1, -1, 1], "abf"),
+            ("a\nb\nc", 4, &[-1, -1, -1], "ac"),
+            ("a\r\nb\r\nc", 1, &[1, 1, 1], "ac"),
+            ("a\u{301}\u{1f600}\u{754c}z", 0, &[1, 1, 1], "z"),
+            ("a\u{301}\u{1f600}\u{754c}z", 10, &[-1, -1, -1], "z"),
+            ("abc", 0, &[1, 1, 1, 1], ""),
+        ];
+
+        for &(initial, offset, deletes, expected) in cases {
+            let mut buf = test_buffer(initial, initial.contains('\r'));
+            buf.cursor_move_to_offset(offset);
+            let before = buffer_state(&buf);
+            for &delta in deletes {
+                buf.delete(CursorMovement::Grapheme, delta);
+            }
+            assert_round_trip(&mut buf, &before, expected);
+        }
+    }
+
+    #[test]
+    fn undo_redo_selection_replacement() {
+        for crlf in [false, true] {
+            for backward in [false, true] {
+                for replacement in ["", "X", "longer\nreplacement\n", "\u{754c}\u{1f600}"] {
+                    let mut buf = test_buffer("\talpha\nbeta\nlast", crlf);
+                    let mut beg = Point { x: 2, y: 0 };
+                    let mut end = Point { x: 2, y: 1 };
+                    if backward {
+                        std::mem::swap(&mut beg, &mut end);
+                    }
+                    buf.cursor_move_to_logical(beg);
+                    buf.selection_update_logical(end);
+                    let before = buffer_state(&buf);
+
+                    buf.write_raw(replacement.as_bytes());
+                    assert!(!buf.has_selection());
+                    let expected = format!("\ta{replacement}ta\nlast");
+                    let expected = if crlf { expected.replace('\n', "\r\n") } else { expected };
+                    assert_round_trip(&mut buf, &before, &expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn undo_redo_overtype() {
+        let cases: &[(&str, &[&str], &str)] = &[
+            ("abcdef", &["XY", "Z"], "aXYZef"),
+            ("ab", &["XYZ", "!"], "aXYZ!"),
+            ("abcdef", &["X\nY", "Z"], "aX\nYZef"),
+            ("a\u{754c}\u{1f600}z", &["x", "y"], "axyz"),
+        ];
+
+        for &(initial, writes, expected) in cases {
+            let mut buf = test_buffer(initial, false);
+            buf.set_overtype(true);
+            buf.cursor_move_to_offset(1);
+            let before = buffer_state(&buf);
+            for text in writes {
+                buf.write_canon(text.as_bytes());
+            }
+            assert_round_trip(&mut buf, &before, expected);
+        }
+    }
+
+    #[test]
+    fn undo_redo_multiple_steps() {
+        let mut buf = test_buffer("a\nb\nc", false);
+        let mut states = vec![buffer_state(&buf)];
+
+        for (offset, text) in [(0, "prefix\n"), (10, "\nsuffix"), (3, "!")] {
+            buf.cursor_move_to_offset(offset);
+            // Navigation changes the intermediate cursor state without adding a history entry.
+            *states.last_mut().unwrap() = buffer_state(&buf);
+            buf.write_raw(text.as_bytes());
+            states.push(buffer_state(&buf));
+        }
+        assert_eq!(buffer_contents(&buf), "pre!fix\na\nb\nsuffix\nc");
+
+        for _ in 0..3 {
+            for state in states[..states.len() - 1].iter().rev() {
+                buf.undo();
+                assert_eq!(&buffer_state(&buf), state);
+                assert_layout(&buf);
+            }
+            buf.undo();
+            assert_eq!(buffer_state(&buf), states[0]);
+
+            for state in &states[1..] {
+                buf.redo();
+                assert_eq!(&buffer_state(&buf), state);
+                assert_layout(&buf);
+            }
+            buf.redo();
+            assert_eq!(buffer_state(&buf), *states.last().unwrap());
+        }
+    }
+
+    #[test]
+    fn undo_redo_branching() {
+        let mut buf = test_buffer("tail", false);
+        buf.write_raw(b"a");
+        buf.cursor_move_to_offset(1);
+        let branch_point = buffer_state(&buf);
+        buf.write_raw(b"b");
+        buf.undo();
+        assert_eq!(buffer_state(&buf), branch_point);
+
+        buf.write_raw(b"x");
+        buf.redo();
+        assert_eq!(buffer_contents(&buf), "axtail", "editing must discard the redo branch");
+        assert_round_trip(&mut buf, &branch_point, "axtail");
+    }
+
+    #[test]
+    fn undo_redo_generation() {
+        let mut buf = test_buffer("", false);
+        let initial = buf.generation();
+        buf.write_raw(b"a");
+        let written = buf.generation();
+
+        buf.undo();
+        assert_eq!(buf.generation(), initial);
+
+        buf.redo();
+        assert_eq!(buf.generation(), written);
+
+        buf.undo();
+        buf.write_raw(b"b");
+        assert_ne!(buf.generation(), initial);
+        assert_ne!(buf.generation(), written, "a new branch must have a fresh generation");
+
+        let branched = buf.generation();
+        buf.delete(CursorMovement::Grapheme, -1);
+        let deleted = buf.generation();
+        assert_ne!(deleted, branched);
+        buf.undo();
+        assert_eq!(buf.generation(), branched);
+        buf.redo();
+        assert_eq!(buf.generation(), deleted);
+    }
+
+    #[test]
+    fn generation_without_history() {
+        let mut buf = test_buffer("", false);
+        let initial = buf.generation();
+        buf.copy_from_str(&b"text".as_slice());
+        let copied = buf.generation();
+        assert_ne!(copied, initial);
+        buf.copy_from_str(&b"text".as_slice());
+        assert_eq!(buf.generation(), copied, "unchanged contents keep their generation");
+
+        let mut buf = test_buffer("a\nb\n", false);
+        let initial = buf.generation();
+        buf.normalize_newlines(true);
+        assert_ne!(buf.generation(), initial);
+        assert_eq!(buffer_contents(&buf), "a\r\nb\r\n");
+    }
+
+    #[test]
+    fn undo_redo_failed_replace_all() {
+        let mut buf = test_buffer("", false);
+        assert!(
+            buf.find_and_replace_all(
+                "[",
+                SearchOptions { use_regex: true, ..Default::default() },
+                b"x",
+            )
+            .is_err()
+        );
+
+        buf.write_raw(b"a");
+        buf.cursor_move_to_offset(1);
+        let before = buffer_state(&buf);
+        buf.write_raw(b"b");
+        assert_round_trip(&mut buf, &before, "ab");
+    }
+
+    #[test]
+    fn undo_redo_replace_all() {
+        for crlf in [false, true] {
+            for (pattern, replacement, expected) in [
+                ("cat", "lion", "lion\nlion lion\n"),
+                ("cat", "", "\n \n"),
+                ("^", ">", ">cat\n>cat cat\n"),
+                ("(c)(at)", "$2$1", "atc\natc atc\n"),
+            ] {
+                let mut buf = test_buffer("cat\ncat cat\n", crlf);
+                buf.cursor_move_to_logical(Point { x: 1, y: 1 });
+                let before = buffer_state(&buf);
+                buf.find_and_replace_all(
+                    pattern,
+                    SearchOptions { use_regex: true, ..Default::default() },
+                    replacement.as_bytes(),
+                )
+                .unwrap();
+                let expected =
+                    if crlf { expected.replace('\n', "\r\n") } else { expected.to_string() };
+                assert_round_trip(&mut buf, &before, &expected);
+            }
+        }
+    }
+
+    #[test]
+    fn undo_redo_grouped_overlapping_edits() {
+        let mut buf = test_buffer("abcdef\nlast", false);
+        buf.cursor_move_to_offset(2);
+        let before = buffer_state(&buf);
+
+        buf.edit_begin_grouping();
+        buf.write_raw(b"XY");
+        buf.cursor_move_to_offset(1);
+        buf.delete(CursorMovement::Grapheme, 2);
+        buf.cursor_move_to_offset(buf.text_length());
+        buf.write_raw(b"\nend");
+        buf.cursor_move_to_offset(0);
+        buf.write_raw(b">");
+        buf.edit_end_grouping();
+
+        assert_round_trip(&mut buf, &before, ">aYcdef\nlast\nend");
+    }
+
+    #[test]
+    fn undo_redo_large_group() {
+        let mut buf = test_buffer(&"a\n".repeat(2000), false);
+        let before = buffer_state(&buf);
+        buf.find_and_replace_all("a", SearchOptions::default(), b"bb\ncc").unwrap();
+        assert_round_trip(&mut buf, &before, &"bb\ncc\n".repeat(2000));
+    }
+
+    #[test]
+    fn undo_redo_long_history() {
+        let mut buf = test_buffer("", false);
+        let initial = buffer_state(&buf);
+        buf.edit_begin_grouping();
+        buf.write_raw(b"a");
+        buf.cursor_move_to_offset(1);
+        buf.write_raw(b"b");
+        buf.edit_end_grouping();
+        let before = buffer_state(&buf);
+
+        for _ in 0..2000 {
+            buf.cursor_move_to_offset(buf.text_length());
+            buf.write_raw(b"x");
+        }
+        let after = buffer_state(&buf);
+
+        for _ in 0..2 {
+            for _ in 0..2000 {
+                buf.undo();
+            }
+            assert_eq!(buffer_state(&buf), before);
+            buf.undo();
+            assert_eq!(buffer_state(&buf), initial, "the oldest group must remain undoable");
+            assert_layout(&buf);
+
+            buf.redo();
+            assert_eq!(buffer_state(&buf), before);
+            for _ in 0..2000 {
+                buf.redo();
+            }
+            assert_eq!(buffer_state(&buf), after);
+            assert_layout(&buf);
+        }
+    }
+
+    #[test]
+    fn undo_redo_indentation() {
+        for backward in [false, true] {
+            for (initial, direction, expected) in
+                [("a\nb\nc", 1, "\ta\n\tb\nc"), ("\ta\n\tb\nc", -1, "a\nb\nc")]
+            {
+                let mut buf = test_buffer(initial, false);
+                buf.set_indent_with_tabs(true);
+                let mut beg = Point { x: 0, y: 0 };
+                let mut end = Point { x: 0, y: 2 };
+                if backward {
+                    std::mem::swap(&mut beg, &mut end);
+                }
+                buf.cursor_move_to_logical(beg);
+                buf.selection_update_logical(end);
+                let before = buffer_state(&buf);
+                buf.indent_change(direction);
+                assert_round_trip(&mut buf, &before, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn undo_redo_move_lines() {
+        for crlf in [false, true] {
+            for backward in [false, true] {
+                for (direction, expected) in [
+                    (MoveLineDirection::Up, "bb\ncc\naa\ndd\n"),
+                    (MoveLineDirection::Down, "aa\ndd\nbb\ncc\n"),
+                ] {
+                    let mut buf = test_buffer("aa\nbb\ncc\ndd\n", crlf);
+                    let mut beg = Point { x: 1, y: 1 };
+                    let mut end = Point { x: 1, y: 2 };
+                    if backward {
+                        std::mem::swap(&mut beg, &mut end);
+                    }
+                    buf.cursor_move_to_logical(beg);
+                    buf.selection_update_logical(end);
+                    let before = buffer_state(&buf);
+                    buf.move_selected_lines(direction);
+                    let expected =
+                        if crlf { expected.replace('\n', "\r\n") } else { expected.to_string() };
+                    assert_round_trip(&mut buf, &before, &expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn undo_redo_after_layout_change() {
+        for (wrap_before, width_before, wrap_after, width_after, tab_size) in [
+            (false, 20, true, 4, 4),
+            (true, 4, false, 20, 4),
+            (true, 4, true, 8, 4),
+            (true, 8, true, 8, 8),
+        ] {
+            let mut buf = test_buffer("\tabcdefghij\nlast", false);
+            buf.set_word_wrap(wrap_before);
+            buf.set_width(width_before);
+            let before = buffer_state(&buf);
+            buf.write_raw(b"x\n");
+            buf.set_word_wrap(wrap_after);
+            buf.set_width(width_after);
+            buf.set_tab_size(tab_size);
+            assert_round_trip(&mut buf, &before, "x\n\tabcdefghij\nlast");
+        }
+    }
+
+    #[test]
+    fn undo_redo_after_newline_conversion() {
+        for crlf in [false, true] {
+            let mut buf = test_buffer("tail", crlf);
+            let before = buffer_state(&buf);
+            buf.write_raw(b"x\ny\n");
+            buf.normalize_newlines(!crlf);
+            let expected = if crlf { "x\ny\ntail" } else { "x\r\ny\r\ntail" };
+            assert_round_trip(&mut buf, &before, expected);
+        }
     }
 
     #[test]
