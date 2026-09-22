@@ -7,6 +7,8 @@ mod draw_editor;
 mod draw_filepicker;
 mod draw_menubar;
 mod draw_statusbar;
+#[cfg(test)]
+mod layout_tests;
 mod localization;
 mod settings;
 mod state;
@@ -340,6 +342,9 @@ fn print_version() {
 
 fn draw(tui: &mut Tui, input: Option<input::Input>, state: &mut State) {
     let ctx = &mut tui.create_context(input);
+    ctx.attr_display(Display::Grid);
+    ctx.attr_grid_template_columns(&[GridTrack::Fraction(1)]);
+    ctx.attr_grid_template_rows(&[GridTrack::Auto, GridTrack::Fraction(1), GridTrack::Auto]);
 
     draw_menubar(ctx, state);
     draw_editor(ctx, state);
