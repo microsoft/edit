@@ -45,19 +45,32 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         let contains_focus = ctx.contains_focus();
         let mut activated = false;
 
-        ctx.table_begin("path");
-        ctx.table_set_columns(&[0, COORD_TYPE_SAFE_MAX]);
-        ctx.table_set_cell_gap(Size { width: 1, height: 0 });
+        ctx.block_begin("path");
+        ctx.attr_display(Display::Grid);
+        ctx.attr_grid_auto_rows(GridTrack::Intrinsic(0));
+        ctx.attr_grid_template_columns(&[GridTrack::Intrinsic(0), GridTrack::Fraction(1)]);
+        ctx.attr_focus_navigation(FocusNavigation::Vertical);
+        ctx.attr_grid_gap(Size { width: 1, height: 0 });
         ctx.attr_padding(Rect::two(1, 1));
         ctx.inherit_focus();
         {
-            ctx.table_next_row();
+            ctx.block_begin("row");
+            ctx.attr_display(Display::Grid);
+            ctx.attr_grid_column_subgrid();
+            ctx.attr_grid_align_items(GridAlignment::Start);
+            ctx.attr_focus_navigation(FocusNavigation::Horizontal);
 
             ctx.label("dir-label", loc(LocId::SaveAsDialogPathLabel));
             ctx.label("dir", state.file_picker_pending_dir.as_str());
             ctx.attr_overflow(Overflow::TruncateMiddle);
 
-            ctx.table_next_row();
+            ctx.block_end();
+            ctx.next_block_id_mixin(1);
+            ctx.block_begin("row");
+            ctx.attr_display(Display::Grid);
+            ctx.attr_grid_column_subgrid();
+            ctx.attr_grid_align_items(GridAlignment::Start);
+            ctx.attr_focus_navigation(FocusNavigation::Horizontal);
             ctx.inherit_focus();
 
             ctx.label("name-label", loc(LocId::SaveAsDialogNameLabel));
@@ -131,7 +144,8 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                 activated = true;
             }
         }
-        ctx.table_end();
+        ctx.block_end();
+        ctx.block_end();
 
         if state.file_picker_entries.is_none() {
             draw_dialog_saveas_refresh_files(state);
@@ -206,13 +220,21 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
             ctx.attr_overflow(Overflow::TruncateTail);
             ctx.attr_padding(Rect::three(1, 2, 1));
 
-            ctx.table_begin("choices");
+            ctx.block_begin("choices");
+            ctx.attr_display(Display::Grid);
+            ctx.attr_grid_auto_columns(GridTrack::Intrinsic(0));
+            ctx.attr_grid_auto_rows(GridTrack::Intrinsic(0));
+            ctx.attr_focus_navigation(FocusNavigation::Vertical);
             ctx.inherit_focus();
             ctx.attr_padding(Rect::three(0, 2, 1));
             ctx.attr_position(Position::Center);
-            ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+            ctx.attr_grid_gap(Size { width: 2, height: 0 });
             {
-                ctx.table_next_row();
+                ctx.block_begin("row");
+                ctx.attr_display(Display::Grid);
+                ctx.attr_grid_column_subgrid();
+                ctx.attr_grid_align_items(GridAlignment::Start);
+                ctx.attr_focus_navigation(FocusNavigation::Horizontal);
                 ctx.inherit_focus();
 
                 save = ctx.button("yes", loc(LocId::Yes), ButtonStyle::default());
@@ -222,7 +244,8 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                     state.file_picker_overwrite_warning = None;
                 }
             }
-            ctx.table_end();
+            ctx.block_end();
+            ctx.block_end();
 
             if contains_focus {
                 save |= ctx.consume_shortcut(vk::Y);

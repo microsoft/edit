@@ -16,18 +16,26 @@ use crate::localization::*;
 use crate::state::*;
 
 pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
-    ctx.table_begin("statusbar");
+    ctx.block_begin("statusbar");
+    ctx.attr_display(Display::Grid);
+    ctx.attr_grid_auto_columns(GridTrack::Intrinsic(0));
+    ctx.attr_grid_auto_rows(GridTrack::Intrinsic(0));
+    ctx.attr_focus_navigation(FocusNavigation::Vertical);
     ctx.attr_focus_well();
     ctx.attr_background_rgba(state.menubar_color_bg);
     ctx.attr_foreground_rgba(state.menubar_color_fg);
-    ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+    ctx.attr_grid_gap(Size { width: 2, height: 0 });
     ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
     ctx.attr_padding(Rect::two(0, 1));
 
     if let Some(doc) = state.documents.active() {
         let mut tb = doc.buffer.borrow_mut();
 
-        ctx.table_next_row();
+        ctx.block_begin("row");
+        ctx.attr_display(Display::Grid);
+        ctx.attr_grid_column_subgrid();
+        ctx.attr_grid_align_items(GridAlignment::Start);
+        ctx.attr_focus_navigation(FocusNavigation::Horizontal);
 
         state.wants_language_picker |= ctx.button(
             "language",
@@ -94,7 +102,11 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             ButtonStyle::default(),
         );
         if state.wants_indentation_picker {
-            ctx.table_begin("indentation-picker");
+            ctx.block_begin("indentation-picker");
+            ctx.attr_display(Display::Grid);
+            ctx.attr_grid_auto_columns(GridTrack::Intrinsic(0));
+            ctx.attr_grid_auto_rows(GridTrack::Intrinsic(0));
+            ctx.attr_focus_navigation(FocusNavigation::Vertical);
             ctx.attr_float(FloatSpec {
                 anchor: Anchor::Last,
                 gravity_x: 0.0,
@@ -104,13 +116,17 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             });
             ctx.attr_border();
             ctx.attr_padding(Rect::two(0, 1));
-            ctx.table_set_cell_gap(Size { width: 1, height: 0 });
+            ctx.attr_grid_gap(Size { width: 1, height: 0 });
             {
                 if ctx.contains_focus() && ctx.consume_shortcut(vk::RETURN) {
                     ctx.toss_focus_up();
                 }
 
-                ctx.table_next_row();
+                ctx.block_begin("row");
+                ctx.attr_display(Display::Grid);
+                ctx.attr_grid_column_subgrid();
+                ctx.attr_grid_align_items(GridAlignment::Start);
+                ctx.attr_focus_navigation(FocusNavigation::Horizontal);
 
                 ctx.list_begin("type");
                 ctx.focus_on_first_present();
@@ -148,7 +164,8 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
                 }
                 ctx.list_end();
             }
-            ctx.table_end();
+            ctx.block_end();
+            ctx.block_end();
 
             if !ctx.contains_focus() {
                 state.wants_indentation_picker = false;
@@ -199,13 +216,14 @@ pub fn draw_statusbar(ctx: &mut Context, state: &mut State) {
             ctx.attr_position(Position::Right);
         }
         ctx.block_end();
+        ctx.block_end();
     } else {
         state.wants_statusbar_focus = false;
         state.wants_encoding_picker = false;
         state.wants_indentation_picker = false;
     }
 
-    ctx.table_end();
+    ctx.block_end();
 }
 
 pub fn draw_dialog_language_change(ctx: &mut Context, state: &mut State) {
@@ -270,12 +288,22 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
         if reopen { loc(LocId::EncodingReopen) } else { loc(LocId::EncodingConvert) },
     );
     {
-        ctx.table_begin("encoding-search");
-        ctx.table_set_columns(&[0, COORD_TYPE_SAFE_MAX]);
-        ctx.table_set_cell_gap(Size { width: 1, height: 0 });
+        ctx.block_begin("encoding-search");
+        ctx.attr_display(Display::Grid);
+        ctx.attr_grid_auto_rows(GridTrack::Intrinsic(0));
+        ctx.attr_grid_template_columns(&[
+            GridTrack::Intrinsic(0),
+            GridTrack::Intrinsic(COORD_TYPE_SAFE_MAX),
+        ]);
+        ctx.attr_focus_navigation(FocusNavigation::Vertical);
+        ctx.attr_grid_gap(Size { width: 1, height: 0 });
         ctx.inherit_focus();
         {
-            ctx.table_next_row();
+            ctx.block_begin("row");
+            ctx.attr_display(Display::Grid);
+            ctx.attr_grid_column_subgrid();
+            ctx.attr_grid_align_items(GridAlignment::Start);
+            ctx.attr_focus_navigation(FocusNavigation::Horizontal);
             ctx.inherit_focus();
 
             ctx.label("needle-label", loc(LocId::SearchNeedleLabel));
@@ -285,7 +313,8 @@ pub fn draw_dialog_encoding_change(ctx: &mut Context, state: &mut State) {
             }
             ctx.inherit_focus();
         }
-        ctx.table_end();
+        ctx.block_end();
+        ctx.block_end();
 
         ctx.scrollarea_begin("scrollarea", Size { width, height });
         ctx.attr_background_rgba(ctx.indexed_alpha(IndexedColor::Black, 1, 4));
