@@ -65,7 +65,14 @@ fn bench_buffer(c: &mut Criterion) {
         res
     };
 
-    let mut patches_with_coords = Vec::new();
+    enum Op<'a> {
+        Move { pos: Point },
+        Replace { len: usize, text: &'a str },
+        Insert { text: &'a str },
+        Delete { len: usize },
+    }
+
+    let mut ops = Vec::new();
     {
         let mut tb = buffer::TextBuffer::new(false).unwrap();
         tb.set_crlf(false);
@@ -73,68 +80,106 @@ fn bench_buffer(c: &mut Criterion) {
 
         for t in &data.txns {
             for p in &t.patches {
-                tb.cursor_move_to_offset(p.0);
-                let beg = tb.cursor_logical_pos();
+                if p.0 != tb.cursor_offset() {
+                    tb.cursor_move_to_offset(p.0);
+                    ops.push(Op::Move { pos: tb.cursor_logical_pos() });
+                }
 
-                tb.delete(buffer::CursorMovement::Grapheme, p.1 as CoordType);
-
-                tb.write_raw(p.2.as_bytes());
-                patches_with_coords.push((beg, p.1 as CoordType, p.2));
+                if p.1 > 0 && !p.2.is_empty() {
+                    tb.selection_update_delta(buffer::CursorMovement::Grapheme, p.1 as CoordType);
+                    tb.write_raw(p.2.as_bytes());
+                    ops.push(Op::Replace { len: p.1, text: p.2 });
+                } else if p.1 > 0 {
+                    tb.delete(buffer::CursorMovement::Grapheme, p.1 as CoordType);
+                    ops.push(Op::Delete { len: p.1 });
+                } else {
+                    assert!(!p.2.is_empty());
+                    tb.write_raw(p.2.as_bytes());
+                    ops.push(Op::Insert { text: p.2 });
+                }
             }
         }
-
-        let mut actual = String::new();
-        tb.save_as_string(&mut actual);
-        assert_eq!(actual, data.end_content);
     }
 
-    let bench_gap_buffer = || {
-        let mut buf = buffer::GapBuffer::new(false).unwrap();
-        buf.replace(0..usize::MAX, data.start_content.as_bytes());
-
-        for t in &data.txns {
-            for p in &t.patches {
-                buf.replace(p.0..p.0 + p.1, p.2.as_bytes());
-            }
-        }
-
-        buf
-    };
-
-    let bench_text_buffer = || {
-        let mut tb = buffer::TextBuffer::new(false).unwrap();
+    fn bench<T: buffer::TextBufferStorage>(
+        start_content: &[u8],
+        ops: &[Op],
+    ) -> buffer::TextBuffer<T> {
+        let mut tb = buffer::TextBuffer::<T>::new_with_storage(false).unwrap();
         tb.set_crlf(false);
-        tb.write_raw(data.start_content.as_bytes());
+        tb.write_raw(start_content);
 
-        for p in &patches_with_coords {
-            tb.cursor_move_to_logical(p.0);
-            tb.delete(buffer::CursorMovement::Grapheme, p.1);
-            tb.write_raw(p.2.as_bytes());
+        for op in ops {
+            match op {
+                Op::Move { pos } => {
+                    tb.cursor_move_to_logical(*pos);
+                }
+                Op::Replace { len, text } => {
+                    tb.selection_update_delta(buffer::CursorMovement::Grapheme, *len as CoordType);
+                    tb.write_raw(text.as_bytes());
+                }
+                Op::Insert { text } => {
+                    tb.write_raw(text.as_bytes());
+                }
+                Op::Delete { len } => {
+                    tb.delete(buffer::CursorMovement::Grapheme, *len as CoordType);
+                }
+            }
         }
 
         tb
-    };
+    }
+
+    let bench_zipper = || bench::<buffer::ZipperStorage>(data.start_content.as_bytes(), &ops);
+    let bench_piece_list =
+        || bench::<buffer::PieceListStorage>(data.start_content.as_bytes(), &ops);
+    let bench_piece_tree =
+        || bench::<buffer::PieceTreeStorage>(data.start_content.as_bytes(), &ops);
+    let bench_piece_tree_avl =
+        || bench::<buffer::PieceTreeAvlStorage>(data.start_content.as_bytes(), &ops);
 
     // Sanity check: If this fails, the implementation is incorrect.
     {
-        let buf = bench_gap_buffer();
-        let mut actual = Vec::new();
-        buf.extract_raw(0..usize::MAX, &mut actual, 0);
-        assert_eq!(actual, data.end_content.as_bytes());
+        let mut buf = bench_piece_list();
+        let mut actual = String::new();
+        buf.save_as_string(&mut actual);
+        println!("PieceList: {}", buf.storage().committed());
+        assert_eq!(actual, data.end_content);
     }
     {
-        let mut tb = bench_text_buffer();
+        let mut buf = bench_zipper();
         let mut actual = String::new();
-        tb.save_as_string(&mut actual);
+        buf.save_as_string(&mut actual);
+        println!("Zipper: {}", buf.storage().committed());
+        assert_eq!(actual, data.end_content);
+    }
+    {
+        let mut buf = bench_piece_tree();
+        let mut actual = String::new();
+        buf.save_as_string(&mut actual);
+        println!("PieceTree: {}", buf.storage().committed());
+        assert_eq!(actual, data.end_content);
+    }
+    {
+        let mut buf = bench_piece_tree_avl();
+        let mut actual = String::new();
+        buf.save_as_string(&mut actual);
+        println!("PieceTreeAvl: {}", buf.storage().committed());
         assert_eq!(actual, data.end_content);
     }
 
     c.benchmark_group("buffer")
-        .bench_function(BenchmarkId::new("GapBuffer", "rustcode"), |b| {
-            b.iter(bench_gap_buffer);
+        .bench_function(BenchmarkId::new("PieceList", "rustcode"), |b| {
+            b.iter(bench_piece_list);
         })
-        .bench_function(BenchmarkId::new("TextBuffer", "rustcode"), |b| {
-            b.iter(bench_text_buffer);
+        .bench_function(BenchmarkId::new("Zipper", "rustcode"), |b| {
+            b.iter(bench_zipper);
+        })
+        .bench_function(BenchmarkId::new("PieceTree", "rustcode"), |b| {
+            b.iter(bench_piece_tree);
+        })
+        .bench_function(BenchmarkId::new("PieceTreeAvl", "rustcode"), |b| {
+            b.iter(bench_piece_tree_avl);
         });
 }
 

@@ -22,10 +22,13 @@
 
 mod gap_buffer;
 mod navigation;
+mod piece_list;
+mod piece_tree;
+mod piece_tree_avl;
+mod zipper;
 
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
-use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read as _, Write as _};
 use std::mem::{self, MaybeUninit};
@@ -34,6 +37,10 @@ use std::rc::Rc;
 use std::str;
 
 pub use gap_buffer::GapBuffer;
+pub use piece_list::PieceList;
+pub use piece_tree::PieceTree;
+pub use piece_tree_avl::PieceTreeAvl;
+pub use zipper::Zipper;
 
 use crate::arena::{Arena, arena_write_fmt, scratch_arena};
 use crate::cell::SemiRefCell;
@@ -107,26 +114,108 @@ enum HistoryType {
     Delete,
 }
 
-/// An undo/redo entry.
-struct HistoryEntry {
-    /// [`TextBuffer::cursor`] position before the change was made.
-    cursor_before: Point,
-    /// [`TextBuffer::selection`] before the change was made.
-    selection_before: Option<TextBufferSelection>,
-    /// [`TextBuffer::stats`] before the change was made.
-    stats_before: TextBufferStatistics,
-    /// [`GapBuffer::generation`] before the change was made.
-    ///
-    /// **NOTE:** Entries with the same generation are grouped together.
-    generation_before: u32,
-    /// Logical cursor position where the change took place.
-    /// The position is at the start of the changed range.
+/// Editor state stored directly on a text storage revision.
+#[doc(hidden)]
+#[derive(Copy, Clone)]
+pub struct RevisionMetadata {
     cursor: Point,
-    /// Text that was deleted from the buffer.
-    deleted: Vec<u8>,
-    /// Text that was added to the buffer.
-    added: Vec<u8>,
+    selection: Option<TextBufferSelection>,
+    stats: TextBufferStatistics,
+    damage_start: CoordType,
 }
+
+/// Backing storage for a [`TextBuffer`].
+#[allow(clippy::len_without_is_empty)]
+pub trait TextBufferStorage: ReadableDocument + WriteableDocument {
+    fn new(small: bool, metadata: RevisionMetadata) -> io::Result<Self>
+    where
+        Self: Sized;
+    fn committed(&self) -> usize;
+    fn len(&self) -> usize;
+    fn generation(&self) -> u32;
+    fn begin_revision(&mut self, metadata: RevisionMetadata, coalesce: bool);
+    fn revision_metadata_mut(&mut self) -> &mut RevisionMetadata;
+    fn reset_history(&mut self, metadata: RevisionMetadata);
+    fn undo(&mut self, current_metadata: RevisionMetadata) -> Option<RevisionMetadata>;
+    fn redo(&mut self, current_metadata: RevisionMetadata) -> Option<RevisionMetadata>;
+    fn replace_coalescing(&mut self, range: Range<usize>, replacement: &[u8]);
+    fn extract_raw(&self, range: Range<usize>, out: &mut Vec<u8>, out_off: usize);
+    fn clear(&mut self);
+    fn copy_from(&mut self, src: &dyn ReadableDocument) -> bool;
+    fn copy_into(&self, dst: &mut dyn WriteableDocument);
+}
+
+macro_rules! impl_text_buffer_storage {
+    ($storage:ident) => {
+        impl TextBufferStorage for $storage<RevisionMetadata> {
+            fn new(small: bool, metadata: RevisionMetadata) -> io::Result<Self> {
+                Self::new(small, metadata)
+            }
+
+            fn committed(&self) -> usize {
+                self.committed()
+            }
+
+            fn len(&self) -> usize {
+                self.len()
+            }
+
+            fn generation(&self) -> u32 {
+                self.generation()
+            }
+
+            fn begin_revision(&mut self, metadata: RevisionMetadata, coalesce: bool) {
+                self.begin_revision(metadata, coalesce);
+            }
+
+            fn revision_metadata_mut(&mut self) -> &mut RevisionMetadata {
+                self.revision_metadata_mut()
+            }
+
+            fn reset_history(&mut self, metadata: RevisionMetadata) {
+                self.reset_history(metadata);
+            }
+
+            fn undo(&mut self, current_metadata: RevisionMetadata) -> Option<RevisionMetadata> {
+                self.undo(current_metadata)
+            }
+
+            fn redo(&mut self, current_metadata: RevisionMetadata) -> Option<RevisionMetadata> {
+                self.redo(current_metadata)
+            }
+
+            fn replace_coalescing(&mut self, range: Range<usize>, replacement: &[u8]) {
+                self.replace_coalescing(range, replacement);
+            }
+
+            fn extract_raw(&self, range: Range<usize>, out: &mut Vec<u8>, out_off: usize) {
+                self.extract_raw(range, out, out_off);
+            }
+
+            fn clear(&mut self) {
+                self.clear();
+            }
+
+            fn copy_from(&mut self, src: &dyn ReadableDocument) -> bool {
+                self.copy_from(src)
+            }
+
+            fn copy_into(&self, dst: &mut dyn WriteableDocument) {
+                self.copy_into(dst);
+            }
+        }
+    };
+}
+
+impl_text_buffer_storage!(Zipper);
+impl_text_buffer_storage!(PieceList);
+impl_text_buffer_storage!(PieceTree);
+impl_text_buffer_storage!(PieceTreeAvl);
+
+pub type ZipperStorage = Zipper<RevisionMetadata>;
+pub type PieceListStorage = PieceList<RevisionMetadata>;
+pub type PieceTreeStorage = PieceTree<RevisionMetadata>;
+pub type PieceTreeAvlStorage = PieceTreeAvl<RevisionMetadata>;
 
 /// Caches an ICU search operation.
 struct ActiveSearch {
@@ -138,7 +227,7 @@ struct ActiveSearch {
     text: icu::Text,
     /// The ICU `URegularExpression` object.
     regex: icu::Regex,
-    /// [`GapBuffer::generation`] when the search was created.
+    /// [`Zipper::generation`] when the search was created.
     /// This is used to detect if we need to refresh the
     /// [`ActiveSearch::regex`] object.
     buffer_generation: u32,
@@ -181,22 +270,9 @@ struct ActiveEditLineInfo {
     distance_next_line_start: usize,
 }
 
-/// Undo/redo grouping works by recording a set of "overrides",
-/// which are then applied in [`TextBuffer::edit_begin()`].
-/// This allows us to create a group of edits that all share a
-/// common `generation_before` and can be undone/redone together.
-/// This struct stores those overrides.
 struct ActiveEditGroupInfo {
-    /// [`TextBuffer::cursor`] position before the change was made.
-    cursor_before: Point,
-    /// [`TextBuffer::selection`] before the change was made.
-    selection_before: Option<TextBufferSelection>,
-    /// [`TextBuffer::stats`] before the change was made.
-    stats_before: TextBufferStatistics,
-    /// [`GapBuffer::generation`] before the change was made.
-    ///
-    /// **NOTE:** Entries with the same generation are grouped together.
-    generation_before: u32,
+    metadata: RevisionMetadata,
+    started: bool,
 }
 
 /// Char- or word-wise navigation? Your choice.
@@ -220,20 +296,18 @@ pub struct RenderResult {
 }
 
 /// A [`TextBuffer`] with inner mutability.
-pub type TextBufferCell = SemiRefCell<TextBuffer>;
+pub type TextBufferCell<T = ZipperStorage> = SemiRefCell<TextBuffer<T>>;
 
 /// A [`TextBuffer`] inside an [`Rc`].
 ///
 /// We need this because the TUI system needs to borrow
 /// the given text buffer(s) until after the layout process.
-pub type RcTextBuffer = Rc<TextBufferCell>;
+pub type RcTextBuffer<T = ZipperStorage> = Rc<TextBufferCell<T>>;
 
 /// A text buffer for a text editor.
-pub struct TextBuffer {
-    buffer: GapBuffer,
+pub struct TextBuffer<T: TextBufferStorage = ZipperStorage> {
+    buffer: T,
 
-    undo_stack: VecDeque<SemiRefCell<HistoryEntry>>,
-    redo_stack: VecDeque<SemiRefCell<HistoryEntry>>,
     last_history_type: HistoryType,
     last_save_generation: u32,
 
@@ -241,6 +315,8 @@ pub struct TextBuffer {
     active_edit_line_info: Option<ActiveEditLineInfo>,
     active_edit_depth: i32,
     active_edit_off: usize,
+    active_edit_deleted: usize,
+    active_edit_coalescing: bool,
 
     stats: TextBufferStatistics,
     cursor: Cursor,
@@ -272,22 +348,23 @@ pub struct TextBuffer {
     wants_cursor_visibility: bool,
 }
 
-impl TextBuffer {
-    /// Creates a new text buffer inside an [`Rc`].
-    /// See [`TextBuffer::new()`].
-    pub fn new_rc(small: bool) -> io::Result<RcTextBuffer> {
-        let buffer = Self::new(small)?;
+impl<T: TextBufferStorage> TextBuffer<T> {
+    /// Creates a new text buffer with the selected backing storage inside an [`Rc`].
+    /// See [`TextBuffer::new_with_storage()`].
+    pub fn new_rc_with_storage(small: bool) -> io::Result<RcTextBuffer<T>> {
+        let buffer = Self::new_with_storage(small)?;
         Ok(Rc::new(SemiRefCell::new(buffer)))
     }
 
-    /// Creates a new text buffer. With `small` you can control
-    /// if the buffer is optimized for <1MiB contents.
-    pub fn new(small: bool) -> io::Result<Self> {
+    /// Creates a new text buffer with the selected backing storage. With `small`
+    /// you can control if the buffer is optimized for <1MiB contents.
+    pub fn new_with_storage(small: bool) -> io::Result<Self> {
+        let stats = TextBufferStatistics { logical_lines: 1, visual_lines: 1 };
+        let metadata =
+            RevisionMetadata { cursor: Point::default(), selection: None, stats, damage_start: 0 };
         Ok(Self {
-            buffer: GapBuffer::new(small)?,
+            buffer: T::new(small, metadata)?,
 
-            undo_stack: Default::default(),
-            redo_stack: Default::default(),
             last_history_type: HistoryType::Other,
             last_save_generation: 0,
 
@@ -295,8 +372,10 @@ impl TextBuffer {
             active_edit_line_info: None,
             active_edit_depth: 0,
             active_edit_off: 0,
+            active_edit_deleted: 0,
+            active_edit_coalescing: false,
 
-            stats: TextBufferStatistics { logical_lines: 1, visual_lines: 1 },
+            stats,
             cursor: Default::default(),
             cursor_for_rendering: None,
             selection: None,
@@ -321,6 +400,10 @@ impl TextBuffer {
 
             wants_cursor_visibility: false,
         })
+    }
+
+    pub fn storage(&self) -> &T {
+        &self.buffer
     }
 
     /// Length of the document in bytes.
@@ -384,6 +467,13 @@ impl TextBuffer {
     /// Changes the newline type without normalizing the document.
     pub fn set_crlf(&mut self, crlf: bool) {
         self.newlines_are_crlf = crlf;
+        self.prevent_undo_joining();
+        self.buffer.reset_history(RevisionMetadata {
+            cursor: self.cursor.logical_pos,
+            selection: self.selection,
+            stats: self.stats,
+            damage_start: 0,
+        });
     }
 
     /// Changes the newline type used in the document.
@@ -469,6 +559,11 @@ impl TextBuffer {
     /// Set the overtype mode.
     pub fn set_overtype(&mut self, overtype: bool) {
         self.overtype = overtype;
+    }
+
+    /// Gets the byte offset of the cursor.
+    pub fn cursor_offset(&self) -> usize {
+        self.cursor.offset
     }
 
     /// Gets the logical cursor position, that is,
@@ -680,18 +775,22 @@ impl TextBuffer {
 
             let delete = self.buffer.len() - self.cursor.offset;
             if delete != 0 {
-                self.buffer.allocate_gap(self.cursor.offset, 0, delete);
+                self.buffer.replace(self.cursor.offset..usize::MAX, b"");
             }
         }
     }
 
     fn recalc_after_content_swap(&mut self) {
         // If the buffer was changed, nothing we previously saved can be relied upon.
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.last_history_type = HistoryType::Other;
+        self.prevent_undo_joining();
         self.cursor = Default::default();
         self.set_selection(None);
+        self.buffer.reset_history(RevisionMetadata {
+            cursor: self.cursor.logical_pos,
+            selection: self.selection,
+            stats: self.stats,
+            damage_start: 0,
+        });
         self.mark_as_clean();
         self.reflow();
         self.highlighter_cache.invalidate_from(0);
@@ -854,22 +953,6 @@ impl TextBuffer {
         first_chunk_len: usize,
         done: bool,
     ) -> io::Result<()> {
-        // Get the length of the file. 0 = not a file.
-        let file_len = if done {
-            // But if the first 4KiB read already contains the entire file, we won't need
-            // the file length below (we early return). The value here doesn't matter.
-            0
-        } else {
-            // We can't acquire the length on pipes, for instance.
-            file.metadata().ok().and_then(|m| m.len().try_into().ok()).unwrap_or(0)
-        };
-
-        // If we have a file length, reserve enough space for it.
-        // The call is a no-op for small files (currently <4GiB).
-        if file_len > 0 {
-            self.buffer.try_reserve(file_len);
-        }
-
         // Handle the first chunk we already read for encoding detection.
         {
             let mut first_chunk = unsafe { buf[..first_chunk_len].assume_init_ref() };
@@ -884,29 +967,15 @@ impl TextBuffer {
             return Ok(());
         }
 
+        let mut chunk = vec![0; 128 * KIBI];
+
         loop {
-            let chunk_size = if file_len > 0 {
-                // If we know the file length:
-                // * Read the file until the end
-                // * And if we're still reading at that point, read in 4KiB chunks (e.g. if someone wrote
-                //   to the file concurrently; typically this won't happen, so the chunk size is small).
-                file_len.checked_sub(self.text_length()).unwrap_or(4 * KIBI)
-            } else {
-                // For pipes, sockets, etc., read in 128KiB chunks, because anything smaller has poor perf.
-                128 * KIBI
-            };
-
-            let gap = self.buffer.allocate_gap(self.text_length(), chunk_size, 0);
-            if gap.is_empty() {
-                break;
-            }
-
-            let read = file.read(gap)?;
+            let read = file.read(&mut chunk)?;
             if read == 0 {
                 break;
             }
-
-            self.buffer.commit_gap(read);
+            let offset = self.text_length();
+            self.buffer.replace(offset..offset, &chunk[..read]);
         }
 
         Ok(())
@@ -923,25 +992,21 @@ impl TextBuffer {
         let pivot_buffer = scratch.alloc_uninit_slice(4 * KIBI);
         let mut c = icu::Converter::new(pivot_buffer, self.encoding, "UTF-8")?;
         let mut first_chunk = unsafe { buf[..first_chunk_len].assume_init_ref() };
+        let mut output = [MaybeUninit::<u8>::uninit(); 8 * KIBI];
 
         while !first_chunk.is_empty() {
             let off = self.text_length();
-            let gap = self.buffer.allocate_gap(off, 8 * KIBI, 0);
-            let (input_advance, mut output_advance) =
-                c.convert(first_chunk, slice_as_uninit_mut(gap))?;
+            let (input_advance, output_advance) = c.convert(first_chunk, &mut output)?;
+            let mut written = unsafe { output[..output_advance].assume_init_ref() };
 
             // Remove the BOM from the file, if this is the first chunk.
             // Our caller ensures to only call us once the BOM has been identified,
             // which means that if there's a BOM it must be wholly contained in this chunk.
-            if off == 0 {
-                let written = &mut gap[..output_advance];
-                if written.starts_with(b"\xEF\xBB\xBF") {
-                    written.copy_within(3.., 0);
-                    output_advance -= 3;
-                }
+            if off == 0 && written.starts_with(b"\xEF\xBB\xBF") {
+                written = &written[3..];
             }
 
-            self.buffer.commit_gap(output_advance);
+            self.buffer.replace(off..off, written);
             first_chunk = &first_chunk[input_advance..];
         }
 
@@ -954,15 +1019,11 @@ impl TextBuffer {
                 done = read == 0;
             }
 
-            let gap = self.buffer.allocate_gap(self.text_length(), 8 * KIBI, 0);
-            if gap.is_empty() {
-                break;
-            }
-
             let read = unsafe { buf[..buf_len].assume_init_ref() };
-            let (input_advance, output_advance) = c.convert(read, slice_as_uninit_mut(gap))?;
-
-            self.buffer.commit_gap(output_advance);
+            let (input_advance, output_advance) = c.convert(read, &mut output)?;
+            let written = unsafe { output[..output_advance].assume_init_ref() };
+            let offset = self.text_length();
+            self.buffer.replace(offset..offset, written);
 
             let flush = done && buf_len == 0;
             buf_len -= input_advance;
@@ -1124,7 +1185,9 @@ impl TextBuffer {
         self.set_selection(None);
         had_selection
     }
+}
 
+impl TextBuffer<ZipperStorage> {
     /// Find the next occurrence of the given `pattern` and select it.
     pub fn find_and_select(&mut self, pattern: &str, options: SearchOptions) -> icu::Result<()> {
         if let Some(search) = &mut self.search {
@@ -1195,7 +1258,10 @@ impl TextBuffer {
                     Self::find_parse_replacement(&scratch, &mut *search, replacement);
                 let replacement =
                     self.find_fill_replacement(&mut *search, replacement, &parsed_replacements);
+
+                self.prevent_undo_joining();
                 self.write_raw(&replacement);
+                self.prevent_undo_joining();
 
                 // After replacing a zero-width match, advance past it so that find_and_select wraps to the
                 // next match rather than finding the same anchor (e.g. `$`) again at the same line end.
@@ -1492,7 +1558,9 @@ impl TextBuffer {
             Cow::Owned(res)
         }
     }
+}
 
+impl<T: TextBufferStorage> TextBuffer<T> {
     fn measurement_config(&self) -> MeasurementConfig<'_> {
         MeasurementConfig::new(&self.buffer)
             .with_word_wrap_column(self.word_wrap_column)
@@ -1755,7 +1823,7 @@ impl TextBuffer {
     /// that the TextBuffer has not been modified since you received the cursor from this class.
     pub unsafe fn set_cursor(&mut self, cursor: Cursor) {
         self.set_cursor_internal(cursor);
-        self.last_history_type = HistoryType::Other;
+        self.prevent_undo_joining();
         self.set_selection(None);
     }
 
@@ -1766,7 +1834,7 @@ impl TextBuffer {
         };
 
         self.set_cursor_internal(cursor);
-        self.last_history_type = HistoryType::Other;
+        self.prevent_undo_joining();
 
         let end = self.cursor.logical_pos;
         self.set_selection(if beg == end { None } else { Some(TextBufferSelection { beg, end }) });
@@ -2307,13 +2375,12 @@ impl TextBuffer {
     }
 
     fn write(&mut self, text: &[u8], at: Cursor, raw: bool) {
-        let history_type = if raw { HistoryType::Other } else { HistoryType::Write };
         let mut edit_begun = false;
 
         // If we have an active selection, writing an empty `text`
         // will still delete the selection. As such, we check this first.
         if let Some((beg, end)) = self.selection_range_internal(false) {
-            self.edit_begin(history_type, beg);
+            self.edit_begin(HistoryType::Write, beg);
             self.edit_delete(end);
             self.set_selection(None);
             edit_begun = true;
@@ -2330,7 +2397,7 @@ impl TextBuffer {
         }
 
         if !edit_begun {
-            self.edit_begin(history_type, at);
+            self.edit_begin(HistoryType::Write, at);
         }
 
         let mut offset = 0;
@@ -2814,10 +2881,13 @@ impl TextBuffer {
 
     fn edit_begin_grouping(&mut self) {
         self.active_edit_group = Some(ActiveEditGroupInfo {
-            cursor_before: self.cursor.logical_pos,
-            selection_before: self.selection,
-            stats_before: self.stats,
-            generation_before: self.buffer.generation(),
+            metadata: RevisionMetadata {
+                cursor: self.cursor.logical_pos,
+                selection: self.selection,
+                stats: self.stats,
+                damage_start: self.cursor.logical_pos.y,
+            },
+            started: false,
         });
     }
 
@@ -2836,38 +2906,34 @@ impl TextBuffer {
         let cursor_before = self.cursor;
         self.set_cursor_internal(cursor);
 
-        // If both the last and this are a Write/Delete operation, we skip allocating a new undo history item.
-        if history_type != self.last_history_type
-            || !matches!(history_type, HistoryType::Write | HistoryType::Delete)
-        {
-            self.redo_stack.clear();
-            while self.undo_stack.len() > 1000 {
-                self.undo_stack.pop_front();
-            }
-
-            self.last_history_type = history_type;
-            self.undo_stack.push_back(SemiRefCell::new(HistoryEntry {
-                cursor_before: cursor_before.logical_pos,
-                selection_before: self.selection,
-                stats_before: self.stats,
-                generation_before: self.buffer.generation(),
-                cursor: cursor.logical_pos,
-                deleted: Vec::new(),
-                added: Vec::new(),
-            }));
-
-            if let Some(info) = &self.active_edit_group
-                && let Some(entry) = self.undo_stack.back()
-            {
-                let mut entry = entry.borrow_mut();
-                entry.cursor_before = info.cursor_before;
-                entry.selection_before = info.selection_before;
-                entry.stats_before = info.stats_before;
-                entry.generation_before = info.generation_before;
-            }
-        }
+        let continued = history_type == self.last_history_type
+            && matches!(history_type, HistoryType::Write | HistoryType::Delete);
+        let (metadata, coalesce) = if let Some(group) = &mut self.active_edit_group {
+            group.metadata.damage_start = group.metadata.damage_start.min(cursor.logical_pos.y);
+            let coalesce = group.started;
+            group.started = true;
+            (group.metadata, coalesce)
+        } else {
+            (
+                RevisionMetadata {
+                    cursor: cursor_before.logical_pos,
+                    selection: self.selection,
+                    stats: self.stats,
+                    damage_start: cursor.logical_pos.y,
+                },
+                continued,
+            )
+        };
+        self.buffer.begin_revision(metadata, coalesce);
+        let revision_metadata = self.buffer.revision_metadata_mut();
+        revision_metadata.damage_start = revision_metadata.damage_start.min(cursor.logical_pos.y);
+        self.last_history_type = history_type;
 
         self.active_edit_off = cursor.offset;
+        self.active_edit_deleted = 0;
+        self.active_edit_coalescing =
+            matches!(history_type, HistoryType::Write | HistoryType::Delete)
+                || self.active_edit_group.is_some();
         self.highlighter_cache.invalidate_from(cursor.logical_pos.y);
 
         // If word-wrap is enabled, the visual layout of all logical lines affected by the write
@@ -2893,14 +2959,13 @@ impl TextBuffer {
     fn edit_write(&mut self, text: &[u8]) {
         let logical_y_before = self.cursor.logical_pos.y;
 
-        // Copy the written portion into the undo entry.
-        {
-            let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
-            undo.added.extend_from_slice(text);
-        }
-
         // Write!
-        self.buffer.replace(self.active_edit_off..self.active_edit_off, text);
+        if self.active_edit_coalescing {
+            self.buffer.replace_coalescing(self.active_edit_off..self.active_edit_off, text);
+        } else {
+            self.buffer.replace(self.active_edit_off..self.active_edit_off, text);
+        }
+        self.active_edit_coalescing = true;
 
         // Move self.cursor to the end of the newly written text. Can't use `self.set_cursor_internal`,
         // because we're still in the progress of recalculating the line stats.
@@ -2916,24 +2981,14 @@ impl TextBuffer {
 
         let logical_y_before = self.cursor.logical_pos.y;
         let off = self.active_edit_off;
-        let mut out_off = usize::MAX;
-
-        let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
-
-        // If this is a continued backspace operation,
-        // we need to prepend the deleted portion to the undo entry.
-        if self.cursor.logical_pos < undo.cursor {
-            out_off = 0;
-            undo.cursor = self.cursor.logical_pos;
-        }
-
-        // Copy the deleted portion into the undo entry.
-        let deleted = &mut undo.deleted;
-        self.buffer.extract_raw(off..to.offset, deleted, out_off);
-
-        // Delete the portion from the buffer by enlarging the gap.
         let count = to.offset - off;
-        self.buffer.allocate_gap(off, 0, count);
+        if self.active_edit_coalescing {
+            self.buffer.replace_coalescing(off..to.offset, b"");
+        } else {
+            self.buffer.replace(off..to.offset, b"");
+        }
+        self.active_edit_coalescing = true;
+        self.active_edit_deleted += count;
 
         self.stats.logical_lines += logical_y_before - to.logical_pos.y;
     }
@@ -2947,14 +3002,8 @@ impl TextBuffer {
             return;
         }
 
-        #[cfg(debug_assertions)]
-        {
-            let entry = self.undo_stack.back_mut().unwrap().borrow_mut();
-            debug_assert!(!entry.deleted.is_empty() || !entry.added.is_empty());
-        }
-
         if let Some(info) = self.active_edit_line_info.take() {
-            let deleted_count = self.undo_stack.back_mut().unwrap().borrow_mut().deleted.len();
+            let deleted_count = self.active_edit_deleted;
             let target = self.cursor.logical_pos;
 
             // From our safe position we can measure the actual visual position of the cursor.
@@ -2996,132 +3045,28 @@ impl TextBuffer {
         self.undo_redo(false);
     }
 
+    pub fn prevent_undo_joining(&mut self) {
+        self.last_history_type = HistoryType::Other;
+    }
+
     fn undo_redo(&mut self, undo: bool) {
-        let buffer_generation = self.buffer.generation();
-        let mut entry_buffer_generation = None;
-        let mut damage_start = CoordType::MAX;
-
-        loop {
-            // Transfer the last entry from the undo stack to the redo stack or vice versa.
-            {
-                let (from, to) = if undo {
-                    (&mut self.undo_stack, &mut self.redo_stack)
-                } else {
-                    (&mut self.redo_stack, &mut self.undo_stack)
-                };
-
-                // Only pop the entry if its buffer generation matches the previous one
-                let Some(g) = from.pop_back_if(|c| {
-                    entry_buffer_generation.is_none_or(|g| g == c.borrow().generation_before)
-                }) else {
-                    break;
-                };
-
-                to.push_back(g);
-            }
-
-            let change = {
-                let to = if undo { &self.redo_stack } else { &self.undo_stack };
-                to.back().unwrap()
-            };
-
-            // Remember the buffer generation of the change so we can stop popping undos/redos.
-            // Also, move to the point where the modification took place.
-            let cursor = {
-                let change = change.borrow();
-                entry_buffer_generation = Some(change.generation_before);
-                self.cursor_move_to_logical_internal(self.cursor, change.cursor)
-            };
-
-            let safe_cursor = if self.word_wrap_column > 0 {
-                // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
-                // This is because the undo/redo operation may have changed the visual position of the cursor.
-                self.goto_line_start(cursor, cursor.logical_pos.y)
-            } else {
-                cursor
-            };
-
-            damage_start = damage_start.min(cursor.logical_pos.y);
-
-            {
-                let mut change = change.borrow_mut();
-                let change = &mut *change;
-
-                // Undo: Whatever was deleted is now added and vice versa.
-                mem::swap(&mut change.deleted, &mut change.added);
-
-                // Delete the inserted portion.
-                self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
-
-                // Reinsert the deleted portion.
-                {
-                    let added = &change.added[..];
-                    let mut beg = 0;
-                    let mut offset = cursor.offset;
-
-                    while beg < added.len() {
-                        let (end, line) = simd::lines_fwd(added, beg, 0, 1);
-                        let has_newline = line != 0;
-                        let link = &added[beg..end];
-                        let line = unicode::strip_newline(link);
-                        let mut written;
-
-                        {
-                            let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
-                            written = slice_copy_safe(gap, line);
-
-                            if has_newline {
-                                if self.newlines_are_crlf && written < gap.len() {
-                                    gap[written] = b'\r';
-                                    written += 1;
-                                }
-                                if written < gap.len() {
-                                    gap[written] = b'\n';
-                                    written += 1;
-                                }
-                            }
-
-                            self.buffer.commit_gap(written);
-                        }
-
-                        beg = end;
-                        offset += written;
-                    }
-                }
-
-                // Restore the previous line statistics.
-                mem::swap(&mut self.stats, &mut change.stats_before);
-
-                // Restore the previous selection.
-                mem::swap(&mut self.selection, &mut change.selection_before);
-
-                // Pretend as if the buffer was never modified.
-                self.buffer.set_generation(change.generation_before);
-                change.generation_before = buffer_generation;
-
-                // Restore the previous cursor.
-                let cursor_before =
-                    self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
-                change.cursor_before = self.cursor.logical_pos;
-                // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
-                self.cursor = cursor_before;
-
-                if self.undo_stack.is_empty() {
-                    self.last_history_type = HistoryType::Other;
-                }
-            }
-        }
-
-        if damage_start == CoordType::MAX {
-            // There weren't any undo/redo entries.
+        let current = RevisionMetadata {
+            cursor: self.cursor.logical_pos,
+            selection: self.selection,
+            stats: self.stats,
+            damage_start: self.cursor.logical_pos.y,
+        };
+        let metadata = if undo { self.buffer.undo(current) } else { self.buffer.redo(current) };
+        let Some(metadata) = metadata else {
             return;
-        }
+        };
 
-        self.highlighter_cache.invalidate_from(damage_start);
-
-        if entry_buffer_generation.is_some() {
-            self.recalc_after_content_changed();
-        }
+        self.stats = metadata.stats;
+        self.selection = metadata.selection;
+        self.cursor = self.cursor_move_to_logical_internal(Default::default(), metadata.cursor);
+        self.last_history_type = HistoryType::Other;
+        self.highlighter_cache.invalidate_from(metadata.damage_start);
+        self.recalc_after_content_changed();
     }
 
     /// For interfacing with ICU.
@@ -3132,6 +3077,20 @@ impl TextBuffer {
     /// For interfacing with ICU.
     pub fn read_forward(&self, off: usize) -> &[u8] {
         self.buffer.read_forward(off)
+    }
+}
+
+impl TextBuffer<ZipperStorage> {
+    /// Creates a new Zipper-backed text buffer inside an [`Rc`].
+    /// See [`TextBuffer::new()`].
+    pub fn new_rc(small: bool) -> io::Result<RcTextBuffer> {
+        Self::new_rc_with_storage(small)
+    }
+
+    /// Creates a new Zipper-backed text buffer. With `small` you can control
+    /// if the buffer is optimized for <1MiB contents.
+    pub fn new(small: bool) -> io::Result<Self> {
+        Self::new_with_storage(small)
     }
 }
 
@@ -3175,9 +3134,12 @@ fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SearchOptions, TextBuffer};
+    use super::{
+        CursorMovement, PieceListStorage, PieceTreeAvlStorage, PieceTreeStorage, SearchOptions,
+        TextBuffer, TextBufferStorage, ZipperStorage,
+    };
 
-    fn buffer_contents(buf: &mut TextBuffer) -> String {
+    fn buffer_contents<T: TextBufferStorage>(buf: &mut TextBuffer<T>) -> String {
         let mut str = String::new();
         buf.save_as_string(&mut str);
         str
@@ -3218,5 +3180,30 @@ mod tests {
         .unwrap();
 
         assert_eq!(buffer_contents(&mut buf), "ax\nbx\nx\n");
+    }
+
+    fn storage_parity<T: TextBufferStorage>() {
+        let mut buf = TextBuffer::<T>::new_with_storage(false).unwrap();
+        buf.set_crlf(false);
+        buf.write_raw(b"one\ntwo\n");
+
+        buf.prevent_undo_joining();
+        buf.cursor_move_to_offset(0);
+        buf.selection_update_delta(CursorMovement::Grapheme, 3);
+        buf.write_raw(b"ONE");
+        assert_eq!(buffer_contents(&mut buf), "ONE\ntwo\n");
+
+        buf.undo();
+        assert_eq!(buffer_contents(&mut buf), "one\ntwo\n");
+        buf.redo();
+        assert_eq!(buffer_contents(&mut buf), "ONE\ntwo\n");
+    }
+
+    #[test]
+    fn text_buffer_storage_parity() {
+        storage_parity::<ZipperStorage>();
+        storage_parity::<PieceListStorage>();
+        storage_parity::<PieceTreeStorage>();
+        storage_parity::<PieceTreeAvlStorage>();
     }
 }
