@@ -541,6 +541,7 @@ impl Tui {
         let mut input_keyboard = None;
         let mut input_mouse_modifiers = kbmod::NONE;
         let mut input_mouse_click = 0;
+        let mut input_mouse_right_down = false;
         let mut input_scroll_delta = Point { x: 0, y: 0 };
         // `input_consumed` should be `true` if we're in the settling phase which is indicated by
         // `self.needs_settling() == true`. However, there's a possibility for it being true from
@@ -640,6 +641,7 @@ impl Tui {
                 } else if mouse_down {
                     // Transition from no mouse input to some mouse input --> Record the mouse down position.
                     self.mouse_down_node_path.replace_range(.., &self.mouse_hover_node_path);
+                    input_mouse_right_down = next_state == InputMouseState::Right;
 
                     // On left-mouse-down we change focus.
                     let mut target = 0;
@@ -719,8 +721,10 @@ impl Tui {
             input_keyboard,
             input_mouse_modifiers,
             input_mouse_click,
+            input_mouse_right_down,
             input_scroll_delta,
             input_consumed,
+            textarea_context_menu_position: None,
 
             tree,
             last_modal: None,
@@ -1384,9 +1388,11 @@ pub struct Context<'a, 'input> {
     input_keyboard: Option<InputKey>,
     input_mouse_modifiers: InputKeyMod,
     input_mouse_click: CoordType,
+    input_mouse_right_down: bool,
     /// By how much the mouse wheel was scrolled since the last frame.
     input_scroll_delta: Point,
     input_consumed: bool,
+    textarea_context_menu_position: Option<Point>,
 
     tree: Tree<'a>,
     last_modal: Option<&'a NodeCell<'a>>,
@@ -1745,6 +1751,11 @@ impl<'a> Context<'a, '_> {
     /// Returns None if the input was already consumed.
     pub fn keyboard_input(&self) -> Option<InputKey> {
         if self.input_consumed { None } else { self.input_keyboard }
+    }
+
+    /// Returns and clears a request to open a context menu for a textarea.
+    pub fn take_textarea_context_menu_position(&mut self) -> Option<Point> {
+        self.textarea_context_menu_position.take()
     }
 
     #[inline]
@@ -2295,6 +2306,22 @@ impl<'a> Context<'a, '_> {
                 x: mouse.x - inner.left - tb.margin_width() + tc.scroll_offset.x,
                 y: mouse.y - inner.top + tc.scroll_offset.y,
             };
+
+            if self.input_mouse_right_down
+                && text_rect.contains(self.tui.mouse_down_position)
+                && tb.selection_range().is_some_and(|(beg, end)| {
+                    let beg = beg.visual_pos;
+                    let end = end.visual_pos;
+                    pos.y >= beg.y
+                        && pos.y <= end.y
+                        && (pos.y != beg.y || pos.x >= beg.x)
+                        && (pos.y != end.y || pos.x < end.x)
+                })
+            {
+                self.textarea_context_menu_position = Some(mouse);
+                self.set_input_consumed();
+                return false;
+            }
 
             if select_rect.contains(self.tui.mouse_down_position) {
                 if self.tui.mouse_is_drag {
@@ -3351,6 +3378,48 @@ impl<'a> Context<'a, '_> {
         if !self.contains_focus() {
             self.tui.menubar_toggle_id = 0;
         }
+    }
+
+    /// Starts a context menu at the given viewport position.
+    pub fn context_menu_begin(&mut self, classname: &'static str, position: Point) {
+        let open_left = position.x >= self.tui.size.width / 2;
+        let open_up = position.y >= self.tui.size.height / 2;
+
+        self.table_begin(classname);
+        self.attr_float(FloatSpec {
+            anchor: Anchor::Root,
+            gravity_x: open_left as u8 as f32,
+            gravity_y: open_up as u8 as f32,
+            offset_x: (position.x + !open_left as CoordType) as f32,
+            offset_y: (position.y + !open_up as CoordType) as f32,
+        });
+        self.attr_border();
+        self.attr_focus_well();
+        self.focus_on_first_present();
+    }
+
+    /// Appends a button to the current context menu.
+    pub fn context_menu_button(
+        &mut self,
+        text: &str,
+        accelerator: char,
+        shortcut: InputKey,
+    ) -> bool {
+        self.menubar_menu_button(text, accelerator, shortcut)
+    }
+
+    /// Ends a context menu and returns whether it should be closed.
+    pub fn context_menu_end(&mut self) -> bool {
+        let escape = !self.input_consumed
+            && self.input_keyboard == Some(vk::ESCAPE)
+            && self.contains_focus();
+        if escape {
+            self.set_input_consumed();
+            Tui::clean_node_path(&mut self.tui.focused_node_path);
+        }
+
+        self.table_end();
+        escape || !self.contains_focus()
     }
 
     /// Renders a button label with an optional accelerator character
