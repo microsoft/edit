@@ -360,8 +360,6 @@ impl<'doc> MeasurementConfig<'doc> {
 
                 // The loop below should not modify the target we already found.
                 let mut visual_pos_x_lookahead = visual_pos_x;
-                // The width of the word the cursor is in, from the last wrap opportunity on.
-                let mut word_width = visual_pos_x - wrap_opp_visual_pos_x;
 
                 loop {
                     let props_current_cluster = props_next_cluster;
@@ -442,13 +440,9 @@ impl<'doc> MeasurementConfig<'doc> {
                     }
 
                     visual_pos_x_lookahead += width;
-                    word_width += width;
 
                     // Words that can't move to the next row as a whole don't need to be
                     // scanned to their end either.
-                    if word_width > self.word_wrap_column {
-                        break;
-                    }
                     if at_end_of_text
                         || !ucd_line_break_joins(props_current_cluster, props_next_cluster)
                     {
@@ -457,11 +451,9 @@ impl<'doc> MeasurementConfig<'doc> {
                     }
                 }
 
-                // A word that extends past the word wrap column but fits on a row by itself
-                // is moved to the next row, taking the cursor along with it.
-                if visual_pos_x_lookahead > self.word_wrap_column
-                    && word_width <= self.word_wrap_column
-                {
+                // A word that would cross the word wrap column is moved to the next row
+                // as a whole, even if the word itself is wider than a row.
+                if visual_pos_x_lookahead > self.word_wrap_column {
                     visual_pos_x -= wrap_opp_visual_pos_x;
                     visual_pos_y += 1;
                 }
@@ -1107,7 +1099,7 @@ mod test {
 
         let expected = [
             // Cursor after "text " and the backtick.
-            (6, Point { x: 2, y: 2 }),
+            (6, Point { x: 1, y: 3 }),
             // Cursor inside the "`code`" word, spread over the rows below.
             (7, Point { x: 2, y: 3 }),
             (8, Point { x: 1, y: 4 }),
