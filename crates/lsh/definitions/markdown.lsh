@@ -90,6 +90,16 @@ pub fn markdown() {
                     if /.*/ {}
                 }
             }
+        } else if /(?i:sql)/ {
+            loop {
+                await input;
+                if /\s*```/ {
+                    return;
+                } else {
+                    sql();
+                    if /.*/ {}
+                }
+            }
         } else if /(?i:pwsh|powershell)/ {
             loop {
                 await input;

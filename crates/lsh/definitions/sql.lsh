@@ -1,0 +1,81 @@
+#[display_name = "SQL"]
+#[path = "**/*.sql"]
+pub fn sql() {
+    until /$/ {
+        yield other;
+
+        if /--.*/ {
+            yield comment;
+        } else if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /'/ {
+            // Single-quoted string. '' is an escaped quote.
+            until /$/ {
+                yield string;
+                if /''/ {
+                    // Escaped quote, stay in string.
+                } else if /'/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /"/ {
+            // Quoted identifier. "" is an escaped quote.
+            until /$/ {
+                yield string;
+                if /""/ {
+                    // Escaped quote, stay in string.
+                } else if /"/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /`/ {
+            // MySQL quoted identifier. `` is an escaped quote.
+            until /$/ {
+                yield string;
+                if /``/ {
+                    // Escaped quote, stay in string.
+                } else if /`/ {
+                    yield string;
+                    break;
+                }
+                await input;
+            }
+        } else if /\[[^\]]*\]/ {
+            // T-SQL bracketed identifier: [column name].
+            yield string;
+        } else if /(?i:case|when|then|else|end|if|loop|while|for|repeat|leave|return|begin|cursor|handler|trigger|break|continue|do)\>/ {
+            yield keyword.control;
+        } else if /(?i:select|from|where|join|inner|outer|left|right|full|cross|on|using|group|by|order|having|limit|offset|fetch|union|intersect|except|all|distinct|as|into|values|set|insert|update|delete|merge|create|alter|drop|table|view|index|sequence|schema|database|primary|foreign|key|references|constraint|unique|check|default|not|and|or|between|in|like|ilike|is|exists|any|some|escape|over|partition|rows|range|unbounded|preceding|following|current|row|with|recursive|grant|revoke|commit|rollback|transaction|explain|analyze|vacuum)\>/ {
+            yield keyword.other;
+        } else if /(?i:true|false|null|unknown)\>/ {
+            yield constant.language;
+        } else if /(?i:count|sum|avg|min|max|coalesce|nullif|cast|extract|substring|trim|upper|lower|length|concat|now|current_date|current_time|current_timestamp)\>/ {
+            yield method;
+        } else if /(?i:smallint|integer|int|bigint|decimal|numeric|real|double|precision|float|serial|bigserial|money|char|varchar|text|bytea|timestamp|date|time|interval|boolean|bool|uuid|json|jsonb|xml|array)\>/ {
+            yield storage.type;
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
