@@ -12,7 +12,7 @@
 #[path = "**/*.vcxproj.filters"]
 #[path = "**/*.vcxproj"]
 #[path = "**/*.xaml"]
-#[path = "**/*.xml"]
+#[path = "**/*.xhtml"]
 #[path = "**/*.xml"]
 pub fn xml() {
     until /$/ {
