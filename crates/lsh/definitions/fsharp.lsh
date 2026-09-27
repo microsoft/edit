@@ -2,6 +2,7 @@
 #[path = "**/*.fs"]
 #[path = "**/*.fsi"]
 #[path = "**/*.fsx"]
+#[path = "**/*.fsscript"]
 pub fn fsharp() {
     // Compiler and script directives always occupy the entire line.
     if /\s*#(?:if|else|endif|light|line|load|nowarn|time|help|quit|r|I)\>.*/ {

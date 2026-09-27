@@ -2,7 +2,10 @@
 #[path = "**/*.cpp"]
 #[path = "**/*.cc"]
 #[path = "**/*.cxx"]
+#[path = "**/*.hh"]
 #[path = "**/*.hpp"]
+#[path = "**/*.hxx"]
+#[path = "**/*.ixx"]
 #[path = "**/*.h"]
 pub fn cpp() {
     until /$/ {
