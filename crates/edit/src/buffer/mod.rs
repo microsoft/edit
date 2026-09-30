@@ -2863,9 +2863,11 @@ impl TextBuffer {
         self.set_cursor_internal(cursor);
         self.redo_stack.clear();
 
-        // If both the last and this are a Write/Delete operation, we skip allocating a new undo history item.
+        // Writes can only append to the previous entry. In particular, an automatic final
+        // newline leaves the cursor before the end of that entry, as can a whole-line paste.
         if history_type != self.last_history_type
             || !matches!(history_type, HistoryType::Write | HistoryType::Delete)
+            || (history_type == HistoryType::Write && cursor.offset != self.active_edit_off)
         {
             self.last_history_type = history_type;
             self.undo_stack.push(SemiRefCell::new(HistoryEntry {
@@ -2980,7 +2982,8 @@ impl TextBuffer {
             let target = self.cursor.logical_pos;
 
             // From our safe position we can measure the actual visual position of the cursor.
-            self.set_cursor_internal(self.cursor_move_to_logical_internal(info.safe_start, target));
+            // The new cursor may exceed the old visual line count until it is updated below.
+            self.cursor = self.cursor_move_to_logical_internal(info.safe_start, target);
 
             // If content is added at the insertion position, that's not a problem:
             // We can just remeasure the height of this one line and calculate the delta.
@@ -3257,7 +3260,8 @@ mod tests {
 
     #[test]
     fn undo_redo_coalesced_writes() {
-        let cases: &[(&str, &[(usize, &str)], &str)] = &[
+        type WriteCase<'a> = (&'a str, &'a [(usize, &'a str)], &'a str);
+        let cases: &[WriteCase<'_>] = &[
             ("abcd", &[(2, "X"), (3, "Y")], "abXYcd"),
             ("abcd", &[(0, "X"), (5, "Y")], "XabcdY"),
             ("abcd", &[(4, "X"), (0, "Y")], "YabcdX"),
@@ -3271,13 +3275,206 @@ mod tests {
         for &(initial, writes, expected) in cases {
             let mut buf = test_buffer(initial, false);
             let before = buffer_state(&buf);
+            buf.edit_begin_grouping();
             for &(offset, text) in writes {
-                // Internal edit positions need not follow the cursor or introduce an undo barrier.
+                // Disjoint writes require separate entries, but can share an explicit group.
                 let at = buf.cursor_move_to_offset_internal(buf.cursor, offset);
                 buf.write(text.as_bytes(), at, true);
             }
+            buf.edit_end_grouping();
             assert_round_trip(&mut buf, &before, expected);
         }
+    }
+
+    #[test]
+    fn undo_storage_coalescing() {
+        let mut buf = test_buffer("abcdef", false);
+        let before = buffer_state(&buf);
+        for text in [b"a", b"b", b"c"] {
+            buf.write_raw(text);
+        }
+        assert_eq!(buf.undo_stack.len(), 1);
+        assert_eq!(buf.undo_stack[0].borrow().added, b"abc");
+        assert_round_trip(&mut buf, &before, "abcabcdef");
+
+        let mut buf = test_buffer("abcdef", false);
+        buf.cursor_move_to_offset(3);
+        let before = buffer_state(&buf);
+        for delta in [-1, 1, -1] {
+            buf.delete(CursorMovement::Grapheme, delta);
+        }
+        assert_eq!(buf.undo_stack.len(), 1);
+        assert_eq!(buf.undo_stack[0].borrow().deleted, b"bcd");
+        assert_round_trip(&mut buf, &before, "aef");
+
+        let mut buf = test_buffer("abcdef", false);
+        let before = buffer_state(&buf);
+        buf.edit_begin_grouping();
+        buf.write_raw(b"X");
+        buf.cursor_move_to_offset(buf.text_length());
+        buf.write_raw(b"Y");
+        buf.edit_end_grouping();
+        assert_eq!(buf.undo_stack.len(), 2);
+        assert_round_trip(&mut buf, &before, "XabcdefY");
+    }
+
+    #[test]
+    fn undo_redo_grouped_replacements() {
+        for width in [0, 4] {
+            for first in 0..=4 {
+                for delete in 0..=2 {
+                    for text in ["", "XY", "\n"] {
+                        for second in 0..=4 {
+                            let mut buf = test_buffer("ab\ncd", false);
+                            buf.set_word_wrap(width > 0);
+                            buf.set_width(width);
+                            let before = buffer_state(&buf);
+                            let mut expected = before.text.clone();
+
+                            buf.edit_begin_grouping();
+                            for offset in [first, second] {
+                                let offset = offset.min(expected.len());
+                                let end = (offset + delete).min(expected.len());
+                                buf.cursor_move_to_offset(offset);
+                                assert_layout(&buf);
+                                buf.selection_update_offset(end);
+                                buf.write_raw(text.as_bytes());
+                                expected.replace_range(offset..end, text);
+                                assert_eq!(buffer_contents(&buf), expected);
+                            }
+                            buf.edit_end_grouping();
+                            assert_layout(&buf);
+
+                            if delete != 0 || !text.is_empty() {
+                                assert_round_trip(&mut buf, &before, &expected);
+                            } else {
+                                assert!(buf.undo_stack.is_empty());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn undo_redo_grapheme_boundaries() {
+        for width in [0, 4] {
+            for (initial, writes, expected) in [
+                ("a", &["\u{301}", "b"][..], "a\u{301}b"),
+                ("\u{1f469}", &["\u{200d}", "\u{1f4bb}"][..], "\u{1f469}\u{200d}\u{1f4bb}"),
+                ("", &["\u{1f1fa}", "\u{1f1f8}"][..], "\u{1f1fa}\u{1f1f8}"),
+            ] {
+                let mut buf = test_buffer(initial, false);
+                buf.set_word_wrap(width > 0);
+                buf.set_width(width);
+                buf.cursor_move_to_offset(buf.text_length());
+                let before = buffer_state(&buf);
+                for text in writes {
+                    buf.write_raw(text.as_bytes());
+                    assert_layout(&buf);
+                }
+                assert_round_trip(&mut buf, &before, expected);
+            }
+
+            let mut buf = test_buffer("\u{301}z", false);
+            buf.set_word_wrap(width > 0);
+            buf.set_width(width);
+            let before = buffer_state(&buf);
+            buf.write_raw(b"a\nb");
+            assert_round_trip(&mut buf, &before, "a\nb\u{301}z");
+
+            let mut buf = test_buffer("a b", false);
+            // File loading can leave lone CRs, unlike write_raw(), which normalizes them.
+            buf.buffer.replace(1..2, b"\r");
+            buf.set_word_wrap(width > 0);
+            buf.set_width(width);
+            buf.cursor_move_to_offset(2);
+            let before = buffer_state(&buf);
+            buf.write_raw(b"\n");
+            assert_round_trip(&mut buf, &before, "a\r\nb");
+        }
+    }
+
+    #[test]
+    fn undo_redo_automatic_final_newline() {
+        for crlf in [false, true] {
+            for width in [0, 4] {
+                let mut buf = test_buffer("", crlf);
+                buf.set_insert_final_newline(true);
+                buf.set_word_wrap(width > 0);
+                buf.set_width(width);
+                let initial = buffer_state(&buf);
+                buf.write_canon(b"a");
+                let before = buffer_state(&buf);
+                for text in [b"b", b"c", b"d", b"e"] {
+                    buf.write_canon(text);
+                }
+                assert_round_trip(&mut buf, &before, if crlf { "abcde\r\n" } else { "abcde\n" });
+                buf.undo();
+                buf.undo();
+                assert_eq!(buffer_state(&buf), initial);
+                buf.redo();
+                assert_eq!(buffer_state(&buf), before);
+                buf.redo();
+                assert_eq!(buffer_contents(&buf), if crlf { "abcde\r\n" } else { "abcde\n" });
+            }
+        }
+    }
+
+    #[test]
+    fn undo_redo_line_paste_after_typing() {
+        let mut buf = test_buffer("tail", false);
+        buf.cursor_move_to_offset(2);
+        let initial = buffer_state(&buf);
+        buf.write_canon(b"x");
+        let before = buffer_state(&buf);
+        let mut clipboard = crate::clipboard::Clipboard::default();
+        clipboard.write(b"line\n".to_vec());
+        clipboard.write_was_line_copy(true);
+        buf.paste(&clipboard, false);
+        assert_round_trip(&mut buf, &before, "line\ntaxil");
+        buf.undo();
+        buf.undo();
+        assert_eq!(buffer_state(&buf), initial);
+    }
+
+    #[test]
+    fn undo_redo_group_changes_wrap_width() {
+        let initial = format!("{}abcdef", "\n".repeat(8));
+        let mut buf = test_buffer(&initial, false);
+        buf.set_margin_enabled(true);
+        buf.set_word_wrap(true);
+        buf.set_width(8);
+        let before = buffer_state(&buf);
+        buf.edit_begin_grouping();
+        buf.write_raw(b"\n");
+        buf.cursor_move_to_offset(buf.text_length());
+        buf.write_raw(b"gh\nij");
+        buf.edit_end_grouping();
+        assert_round_trip(&mut buf, &before, &format!("\n{initial}gh\nij"));
+    }
+
+    #[test]
+    fn empty_edit_scopes_preserve_history() {
+        let mut buf = test_buffer("", false);
+        buf.write_raw(b"a");
+        buf.cursor_move_to_offset(1);
+        let before = buffer_state(&buf);
+        buf.write_raw(b"b");
+        buf.undo();
+
+        buf.edit_begin_grouping();
+        buf.write_raw(b"");
+        buf.delete(CursorMovement::Grapheme, 0);
+        buf.edit_end_grouping();
+        buf.redo();
+        assert_eq!(buffer_contents(&buf), "ab");
+        buf.undo();
+        buf.edit_begin_grouping();
+        buf.edit_end_grouping();
+        buf.write_raw(b"x");
+        assert_round_trip(&mut buf, &before, "ax");
     }
 
     #[test]
@@ -3649,7 +3846,7 @@ mod tests {
             .unwrap();
         }
 
-        assert_eq!(buffer_contents(&mut buf), "axx\nbxx\nx\n");
+        assert_eq!(buffer_contents(&buf), "axx\nbxx\nx\n");
     }
 
     #[test]
@@ -3666,6 +3863,6 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(buffer_contents(&mut buf), "ax\nbx\nx\n");
+        assert_eq!(buffer_contents(&buf), "ax\nbx\nx\n");
     }
 }
