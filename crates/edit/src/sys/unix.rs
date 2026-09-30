@@ -568,8 +568,8 @@ pub fn preferred_languages(arena: &Arena) -> BVec<'_, &'_ str> {
             let val = BString::from_str(arena, &val).leak();
 
             for c in unsafe { val.as_bytes_mut() } {
-                if *c == b'-' {
-                    *c = b'_';
+                if *c == b'_' {
+                    *c = b'-';
                 }
             }
 
