@@ -148,7 +148,8 @@ impl GapBuffer {
         self.generation = generation;
     }
 
-    fn bump_generation(&mut self) {
+    /// Assigns a fresh revision, including for document settings that affect serialization.
+    pub(crate) fn bump_generation(&mut self) {
         self.generation_counter = self.generation_counter.wrapping_add(1);
         self.generation = self.generation_counter;
     }
@@ -178,7 +179,9 @@ impl GapBuffer {
         unsafe { slice::from_raw_parts_mut(self.text.add(self.gap_off).as_ptr(), self.gap_len) }
     }
 
-    fn move_gap(&mut self, off: usize) {
+    /// Relocates the chunk boundary without modifying the contents or revision.
+    pub(super) fn move_gap(&mut self, off: usize) {
+        assert!(off <= self.text_length);
         if self.gap_len > 0 {
             //
             //                       v gap_off
