@@ -241,6 +241,8 @@ pub struct TextBuffer {
     active_edit_line_info: Option<ActiveEditLineInfo>,
     active_edit_depth: i32,
     active_edit_off: usize,
+    /// Start of an expanded history replacement, only used for joining graphemes.
+    active_edit_context: Option<usize>,
 
     stats: TextBufferStatistics,
     cursor: Cursor,
@@ -295,6 +297,7 @@ impl TextBuffer {
             active_edit_line_info: None,
             active_edit_depth: 0,
             active_edit_off: 0,
+            active_edit_context: None,
 
             stats: TextBufferStatistics { logical_lines: 1, visual_lines: 1 },
             cursor: Default::default(),
@@ -393,7 +396,7 @@ impl TextBuffer {
     /// NOTE: Cannot be undone.
     pub fn normalize_newlines(&mut self, crlf: bool) {
         // TODO: Preserve undo/redo across conversion. Recorded byte lengths and saved-state
-        // identities become stale; translating only the reinserted text during replay is insufficient.
+        // identities become stale when the newline representation changes.
         let newline: &[u8] = if crlf { b"\r\n" } else { b"\n" };
         let mut off = 0;
 
@@ -2336,6 +2339,11 @@ impl TextBuffer {
         // If we have an active selection, writing an empty `text`
         // will still delete the selection. As such, we check this first.
         if let Some((beg, end)) = self.selection_range_internal(false) {
+            if self.edit_may_join(beg.offset, end.offset, text)
+                || self.edit_may_join(beg.offset, end.offset, b"")
+            {
+                self.undo_barrier();
+            }
             self.edit_begin(HistoryType::Write, beg);
             self.edit_delete(end);
             self.set_selection(None);
@@ -2353,6 +2361,9 @@ impl TextBuffer {
         }
 
         if !edit_begun {
+            if self.edit_may_join(at.offset, at.offset, text) {
+                self.undo_barrier();
+            }
             self.edit_begin(HistoryType::Write, at);
         }
 
@@ -2520,6 +2531,9 @@ impl TextBuffer {
             }
         }
 
+        if self.edit_may_join(beg.offset, end.offset, b"") {
+            self.undo_barrier();
+        }
         self.edit_begin(HistoryType::Delete, beg);
         self.edit_delete(end);
         self.edit_end();
@@ -2686,6 +2700,9 @@ impl TextBuffer {
             } else {
                 line_start
             };
+            if self.edit_may_join(from.offset, to.offset, b"") {
+                self.undo_barrier();
+            }
             self.edit_begin(HistoryType::Delete, from);
             self.edit_delete(to);
             self.edit_end();
@@ -2776,6 +2793,9 @@ impl TextBuffer {
         self.buffer.extract_raw(beg.offset..end.offset, &mut out, 0);
 
         if delete && !out.is_empty() {
+            if self.edit_may_join(beg.offset, end.offset, b"") {
+                self.undo_barrier();
+            }
             self.edit_begin(HistoryType::Delete, beg);
             self.edit_delete(end);
             self.edit_end();
@@ -2892,6 +2912,7 @@ impl TextBuffer {
         }
 
         self.active_edit_off = cursor.offset;
+        self.active_edit_context = None;
         self.highlighter_cache.invalidate_from(cursor.logical_pos.y);
 
         // If word-wrap is enabled, the visual layout of all logical lines affected by the write
@@ -2915,6 +2936,12 @@ impl TextBuffer {
     /// Writes `text` into the buffer at the current cursor position.
     /// It records the change in the undo stack.
     fn edit_write(&mut self, text: &[u8]) {
+        if self.active_edit_context.is_some()
+            || self.edit_may_join(self.active_edit_off, self.active_edit_off, text)
+        {
+            self.edit_joining_replace(self.active_edit_off, text);
+            return;
+        }
         let logical_y_before = self.cursor.logical_pos.y;
 
         // Copy the written portion into the undo entry.
@@ -2937,6 +2964,12 @@ impl TextBuffer {
     /// It records the change in the undo stack.
     fn edit_delete(&mut self, to: Cursor) {
         debug_assert!(to.offset >= self.active_edit_off);
+        if self.active_edit_context.is_some()
+            || self.edit_may_join(self.active_edit_off, to.offset, b"")
+        {
+            self.edit_joining_replace(to.offset, b"");
+            return;
+        }
 
         let logical_y_before = self.cursor.logical_pos.y;
         let off = self.active_edit_off;
@@ -2962,6 +2995,65 @@ impl TextBuffer {
         self.stats.logical_lines += logical_y_before - to.logical_pos.y;
     }
 
+    fn edit_may_join(&self, beg: usize, end: usize, text: &[u8]) -> bool {
+        use unicode::graphemes_may_join as may_join;
+        let left = self.read_backward(beg);
+        let right = self.read_forward(end);
+        if text.is_empty() {
+            beg != end && may_join(left, right)
+        } else {
+            may_join(left, text) || may_join(text, right)
+        }
+    }
+
+    /// Record unchanged grapheme context on both sides, without rewriting it in the buffer.
+    #[cold]
+    fn edit_joining_replace(&mut self, end: usize, text: &[u8]) {
+        let off = self.active_edit_off;
+        if off == end && text.is_empty() {
+            return;
+        }
+        let mut safe = self.goto_line_start(self.cursor, self.cursor.logical_pos.y);
+        while safe.offset > off {
+            safe = self.goto_line_start(safe, safe.logical_pos.y - 1);
+        }
+        let at = self.cursor_move_to_offset_internal(safe, off);
+        let left = self.cursor_move_to_logical_internal(
+            safe,
+            Point { x: (at.logical_pos.x - 1).max(0), y: at.logical_pos.y },
+        );
+        let right = self.cursor_move_to_offset_internal(safe, end.saturating_add(1));
+        let entry = self.undo_stack.last().unwrap();
+        let start = self.active_edit_context.unwrap_or_else(|| {
+            self.cursor_move_to_logical_internal(safe, entry.borrow().cursor).offset
+        });
+        let mut entry = entry.borrow_mut();
+        let mut start = start;
+        if left.offset < start {
+            self.buffer.extract_raw(left.offset..start, &mut entry.deleted, 0);
+            self.buffer.extract_raw(left.offset..start, &mut entry.added, 0);
+            entry.cursor = left.logical_pos;
+            start = left.offset;
+        }
+        let recorded_end = start + entry.added.len();
+        if right.offset > recorded_end {
+            self.buffer.extract_raw(recorded_end..right.offset, &mut entry.deleted, usize::MAX);
+            self.buffer.extract_raw(recorded_end..right.offset, &mut entry.added, usize::MAX);
+        }
+        let removed_lines =
+            entry.added[off - start..end - start].iter().filter(|&&b| b == b'\n').count()
+                as CoordType;
+        let inserted_lines = text.iter().filter(|&&b| b == b'\n').count() as CoordType;
+        entry.added.replace_range(off - start..end - start, text);
+        drop(entry);
+        self.active_edit_context = Some(start);
+
+        self.buffer.replace(off..end, text);
+        self.active_edit_off = off + text.len();
+        self.cursor = self.cursor_move_to_offset_internal(safe, self.active_edit_off);
+        self.stats.logical_lines += inserted_lines - removed_lines;
+    }
+
     /// Finalizes the current edit operation
     /// and recalculates the line statistics.
     fn edit_end(&mut self) {
@@ -2969,6 +3061,9 @@ impl TextBuffer {
         debug_assert!(self.active_edit_depth >= 0);
         if self.active_edit_depth > 0 {
             return;
+        }
+        if self.active_edit_context.take().is_some() {
+            self.undo_barrier();
         }
 
         #[cfg(debug_assertions)]
@@ -3080,44 +3175,9 @@ impl TextBuffer {
                 // Undo: Whatever was deleted is now added and vice versa.
                 mem::swap(&mut change.deleted, &mut change.added);
 
-                // Delete the inserted portion.
-                self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
-
-                // Reinsert the deleted portion.
-                {
-                    let added = &change.added[..];
-                    let mut beg = 0;
-                    let mut offset = cursor.offset;
-
-                    while beg < added.len() {
-                        let (end, line) = simd::lines_fwd(added, beg, 0, 1);
-                        let has_newline = line != 0;
-                        let link = &added[beg..end];
-                        let line = unicode::strip_newline(link);
-                        let mut written;
-
-                        {
-                            let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
-                            written = slice_copy_safe(gap, line);
-
-                            if has_newline {
-                                if self.newlines_are_crlf && written < gap.len() {
-                                    gap[written] = b'\r';
-                                    written += 1;
-                                }
-                                if written < gap.len() {
-                                    gap[written] = b'\n';
-                                    written += 1;
-                                }
-                            }
-
-                            self.buffer.commit_gap(written);
-                        }
-
-                        beg = end;
-                        offset += written;
-                    }
-                }
+                // Replay exact bytes, including unchanged CR/LF grapheme context.
+                self.buffer
+                    .replace(cursor.offset..cursor.offset + change.deleted.len(), &change.added);
 
                 // Restore the previous line statistics.
                 mem::swap(&mut self.stats, &mut change.stats_before);
@@ -3369,12 +3429,14 @@ mod tests {
                 buf.set_word_wrap(width > 0);
                 buf.set_width(width);
                 buf.cursor_move_to_offset(buf.text_length());
-                let before = buffer_state(&buf);
                 for text in writes {
+                    let before = buffer_state(&buf);
                     buf.write_raw(text.as_bytes());
                     assert_layout(&buf);
+                    let after = buffer_contents(&buf);
+                    assert_round_trip(&mut buf, &before, &after);
                 }
-                assert_round_trip(&mut buf, &before, expected);
+                assert_eq!(buffer_contents(&buf), expected);
             }
 
             let mut buf = test_buffer("\u{301}z", false);
@@ -3393,6 +3455,145 @@ mod tests {
             let before = buffer_state(&buf);
             buf.write_raw(b"\n");
             assert_round_trip(&mut buf, &before, "a\r\nb");
+        }
+    }
+
+    #[test]
+    fn joining_insert_records_context_as_replacement() {
+        let mut buf = test_buffer("", false);
+        buf.write_raw(b"a");
+        let before = buffer_state(&buf);
+        buf.write_raw("\u{301}".as_bytes());
+        assert_eq!(buf.undo_stack.len(), 2, "joining edits must not merge with earlier typing");
+        {
+            let entry = buf.undo_stack.last().unwrap().borrow();
+            assert_eq!(entry.cursor, Point { x: 0, y: 0 });
+            assert_eq!(entry.deleted, b"a");
+            assert_eq!(entry.added, "a\u{301}".as_bytes());
+        }
+        assert_round_trip(&mut buf, &before, "a\u{301}");
+        buf.undo();
+        buf.undo();
+        assert_eq!(buffer_contents(&buf), "");
+        buf.redo();
+        buf.redo();
+        assert_eq!(buffer_contents(&buf), "a\u{301}");
+    }
+
+    #[test]
+    fn undo_redo_joining_deletions_and_replacements() {
+        let cases = [
+            ("a\n\u{301}z", "a", "\n", "a\u{301}z"),
+            ("a\r\n\u{301}z", "a", "\r\n", "a\u{301}z"),
+            ("a\u{308}\n\u{301}z", "a\u{308}", "\n", "a\u{308}\u{301}z"),
+            ("\u{1100}\n\u{1161}z", "\u{1100}", "\n", "\u{1100}\u{1161}z"),
+            (
+                "\u{1f469}\u{200d}\n\u{1f4bb}z",
+                "\u{1f469}\u{200d}",
+                "\n",
+                "\u{1f469}\u{200d}\u{1f4bb}z",
+            ),
+            ("\u{1f1fa}\n\u{1f1f8}z", "\u{1f1fa}", "\n", "\u{1f1fa}\u{1f1f8}z"),
+            ("\u{600}\na", "\u{600}", "\n", "\u{600}a"),
+            ("\rX\nz", "\r", "X", "\r\nz"),
+        ];
+        for width in [0, 4] {
+            for (initial, prefix, removed, expected) in cases {
+                for backward in [false, true] {
+                    let mut buf = test_buffer("", false);
+                    // Preserve mixed line endings and lone CRs as file loading does.
+                    buf.buffer.replace(0..0, initial.as_bytes());
+                    buf.stats.logical_lines =
+                        initial.bytes().filter(|&b| b == b'\n').count() as CoordType + 1;
+                    buf.recalc_after_content_swap();
+                    buf.set_word_wrap(width > 0);
+                    buf.set_width(width);
+                    let beg = prefix.len();
+                    let end = beg + removed.len();
+                    buf.cursor_move_to_offset(if backward { end } else { beg });
+                    let before = buffer_state(&buf);
+                    buf.delete(CursorMovement::Grapheme, if backward { -1 } else { 1 });
+                    assert_round_trip(&mut buf, &before, expected);
+
+                    buf.undo();
+                    buf.cursor_move_to_offset(beg);
+                    buf.selection_update_offset(end);
+                    let before = buffer_state(&buf);
+                    buf.write_raw(b"X\nY");
+                    let expected = format!("{prefix}X\nY{}", &initial[end..]);
+                    assert_eq!(
+                        buf.logical_line_count(),
+                        expected.bytes().filter(|&b| b == b'\n').count() as CoordType + 1,
+                        "initial={initial:?}, backward={backward}, width={width}",
+                    );
+                    assert_round_trip(&mut buf, &before, &expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn undo_redo_joining_insertions_at_both_edges() {
+        for width in [0, 4] {
+            for (initial, offset, text, expected) in [
+                ("a\u{308}z", 3, "\u{301}", "a\u{308}\u{301}z"),
+                ("\u{301}z", 0, "ab", "ab\u{301}z"),
+                ("\u{1f469}\u{1f4bb}z", 4, "\u{200d}", "\u{1f469}\u{200d}\u{1f4bb}z"),
+                (
+                    "\u{1f1fa}\u{1f1f8}\u{1f1ec}\u{1f1e7}",
+                    8,
+                    "\u{1f1e9}",
+                    "\u{1f1fa}\u{1f1f8}\u{1f1e9}\u{1f1ec}\u{1f1e7}",
+                ),
+                ("az", 1, "\u{301}\n\u{600}", "a\u{301}\n\u{600}z"),
+            ] {
+                let mut buf = test_buffer(initial, false);
+                buf.set_word_wrap(width > 0);
+                buf.set_width(width);
+                buf.cursor_move_to_offset(offset);
+                let before = buffer_state(&buf);
+                buf.write_raw(text.as_bytes());
+                assert_round_trip(&mut buf, &before, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_edits_preserve_explicit_groups() {
+        for width in [0, 4] {
+            let mut buf = test_buffer("a\n\u{301}z", false);
+            buf.set_word_wrap(width > 0);
+            buf.set_width(width);
+            let before = buffer_state(&buf);
+            buf.edit_begin_grouping();
+            buf.cursor_move_to_offset(1);
+            buf.delete(CursorMovement::Grapheme, 1);
+            buf.write_raw("\u{308}".as_bytes());
+            buf.cursor_move_to_offset(0);
+            buf.write_raw("\u{600}".as_bytes());
+            buf.edit_end_grouping();
+            assert_round_trip(&mut buf, &before, "\u{600}a\u{301}\u{308}z");
+        }
+    }
+
+    #[test]
+    fn joining_edits_preserve_invalid_utf8() {
+        let mut buf = test_buffer("", false);
+        buf.buffer.replace(0..0, &[b'a', 0xE1, 0x80, b'z']);
+        buf.recalc_after_content_swap();
+        buf.cursor_move_to_offset(3);
+        buf.write_raw("\u{301}".as_bytes());
+        for _ in 0..3 {
+            let mut actual = Vec::new();
+            buf.buffer.extract_raw(0..buf.text_length(), &mut actual, 0);
+            assert_eq!(actual, [b'a', 0xE1, 0x80, 0xCC, 0x81, b'z']);
+            assert_layout(&buf);
+            buf.undo();
+            actual.clear();
+            buf.buffer.extract_raw(0..buf.text_length(), &mut actual, 0);
+            assert_eq!(actual, [b'a', 0xE1, 0x80, b'z']);
+            assert_layout(&buf);
+            buf.redo();
         }
     }
 

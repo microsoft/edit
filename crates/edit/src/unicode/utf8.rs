@@ -41,7 +41,7 @@ impl<'a> Utf8Chars<'a> {
 
     /// Returns the current offset in the byte slice.
     ///
-    /// This will be past the last returned character.
+    /// This is past the character returned by `next`, or at the start of the one returned by `prev`.
     pub fn offset(&self) -> usize {
         self.offset
     }
@@ -54,6 +54,29 @@ impl<'a> Utf8Chars<'a> {
     /// Returns true if `next` will return another character.
     pub fn has_next(&self) -> bool {
         self.offset < self.source.len()
+    }
+
+    /// Decodes the preceding character and moves to its first byte.
+    /// At forward-decoded boundaries, this reverses `next`, including invalid UTF-8.
+    pub fn prev(&mut self) -> Option<char> {
+        let end = self.offset;
+        let mut start = end.checked_sub(1)?;
+        if self.source[start].is_ascii() {
+            self.offset = start;
+            return Some(self.source[start] as char);
+        }
+        while start > end.saturating_sub(4) && self.source[start] & 0xC0 == 0x80 {
+            start -= 1;
+        }
+        let mut chars = Self::new(&self.source[..end], start);
+        let ch = chars.next().unwrap();
+        if chars.offset == end {
+            self.offset = start;
+            Some(ch)
+        } else {
+            self.offset = end - 1;
+            Some(Self::fffd())
+        }
     }
 
     // I found that on mixed 50/50 English/Non-English text,
@@ -253,6 +276,43 @@ impl iter::FusedIterator for Utf8Chars<'_> {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_reverse(source: &[u8]) {
+        let mut forward = Utf8Chars::new(source, 0);
+        let mut expected = Vec::new();
+        while forward.has_next() {
+            let start = forward.offset();
+            expected.push((forward.next().unwrap(), start));
+        }
+        let mut backward = Utf8Chars::new(source, source.len());
+        for (ch, start) in expected.into_iter().rev() {
+            assert_eq!(backward.prev(), Some(ch), "{source:x?}");
+            assert_eq!(backward.offset(), start, "{source:x?}");
+        }
+        assert_eq!(backward.prev(), None);
+    }
+
+    #[test]
+    fn reverse_utf8() {
+        assert_reverse(b"");
+        assert_reverse("a\u{301}\u{754c}\u{1f469}\u{200d}\u{1f4bb}".as_bytes());
+        for first in 0..=255 {
+            for second in 0..=255 {
+                assert_reverse(&[first, second]);
+            }
+        }
+        let bytes =
+            [0, b'a', 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xBF, 0xC2, 0xE0, 0xED, 0xF0, 0xF4, 0xFF];
+        for a in bytes {
+            for b in bytes {
+                for c in bytes {
+                    for d in bytes {
+                        assert_reverse(&[a, b, c, d]);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_broken_utf8() {
