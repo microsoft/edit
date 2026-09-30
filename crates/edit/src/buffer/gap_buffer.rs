@@ -143,13 +143,13 @@ impl GapBuffer {
         self.generation
     }
 
-    /// Restore a historical revision (undo/redo).
+    /// Restore a historical revision (for undo/redo).
     pub fn set_generation(&mut self, generation: u32) {
         self.generation = generation;
     }
 
     /// Assigns a fresh revision, including for document settings that affect serialization.
-    pub(crate) fn bump_generation(&mut self) {
+    pub fn bump_generation(&mut self) {
         self.generation_counter = self.generation_counter.wrapping_add(1);
         self.generation = self.generation_counter;
     }
@@ -179,9 +179,7 @@ impl GapBuffer {
         unsafe { slice::from_raw_parts_mut(self.text.add(self.gap_off).as_ptr(), self.gap_len) }
     }
 
-    /// Relocates the chunk boundary without modifying the contents or revision.
-    pub(super) fn move_gap(&mut self, off: usize) {
-        assert!(off <= self.text_length);
+    fn move_gap(&mut self, off: usize) {
         if self.gap_len > 0 {
             //
             //                       v gap_off

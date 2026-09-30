@@ -41,7 +41,7 @@ impl<'a> Utf8Chars<'a> {
 
     /// Returns the current offset in the byte slice.
     ///
-    /// This is past the character returned by `next`, or at the start of the one returned by `prev`.
+    /// This will be past the last returned character.
     pub fn offset(&self) -> usize {
         self.offset
     }
@@ -54,29 +54,6 @@ impl<'a> Utf8Chars<'a> {
     /// Returns true if `next` will return another character.
     pub fn has_next(&self) -> bool {
         self.offset < self.source.len()
-    }
-
-    /// Decodes the preceding character and moves to its first byte.
-    /// At forward-decoded boundaries, this reverses `next`, including invalid UTF-8.
-    pub fn prev(&mut self) -> Option<char> {
-        let end = self.offset;
-        let mut start = end.checked_sub(1)?;
-        if self.source[start].is_ascii() {
-            self.offset = start;
-            return Some(self.source[start] as char);
-        }
-        while start > end.saturating_sub(4) && self.source[start] & 0xC0 == 0x80 {
-            start -= 1;
-        }
-        let mut chars = Self::new(&self.source[..end], start);
-        let ch = chars.next().unwrap();
-        if chars.offset == end {
-            self.offset = start;
-            Some(ch)
-        } else {
-            self.offset = end - 1;
-            Some(Self::fffd())
-        }
     }
 
     // I found that on mixed 50/50 English/Non-English text,
@@ -273,44 +250,78 @@ impl Iterator for Utf8Chars<'_> {
 
 impl iter::FusedIterator for Utf8Chars<'_> {}
 
+/// Returns the last character using the same invalid-UTF-8 recovery as `Utf8Chars`.
+/// Returns U+FFFD for an empty slice.
+pub fn utf8_decode_last(source: &[u8]) -> char {
+    if source.is_empty() {
+        return Utf8Chars::fffd();
+    }
+
+    let mut offset = source.len();
+    let mut c = unsafe { *source.get_unchecked(offset - 1) };
+
+    // ASCII? Simple.
+    if c.is_ascii() {
+        return c as char;
+    }
+
+    // Find the start of the last UTF8 sequence. It can't be longer than 4 bytes. `start` will
+    // trail the offset on loop exit, as this matches the expectation of `Utf8Chars::next_slow`.
+    let lim = offset.saturating_sub(4);
+    while c & 0xC0 == 0x80 {
+        offset -= 1;
+        if offset <= lim {
+            return Utf8Chars::fffd();
+        }
+        c = unsafe { *source.get_unchecked(offset - 1) };
+    }
+
+    // Parsing the last sequence is successful if the entire tail end was consumed.
+    let mut chars = Utf8Chars::new(source, offset);
+    let ch = chars.next_slow(c);
+    if chars.offset == source.len() { ch } else { Utf8Chars::fffd() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn assert_reverse(source: &[u8]) {
-        let mut forward = Utf8Chars::new(source, 0);
-        let mut expected = Vec::new();
-        while forward.has_next() {
-            let start = forward.offset();
-            expected.push((forward.next().unwrap(), start));
-        }
-        let mut backward = Utf8Chars::new(source, source.len());
-        for (ch, start) in expected.into_iter().rev() {
-            assert_eq!(backward.prev(), Some(ch), "{source:x?}");
-            assert_eq!(backward.offset(), start, "{source:x?}");
-        }
-        assert_eq!(backward.prev(), None);
-    }
-
     #[test]
-    fn reverse_utf8() {
-        assert_reverse(b"");
-        assert_reverse("a\u{301}\u{754c}\u{1f469}\u{200d}\u{1f4bb}".as_bytes());
-        for first in 0..=255 {
-            for second in 0..=255 {
-                assert_reverse(&[first, second]);
-            }
-        }
-        let bytes =
-            [0, b'a', 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xBF, 0xC2, 0xE0, 0xED, 0xF0, 0xF4, 0xFF];
-        for a in bytes {
-            for b in bytes {
-                for c in bytes {
-                    for d in bytes {
-                        assert_reverse(&[a, b, c, d]);
-                    }
-                }
-            }
+    fn decode_last_utf8() {
+        let cases: &[(&[u8], char)] = &[
+            (b"", '\u{FFFD}'),
+            (b"\0", '\0'),
+            (b"ab", 'b'),
+            (b"\x7F", '\u{7F}'),
+            (b"\xC2\x80", '\u{80}'),
+            (b"\xDF\xBF", '\u{7FF}'),
+            (b"\xE0\xA0\x80", '\u{800}'),
+            (b"\xEF\xBF\xBF", '\u{FFFF}'),
+            (b"\xF0\x90\x80\x80", '\u{10000}'),
+            (b"\xF4\x8F\xBF\xBF", '\u{10FFFF}'),
+            (b"x\xC2\x80", '\u{80}'),
+            (b"x\xE0\xA0\x80", '\u{800}'),
+            (b"x\xF0\x90\x80\x80", '\u{10000}'),
+            (b"\xFF\xC2\x80", '\u{80}'),
+            (b"\xFFz", 'z'),
+            // Truncated sequences.
+            (b"\xC2", '\u{FFFD}'),
+            (b"\xE1\x80", '\u{FFFD}'),
+            (b"\xF0\x90\x80", '\u{FFFD}'),
+            // Stray and excess continuation bytes.
+            (b"\x80", '\u{FFFD}'),
+            (b"\x80\x80\x80\x80\x80", '\u{FFFD}'),
+            (b"\xC2\x80\x80", '\u{FFFD}'),
+            // Overlong encodings, a surrogate, and a value above U+10FFFF.
+            (b"\xC0\x80", '\u{FFFD}'),
+            (b"\xE0\x80\x80", '\u{FFFD}'),
+            (b"\xF0\x80\x80\x80", '\u{FFFD}'),
+            (b"\xED\xA0\x80", '\u{FFFD}'),
+            (b"\xF4\x90\x80\x80", '\u{FFFD}'),
+        ];
+
+        for &(source, expected) in cases {
+            assert_eq!(utf8_decode_last(source), expected, "{source:x?}");
         }
     }
 
