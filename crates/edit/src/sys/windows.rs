@@ -9,14 +9,64 @@ use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull, null, null_mut};
 use std::{io, mem, time};
 
-use stdext::arena::{Arena, scratch_arena};
-use stdext::collections::{BString, BVec};
 use windows_sys::Win32::Storage::FileSystem;
+use windows_sys::Win32::System::Memory::{
+    MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc, VirtualFree,
+};
 use windows_sys::Win32::System::{Console, IO, LibraryLoader, Threading};
 use windows_sys::Win32::{Foundation, Globalization};
 use windows_sys::core::*;
 
+use crate::arena::{Arena, scratch_arena};
+use crate::collections::{BString, BVec};
 use crate::helpers::*;
+
+/// Reserves a virtual memory region of the given size.
+/// To commit the memory, use [`virtual_commit`].
+/// To release the memory, use [`virtual_release`].
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Don't forget to release the memory when you're done with it or you'll leak it.
+pub unsafe fn virtual_reserve(size: usize) -> io::Result<NonNull<u8>> {
+    unsafe {
+        let res = VirtualAlloc(null_mut(), size, MEM_RESERVE, PAGE_READWRITE);
+        if res.is_null() {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(NonNull::new_unchecked(res as *mut _))
+        }
+    }
+}
+
+/// Releases a virtual memory region of the given size.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Make sure to only pass pointers acquired from [`virtual_reserve`].
+pub unsafe fn virtual_release(base: NonNull<u8>, _size: usize) {
+    unsafe {
+        // NOTE: `VirtualFree` fails if the pointer isn't
+        // a valid base address or if the size isn't zero.
+        VirtualFree(base.as_ptr() as *mut _, 0, MEM_RELEASE);
+    }
+}
+
+/// Commits a virtual memory region of the given size.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Make sure to only pass pointers acquired from [`virtual_reserve`]
+/// and to pass a size less than or equal to the size passed to [`virtual_reserve`].
+pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> io::Result<()> {
+    unsafe {
+        let res = VirtualAlloc(base.as_ptr() as *mut _, size, MEM_COMMIT, PAGE_READWRITE);
+        if res.is_null() { Err(io::Error::last_os_error()) } else { Ok(()) }
+    }
+}
 
 macro_rules! w_env {
     ($s:literal) => {{

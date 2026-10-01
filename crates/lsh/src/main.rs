@@ -13,9 +13,8 @@ use std::process::exit;
 use anyhow::bail;
 use argh::FromArgs;
 use lsh::compiler::SerializedCharset;
-use lsh::runtime::Runtime;
-use stdext::arena::scratch_arena;
-use stdext::glob::glob_match;
+use lsh::glob::glob_match;
+use lsh::runtime::{Highlight, Runtime};
 
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(description = "Debug and test frontend for LSH")]
@@ -65,11 +64,8 @@ pub fn main() {
 }
 
 fn run() -> anyhow::Result<()> {
-    stdext::arena::init(128 * 1024 * 1024).unwrap();
-
     let command: Command = argh::from_env();
-    let scratch = scratch_arena(None);
-    let mut generator = lsh::compiler::Generator::new(&scratch);
+    let mut generator = lsh::compiler::Generator::new();
     let mut read_lsh = |path: &Path| {
         if path.is_dir() { generator.read_directory(path) } else { generator.read_file(path) }
     };
@@ -134,7 +130,7 @@ fn run_render(
     let mut color_map = Vec::new();
     let mut unknown_kinds = Vec::new();
     for hk in &assembly.highlight_kinds {
-        let color = match hk.identifier {
+        let color = match hk.identifier.as_str() {
             "other" => "",
 
             "comment" => "\x1b[32m",  // Green
@@ -181,17 +177,12 @@ fn run_render(
         eprintln!("\x1b[m");
     }
 
-    // Convert Assembly data to static references by leaking memory
-    // This is fine for a CLI tool that runs once and exits
     let charsets: Vec<SerializedCharset> =
         assembly.charsets.into_iter().map(|cs| cs.serialize()).collect();
 
-    let mut runtime = Runtime::new(
-        &assembly.instructions,
-        &assembly.strings,
-        &charsets,
-        entrypoint.address as u32,
-    );
+    let strings: Vec<&str> = assembly.strings.iter().map(String::as_str).collect();
+    let mut runtime =
+        Runtime::new(&assembly.instructions, &strings, &charsets, entrypoint.address as u32);
 
     let file = if let Some(path) = path {
         File::open(path)?
@@ -210,8 +201,8 @@ fn run_render(
 
     for line in reader.lines() {
         let line = line?;
-        let scratch = scratch_arena(None);
-        let highlights = runtime.parse_next_line::<u32>(&scratch, line.as_bytes());
+        let mut highlights: Vec<Highlight<u32>> = Vec::new();
+        runtime.parse_next_line(line.as_bytes(), &mut highlights);
 
         for w in highlights.windows(2) {
             let curr = &w[0];

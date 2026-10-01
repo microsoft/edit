@@ -8,15 +8,13 @@ use std::ops::{BitOr, BitXor};
 use std::ptr;
 use std::slice::ChunksExact;
 
-use stdext::arena::{Arena, scratch_arena};
-use stdext::collections::BString;
-use stdext::simd::memset;
-use stdext::unicode::{SanitizedControlChars, sanitize_control_chars};
-use stdext::{MaybeOwned, arena_write_fmt};
-
+use crate::arena::{Arena, arena_write_fmt, scratch_arena};
+use crate::collections::BString;
 use crate::helpers::{CoordType, Point, Rect, Size};
+use crate::maybe_owned::MaybeOwned;
 use crate::oklab::StraightRgba;
-use crate::unicode::MeasurementConfig;
+use crate::simd::memset;
+use crate::unicode::{MeasurementConfig, SanitizedControlChars, sanitize_control_chars};
 
 // Same constants as used in the PCG family of RNGs.
 #[cfg(target_pointer_width = "32")]

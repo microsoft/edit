@@ -12,10 +12,9 @@ use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 use std::{fmt, slice};
 
-use stdext::alloc::Allocator;
-use stdext::arena::Arena;
-use stdext::collections::{BString, BVec};
-
+use crate::alloc::Allocator;
+use crate::arena::Arena;
+use crate::collections::{BString, BVec};
 use crate::unicode::MeasurementConfig;
 
 /// Maximum nesting depth to prevent stack overflow.
@@ -217,7 +216,7 @@ impl<'a, 'i> Parser<'a, 'i> {
             self.pos += 1;
         }
 
-        if let Some(num) = stdext::float::parse_f64_approx(&self.bytes[start..self.pos])
+        if let Some(num) = crate::float::parse_f64_approx(&self.bytes[start..self.pos])
             && num.is_finite()
         {
             Ok(Value::Number(num))
@@ -599,9 +598,8 @@ impl Allocator for StackAlloc<'_> {
 #[allow(clippy::invisible_characters)]
 #[cfg(test)]
 mod tests {
-    use stdext::arena::scratch_arena;
-
     use super::*;
+    use crate::arena::scratch_arena;
 
     #[test]
     fn test_null() {

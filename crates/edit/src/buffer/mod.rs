@@ -34,12 +34,11 @@ use std::rc::Rc;
 use std::str;
 
 pub use gap_buffer::GapBuffer;
-use stdext::arena::{Arena, scratch_arena};
-use stdext::collections::{BString, BVec};
-use stdext::{ReplaceRange as _, arena_write_fmt, minmax, slice_as_uninit_mut, slice_copy_safe};
 
+use crate::arena::{Arena, arena_write_fmt, scratch_arena};
 use crate::cell::SemiRefCell;
 use crate::clipboard::Clipboard;
+use crate::collections::{BString, BVec};
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::framebuffer::{Attributes, Framebuffer, IndexedColor};
 use crate::helpers::*;
@@ -201,12 +200,14 @@ struct ActiveEditGroupInfo {
 }
 
 /// Char- or word-wise navigation? Your choice.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CursorMovement {
     Grapheme,
     Word,
 }
 
 /// See [`TextBuffer::move_selected_lines`].
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MoveLineDirection {
     Up,
     Down,
@@ -853,6 +854,23 @@ impl TextBuffer {
         first_chunk_len: usize,
         done: bool,
     ) -> io::Result<()> {
+        // Get the length of the file. 0 = not a file.
+        let file_len = if done {
+            // But if the first 4KiB read already contains the entire file, we won't need
+            // the file length below (we early return). The value here doesn't matter.
+            0
+        } else {
+            // We can't acquire the length on pipes, for instance.
+            file.metadata().ok().and_then(|m| m.len().try_into().ok()).unwrap_or(0)
+        };
+
+        // If we have a file length, reserve enough space for it.
+        // The call is a no-op for small files (currently <4GiB).
+        if file_len > 0 {
+            self.buffer.try_reserve(file_len);
+        }
+
+        // Handle the first chunk we already read for encoding detection.
         {
             let mut first_chunk = unsafe { buf[..first_chunk_len].assume_init_ref() };
             if first_chunk.starts_with(b"\xEF\xBB\xBF") {
@@ -862,27 +880,22 @@ impl TextBuffer {
 
             self.buffer.replace(0..0, first_chunk);
         }
-
         if done {
             return Ok(());
         }
 
-        // If we don't have file metadata, the input may be a pipe or a socket.
-        // Every read will have the same size until we hit the end.
-        let mut chunk_size = 128 * KIBI;
-        let mut extra_chunk_size = 128 * KIBI;
-
-        if let Ok(m) = file.metadata() {
-            // Usually the next read of size `chunk_size` will read the entire file,
-            // but if the size has changed for some reason, then `extra_chunk_size`
-            // should be large enough to read the rest of the file.
-            // 4KiB is not too large and not too slow.
-            let len = m.len() as usize;
-            chunk_size = len.saturating_sub(first_chunk_len);
-            extra_chunk_size = 4 * KIBI;
-        }
-
         loop {
+            let chunk_size = if file_len > 0 {
+                // If we know the file length:
+                // * Read the file until the end
+                // * And if we're still reading at that point, read in 4KiB chunks (e.g. if someone wrote
+                //   to the file concurrently; typically this won't happen, so the chunk size is small).
+                file_len.checked_sub(self.text_length()).unwrap_or(4 * KIBI)
+            } else {
+                // For pipes, sockets, etc., read in 128KiB chunks, because anything smaller has poor perf.
+                128 * KIBI
+            };
+
             let gap = self.buffer.allocate_gap(self.text_length(), chunk_size, 0);
             if gap.is_empty() {
                 break;
@@ -894,7 +907,6 @@ impl TextBuffer {
             }
 
             self.buffer.commit_gap(read);
-            chunk_size = extra_chunk_size;
         }
 
         Ok(())
@@ -2518,7 +2530,11 @@ impl TextBuffer {
 
         self.edit_begin_grouping();
 
-        for y in selection_beg.y.min(selection_end.y)..=selection_beg.y.max(selection_end.y) {
+        let [first, last] = minmax(selection_beg, selection_end);
+        // Just like in VS Code, if the selections ends at a line start, it is not included.
+        let last_y = if last.x == 0 && last.y > first.y { last.y - 1 } else { last.y };
+
+        for y in first.y..=last_y {
             self.cursor_move_to_logical(Point { x: 0, y });
 
             let line_start_offset = self.cursor.offset;
@@ -2576,7 +2592,7 @@ impl TextBuffer {
         let mut chars = 0;
         let mut columns = 0;
 
-        'outer: loop {
+        'outer: while columns < max_columns {
             let chunk = self.read_forward(offset);
             if chunk.is_empty() {
                 break;
@@ -2596,15 +2612,65 @@ impl TextBuffer {
             }
 
             offset += chunk.len();
-
-            // No need to do another round if we
-            // already got the exact right amount.
-            if columns >= max_columns {
-                break;
-            }
         }
 
         (chars, columns)
+    }
+
+    /// This is basically the backspace operation, the way editors typically want it:
+    /// It unindents the line if the cursor is within the leading indentation.
+    pub fn backspace_with_auto_unindent(&mut self, granularity: CursorMovement) {
+        'unindent: {
+            // If there's a selection backspace deletes it.
+            if self.selection.is_some() {
+                break 'unindent;
+            }
+
+            // If we're at a line start backspace deletes the newline.
+            if self.cursor.logical_pos.x <= 0 {
+                break 'unindent;
+            }
+
+            let line_start = self.goto_line_start(self.cursor, self.cursor.logical_pos.y);
+
+            // Determine the position of the new (reduced) indentation.
+            // For Backspace (Grapheme) it's one "tab", but for Ctrl+Backspace (Word) it's to the line start.
+            let prev_column = if granularity == CursorMovement::Grapheme {
+                self.tab_size_prev_column(self.cursor.column)
+            } else {
+                0 // Ctrl+Backspace (Word) = line start
+            };
+            let (from_pos, from_col) = self.measure_indent_internal(line_start.offset, prev_column);
+
+            // Check if the cursor is within the leading indentation.
+            // This continues the measurement where we left off, so there's some extra arithmetic involved.
+            let (delta, _) = self.measure_indent_internal(
+                line_start.offset + from_pos as usize,
+                self.cursor.column - from_col,
+            );
+            if delta + from_pos < self.cursor.logical_pos.x {
+                break 'unindent;
+            }
+
+            // Here would technically just do `self.delete(CursorMovement::Grapheme, -delta);`
+            // but since we already got the `line_start`, etc., this is a bit more straightforward.
+            let to = self.cursor;
+            let from = if granularity == CursorMovement::Grapheme {
+                self.cursor_move_to_logical_internal(
+                    line_start,
+                    Point { x: from_pos, y: line_start.logical_pos.y },
+                )
+            } else {
+                line_start
+            };
+            self.edit_begin(HistoryType::Delete, from);
+            self.edit_delete(to);
+            self.edit_end();
+            return;
+        }
+
+        // If we didn't perform an unindent, fall back to a regular backspace.
+        self.delete(granularity, -1);
     }
 
     /// Displaces the current, cursor or the selection, line(s) in the given direction.

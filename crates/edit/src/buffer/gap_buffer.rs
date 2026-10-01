@@ -5,11 +5,9 @@ use std::ops::Range;
 use std::ptr::{self, NonNull};
 use std::{io, slice};
 
-use stdext::sys::{virtual_commit, virtual_release, virtual_reserve};
-use stdext::{ReplaceRange as _, slice_copy_safe};
-
 use crate::document::{ReadableDocument, WriteableDocument};
 use crate::helpers::*;
+use crate::sys::{virtual_commit, virtual_release, virtual_reserve};
 
 #[cfg(target_pointer_width = "32")]
 const LARGE_CAPACITY: usize = 128 * MEBI;
@@ -89,6 +87,39 @@ impl GapBuffer {
             generation: 0,
             buffer,
         })
+    }
+
+    /// Enlarges the reserved capacity of the buffer.
+    ///
+    /// TODO: Ideally we would only lazily reserve virtual memory, such that this doesn't
+    /// need to reserve + release. However, this requires reporting errors from enlarge_gap.
+    pub fn try_reserve(&mut self, bytes: usize) {
+        if bytes < self.reserve {
+            return;
+        }
+
+        if self.text_length != 0 {
+            debug_assert!(false);
+            return;
+        }
+        let BackingBuffer::VirtualMemory(old_ptr, old_len) = self.buffer else {
+            debug_assert!(false);
+            return;
+        };
+
+        unsafe {
+            let bytes =
+                bytes.saturating_add(MEBI + LARGE_ALLOC_CHUNK - 1) & !(LARGE_ALLOC_CHUNK - 1);
+            if let Ok(ptr) = virtual_reserve(bytes) {
+                virtual_release(old_ptr, old_len);
+                self.buffer = BackingBuffer::VirtualMemory(ptr, bytes);
+                self.text = ptr;
+                self.reserve = bytes;
+                self.commit = 0;
+                self.gap_off = 0;
+                self.gap_len = 0;
+            }
+        }
     }
 
     #[allow(clippy::len_without_is_empty)]
@@ -179,16 +210,13 @@ impl GapBuffer {
 
         let gap_len_old = self.gap_len;
         let gap_len_new = (len + gap_chunk + gap_chunk - 1) & !(gap_chunk - 1);
+        let gap_len_new = gap_len_new.min(self.reserve - self.text_length);
 
         let bytes_old = self.commit;
         let bytes_new = self.text_length + gap_len_new;
 
         if bytes_new > bytes_old {
             let bytes_new = (bytes_new + alloc_chunk - 1) & !(alloc_chunk - 1);
-
-            if bytes_new > self.reserve {
-                return;
-            }
 
             match &mut self.buffer {
                 BackingBuffer::VirtualMemory(ptr, _) => unsafe {
