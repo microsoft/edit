@@ -541,12 +541,7 @@ impl<'c> CodeGen<'c> {
 
             Regex::CharClass(cs) => self.emit_charset(cs, 1, 1, on_match, on_fail),
 
-            Regex::Dot => {
-                let dst = self.program.get_reg(Register::InputOffset);
-                let node = self.program.alloc_iri(Op::AddImm { dst, imm: 1 });
-                self.program.graph[node].next = Some(on_match);
-                Ok(node)
-            }
+            Regex::Dot => self.emit_charset(&Charset::yes(), 1, 1, on_match, on_fail),
 
             Regex::EndOfLine => {
                 let if_node = self

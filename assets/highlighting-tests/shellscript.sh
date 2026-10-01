@@ -31,6 +31,28 @@ echo $'escape sequences: \a \b \e \f \r \t \v \\\\ \''
 # Backtick interpolation
 echo "today is `date +%Y-%m-%d`"
 
+echo 'first
+# still quoted'; true
+echo "first
+# still quoted $USER"; false
+echo "first\
+continued $USER"; true
+echo "escaped quote at EOL: \"
+still quoted"; false
+echo "escaped backslash at EOL: \\
+still quoted"; true
+echo $'first\
+still quoted'; true
+echo $'first
+# still quoted'; false
+echo `first\
+still quoted`; false
+echo `first
+still quoted`; true
+echo 'blank line follows
+
+still quoted'; true
+
 # Control flow
 if [ -f /etc/passwd ]; then
     echo "exists"

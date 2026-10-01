@@ -214,31 +214,44 @@ fn bench_json(c: &mut Criterion) {
 }
 
 fn bench_lsh(c: &mut Criterion) {
-    let bytes = include_bytes!("../../../assets/highlighting-tests/markdown.md");
-    let bytes = &bytes[..];
-    let lang = lsh::LANGUAGES.iter().find(|lang| lang.id == "markdown").unwrap();
-    let highlighter = lsh::Highlighter::new(black_box(&bytes), lang);
+    // It would be overkill to include all types of files, so this is a subset of
+    // those which are particularly complex or those I expect to be very large files.
+    const TESTS: &[(&str, &[u8])] = &[
+        ("javascript", include_bytes!("../../../assets/highlighting-tests/javascript.js")),
+        ("markdown", include_bytes!("../../../assets/highlighting-tests/markdown.md")),
+        ("sql", include_bytes!("../../../assets/highlighting-tests/sql.sql")),
+    ];
 
-    c.benchmark_group("lsh").throughput(Throughput::Bytes(bytes.len() as u64)).bench_function(
-        "markdown",
-        |b| {
-            b.iter(|| {
-                let mut h = highlighter.clone();
-                loop {
-                    let scratch = scratch_arena(None);
-                    let res = h.parse_next_line(&scratch);
-                    if res.is_empty() {
-                        break;
-                    }
-                }
-            })
-        },
-    );
+    let mut group = c.benchmark_group("lsh");
 
-    c.benchmark_group("lsh").bench_function("process_file_associations", |b| {
+    group.bench_function("process_file_associations", |b| {
         let path = Path::new("/some/long/path/to/file/foo.bar.foo.bar.foo.bar");
         b.iter(|| lsh::process_file_associations(lsh::FILE_ASSOCIATIONS, black_box(path)))
     });
+
+    for &(id, bytes) in TESTS {
+        let (_, lines) = simd::lines_fwd(bytes, 0, 0, CoordType::MAX);
+        let lang = lsh::LANGUAGES.iter().find(|lang| lang.id == id).unwrap();
+        let highlighter = lsh::Highlighter::new(&bytes, lang);
+
+        group
+            .throughput(Throughput::ElementsAndBytes {
+                elements: lines as u64,
+                bytes: bytes.len() as u64,
+            })
+            .bench_function(id, |b| {
+                b.iter(|| {
+                    let mut h = highlighter.clone();
+                    loop {
+                        let scratch = scratch_arena(None);
+                        let res = h.parse_next_line(&scratch);
+                        if res.is_empty() {
+                            break;
+                        }
+                    }
+                })
+            });
+    }
 }
 
 fn bench_oklab(c: &mut Criterion) {

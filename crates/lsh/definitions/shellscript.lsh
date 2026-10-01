@@ -16,35 +16,36 @@ pub fn shellscript() {
         if /#.*/ {
             yield comment;
         } else if /'/ {
-            until /$/ {
-                yield string;
+            loop {
                 if /'/ { yield string; break; }
+                yield string;
                 await input;
             }
         } else if /\$'/ {
             // ANSI C quoting $'...\n...'
-            until /$/ {
-                yield string;
-                if /\\./ {}
+            loop {
+                if /\\.?/ {}
                 else if /'/ { yield string; break; }
+                yield string;
                 await input;
             }
         } else if /"/ {
             // TODO: Handle nested evaluation via $(...) and $((...)).
-            until /$/ {
+            loop {
                 yield string;
-                if /\\./ {}
+                if /\\.?/ {}
                 else if /\$(?:\{[^}]+\}|\(\([^)]*\)\)|\([^)]*\)|[A-Za-z_]\w*|\d+|[#?*!@$-])/ {
                     yield variable;
                 }
                 else if /"/ { yield string; break; }
+                yield string;
                 await input;
             }
         } else if /`/ {
-            until /$/ {
-                yield string;
-                if /\\./ {}
+            loop {
+                if /\\.?/ {}
                 else if /`/ { yield string; break; }
+                yield string;
                 await input;
             }
         } else if /<<-?\s*['"]?(?:EOF|END|HEREDOC)\>['"]?.*/ {

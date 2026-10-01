@@ -50,6 +50,7 @@ pub struct Parser<'c, 'src> {
     src: &'src str,
     pos: usize,
     token_start: usize,
+    await_or_call_count: usize,
     context: Vec<Context>,
     variables: HashMap<&'src str, RegId>,
 }
@@ -57,7 +58,16 @@ pub struct Parser<'c, 'src> {
 impl<'c, 'src> Parser<'c, 'src> {
     pub fn new(program: &'c mut Program, path: &'src str, src: &'src str) -> Self {
         let context = Vec::new();
-        Self { program, path, src, pos: 0, token_start: 0, context, variables: Default::default() }
+        Self {
+            program,
+            path,
+            src,
+            pos: 0,
+            token_start: 0,
+            await_or_call_count: 0,
+            context,
+            variables: Default::default(),
+        }
     }
 
     pub fn run(&mut self) -> CompileResult<()> {
@@ -196,10 +206,14 @@ impl<'c, 'src> Parser<'c, 'src> {
     ) -> CompileResult<Fragment> {
         // First, save the current input offset.
         // This is used to detect if the loop made any progress.
+        let saved_line = self.program.alloc_vreg();
         let saved_offset = self.program.alloc_vreg();
-        let first = self.program.alloc_iri(Op::Mov {
-            dst: saved_offset,
-            src: self.program.get_reg(Register::InputOffset),
+        let first = self
+            .program
+            .alloc_iri(Op::Mov { dst: saved_line, src: self.program.get_reg(Register::InputLine) });
+        let save_offset = self.program.alloc_ir(Node {
+            next: Some(loop_start),
+            instr: Op::Mov { dst: saved_offset, src: self.program.get_reg(Register::InputOffset) },
         });
 
         self.context.push(Context {
@@ -207,17 +221,33 @@ impl<'c, 'src> Parser<'c, 'src> {
             loop_exit: Some(loop_exit),
             capture_groups: Vec::new(),
         });
+        let await_or_call_count = self.await_or_call_count;
         let block = self.parse_block()?;
         self.context.pop();
 
         // Force advance the input offset by 1 if it got stuck in the loop iteration.
-        //   if input_offset == saved_offset {
+        //   if input_offset == saved_offset && input_line == saved_line {
         //       input_offset += 1;
         //   }
-        let advance = self.program.alloc_ir(Node {
+        let mut advance = self.program.alloc_ir(Node {
             next: Some(first),
             instr: Op::AddImm { dst: self.program.get_reg(Register::InputOffset), imm: 1 },
         });
+        // We can skip the line check entirely, if we can prove that nothing in the loop
+        // can cross lines (= no `await input` calls and no nested function calls).
+        if self.await_or_call_count != await_or_call_count {
+            advance = self.program.alloc_ir(Node {
+                next: Some(first),
+                instr: Op::If {
+                    condition: Condition::Cmp {
+                        lhs: self.program.get_reg(Register::InputLine),
+                        rhs: saved_line,
+                        op: ComparisonOp::Eq,
+                    },
+                    then: advance,
+                },
+            })
+        };
         let advance_check = self.program.alloc_ir(Node {
             next: Some(first),
             instr: Op::If {
@@ -233,7 +263,7 @@ impl<'c, 'src> Parser<'c, 'src> {
         // NOTE: It's crucial that we connect the block with the loop before calling collect_interesting_charset,
         // as the until statement's regex is not part of the loop but still counts as an "interesting charset",
         // for the purpose of skipping uninteresting characters.
-        self.program.graph[first].set_next(loop_start);
+        self.program.graph[first].set_next(save_offset);
         self.program.graph[loop_good].set_next(block.first);
 
         // Skip any uninteresting characters before the next loop iteration.
@@ -476,6 +506,7 @@ impl<'c, 'src> Parser<'c, 'src> {
 
         self.expect(';')?;
 
+        self.await_or_call_count += 1;
         let ir = self.program.alloc_iri(Op::AwaitInput);
         Ok(Fragment::single(ir))
     }
@@ -573,6 +604,7 @@ impl<'c, 'src> Parser<'c, 'src> {
                 self.pos += 1;
                 self.expect(')')?;
                 self.expect(';')?;
+                self.await_or_call_count += 1;
                 let name = self.program.intern_string(name);
                 Ok(Fragment::single(self.program.alloc_iri(Op::Call { name })))
             }

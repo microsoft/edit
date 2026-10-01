@@ -20,23 +20,29 @@ pub fn javascript() {
             }
         } else if /'/ {
             until /$/ {
-                yield string;
-                if /\\./ {}
-                else if /'/ { yield string; break; }
-                await input;
+                if /\\/ {
+                    if /$/ { yield string; await input; }
+                    else if /./ {}
+                } else if /'/ {
+                    break;
+                }
             }
+            yield string;
         } else if /"/ {
             until /$/ {
-                yield string;
-                if /\\./ {}
-                else if /"/ { yield string; break; }
-                await input;
+                if /\\/ {
+                    if /$/ { yield string; await input; }
+                    else if /./ {}
+                } else if /"/ {
+                    break;
+                }
             }
+            yield string;
         } else if /`/ {
             loop {
-                yield string;
-                if /\\./ {}
+                if /\\/ { if /./ {} }
                 else if /`/ { yield string; break; }
+                yield string;
                 await input;
             }
         } else if /(?:break|case|catch|continue|debugger|default|do|else|finally|for|if|return|switch|throw|try|while)\>/ {
