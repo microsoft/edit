@@ -16,6 +16,15 @@ pub fn yaml() {
             // Key: (Value follows)
         }
 
+        yield other;
+
+        if /!![\w-]+/ {
+            yield storage.type;
+            if /\s+/ {
+                yield other;
+            }
+        }
+
         if /[|>][-+]?.*/ {
             // If we see a multiline string inducer, capture content until indentation is back to before.
             // Since we'll skip multiple lines, we need to use nested loops here.
@@ -46,75 +55,24 @@ pub fn yaml() {
 
     if /---/ {
         yield other;
-    } else if /!![\w-]+/ {
-        // Explicit tag, e.g. !!str, !!int (see YAML 1.2.2 §6.9.1).
-        yield storage.type;
-        if /\s+/ {
-            yield other;
-        }
-        if /'/ {
-            until /$/ {
-                yield string;
-                if /''/ {
-                } else if /'/ {
-                    yield string;
-                    break;
-                }
-                await input;
-            }
-        } else if /"/ {
-            until /$/ {
-                yield string;
-                if /\\./ {
-                } else if /"/ {
-                    yield string;
-                    break;
-                }
-                await input;
-            }
-        } else if /true|false|yes|no|null|~/ {
-            if /\s*[^\s#]+[^#]*/ {
-                yield string;
-            } else {
-                yield constant.language;
-            }
-        } else if /(?i:[+-]?\.(?:inf|nan))\>/ {
-            if /\s*[^\s#]+[^#]*/ {
-                yield string;
-            } else {
-                yield constant.numeric;
-            }
-        } else if /-?(?:0x[\da-fA-F_]+|0o[0-7_]+|0b[01_]+|\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/ {
-            if /\s*[^\s#]+[^#]*/ {
-                yield string;
-            } else {
-                yield constant.numeric;
-            }
-        } else if /[^\s#]+[^#]*/ {
-            yield string;
-        }
     } else if /'/ {
-        // Single-quoted string. '' is an escaped quote (see YAML 1.2.2 §7.3.2).
-        // Handled explicitly so that '#' inside quotes isn't mistaken for a comment.
-        until /$/ {
-            yield string;
+        loop {
             if /''/ {
-                // Escaped quote, stay in string.
             } else if /'/ {
                 yield string;
                 break;
             }
+            yield string;
             await input;
         }
     } else if /"/ {
-        // Double-quoted string with backslash escapes.
-        until /$/ {
-            yield string;
+        loop {
             if /\\./ {
             } else if /"/ {
                 yield string;
                 break;
             }
+            yield string;
             await input;
         }
     } else if /true|false|yes|no|null|~/ {
@@ -125,17 +83,7 @@ pub fn yaml() {
         } else {
             yield constant.language;
         }
-    } else if /(?i:[+-]?\.(?:inf|nan))\>/ {
-        // Special values: .inf, -.inf, +.inf, .nan (see YAML 1.2.2 §2.4, Example 2.20).
-        // Same as with keywords above: trailing content means it's actually a string.
-        if /\s*[^\s#]+[^#]*/ {
-            yield string;
-        } else {
-            yield constant.numeric;
-        }
-    } else if /-?(?:0x[\da-fA-F_]+|0o[0-7_]+|0b[01_]+|\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/ {
-        // Numbers, incl. hex/octal/binary (see YAML 1.2.2 §2.4, Example 2.19).
-        // Same as with keywords above.
+    } else if /[+-]?(?i:\.inf|\.nan|(?:0x[\da-f_]+|0o[0-7_]+|0b[01_]+|\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)/ {
         if /\s*[^\s#]+[^#]*/ {
             yield string;
         } else {

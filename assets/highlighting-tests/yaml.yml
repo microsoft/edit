@@ -14,6 +14,16 @@ number_int: 42
 number_float: 3.1415
 number_scientific: 1.23e45
 number_negative: -7
+number_positive: +7
+number_hex: 0xC
+number_octal: 0o14
+number_binary: 0b1010
+number_hex_negative: -0xC
+number_hex_separated: 0xCA_FE
+number_inf: .inf
+number_inf_negative: -.Inf
+number_inf_positive: +.INF
+number_nan: .NaN
 boolean_true: true
 boolean_false: false
 null_value: null
@@ -21,6 +31,10 @@ explicit_null: ~
 date: 2024-06-01
 timestamp: 2024-06-01T12:34:56Z
 confusable_string_number: 1.23e45 1.23e45 # This is a comment
+confusable_hex: 0xCafe extra # This is a comment
+confusable_inf: .infinite
+confusable_nan: .nan suffix
+confusable_binary: 0b1010suffix
 sequence:
   - item1
   - item2
@@ -41,3 +55,32 @@ empty_mapping: { foo: bar }
 literal_colon: "value:with:colons"
 literal_dash: "-not-a-sequence"
 special_chars: "Tab:\t Newline:\n Unicode:\u2713"
+single_quoted: "It's YAML # not a comment" # This is a comment
+double_quoted: 'An escaped "quote" # not a comment' # This is a comment
+empty_single: ""
+empty_double: ""
+multiline_single: "An escaped quote at end of line: '
+  # still a string" # This is a comment
+multiline_double: 'An escaped quote at end of line: "
+  # still a string' # This is a comment
+tagged_number: !!str 123
+tagged_quote: !!int "42" # This is a comment
+tagged_boolean: !!bool true
+tagged_inf: !!float -.inf
+tagged_plain: !!str a plain value # This is a comment
+tagged_empty: !!str ""
+tagged_single: !!str "An escaped quote at end of line: '
+  # still a string" # This is a comment
+tagged_double: !!str 'An escaped quote at end of line: "
+  # still a string' # This is a comment
+tagged_literal: !!str |
+  true
+  # literal text
+after_tagged_literal: false
+tagged_folded: !!str >
+  .inf
+  0xC
+after_tagged_folded: 42
+tagged_sequence:
+  - !!str "# not a comment"
+  - !!int 0o14
