@@ -290,6 +290,7 @@ mod tests {
     fn test_utf8_chars_next() {
         const REPLACEMENT: char = '\u{FFFD}';
 
+        #[allow(clippy::type_complexity)]
         let cases: &[(&[u8], &[(char, usize)])] = &[
             (b"", &[]),
             (b"\0a\x7F", &[('\0', 1), ('a', 2), ('\u{7F}', 3)]),
