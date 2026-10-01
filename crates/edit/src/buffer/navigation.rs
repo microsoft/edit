@@ -49,7 +49,7 @@ pub fn word_backward(doc: &dyn ReadableDocument, offset: usize) -> usize {
 
 /// Word navigation implementation. Matches the behavior of VS Code.
 fn word_navigation<T: WordNavigation>(mut nav: T) -> usize {
-    // First, fill `self.chunk` with at least 1 grapheme.
+    // First, read the initial chunk.
     nav.read();
 
     // Skip one newline, if any.
@@ -101,14 +101,20 @@ impl WordNavigation for WordForward<'_> {
     }
 
     fn skip_newline(&mut self) {
-        // We can rely on the fact that the document does not split graphemes across chunks.
-        // = If there's a newline it's wholly contained in this chunk.
-        // Unlike with `WordBackward`, we can't check for CR and LF separately as only a CR followed
-        // by a LF is a newline. A lone CR in the document is just a regular control character.
-        self.chunk_off += match self.chunk.get(self.chunk_off) {
-            Some(&b'\n') => 1,
-            Some(&b'\r') if self.chunk.get(self.chunk_off + 1) == Some(&b'\n') => 2,
-            _ => 0,
+        match self.chunk {
+            [b'\n', ..] => self.chunk_off = 1,
+            [b'\r', rest @ ..] => {
+                let rest =
+                    if rest.is_empty() { self.doc.read_forward(self.offset + 1) } else { rest };
+
+                // Only consume CR if followed by LF, even across chunks.
+                if rest.first() == Some(&b'\n') {
+                    self.offset += 1;
+                    self.chunk = rest;
+                    self.chunk_off = 1;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -122,8 +128,7 @@ impl WordNavigation for WordForward<'_> {
             }
 
             self.offset += self.chunk.len();
-            self.chunk = self.doc.read_forward(self.offset);
-            self.chunk_off = 0;
+            self.read();
         }
     }
 
@@ -158,34 +163,35 @@ impl WordNavigation for WordBackward<'_> {
     }
 
     fn skip_newline(&mut self) {
-        // We can rely on the fact that the document does not split graphemes across chunks.
-        // = If there's a newline it's wholly contained in this chunk.
-        if self.chunk_off > 0 && self.chunk[self.chunk_off - 1] == b'\n' {
+        if self.chunk.get(self.chunk_off.wrapping_sub(1)) == Some(&b'\n') {
             self.chunk_off -= 1;
+            if self.chunk_off == 0 {
+                self.offset -= self.chunk.len();
+                self.read();
+            }
         }
-        if self.chunk_off > 0 && self.chunk[self.chunk_off - 1] == b'\r' {
+        if self.chunk.get(self.chunk_off.wrapping_sub(1)) == Some(&b'\r') {
             self.chunk_off -= 1;
         }
     }
 
     fn skip_class(&mut self, class: CharClass) {
         while !self.chunk.is_empty() {
-            while self.chunk_off > 0 {
-                if WORD_CLASSIFIER[self.chunk[self.chunk_off - 1] as usize] != class {
+            while let Some(&ch) = self.chunk.get(self.chunk_off.wrapping_sub(1)) {
+                if WORD_CLASSIFIER[ch as usize] != class {
                     return;
                 }
                 self.chunk_off -= 1;
             }
 
             self.offset -= self.chunk.len();
-            self.chunk = self.doc.read_backward(self.offset);
-            self.chunk_off = self.chunk.len();
+            self.read();
         }
     }
 
     fn peek(&self, default: CharClass) -> CharClass {
-        if self.chunk_off > 0 {
-            WORD_CLASSIFIER[self.chunk[self.chunk_off - 1] as usize]
+        if let Some(&ch) = self.chunk.get(self.chunk_off.wrapping_sub(1)) {
+            WORD_CLASSIFIER[ch as usize]
         } else {
             default
         }
@@ -274,17 +280,79 @@ pub fn word_select(doc: &dyn ReadableDocument, offset: usize) -> Range<usize> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::buffer::gap_buffer::GapBuffer;
+
+    #[test]
+    fn test_word_navigation_split_newline() {
+        for (text, gap, forward, backward) in [
+            ("\r\n", 1, 2, 0),
+            ("Hello \r\n World", 7, 14, 0),
+            ("\r\n\r\n", 1, 2, 0),
+            ("\r\n\r\n", 3, 4, 2),
+            ("\rX", 1, 0, 1),
+        ] {
+            let mut doc = GapBuffer::new(true).unwrap();
+            doc.replace(0..0, text.as_bytes());
+            doc.allocate_gap(gap, 0, 0);
+
+            assert_eq!(doc.read_forward(0), &text.as_bytes()[..gap]);
+            assert_eq!(doc.read_backward(text.len()), &text.as_bytes()[gap..]);
+            assert_eq!(
+                (word_forward(&doc, gap - 1), word_backward(&doc, gap + 1)),
+                (forward, backward),
+                "{text:?} with gap at {gap}",
+            );
+        }
+    }
 
     #[test]
     fn test_word_navigation() {
-        assert_eq!(word_forward(&"Hello World".as_bytes(), 0), 5);
-        assert_eq!(word_forward(&"Hello,World".as_bytes(), 0), 5);
-        assert_eq!(word_forward(&"   Hello".as_bytes(), 0), 8);
-        assert_eq!(word_forward(&"\n\nHello".as_bytes(), 0), 1);
+        for (text, offset, expected) in [
+            ("", 0, 0),
+            ("Hello World", 2, 5),
+            ("Hello,World", 0, 5),
+            (" \t Hello", 0, 8),
+            (" \t ", 0, 3),
+            ("\n\nHello", 0, 1),
+            ("\r\n \t Hello", 0, 10),
+            ("\r", 0, 0),
+            (",Hello", 0, 6),
+            (".,!Hello", 0, 3),
+        ] {
+            assert_eq!(word_forward(&text.as_bytes(), offset), expected, "{text:?} at {offset}");
+        }
 
-        assert_eq!(word_backward(&"Hello World".as_bytes(), 11), 6);
-        assert_eq!(word_backward(&"Hello,World".as_bytes(), 10), 6);
-        assert_eq!(word_backward(&"Hello   ".as_bytes(), 7), 0);
-        assert_eq!(word_backward(&"Hello\n\n".as_bytes(), 7), 6);
+        for (text, offset, expected) in [
+            ("", 0, 0),
+            ("Hello World", 11, 6),
+            ("Hello,World", 10, 6),
+            ("Hello \t ", 8, 0),
+            (" \t ", 3, 0),
+            ("Hello\n\n", 7, 6),
+            ("Hello \t \r\n", 10, 0),
+            ("Hello\r", 6, 0),
+            ("Hello,", 6, 0),
+            ("Hello.,!", 8, 5),
+        ] {
+            assert_eq!(word_backward(&text.as_bytes(), offset), expected, "{text:?} at {offset}");
+        }
+    }
+
+    #[test]
+    fn test_word_select() {
+        for (text, offset, expected) in [
+            ("", 0, 0..0),
+            ("h\u{e9}llo", 3, 0..6),
+            ("Hello World", 6, 6..11),
+            ("Hello World", 11, 6..11),
+            ("Hello.,!World", 6, 5..8),
+            ("Hello \t World", 6, 5..8),
+            ("\nHello\n", 3, 1..6),
+            ("Hello\r\nWorld", 5, 0..5),
+            ("Hello\n\n", 6, 6..6),
+            ("Hello\r\n", 7, 7..7),
+        ] {
+            assert_eq!(word_select(&text.as_bytes(), offset), expected, "{text:?} at {offset}");
+        }
     }
 }
