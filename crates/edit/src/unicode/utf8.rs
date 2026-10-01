@@ -250,26 +250,108 @@ impl Iterator for Utf8Chars<'_> {
 
 impl iter::FusedIterator for Utf8Chars<'_> {}
 
+/// Returns the last character using the same invalid-UTF-8 recovery as `Utf8Chars`.
+/// Returns U+FFFD for an empty slice.
+pub fn utf8_decode_last(source: &[u8]) -> char {
+    if source.is_empty() {
+        return Utf8Chars::fffd();
+    }
+
+    let mut offset = source.len();
+    let mut c = unsafe { *source.get_unchecked(offset - 1) };
+
+    // ASCII? Simple.
+    if c.is_ascii() {
+        return c as char;
+    }
+
+    // Find the start of the last UTF8 sequence. It can't be longer than 4 bytes. `start` will
+    // trail the offset on loop exit, as this matches the expectation of `Utf8Chars::next_slow`.
+    let lim = offset.saturating_sub(4);
+    while c & 0xC0 == 0x80 {
+        offset -= 1;
+        if offset <= lim {
+            return Utf8Chars::fffd();
+        }
+        c = unsafe { *source.get_unchecked(offset - 1) };
+    }
+
+    // Parsing the last sequence is successful if the entire tail end was consumed.
+    let mut chars = Utf8Chars::new(source, offset);
+    let ch = chars.next_slow(c);
+    if chars.offset == source.len() { ch } else { Utf8Chars::fffd() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_broken_utf8() {
-        let source = [b'a', 0xED, 0xA0, 0x80, b'b'];
-        let mut chars = Utf8Chars::new(&source, 0);
-        let mut offset = 0;
-        for chunk in source.utf8_chunks() {
-            for ch in chunk.valid().chars() {
-                offset += ch.len_utf8();
-                assert_eq!(chars.next(), Some(ch));
-                assert_eq!(chars.offset(), offset);
+    fn test_utf8_chars_next() {
+        const REPLACEMENT: char = '\u{FFFD}';
+
+        let cases: &[(&[u8], &[(char, usize)])] = &[
+            (b"", &[]),
+            (b"\0a\x7F", &[('\0', 1), ('a', 2), ('\u{7F}', 3)]),
+            (b"\xC2\x80\xDF\xBF", &[('\u{80}', 2), ('\u{7FF}', 4)]),
+            (b"\xE0\xA0\x80\xED\x9F\xBF", &[('\u{800}', 3), ('\u{D7FF}', 6)]),
+            (b"\xF0\x90\x80\x80\xF4\x8F\xBF\xBF", &[('\u{10000}', 4), ('\u{10FFFF}', 8)]),
+            (b"\xE2\x82\xAC\xF1\x91\xA2\xB3", &[('\u{20AC}', 3), ('\u{518B3}', 7)]),
+            // Invalid leads and stray continuation bytes each consume one byte.
+            (
+                b"\x80\xBF\xF5\xFFa",
+                &[(REPLACEMENT, 1), (REPLACEMENT, 2), (REPLACEMENT, 3), (REPLACEMENT, 4), ('a', 5)],
+            ),
+            // Truncated valid prefixes produce one replacement, regardless of their length.
+            (b"\xC2", &[(REPLACEMENT, 1)]),
+            (b"\xE1\x80", &[(REPLACEMENT, 2)]),
+            (b"\xF1\x80", &[(REPLACEMENT, 2)]),
+            (b"\xF1\x80\x80", &[(REPLACEMENT, 3)]),
+            // An invalid continuation is reprocessed, not swallowed with the valid prefix.
+            (b"\xC2a", &[(REPLACEMENT, 1), ('a', 2)]),
+            (b"\xE1\xC2\x80", &[(REPLACEMENT, 1), ('\u{80}', 3)]),
+            (b"\xF1a", &[(REPLACEMENT, 1), ('a', 2)]),
+            (b"\xF1\x80a", &[(REPLACEMENT, 2), ('a', 3)]),
+            (b"\xF1\x80\x80\xC2\x80", &[(REPLACEMENT, 3), ('\u{80}', 5)]),
+            // Overlong encodings, surrogates, and out-of-range values reject the first continuation.
+            (b"\xC1\xBF", &[(REPLACEMENT, 1), (REPLACEMENT, 2)]),
+            (b"\xE0\x9F", &[(REPLACEMENT, 1), (REPLACEMENT, 2)]),
+            (b"\xED\xA0", &[(REPLACEMENT, 1), (REPLACEMENT, 2)]),
+            (b"\xF0\x8F", &[(REPLACEMENT, 1), (REPLACEMENT, 2)]),
+            (b"\xF4\x90", &[(REPLACEMENT, 1), (REPLACEMENT, 2)]),
+        ];
+
+        for &(source, expected) in cases {
+            let mut chars = Utf8Chars::new(source, 0);
+            for &(ch, offset) in expected {
+                assert_eq!(chars.next(), Some(ch), "{source:x?} at {offset}");
+                assert_eq!(chars.offset(), offset, "{source:x?}");
             }
-            if !chunk.invalid().is_empty() {
-                offset += chunk.invalid().len();
-                assert_eq!(chars.next(), Some('\u{FFFD}'));
-                assert_eq!(chars.offset(), offset);
-            }
+            assert_eq!(chars.next(), None, "{source:x?}");
+            assert_eq!(chars.offset(), source.len(), "{source:x?}");
+        }
+    }
+
+    #[test]
+    fn test_utf8_decode_last() {
+        let cases: &[(&[u8], char)] = &[
+            (b"", '\u{FFFD}'),
+            (b"\xFF\x7F", '\u{7F}'),
+            (b"\xC2\x80", '\u{80}'),
+            (b"\xFF\xE2\x82\xAC", '\u{20AC}'),
+            (b"\xFF\xF4\x8F\xBF\xBF", '\u{10FFFF}'),
+            // Truncated sequences.
+            (b"\xC2", '\u{FFFD}'),
+            (b"\xF0\x90\x80", '\u{FFFD}'),
+            // Stray and excess continuation bytes.
+            (b"\x80", '\u{FFFD}'),
+            (b"\x80\x80\x80\x80\x80", '\u{FFFD}'),
+            (b"\xC2\x80\x80", '\u{FFFD}'),
+            (b"a\x80", '\u{FFFD}'),
+        ];
+
+        for &(source, expected) in cases {
+            assert_eq!(utf8_decode_last(source), expected, "{source:x?}");
         }
     }
 }
