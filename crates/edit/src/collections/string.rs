@@ -7,8 +7,8 @@ use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::str::Utf8Error;
 
 use crate::alloc::Allocator;
-use crate::cold_path;
 use crate::collections::BVec;
+use crate::helpers::cold_path;
 
 /// Like a `String` but on borrowed memory. Built on top of [`BVec<u8>`].
 pub struct BString<'a> {
@@ -36,6 +36,12 @@ impl<'a> BString<'a> {
     pub fn from_utf8(vec: BVec<'a, u8>) -> Result<Self, Utf8Error> {
         str::from_utf8(&vec)?;
         Ok(Self { vec })
+    }
+
+    /// Converts this string into a byte vector.
+    #[inline]
+    pub fn into_bytes(self) -> BVec<'a, u8> {
+        self.vec
     }
 
     /// Validates UTF-8, replacing invalid sequences with U+FFFD.

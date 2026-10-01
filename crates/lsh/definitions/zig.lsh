@@ -1,0 +1,42 @@
+#[display_name = "Zig"]
+#[path = "**/*.zig"]
+#[path = "**/*.zon"]
+pub fn zig() {
+    until /$/ {
+        yield other;
+
+        if /\/\/.*/ {
+            yield comment;
+        } else if /\\\\.*/ {
+            yield string;
+        } else if /'/ {
+            single_quote_string();
+        } else if /"/ {
+            double_quote_string();
+        } else if /(?:break|catch|continue|defer|else|errdefer|for|if|nosuspend|orelse|resume|return|suspend|switch|try|while)\>/ {
+            yield keyword.control;
+        } else if /(?:addrspace|align|allowzero|and|asm|callconv|comptime|const|enum|export|extern|fn|inline|linksection|noalias|noinline|opaque|or|packed|pub|struct|test|threadlocal|union|unreachable|var|volatile)\>/ {
+            yield keyword.other;
+        } else if /(?:true|false|null|undefined)\>/ {
+            yield constant.language;
+        } else if /(?:anyerror|anyframe|anyopaque|anytype|bool|comptime_float|comptime_int|error|f16|f32|f64|f80|f128|[iu](?:\d+|size)|noreturn|type|void)\>/ {
+            yield storage.type;
+        } else if /c_(?:char|short|ushort|int|uint|longdouble|longlong|long|ulonglong|ulong)\>/ {
+            yield storage.type;
+        } else if /(?i:0x[\da-f_]+(?:\.[\da-f_]+)?(?:p[+-]?[\d_]+)?|0b[01_]+|0o[0-7_]+|\d[\d_]*(?:\.[\d_]+)?(?:e[+-]?[\d_]+)?)/ {
+            if /\w+/ {
+                // Invalid numeric literal
+            } else {
+                yield constant.numeric;
+            }
+        } else if /@[a-zA-Z_]\w*/ {
+            yield method;
+        } else if /(\w+)\s*\(/ {
+            yield $1 as method;
+        } else if /\w+/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}

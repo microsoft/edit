@@ -6,7 +6,6 @@ use edit::helpers::*;
 use edit::icu;
 use edit::input::{kbmod, vk};
 use edit::tui::*;
-use stdext::string_from_utf8_lossy_owned;
 
 use crate::localization::*;
 use crate::state::*;

@@ -89,10 +89,10 @@
 //! # Example
 //!
 //! ```
+//! use edit::arena::{self, arena_format};
 //! use edit::helpers::Size;
 //! use edit::input::Input;
 //! use edit::tui::*;
-//! use stdext::{arena, arena_format};
 //!
 //! struct State {
 //!     counter: i32,
@@ -147,13 +147,11 @@
 use std::collections::HashSet;
 use std::{io, iter, mem, ptr, time};
 
-use stdext::arena::{Arena, scratch_arena};
-use stdext::collections::{BString, BVec};
-use stdext::{ReplaceRange, arena_format, arena_write_fmt, opt_ptr_eq, str_from_raw_parts};
-
+use crate::arena::{Arena, arena_format, arena_write_fmt, scratch_arena};
 use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
 use crate::clipboard::Clipboard;
+use crate::collections::{BString, BVec};
 use crate::document::WriteableDocument;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::hash::*;
@@ -404,7 +402,7 @@ impl Tui {
             modal_default_bg: StraightRgba::zero(),
             modal_default_fg: StraightRgba::zero(),
 
-            size: Size { width: 0, height: 0 },
+            size: Size { width: 80, height: 24 },
             mouse_position: Point::MIN,
             mouse_down_position: Point::MIN,
             left_mouse_down_target: 0,
@@ -427,7 +425,7 @@ impl Tui {
 
             settling_have: 0,
             settling_want: 0,
-            read_timeout: time::Duration::MAX,
+            read_timeout: time::Duration::ZERO,
         };
         Self::clean_node_path(&mut tui.mouse_hover_node_path);
         Self::clean_node_path(&mut tui.mouse_down_node_path);
@@ -476,6 +474,11 @@ impl Tui {
         // We don't use the size stored in the framebuffer, because until
         // `render()` is called, the framebuffer will use a stale size.
         self.size
+    }
+
+    /// Set the viewport size.
+    pub fn set_size(&mut self, size: Size) {
+        self.size = size;
     }
 
     /// Returns an indexed color from the framebuffer.
@@ -1498,6 +1501,11 @@ impl<'a> Context<'a, '_> {
         // At this point, it's more like "focus_well?" instead of "focus_well!".
         let focus_well = self.tree.last_node;
 
+        // Only blocks containing the focus participate in focus traversal.
+        if !self.tui.is_subtree_focused(&focus_well.borrow()) {
+            return;
+        }
+
         // Remember the focused node, if any, because once the code below runs,
         // we need it for the `Tree::visit_all` call.
         if self.is_focused() {
@@ -1510,14 +1518,9 @@ impl<'a> Context<'a, '_> {
             return;
         };
 
-        // Filter down to nodes that are focus wells and contain the focus. They're
-        // basically the "tab container". We test for the node depth to ensure that
-        // we don't accidentally pick a focus well next to or inside the focused node.
-        {
-            let n = focus_well.borrow();
-            if !n.attributes.focus_well || n.depth > focused.borrow().depth {
-                return;
-            }
+        // Focus wells are the containers within which Tab traversal wraps.
+        if !focus_well.borrow().attributes.focus_well {
+            return;
         }
 
         // Filter down to Tab/Shift+Tab inputs.
@@ -2418,7 +2421,11 @@ impl<'a> Context<'a, '_> {
                     } else {
                         CursorMovement::Grapheme
                     };
-                    tb.delete(granularity, -1);
+                    if single_line {
+                        tb.delete(granularity, -1);
+                    } else {
+                        tb.backspace_with_auto_unindent(granularity);
+                    }
                 }
                 vk::TAB => {
                     if single_line {

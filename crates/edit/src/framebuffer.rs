@@ -8,15 +8,13 @@ use std::ops::{BitOr, BitXor};
 use std::ptr;
 use std::slice::ChunksExact;
 
-use stdext::arena::{Arena, scratch_arena};
-use stdext::collections::BString;
-use stdext::simd::memset;
-use stdext::unicode::{SanitizedControlChars, sanitize_control_chars};
-use stdext::{MaybeOwned, arena_write_fmt};
-
+use crate::arena::{Arena, arena_write_fmt, scratch_arena};
+use crate::collections::BString;
 use crate::helpers::{CoordType, Point, Rect, Size};
+use crate::maybe_owned::MaybeOwned;
 use crate::oklab::StraightRgba;
-use crate::unicode::MeasurementConfig;
+use crate::simd::memset;
+use crate::unicode::{MeasurementConfig, SanitizedControlChars, sanitize_control_chars};
 
 // Same constants as used in the PCG family of RNGs.
 #[cfg(target_pointer_width = "32")]
@@ -167,6 +165,10 @@ impl Framebuffer {
 
     /// Begins a new frame with the given `size`.
     pub fn flip(&mut self, size: Size) {
+        if size.is_empty() {
+            return;
+        }
+
         if size != self.buffers[0].bg_bitmap.size {
             for buffer in &mut self.buffers {
                 buffer.text = LineBuffer::new(size);
@@ -479,6 +481,10 @@ impl Framebuffer {
             (back, front)
         };
 
+        if front.text.size.is_empty() {
+            return BString::empty();
+        }
+
         let mut front_lines = front.text.lines.iter(); // hahaha
         let mut front_bgs = front.bg_bitmap.iter();
         let mut front_fgs = front.fg_bitmap.iter();
@@ -674,6 +680,7 @@ struct LineBuffer {
 
 impl LineBuffer {
     fn new(size: Size) -> Self {
+        debug_assert!(!size.is_empty());
         Self { lines: vec![String::new(); size.height as usize], size }
     }
 
@@ -821,6 +828,7 @@ struct Bitmap {
 
 impl Bitmap {
     fn new(size: Size) -> Self {
+        debug_assert!(!size.is_empty());
         Self { data: vec![StraightRgba::zero(); (size.width * size.height) as usize], size }
     }
 
@@ -931,6 +939,7 @@ struct AttributeBuffer {
 
 impl AttributeBuffer {
     fn new(size: Size) -> Self {
+        debug_assert!(!size.is_empty());
         Self { data: vec![Default::default(); (size.width * size.height) as usize], size }
     }
 

@@ -19,19 +19,18 @@ use draw_editor::*;
 use draw_filepicker::*;
 use draw_menubar::*;
 use draw_statusbar::*;
+use edit::arena::{self, Arena, arena_format, scratch_arena};
+use edit::collections::{BString, BVec};
 use edit::framebuffer::{self, IndexedColor};
 use edit::helpers::*;
 use edit::input::{self, kbmod, vk};
 use edit::oklab::StraightRgba;
 use edit::tui::*;
+use edit::unicode::sanitize_control_chars;
 use edit::vt::{self, Token};
 use edit::{base64, path, sys, unicode};
 use localization::*;
 use state::*;
-use stdext::arena::{self, Arena, scratch_arena};
-use stdext::arena_format;
-use stdext::collections::{BString, BVec};
-use stdext::unicode::sanitize_control_chars;
 
 use crate::settings::Settings;
 
@@ -64,7 +63,7 @@ fn main() -> process::ExitCode {
 
 fn run() -> apperr::Result<()> {
     // Init `sys` first, as everything else may depend on its functionality (IO, function pointers, etc.).
-    let _sys_deinit = sys::init();
+    let _sys_deinit = sys::init()?;
     // Next init `arena`, so that `scratch_arena` works. `loc` depends on it.
     arena::init(SCRATCH_ARENA_CAPACITY)?;
     // Init the `loc` module, so that error messages are localized.
@@ -83,15 +82,16 @@ fn run() -> apperr::Result<()> {
 
     handle_stdin(&mut state)?;
 
+    let mut vt_parser = vt::Parser::new();
+    let mut input_parser = input::Parser::new();
+    let mut tui = Tui::new()?;
+    tui.set_size(sys::get_window_size()?);
+
     // Switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // `handle_args` may want to print a help message (must not fail),
     // and reads files (may hang; should be cancelable with Ctrl+C).
     // As such, we call this after `handle_args`.
     sys::switch_modes()?;
-
-    let mut vt_parser = vt::Parser::new();
-    let mut input_parser = input::Parser::new();
-    let mut tui = Tui::new()?;
 
     let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
 
@@ -115,8 +115,6 @@ fn run() -> apperr::Result<()> {
     tui.set_modal_default_bg(floater_bg);
     tui.set_modal_default_fg(floater_fg);
 
-    sys::inject_window_size_into_stdin();
-
     #[cfg(feature = "debug-latency")]
     let mut last_latency_width = 0;
 
@@ -130,7 +128,7 @@ fn run() -> apperr::Result<()> {
         {
             let scratch = scratch_arena(None);
             let read_timeout = vt_parser.read_timeout().min(tui.read_timeout());
-            let Some(input) = sys::read_stdin(&scratch, read_timeout) else {
+            let Some((resize, input)) = sys::read_stdin(&scratch, read_timeout) else {
                 break;
             };
 
@@ -140,15 +138,21 @@ fn run() -> apperr::Result<()> {
                 passes = 0usize;
             }
 
+            if let Some(size) = resize {
+                draw(&mut tui, Some(input::Input::Resize(size)), &mut state);
+                #[cfg(feature = "debug-latency")]
+                {
+                    passes += 1;
+                }
+            }
+
             let vt_iter = vt_parser.parse(&input);
             let mut input_iter = input_parser.parse(vt_iter);
 
             while {
                 let input = input_iter.next();
                 let more = input.is_some();
-                let mut ctx = tui.create_context(input);
-
-                draw(&mut ctx, &mut state);
+                draw(&mut tui, input, &mut state);
 
                 #[cfg(feature = "debug-latency")]
                 {
@@ -162,9 +166,7 @@ fn run() -> apperr::Result<()> {
         // Continue rendering until the layout has settled.
         // This can take >1 frame, if the input focus is tossed between different controls.
         while tui.needs_settling() {
-            let mut ctx = tui.create_context(None);
-
-            draw(&mut ctx, &mut state);
+            draw(&mut tui, None, &mut state);
 
             #[cfg(feature = "debug-latency")]
             {
@@ -189,7 +191,7 @@ fn run() -> apperr::Result<()> {
 
             #[cfg(feature = "debug-latency")]
             {
-                use stdext::arena_write_fmt;
+                use edit::arena::arena_write_fmt;
 
                 // Print the number of passes and latency in the top right corner.
                 let time_end = std::time::Instant::now();
@@ -336,7 +338,9 @@ fn print_version() {
     sys::write_stdout(concat!("edit version ", env!("CARGO_PKG_VERSION"), "\n"));
 }
 
-fn draw(ctx: &mut Context, state: &mut State) {
+fn draw(tui: &mut Tui, input: Option<input::Input>, state: &mut State) {
+    let ctx = &mut tui.create_context(input);
+
     draw_menubar(ctx, state);
     draw_editor(ctx, state);
     draw_statusbar(ctx, state);
@@ -623,9 +627,13 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         // We explicitly set a high read timeout, because we're not
         // waiting for user keyboard input. If we encounter a lone ESC,
         // it's unlikely to be from a ESC keypress, but rather from a VT sequence.
-        let Some(input) = sys::read_stdin(&scratch, Duration::from_secs(3)) else {
+        let Some((resize, input)) = sys::read_stdin(&scratch, Duration::from_secs(3)) else {
             break;
         };
+
+        if let Some(size) = resize {
+            tui.set_size(size);
+        }
 
         let mut vt_stream = vt_parser.parse(&input);
         while let Some(token) = vt_stream.next() {
@@ -694,6 +702,8 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
 
     if ambiguous_width == 2 {
         unicode::setup_ambiguous_width(2);
+        // The text buffer cursor caches the visual column, which
+        // may change if ambiguous width characters are now wide.
         state.documents.reflow_all();
     }
 

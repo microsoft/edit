@@ -46,10 +46,9 @@
 
 use std::slice;
 
-use stdext::arena::scratch_arena;
-use stdext::collections::BVec;
-
-use super::*;
+use super::charset::Charset;
+use super::ir::*;
+use crate::runtime::Register;
 
 // 0xC2-0xF4 are UTF-8 leading bytes for multibyte sequences. Including them lets
 // `\w+` consume entire multibyte characters, which is important for identifiers
@@ -83,7 +82,7 @@ const ASCII_DIGIT_CHARSET: Charset = {
     charset
 };
 
-pub type CaptureList<'a> = BVec<'a, (IRRegCell<'a>, IRRegCell<'a>)>;
+pub type CaptureList = Vec<(RegId, RegId)>;
 
 #[derive(Debug, Clone)]
 enum Regex {
@@ -508,20 +507,20 @@ impl<'a> RegexParser<'a> {
     }
 }
 
-struct CodeGen<'a, 'c> {
-    compiler: &'c mut Compiler<'a>,
-    captures: CaptureList<'a>,
-    dst_good: IRCell<'a>,
-    dst_bad: IRCell<'a>,
+struct CodeGen<'c> {
+    program: &'c mut Program,
+    captures: CaptureList,
+    dst_good: NodeId,
+    dst_bad: NodeId,
 }
 
-impl<'a, 'c> CodeGen<'a, 'c> {
-    fn new(compiler: &'c mut Compiler<'a>, dst_good: IRCell<'a>, dst_bad: IRCell<'a>) -> Self {
-        let captures = CaptureList::empty();
-        Self { compiler, captures, dst_good, dst_bad }
+impl<'c> CodeGen<'c> {
+    fn new(program: &'c mut Program, dst_good: NodeId, dst_bad: NodeId) -> Self {
+        let captures = CaptureList::new();
+        Self { program, captures, dst_good, dst_bad }
     }
 
-    fn generate(&mut self, regex: &Regex) -> Result<IRCell<'a>, String> {
+    fn generate(&mut self, regex: &Regex) -> Result<NodeId, String> {
         self.emit(regex, self.dst_good, self.dst_bad)
     }
 
@@ -531,13 +530,8 @@ impl<'a, 'c> CodeGen<'a, 'c> {
     /// - Matching the pattern leads to `on_match`
     /// - Failing to match leads to `on_fail`
     ///
-    /// For `IRI::If` nodes: `then` = match branch, `next` = fail branch.
-    fn emit(
-        &mut self,
-        regex: &Regex,
-        on_match: IRCell<'a>,
-        on_fail: IRCell<'a>,
-    ) -> Result<IRCell<'a>, String> {
+    /// For `Op::If` nodes: `then` = match branch, `next` = fail branch.
+    fn emit(&mut self, regex: &Regex, on_match: NodeId, on_fail: NodeId) -> Result<NodeId, String> {
         match regex {
             Regex::Empty => Ok(on_match),
 
@@ -548,17 +542,17 @@ impl<'a, 'c> CodeGen<'a, 'c> {
             Regex::CharClass(cs) => self.emit_charset(cs, 1, 1, on_match, on_fail),
 
             Regex::Dot => {
-                let dst = self.compiler.get_reg(Register::InputOffset);
-                let node = self.compiler.alloc_iri(IRI::AddImm { dst, imm: 1 });
-                node.borrow_mut().next = Some(on_match);
+                let dst = self.program.get_reg(Register::InputOffset);
+                let node = self.program.alloc_iri(Op::AddImm { dst, imm: 1 });
+                self.program.graph[node].next = Some(on_match);
                 Ok(node)
             }
 
             Regex::EndOfLine => {
                 let if_node = self
-                    .compiler
-                    .alloc_iri(IRI::If { condition: Condition::EndOfLine, then: on_match });
-                if_node.borrow_mut().next = Some(on_fail);
+                    .program
+                    .alloc_iri(Op::If { condition: Condition::EndOfLine, then: on_match });
+                self.program.graph[if_node].next = Some(on_fail);
                 Ok(if_node)
             }
 
@@ -600,21 +594,21 @@ impl<'a, 'c> CodeGen<'a, 'c> {
                 if *capturing {
                     // Capturing group: wrap inner pattern with Mov instructions to save
                     // the start and end positions of the matched substring.
-                    let start_reg = self.compiler.alloc_vreg();
-                    let end_reg = self.compiler.alloc_vreg();
+                    let start_reg = self.program.alloc_vreg();
+                    let end_reg = self.program.alloc_vreg();
 
-                    let off_reg = self.compiler.get_reg(Register::InputOffset);
-                    let save_end = self.compiler.alloc_iri(IRI::Mov { dst: end_reg, src: off_reg });
-                    save_end.borrow_mut().next = Some(on_match);
+                    let off_reg = self.program.get_reg(Register::InputOffset);
+                    let save_end = self.program.alloc_iri(Op::Mov { dst: end_reg, src: off_reg });
+                    self.program.graph[save_end].next = Some(on_match);
 
                     let inner_node = self.emit(inner, save_end, on_fail)?;
 
                     // Push *after* emit, so nested groups come first in the reversed list.
-                    self.captures.push(self.compiler.arena, (start_reg, end_reg));
+                    self.captures.push((start_reg, end_reg));
 
                     let save_start =
-                        self.compiler.alloc_iri(IRI::Mov { dst: start_reg, src: off_reg });
-                    save_start.borrow_mut().next = Some(inner_node);
+                        self.program.alloc_iri(Op::Mov { dst: start_reg, src: off_reg });
+                    self.program.graph[save_start].next = Some(inner_node);
 
                     Ok(save_start)
                 } else {
@@ -627,23 +621,23 @@ impl<'a, 'c> CodeGen<'a, 'c> {
     fn emit_for_backtracking(
         &mut self,
         inner: &Regex,
-        on_match: IRCell<'a>,
-        on_fail: IRCell<'a>,
-    ) -> Result<IRCell<'a>, String> {
+        on_match: NodeId,
+        on_fail: NodeId,
+    ) -> Result<NodeId, String> {
         // Since each alternative may fail, we need to save the offset for backtracking.
-        let off_reg = self.compiler.get_reg(Register::InputOffset);
-        let saved = self.compiler.alloc_vreg();
+        let off_reg = self.program.get_reg(Register::InputOffset);
+        let saved = self.program.alloc_vreg();
 
         // Create the backtracking node (restores the offset = the on_fail for the self.emit() below).
-        let restore = self.compiler.alloc_iri(IRI::Mov { dst: off_reg, src: saved });
-        restore.borrow_mut().next = Some(on_fail);
+        let restore = self.program.alloc_iri(Op::Mov { dst: off_reg, src: saved });
+        self.program.graph[restore].next = Some(on_fail);
 
         // Recurse into the alternative.
         let entry = self.emit(inner, on_match, restore)?;
 
         // Create the save node whose target is the self.emit() above.
-        let save = self.compiler.alloc_iri(IRI::Mov { dst: saved, src: off_reg });
-        save.borrow_mut().next = Some(entry);
+        let save = self.program.alloc_iri(Op::Mov { dst: saved, src: off_reg });
+        self.program.graph[save].next = Some(entry);
         Ok(save)
     }
 
@@ -658,14 +652,14 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         inner: &Regex,
         min: u32,
         max: u32,
-        on_match: IRCell<'a>,
-        on_fail: IRCell<'a>,
-    ) -> Result<IRCell<'a>, String> {
+        on_match: NodeId,
+        on_fail: NodeId,
+    ) -> Result<NodeId, String> {
         // `.*` = skip to end of line. Very common pattern, special-cased for speed.
         if min == 0 && max == u32::MAX && matches!(*inner, Regex::Dot) {
-            let off_reg = self.compiler.get_reg(Register::InputOffset);
-            let skip_node = self.compiler.alloc_iri(IRI::MovImm { dst: off_reg, imm: u32::MAX });
-            skip_node.borrow_mut().next = Some(on_match);
+            let off_reg = self.program.get_reg(Register::InputOffset);
+            let skip_node = self.program.alloc_iri(Op::MovImm { dst: off_reg, imm: u32::MAX });
+            self.program.graph[skip_node].next = Some(on_match);
             return Ok(skip_node);
         }
 
@@ -730,27 +724,26 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         &mut self,
         s: &str,
         case_insensitive: bool,
-        on_match: IRCell<'a>,
-        on_fail: IRCell<'a>,
-    ) -> Result<IRCell<'a>, String> {
+        on_match: NodeId,
+        on_fail: NodeId,
+    ) -> Result<NodeId, String> {
         if s.is_empty() {
             return Ok(on_match);
         }
 
-        let scratch = scratch_arena(Some(self.compiler.arena));
+        let lower;
         let s = if case_insensitive {
-            let mut lower = BString::from_str(&*scratch, s);
-            lower.make_ascii_lowercase();
-            lower.leak()
+            lower = s.to_ascii_lowercase();
+            &lower
         } else {
             s
         };
 
-        let s = self.compiler.intern_string(s);
+        let s = self.program.intern_string(s);
         let condition =
             if case_insensitive { Condition::PrefixInsensitive(s) } else { Condition::Prefix(s) };
-        let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
-        if_node.borrow_mut().next = Some(on_fail);
+        let if_node = self.program.alloc_iri(Op::If { condition, then: on_match });
+        self.program.graph[if_node].next = Some(on_fail);
         Ok(if_node)
     }
 
@@ -759,9 +752,9 @@ impl<'a, 'c> CodeGen<'a, 'c> {
         cs: &Charset,
         min: u32,
         max: u32,
-        on_match: IRCell<'a>,
-        on_fail: IRCell<'a>,
-    ) -> Result<IRCell<'a>, String> {
+        on_match: NodeId,
+        on_fail: NodeId,
+    ) -> Result<NodeId, String> {
         let mut next = if min == 0 { on_match } else { on_fail };
 
         // If the expression is of form [a], [ab], [aA], or [aAbB] it is
@@ -794,12 +787,12 @@ impl<'a, 'c> CodeGen<'a, 'c> {
             }
         }
 
-        let cs = self.compiler.intern_charset(cs);
+        let cs = self.program.intern_charset(cs);
         let condition = Condition::Charset { cs, min, max };
-        let if_node = self.compiler.alloc_iri(IRI::If { condition, then: on_match });
+        let if_node = self.program.alloc_iri(Op::If { condition, then: on_match });
 
         // min=0 implies that it cannot fail. Remove `on_fail` to allow for later optimizations.
-        if_node.borrow_mut().next = Some(next);
+        self.program.graph[if_node].next = Some(next);
 
         Ok(if_node)
     }
@@ -809,16 +802,16 @@ impl<'a, 'c> CodeGen<'a, 'c> {
 ///
 /// The generated IR is wired to `dst_good` on successful match and `dst_bad` on failure.
 /// The returned tuple contains the start of the IR graph and a list of capture group ranges.
-pub fn parse<'a>(
-    compiler: &mut Compiler<'a>,
+pub fn parse(
+    program: &mut Program,
     pattern: &str,
-    dst_good: IRCell<'a>,
-    dst_bad: IRCell<'a>,
-) -> Result<(IRCell<'a>, CaptureList<'a>), String> {
+    dst_good: NodeId,
+    dst_bad: NodeId,
+) -> Result<(NodeId, CaptureList), String> {
     let parser = RegexParser::new(pattern);
     let regex = parser.parse()?;
 
-    let mut codegen = CodeGen::new(compiler, dst_good, dst_bad);
+    let mut codegen = CodeGen::new(program, dst_good, dst_bad);
     let entry = codegen.generate(&regex)?;
 
     // Reverse captures: Concat iterates in reverse, so groups are pushed in reverse order.

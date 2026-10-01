@@ -448,12 +448,6 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                         'M' if csi.param_count == 0 => {
                             self.parser.x10_mouse_want = true;
                         }
-                        't' if csi.params[0] == 8 => {
-                            // Window Size
-                            let width = (csi.params[2] as CoordType).clamp(1, 32767);
-                            let height = (csi.params[1] as CoordType).clamp(1, 32767);
-                            return Some(Input::Resize(Size { width, height }));
-                        }
                         _ => {}
                     }
                 }

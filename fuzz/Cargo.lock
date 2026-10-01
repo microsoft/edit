@@ -28,11 +28,10 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "edit"
-version = "1.2.1"
+version = "2.0.0"
 dependencies = [
  "libc",
  "lsh",
- "stdext",
  "toml-span",
  "windows-sys",
  "winresource",
@@ -44,7 +43,6 @@ version = "0.0.0"
 dependencies = [
  "edit",
  "libfuzzer-sys",
- "stdext",
 ]
 
 [[package]]
@@ -93,10 +91,7 @@ dependencies = [
 
 [[package]]
 name = "lsh"
-version = "0.0.0"
-dependencies = [
- "stdext",
-]
+version = "0.1.0"
 
 [[package]]
 name = "r-efi"
@@ -117,17 +112,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
-name = "stdext"
-version = "0.0.0"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "toml-span"
-version = "0.6.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c6532e5b62b652073bff0e2050ef57e4697a853be118d6c57c32b59fffdeaab"
+checksum = "f22ba417d437b5fa5dcba6c27dbd6c14f38845315b724d89fed73b7a426451b7"
 dependencies = [
  "smallvec",
 ]

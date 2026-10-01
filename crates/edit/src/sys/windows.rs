@@ -9,15 +9,64 @@ use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull, null, null_mut};
 use std::{io, mem, time};
 
-use stdext::arena::{Arena, scratch_arena};
-use stdext::arena_write_fmt;
-use stdext::collections::{BString, BVec};
 use windows_sys::Win32::Storage::FileSystem;
+use windows_sys::Win32::System::Memory::{
+    MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc, VirtualFree,
+};
 use windows_sys::Win32::System::{Console, IO, LibraryLoader, Threading};
 use windows_sys::Win32::{Foundation, Globalization};
 use windows_sys::core::*;
 
+use crate::arena::{Arena, scratch_arena};
+use crate::collections::{BString, BVec};
 use crate::helpers::*;
+
+/// Reserves a virtual memory region of the given size.
+/// To commit the memory, use [`virtual_commit`].
+/// To release the memory, use [`virtual_release`].
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Don't forget to release the memory when you're done with it or you'll leak it.
+pub unsafe fn virtual_reserve(size: usize) -> io::Result<NonNull<u8>> {
+    unsafe {
+        let res = VirtualAlloc(null_mut(), size, MEM_RESERVE, PAGE_READWRITE);
+        if res.is_null() {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(NonNull::new_unchecked(res as *mut _))
+        }
+    }
+}
+
+/// Releases a virtual memory region of the given size.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Make sure to only pass pointers acquired from [`virtual_reserve`].
+pub unsafe fn virtual_release(base: NonNull<u8>, _size: usize) {
+    unsafe {
+        // NOTE: `VirtualFree` fails if the pointer isn't
+        // a valid base address or if the size isn't zero.
+        VirtualFree(base.as_ptr() as *mut _, 0, MEM_RELEASE);
+    }
+}
+
+/// Commits a virtual memory region of the given size.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Make sure to only pass pointers acquired from [`virtual_reserve`]
+/// and to pass a size less than or equal to the size passed to [`virtual_reserve`].
+pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> io::Result<()> {
+    unsafe {
+        let res = VirtualAlloc(base.as_ptr() as *mut _, size, MEM_COMMIT, PAGE_READWRITE);
+        if res.is_null() { Err(io::Error::last_os_error()) } else { Ok(()) }
+    }
+}
 
 macro_rules! w_env {
     ($s:literal) => {{
@@ -78,7 +127,6 @@ struct State {
     stdin_mode_old: u32,
     stdout_mode_old: u32,
     leading_surrogate: u16,
-    inject_resize: bool,
     wants_exit: bool,
 }
 
@@ -91,7 +139,6 @@ static mut STATE: State = State {
     stdin_mode_old: INVALID_CONSOLE_MODE,
     stdout_mode_old: INVALID_CONSOLE_MODE,
     leading_surrogate: 0,
-    inject_resize: false,
     wants_exit: false,
 };
 
@@ -104,14 +151,14 @@ extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> BOOL {
 }
 
 /// Initializes the platform-specific state.
-pub fn init() -> Deinit {
+pub fn init() -> io::Result<Deinit> {
     unsafe {
         // Get the stdin and stdout handles first, so that if this function fails,
         // we at least got something to use for `write_stdout`.
         STATE.stdin = Console::GetStdHandle(Console::STD_INPUT_HANDLE);
         STATE.stdout = Console::GetStdHandle(Console::STD_OUTPUT_HANDLE);
 
-        Deinit
+        Ok(Deinit)
     }
 }
 
@@ -235,27 +282,21 @@ impl Drop for Deinit {
     }
 }
 
-/// During startup we need to get the window size from the terminal.
-/// Because I didn't want to type a bunch of code, this function tells
-/// [`read_stdin`] to inject a fake sequence, which gets picked up by
-/// the input parser and provided to the TUI code.
-pub fn inject_window_size_into_stdin() {
-    unsafe {
-        STATE.inject_resize = true;
-    }
-}
-
-fn get_console_size() -> Option<Size> {
+pub fn get_window_size() -> io::Result<Size> {
     unsafe {
         let mut info: Console::CONSOLE_SCREEN_BUFFER_INFOEX = mem::zeroed();
         info.cbSize = mem::size_of::<Console::CONSOLE_SCREEN_BUFFER_INFOEX>() as u32;
         if Console::GetConsoleScreenBufferInfoEx(STATE.stdout, &mut info) == 0 {
-            return None;
+            return Err(last_os_error());
         }
 
-        let w = (info.srWindow.Right - info.srWindow.Left + 1).max(1) as CoordType;
-        let h = (info.srWindow.Bottom - info.srWindow.Top + 1).max(1) as CoordType;
-        Some(Size { width: w, height: h })
+        let width = info.srWindow.Right as CoordType - info.srWindow.Left as CoordType + 1;
+        let height = info.srWindow.Bottom as CoordType - info.srWindow.Top as CoordType + 1;
+        if width <= 0 || height <= 0 {
+            Err(io::Error::other("invalid terminal size"))
+        } else {
+            Ok(Size { width, height })
+        }
     }
 }
 
@@ -264,19 +305,14 @@ fn get_console_size() -> Option<Size> {
 /// # Returns
 ///
 /// * `None` if there was an error reading from stdin.
-/// * `Some("")` if the given timeout was reached.
-/// * Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<'_>> {
+/// * `Some((_, ""))` if the given timeout was reached.
+/// * Otherwise, it returns a pending resize and the read string.
+pub fn read_stdin(
+    arena: &Arena,
+    mut timeout: time::Duration,
+) -> Option<(Option<Size>, BString<'_>)> {
     let scratch = scratch_arena(Some(arena));
-
-    // On startup we're asked to inject a window size so that the UI system can layout the elements.
-    // --> Inject a fake sequence for our input parser.
     let mut resize_event = None;
-    if unsafe { STATE.inject_resize } {
-        unsafe { STATE.inject_resize = false };
-        timeout = time::Duration::ZERO;
-        resize_event = get_console_size();
-    }
 
     let read_poll = timeout != time::Duration::MAX; // there is a timeout -> don't block in read()
     let input_buf = scratch.alloc_uninit_slice(4 * KIBI);
@@ -312,7 +348,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
 
         // Read from stdin.
         let input = unsafe {
-            // If we had a `inject_resize`, we don't want to block indefinitely for other pending input on startup,
+            // If we had a pending resize, we don't want to block indefinitely for other input on startup,
             // but are still interested in any other pending input that may be waiting for us.
             let flags = if read_poll { CONSOLE_READ_NOWAIT } else { 0 };
             let mut read = 0;
@@ -360,20 +396,10 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
         }
     }
 
-    const RESIZE_EVENT_FMT_MAX_LEN: usize = 16; // "\x1b[8;65535;65535t"
-    let resize_event_len = if resize_event.is_some() { RESIZE_EVENT_FMT_MAX_LEN } else { 0 };
     // +1 to account for a potential `STATE.leading_surrogate`.
     let utf8_max_len = (utf16_buf_len + 1) * 3;
     let mut text = BString::empty();
-    text.reserve(arena, utf8_max_len + resize_event_len);
-
-    // Now prepend our previously extracted resize event.
-    if let Some(resize_event) = resize_event {
-        // If I read xterm's documentation correctly, CSI 18 t reports the window size in characters.
-        // CSI 8 ; height ; width t is the response. Of course, we didn't send the request,
-        // but we can use this fake response to trigger the editor to resize itself.
-        arena_write_fmt!(arena, text, "\x1b[8;{};{}t", resize_event.height, resize_event.width);
-    }
+    text.reserve(arena, utf8_max_len);
 
     // If the input ends with a lone lead surrogate, we need to remember it for the next read.
     if utf16_buf_len > 0 {
@@ -409,7 +435,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
         }
     }
 
-    Some(text)
+    Some((resize_event, text))
 }
 
 /// Writes a string to stdout.

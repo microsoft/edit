@@ -25,10 +25,10 @@
 //!
 //! ## Quirks
 //!
-//! - `IR.offset` starts as `usize::MAX` (unvisited). Codegen sets it to the bytecode
+//! - Node offsets start as `usize::MAX` (unvisited). Codegen sets them to the bytecode
 //!   address. If we encounter a node with `offset != MAX`, it's a backward reference (loop)
 //!   We need to then emit a jump to the already-assigned address.
-//! - Physical registers have `physical = Some(...)`.
+//! - Fixed physical registers are identified by `RegId::is_physical()`.
 //!   Liveness analysis ignores them (they're always "live").
 //!
 //! ### DFS
@@ -52,28 +52,54 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use stdext::arena::scratch_arena;
-
-use super::*;
-use crate::runtime::Instruction;
+use super::index_vec::{IndexType, IndexVec};
+use super::ir::*;
+use super::{Charset, CompileError, CompileResult};
+use crate::runtime::{Instruction, Register};
 
 #[derive(Debug, Clone, Copy)]
 enum Relocation<'a> {
     ByName(usize, &'a str),
-    ByNode(usize, IRCell<'a>),
+    ByNode(usize, NodeId),
+}
+
+pub struct Assembly {
+    pub instructions: Vec<u8>,
+    pub entrypoints: Vec<Entrypoint>,
+    pub charsets: Vec<Charset>,
+    pub strings: Vec<String>,
+    pub highlight_kinds: Vec<HighlightKind>,
+}
+
+pub struct Entrypoint {
+    pub name: String,
+    pub display_name: String,
+    pub paths: Vec<String>,
+    pub address: usize,
 }
 
 pub struct Backend<'a> {
-    assembly: Assembly<'a>,
+    program: &'a Program,
+    node_offsets: IndexVec<NodeId, usize>,
+    register_allocations: IndexVec<RegId, Option<Register>>,
+    assembly: Assembly,
     relocations: Vec<Relocation<'a>>,
     functions_seen: HashMap<&'a str, usize>,
-    charsets_seen: HashMap<*const Charset, usize>,
-    strings_seen: HashMap<*const str, usize>,
+    charsets_seen: HashMap<CharsetId, usize>,
+    strings_seen: HashMap<StringId, usize>,
 }
 
 impl<'a> Backend<'a> {
-    pub fn new() -> Self {
+    pub fn new(program: &'a Program) -> Self {
+        let node_offsets = IndexVec::from_elem(usize::MAX, program.graph.len());
+        let mut register_allocations = IndexVec::from_elem(None, program.register_count);
+        for index in 0..Register::COUNT {
+            register_allocations[RegId::from_usize(index)] = Some(Register::from_usize(index));
+        }
         Self {
+            program,
+            node_offsets,
+            register_allocations,
             assembly: Assembly {
                 instructions: Default::default(),
                 entrypoints: Default::default(),
@@ -88,12 +114,12 @@ impl<'a> Backend<'a> {
         }
     }
 
-    pub fn compile(mut self, compiler: &Compiler<'a>) -> CompileResult<Assembly<'a>> {
-        for function in &compiler.functions {
+    pub fn compile(mut self) -> CompileResult<Assembly> {
+        for function in &self.program.functions {
             self.allocate_registers(function)?;
 
             let entrypoint_offset = self.assembly.instructions.len();
-            self.functions_seen.insert(function.name, entrypoint_offset);
+            self.functions_seen.insert(&function.name, entrypoint_offset);
             self.generate_code(function)?;
             self.process_relocations();
         }
@@ -120,33 +146,36 @@ impl<'a> Backend<'a> {
             });
         }
 
-        self.assembly.entrypoints = compiler
+        self.assembly.entrypoints = self
+            .program
             .functions
             .iter()
             .filter(|f| f.public)
             .map(|f| Entrypoint {
                 name: f.name.to_string(),
-                display_name: f.attributes.display_name.unwrap_or(f.name).to_string(),
+                display_name: f.attributes.display_name.as_deref().unwrap_or(&f.name).to_string(),
                 paths: f.attributes.paths.iter().map(|s| s.to_string()).collect(),
-                address: f.body.borrow().offset,
+                address: self.node_offsets[f.body],
             })
             .collect();
-        self.assembly.highlight_kinds = compiler.highlight_kinds.clone();
+        self.assembly.highlight_kinds = self.program.highlight_kinds.clone();
 
         Ok(self.assembly)
     }
 
     /// Perform liveness analysis and register allocation for a function.
-    fn allocate_registers(&mut self, function: &Function<'a>) -> CompileResult<()> {
-        let mut analysis = LivenessAnalysis::new(function);
+    fn allocate_registers(&mut self, function: &Function) -> CompileResult<()> {
+        let mut analysis = LivenessAnalysis::new(function, &self.program.graph);
         if analysis.is_empty() {
             return Ok(());
         }
 
         analysis.compute_liveness();
         let intervals = analysis.compute_intervals();
-        let allocation = self.linear_scan_allocation(intervals)?;
-        analysis.apply_allocation(&allocation);
+        let allocation = Self::linear_scan_allocation(intervals)?;
+        for (reg, physical) in allocation {
+            self.register_allocations[reg] = Some(physical);
+        }
 
         Ok(())
     }
@@ -157,10 +186,9 @@ impl<'a> Backend<'a> {
     /// and allocating registers greedily. When out of registers, spills the
     /// interval with the furthest end point.
     fn linear_scan_allocation(
-        &mut self,
         intervals: Vec<LiveInterval>,
-    ) -> CompileResult<HashMap<u32, Register>> {
-        let mut allocation: HashMap<u32, Register> = HashMap::new();
+    ) -> CompileResult<HashMap<RegId, Register>> {
+        let mut allocation: HashMap<RegId, Register> = HashMap::new();
 
         if intervals.is_empty() {
             return Ok(allocation);
@@ -219,59 +247,60 @@ impl<'a> Backend<'a> {
     }
 
     /// Generate bytecode for a function (assumes registers already allocated).
-    fn generate_code(&mut self, function: &Function<'a>) -> CompileResult<()> {
+    fn generate_code(&mut self, function: &Function) -> CompileResult<()> {
         use Instruction::*;
 
-        let mut stack: VecDeque<IRCell<'a>> = VecDeque::new();
+        let mut stack: VecDeque<NodeId> = VecDeque::new();
         stack.push_back(function.body);
 
         while let Some(ir_cell) = stack.pop_front() {
-            let mut ir = ir_cell.borrow_mut();
+            let mut current = ir_cell;
 
-            if ir.offset != usize::MAX {
+            if self.node_offsets[current] != usize::MAX {
                 // Already serialized
                 continue;
             }
 
             loop {
-                ir.offset = self.assembly.instructions.len();
+                self.node_offsets[current] = self.assembly.instructions.len();
+                let ir = &self.program.graph[current];
 
                 match ir.instr {
-                    IRI::Noop => {}
-                    IRI::Mov { dst, src } => {
+                    Op::Noop => {}
+                    Op::Mov { dst, src } => {
                         // NOTE: Liveness analysis doesn't assign physical registers for dead stores.
                         // In practice this shouldn't hit because optimizer.rs also removes dead stores.
                         // In essence, optimizer.rs is a bit redundant and it may be worth checking if they can be unified.
                         if let (Some(dst), Some(src)) =
-                            (dst.borrow().physical, src.borrow().physical)
+                            (self.register_allocations[dst], self.register_allocations[src])
                         {
                             self.push_instruction(Mov { dst, src });
                         }
                     }
-                    IRI::MovImm { dst, imm } => {
-                        if let Some(dst) = dst.borrow().physical {
+                    Op::MovImm { dst, imm } => {
+                        if let Some(dst) = self.register_allocations[dst] {
                             self.push_instruction(MovImm { dst, imm });
                         }
                     }
-                    IRI::MovKind { dst, kind } => {
-                        if let Some(dst) = dst.borrow().physical {
+                    Op::MovKind { dst, kind } => {
+                        if let Some(dst) = self.register_allocations[dst] {
                             self.push_instruction(MovImm { dst, imm: kind });
                         }
                     }
-                    IRI::AddImm { dst, imm } => {
-                        if let Some(dst) = dst.borrow().physical {
+                    Op::AddImm { dst, imm } => {
+                        if let Some(dst) = self.register_allocations[dst] {
                             self.push_instruction(AddImm { dst, imm });
                         }
                     }
-                    IRI::If { condition, then } => {
+                    Op::If { condition, then } => {
                         stack.push_back(then);
 
-                        debug_assert!(!std::ptr::eq(ir_cell, then));
+                        debug_assert_ne!(current, then);
 
                         match condition {
                             Condition::Cmp { lhs, rhs, op } => {
-                                let lhs_phys = lhs.borrow().physical.unwrap();
-                                let rhs_phys = rhs.borrow().physical.unwrap();
+                                let lhs_phys = self.register_allocations[lhs].unwrap();
+                                let rhs_phys = self.register_allocations[rhs].unwrap();
                                 let tgt = self.dst_by_node(then) as u32;
 
                                 match op {
@@ -328,18 +357,18 @@ impl<'a> Backend<'a> {
                             }
                         }
                     }
-                    IRI::Call { name } => {
+                    Op::Call { name } => {
                         let tgt = self.dst_by_name(name) as u32;
                         self.push_instruction(Call { tgt });
                     }
-                    IRI::Return => {
+                    Op::Return => {
                         self.push_instruction(Return);
                     }
-                    IRI::Flush { kind } => {
-                        let kind = kind.borrow().physical.unwrap();
+                    Op::Flush { kind } => {
+                        let kind = self.register_allocations[kind].unwrap();
                         self.push_instruction(FlushHighlight { kind });
                     }
-                    IRI::AwaitInput => {
+                    Op::AwaitInput => {
                         self.push_instruction(AwaitInput);
                     }
                 }
@@ -348,7 +377,9 @@ impl<'a> Backend<'a> {
                     break;
                 };
 
-                ir = next.borrow_mut();
+                current = next;
+                let ir = &self.program.graph[current];
+                let offset = self.node_offsets[current];
 
                 // If the next instruction was already serialized (e.g. this is some form of loop),
                 // simply jump to the already serialized code. We're done here. Nothing new will come after this.
@@ -359,19 +390,19 @@ impl<'a> Backend<'a> {
                 // TODO: If you think about it, this should kinda go into optimizer.rs, because it could
                 // do optimizations across entire instruction sequences (= it could do inlining!).
                 // But optimizer.rs doesn't have a linearized view of the assembly so it can't do this.
-                if ir.offset != usize::MAX {
+                if offset != usize::MAX {
                     match ir.instr {
-                        IRI::Call { name } => {
+                        Op::Call { name } => {
                             let tgt = self.dst_by_name(name) as u32;
                             self.push_instruction(Call { tgt });
                         }
-                        IRI::Return => {
+                        Op::Return => {
                             self.push_instruction(Return);
                         }
                         _ => {
                             self.push_instruction(MovImm {
                                 dst: Register::ProgramCounter,
-                                imm: ir.offset as u32,
+                                imm: offset as u32,
                             });
                         }
                     }
@@ -397,28 +428,27 @@ impl<'a> Backend<'a> {
             }
         }
 
-        let scratch = scratch_arena(None);
-        self.assembly.instructions.extend(instr.encode(&scratch));
+        instr.encode(&mut self.assembly.instructions);
     }
 
-    fn visit_charset(&mut self, h: &'a Charset) -> usize {
-        *self.charsets_seen.entry(h as *const _).or_insert_with(|| {
+    fn visit_charset(&mut self, charset: CharsetId) -> usize {
+        *self.charsets_seen.entry(charset).or_insert_with(|| {
             let idx = self.assembly.charsets.len();
-            self.assembly.charsets.push(h);
+            self.assembly.charsets.push(self.program.charsets[charset].clone());
             idx
         })
     }
 
-    fn visit_string(&mut self, s: &'a str) -> usize {
-        *self.strings_seen.entry(s as *const _).or_insert_with(|| {
+    fn visit_string(&mut self, string: StringId) -> usize {
+        *self.strings_seen.entry(string).or_insert_with(|| {
             let idx = self.assembly.strings.len();
-            self.assembly.strings.push(s);
+            self.assembly.strings.push(self.program.strings[string].clone());
             idx
         })
     }
 
-    fn dst_by_node(&mut self, ir: IRCell<'a>) -> usize {
-        let off = ir.borrow().offset;
+    fn dst_by_node(&mut self, ir: NodeId) -> usize {
+        let off = self.node_offsets[ir];
         if off != usize::MAX {
             off
         } else {
@@ -427,7 +457,8 @@ impl<'a> Backend<'a> {
         }
     }
 
-    fn dst_by_name(&mut self, name: &'a str) -> usize {
+    fn dst_by_name(&mut self, name: StringId) -> usize {
+        let name = self.program.strings[name].as_str();
         match self.functions_seen.get(name) {
             Some(&dst) => dst,
             None => {
@@ -444,7 +475,7 @@ impl<'a> Backend<'a> {
                     None => return true,
                     Some(&resolved) => (off, resolved),
                 },
-                Relocation::ByNode(off, node) => match node.borrow().offset {
+                Relocation::ByNode(off, node) => match self.node_offsets[node] {
                     usize::MAX => return true,
                     resolved => (off, resolved),
                 },
@@ -465,7 +496,7 @@ impl<'a> Backend<'a> {
 /// A live interval represents the range of instructions where a vreg is live.
 #[derive(Debug, Clone, Copy)]
 struct LiveInterval {
-    vreg_id: u32,
+    vreg_id: RegId,
     start: usize,
     end: usize,
 }
@@ -476,16 +507,15 @@ struct LiveInterval {
 /// The analysis owns all intermediate data structures, exposing only what's
 /// needed for register allocation.
 struct LivenessAnalysis<'a> {
+    graph: &'a Graph,
     /// IR nodes in DFS order (instruction indices correspond to positions here).
-    nodes: Vec<IRCell<'a>>,
+    nodes: Vec<NodeId>,
     /// CFG: `successors[i]` contains indices of nodes that can follow node i.
     successors: Vec<Vec<usize>>,
-    /// Map from vreg ID to its [`IRRegCell`] (for applying allocation results).
-    vreg_cells: HashMap<u32, IRRegCell<'a>>,
     /// Liveness sets: `live_in[i]` = vregs live at entry to instruction i.
-    live_in: Vec<HashSet<u32>>,
+    live_in: Vec<HashSet<RegId>>,
     /// Liveness sets: `live_out[i]` = vregs live at exit from instruction i.
-    live_out: Vec<HashSet<u32>>,
+    live_out: Vec<HashSet<RegId>>,
 }
 
 impl<'a> LivenessAnalysis<'a> {
@@ -493,23 +523,22 @@ impl<'a> LivenessAnalysis<'a> {
     ///
     /// This linearizes the IR using DFS and builds the CFG. Call `compute_liveness()`
     /// to fill in the liveness sets, then `compute_intervals()` to get live intervals.
-    fn new(function: &Function<'a>) -> Self {
+    fn new(function: &Function, graph: &'a Graph) -> Self {
         let mut nodes = Vec::new();
         let mut node_to_idx = HashMap::new();
-        let mut vreg_cells = HashMap::new();
         let mut visited = HashSet::new();
 
         // DFS is essential for correctness. See module docs for details.
-        Self::dfs(function.body, &mut nodes, &mut node_to_idx, &mut vreg_cells, &mut visited);
+        Self::dfs(graph, function.body, &mut nodes, &mut node_to_idx, &mut visited);
 
         // Build successor relationships from the node_to_idx map
-        let successors = Self::build_successors(&nodes, &node_to_idx);
+        let successors = Self::build_successors(graph, &nodes, &node_to_idx);
 
         let n = nodes.len();
         Self {
+            graph,
             nodes,
             successors,
-            vreg_cells,
             live_in: vec![HashSet::new(); n],
             live_out: vec![HashSet::new(); n],
         }
@@ -524,90 +553,49 @@ impl<'a> LivenessAnalysis<'a> {
     /// Visits "then" branches before "next" (fallthrough) to keep branch
     /// instructions contiguous in the numbering.
     fn dfs(
-        cell: IRCell<'a>,
-        nodes: &mut Vec<IRCell<'a>>,
-        node_to_idx: &mut HashMap<*const RefCell<IR<'a>>, usize>,
-        vreg_cells: &mut HashMap<u32, IRRegCell<'a>>,
-        visited: &mut HashSet<*const RefCell<IR<'a>>>,
+        graph: &Graph,
+        cell: NodeId,
+        nodes: &mut Vec<NodeId>,
+        node_to_idx: &mut HashMap<NodeId, usize>,
+        visited: &mut HashSet<NodeId>,
     ) {
-        if !visited.insert(cell as *const _) {
+        if !visited.insert(cell) {
             return;
         }
 
         let idx = nodes.len();
-        node_to_idx.insert(cell as *const _, idx);
+        node_to_idx.insert(cell, idx);
         nodes.push(cell);
 
-        let ir = cell.borrow();
-
-        #[allow(clippy::collapsible_match)]
-        match ir.instr {
-            IRI::Mov { dst, src } => {
-                if dst.borrow().physical.is_none() {
-                    vreg_cells.insert(dst.borrow().id, dst);
-                }
-                if src.borrow().physical.is_none() {
-                    vreg_cells.insert(src.borrow().id, src);
-                }
-            }
-            IRI::MovImm { dst, .. } => {
-                if dst.borrow().physical.is_none() {
-                    vreg_cells.insert(dst.borrow().id, dst);
-                }
-            }
-            IRI::MovKind { dst, .. } => {
-                if dst.borrow().physical.is_none() {
-                    vreg_cells.insert(dst.borrow().id, dst);
-                }
-            }
-            IRI::AddImm { dst, .. } => {
-                if dst.borrow().physical.is_none() {
-                    vreg_cells.insert(dst.borrow().id, dst);
-                }
-            }
-            IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
-                if lhs.borrow().physical.is_none() {
-                    vreg_cells.insert(lhs.borrow().id, lhs);
-                }
-                if rhs.borrow().physical.is_none() {
-                    vreg_cells.insert(rhs.borrow().id, rhs);
-                }
-            }
-            IRI::Flush { kind, .. } => {
-                if kind.borrow().physical.is_none() {
-                    vreg_cells.insert(kind.borrow().id, kind);
-                }
-            }
-            _ => {}
-        }
+        let ir = &graph[cell];
 
         // Visit "then" branch first (DFS into branches), then "next" (fallthrough).
-        if let IRI::If { then, .. } = ir.instr {
-            Self::dfs(then, nodes, node_to_idx, vreg_cells, visited);
-            let ir = cell.borrow();
+        if let Op::If { then, .. } = ir.instr {
+            Self::dfs(graph, then, nodes, node_to_idx, visited);
             if let Some(next) = ir.next {
-                Self::dfs(next, nodes, node_to_idx, vreg_cells, visited);
+                Self::dfs(graph, next, nodes, node_to_idx, visited);
             }
         } else if let Some(next) = ir.next {
-            Self::dfs(next, nodes, node_to_idx, vreg_cells, visited);
+            Self::dfs(graph, next, nodes, node_to_idx, visited);
         }
     }
 
     /// Build CFG successor relationships from the linearized nodes.
     fn build_successors(
-        nodes: &[IRCell<'a>],
-        node_to_idx: &HashMap<*const RefCell<IR<'a>>, usize>,
+        graph: &Graph,
+        nodes: &[NodeId],
+        node_to_idx: &HashMap<NodeId, usize>,
     ) -> Vec<Vec<usize>> {
         let mut successors = vec![Vec::new(); nodes.len()];
         for (idx, cell) in nodes.iter().enumerate() {
-            let ir = cell.borrow();
+            let ir = &graph[*cell];
             if let Some(next) = ir.next
-                && let Some(&next_idx) = node_to_idx.get(&(next as *const _))
+                && let Some(&next_idx) = node_to_idx.get(&next)
             {
                 successors[idx].push(next_idx);
             }
-            if let IRI::If { then, .. } = ir.instr
-                && let Some(&then_idx) = node_to_idx.get(&(then as *const _))
+            if let Op::If { then, .. } = ir.instr
+                && let Some(&then_idx) = node_to_idx.get(&then)
             {
                 successors[idx].push(then_idx);
             }
@@ -648,7 +636,7 @@ impl<'a> LivenessAnalysis<'a> {
             }
 
             // in[n] = use[n] ∪ (out[n] - def[n])
-            let (use_set, def_set) = Self::compute_use_def(&self.nodes[idx].borrow());
+            let (use_set, def_set) = Self::compute_use_def(&self.graph[self.nodes[idx]]);
             let mut new_in = use_set;
             for &vreg in &new_out {
                 if !def_set.contains(&vreg) {
@@ -672,58 +660,34 @@ impl<'a> LivenessAnalysis<'a> {
     }
 
     /// Compute use and def sets for a single IR instruction.
-    fn compute_use_def(ir: &IR<'a>) -> (HashSet<u32>, HashSet<u32>) {
+    fn compute_use_def(ir: &Node) -> (HashSet<RegId>, HashSet<RegId>) {
         let mut use_set = HashSet::new();
         let mut def_set = HashSet::new();
 
         match ir.instr {
-            IRI::Mov { dst, src } => {
-                if let dst_reg = dst.borrow()
-                    && dst_reg.physical.is_none()
-                {
-                    def_set.insert(dst_reg.id);
+            Op::Mov { dst, src } => {
+                if !dst.is_physical() {
+                    def_set.insert(dst);
                 }
-                let src_reg = src.borrow();
-                if src_reg.physical.is_none() {
-                    use_set.insert(src_reg.id);
+                if !src.is_physical() {
+                    use_set.insert(src);
                 }
             }
-            IRI::MovImm { dst, .. } => {
-                if let dst_reg = dst.borrow()
-                    && dst_reg.physical.is_none()
-                {
-                    def_set.insert(dst_reg.id);
+            Op::MovImm { dst, .. } | Op::MovKind { dst, .. } | Op::AddImm { dst, .. } => {
+                if !dst.is_physical() {
+                    def_set.insert(dst);
                 }
             }
-            IRI::MovKind { dst, .. } => {
-                if let dst_reg = dst.borrow()
-                    && dst_reg.physical.is_none()
-                {
-                    def_set.insert(dst_reg.id);
+            Op::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
+                if !lhs.is_physical() {
+                    use_set.insert(lhs);
+                }
+                if !rhs.is_physical() {
+                    use_set.insert(rhs);
                 }
             }
-            IRI::AddImm { dst, .. } => {
-                if let dst_reg = dst.borrow()
-                    && dst_reg.physical.is_none()
-                {
-                    def_set.insert(dst_reg.id);
-                }
-            }
-            IRI::If { condition: Condition::Cmp { lhs, rhs, .. }, .. } => {
-                let lhs_reg = lhs.borrow();
-                if lhs_reg.physical.is_none() {
-                    use_set.insert(lhs_reg.id);
-                }
-                let rhs_reg = rhs.borrow();
-                if rhs_reg.physical.is_none() {
-                    use_set.insert(rhs_reg.id);
-                }
-            }
-            IRI::Flush { kind, .. } => {
-                let kind_reg = kind.borrow();
-                if kind_reg.physical.is_none() {
-                    use_set.insert(kind_reg.id);
-                }
+            Op::Flush { kind, .. } if !kind.is_physical() => {
+                use_set.insert(kind);
             }
             _ => {}
         }
@@ -733,7 +697,7 @@ impl<'a> LivenessAnalysis<'a> {
 
     /// Compute live intervals from liveness sets, sorted by start position.
     fn compute_intervals(&self) -> Vec<LiveInterval> {
-        let mut vreg_ranges: HashMap<u32, (usize, usize)> = HashMap::new();
+        let mut vreg_ranges: HashMap<RegId, (usize, usize)> = HashMap::new();
 
         for idx in 0..self.nodes.len() {
             for &vreg_id in self.live_in[idx].iter().chain(self.live_out[idx].iter()) {
@@ -754,14 +718,5 @@ impl<'a> LivenessAnalysis<'a> {
 
         intervals.sort_by_key(|i| i.start);
         intervals
-    }
-
-    /// Apply register allocation results to the IRReg cells.
-    fn apply_allocation(&self, allocation: &HashMap<u32, Register>) {
-        for (&vreg_id, &reg) in allocation {
-            if let Some(cell) = self.vreg_cells.get(&vreg_id) {
-                cell.borrow_mut().physical = Some(reg);
-            }
-        }
     }
 }

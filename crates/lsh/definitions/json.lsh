@@ -1,6 +1,8 @@
 #[display_name = "JSON"]
 #[path = "**/*.json"]
 #[path = "**/*.jsonc"]
+#[path = "**/*.jsonl"]
+#[path = "**/*.ndjson"]
 pub fn json() {
     until /$/ {
         yield other;
