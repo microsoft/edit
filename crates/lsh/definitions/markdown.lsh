@@ -50,16 +50,6 @@ pub fn markdown() {
                     if /.*/ {}
                 }
             }
-        } else if /(?i:sql)/ {
-            loop {
-                await input;
-                if /\s*```/ {
-                    return;
-                } else {
-                    sql();
-                    if /.*/ {}
-                }
-            }
         } else if /(?i:json)/ {
             loop {
                 await input;

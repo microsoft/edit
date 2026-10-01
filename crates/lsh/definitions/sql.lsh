@@ -6,74 +6,77 @@ pub fn sql() {
     until /$/ {
         yield other;
 
-        // Single-line comments.
         if /--.*/ {
             yield comment;
-        // Multi-line comments.
         } else if /\/\*/ {
+            sql_block_comment();
+        } else if /(?i:n'|')/ {
             loop {
-                yield comment;
-                await input;
-                if /\*\// {
-                    yield comment;
-                    break;
-                }
-            }
-        } else if /'/ {
-            // Single-quoted strings.
-            loop {
-                yield string;
                 if /''/ {
-                    // SQL escapes a single quote by doubling it.
                 } else if /'/ {
                     yield string;
                     break;
                 }
+                yield string;
                 await input;
             }
         } else if /"/ {
-            // Double-quoted identifiers.
             loop {
-                yield string;
                 if /""/ {
-                    // SQL escapes a double quote by doubling it.
                 } else if /"/ {
                     yield string;
                     break;
                 }
+                yield string;
                 await input;
             }
         } else if /`/ {
-            // Backtick-quoted identifiers.
             loop {
-                yield string;
                 if /``/ {
-                    // SQL escapes a backtick by doubling it.
                 } else if /`/ {
                     yield string;
                     break;
                 }
+                yield string;
                 await input;
             }
-        } else if /(?i:(?:SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|CALL|RETURNING|WITH|RECURSIVE|UNION|INTERSECT|EXCEPT|CASE|WHEN|THEN|ELSE|END|BEGIN|COMMIT|ROLLBACK))\>/ {
-            // Query and control-flow keywords.
-            yield keyword.control;
-        } else if /(?i:(?:AS|AND|OR|NOT|IS|IN|BETWEEN|LIKE|ILIKE|EXISTS|ALL|ANY|DISTINCT|GROUP|BY|HAVING|ORDER|ASC|DESC|LIMIT|OFFSET|FETCH|JOIN|INNER|LEFT|RIGHT|FULL|CROSS|OUTER|ON|USING|PRIMARY|KEY|FOREIGN|REFERENCES|UNIQUE|CHECK|DEFAULT|CONSTRAIT|TABLE|VIEW|INDEX|DATABASE|SCHEMA|GRANT|REVOKE|CASCADE|RESTRICT|ADD|COLUMN))\>/ {
-            // Other SQL keywords.
+        } else if /\[/ {
+            loop {
+                if /\]\]/ {
+                } else if /\]/ {
+                    break;
+                }
+                yield other;
+                await input;
+            }
+        } else if /(?i:ADD|ALL|ALTER|AND|ANY|ASC|AS|BEGIN|BETWEEN|BY|CALL|CASCADE|CASE|CATCH|CHECK|COLLATE|COLUMN|COMMIT|CONSTRAINT|CREATE|CROSS|DATABASE|DECLARE|DEFAULT|DELETE|DESC|DISTINCT|DROP|ELSE|END|EXCEPT|EXECUTE|EXEC|EXISTS|FETCH|FIRST|FOLLOWING|FOREIGN|FROM|FULL|FUNCTION|GRANT|GROUP|HAVING|IF|ILIKE|INDEX|INNER|INSERT|INTERSECT|INTO|IN|IS|JOIN|KEY|LAST|LEFT|LIKE|LIMIT|MERGE|NATURAL|NOT|NULLS|OFFSET|ONLY|ON|ORDER|OR|OUTER|OVER|PARTITION|PRECEDING|PRIMARY|PROCEDURE|PROC|RANGE|RECURSIVE|REFERENCES|REPLACE|RESTRICT|RETURNING|RETURNS|RETURN|REVOKE|RIGHT|ROLLBACK|ROWS|ROW|SCHEMA|SELECT|SET|TABLE|THEN|TOP|TRANSACTION|TRAN|TRIGGER|TRUNCATE|UNBOUNDED|UNION|UNIQUE|UPDATE|USING|USE|VALUES|VIEW|WHEN|WHERE|WHILE|WINDOW|WITHIN|WITHOUT|WITH)\>/ {
             yield keyword.other;
-        } else if /(?i:(?:TRUE|FALSE|NULL))\>/ {
-            // Boolean and NULL literals.
+        } else if /(?i:BIGINT|BIGSERIAL|BINARY|BIT|BOOLEAN|BOX|BYTEA|CHARACTER|CHAR|CIDR|CIRCLE|DATETIMEOFFSET|DATETIME2|DATETIME|DATE|DECIMAL|DEC|DOUBLE|FLOAT|GEOGRAPHY|GEOMETRY|HIERARCHYID|IMAGE|INET|INTEGER|INTERVAL|INT|LINE|LSEG|MACADDR|MONEY|NCHAR|NTEXT|NUMBER|NUMERIC|NVARCHAR|OID|PATH|POINT|POLYGON|REAL|SERIAL|SMALLDATETIME|SMALLINT|SMALLMONEY|SQL_VARIANT|TEXT|TIMESTAMPTZ|TIMESTAMP|TIME|TINYINT|UNIQUEIDENTIFIER|VARBINARY|VARCHAR2|VARCHAR|XML)\>/ {
+            yield storage.type;
+        } else if /(?i:TRUE|FALSE|NULL)\>/ {
             yield constant.language;
-        } else if /-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\>/ {
-            // Numeric literals.
-            yield constant.numeric;
-        } else if /(?i:(COUNT|SUM|AVG|MIN|MAX|COALESCE|NULLIF|CAST|CONVERT|LOWER|UPPER|LENGTH|SUBSTRING|ROUND|ABS|NOW|CURRENT_DATE|CURRENT_TIME|CURRENT_TIMESTAMP))\s*\(/ {
-            // Common SQL functions.
-            yield $1 as method;
-        } else if /\w+/ {
+        } else if /-?(?i:(?:0x[\da-f]+|\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)/ {
+            if /\w+/ {
+            } else {
+                yield constant.numeric;
+            }
+        } else if /[\w@#$]+/ {
             // Gobble word chars to align the next iteration on a word boundary.
         }
 
         yield other;
+    }
+}
+
+fn sql_block_comment() {
+    loop {
+        yield comment;
+        await input;
+        if /\/\*/ {
+            sql_block_comment();
+        } else if /\*\// {
+            yield comment;
+            break;
+        }
     }
 }
