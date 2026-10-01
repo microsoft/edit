@@ -22,6 +22,10 @@ const separated = 1_000_000;
 const float = 3.14;
 const exponent = 1.5e-3;
 const hex_float = 0x1.8p1;
+const hex_fraction = 0xAB.CD;
+const hex_exponent = 0x1P+4;
+const separated_float = 1_000.125_000E+2;
+const separated_hex_float = 0x1234_5678.9ABC_CDEFp-10;
 
 // Character and string literals
 const char = 'a';
@@ -32,12 +36,21 @@ const string = "escapes: \" \\ \n \t";
 // Multiline string
 const multiline =
     \\first line
+    \\
     \\second line
+    \\"quotes", // comments, @builtins, and 123 are literal text
+;
+const inline_multiline = \\starts on the declaration line
 ;
 
 // Identifiers
 const @"quoted identifier" = 123;
 const snake_case = true;
+const @"if" = @"quoted identifier";
+const @"escaped \"quote\"" = "// not a comment";
+const _123 = 123;
+const u8_count = 8;
+const iffy = false;
 
 // Operators
 const arithmetic = 1 + 2 * 3 - 4 / 2 % 2;
@@ -79,6 +92,8 @@ const Value = union(enum) {
 // Arrays, slices, tuples
 const array = [_]u8{ 1, 2, 3, 4 };
 const slice = array[1..3];
+const open_slice = array[1..];
+const hex_slice = array[0x1..0x3];
 const tuple = .{ 42, true, "hello" };
 
 // Pointers
@@ -95,6 +110,20 @@ fn add(a: i32, b: i32) i32 {
 fn generic(comptime T: type, value: T) T {
     return value;
 }
+
+fn inferred(argument: anytype) @TypeOf(argument) {
+    return argument;
+}
+
+extern fn cFunction(argument: c_int, pointer: *anyopaque) c_longdouble;
+
+const CTypes = .{ c_char, c_short, c_ushort, c_int, c_uint, c_long, c_ulong, c_longlong, c_ulonglong, c_longdouble };
+
+const BitFields = packed struct {
+    empty: u0,
+    small: i7,
+    wide: u256,
+};
 
 // If / else
 fn classify(x: i32) i32 {
@@ -133,6 +162,13 @@ fn describe(value: Value) void {
         .float => |x| _ = x,
         .boolean => |x| _ = x,
     }
+}
+
+fn inRange(number: u8) bool {
+    return switch (number) {
+        1...3 => true,
+        else => false,
+    };
 }
 
 // Optionals
