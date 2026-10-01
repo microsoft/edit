@@ -591,3 +591,47 @@ impl<'input> Stream<'_, '_, 'input> {
         Some(Input::Mouse(mouse))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vt;
+
+    fn parse_single(input: &str) -> Option<Input<'_>> {
+        let mut vt_parser = vt::Parser::new();
+        let mut parser = Parser::new();
+        let mut stream = parser.parse(vt_parser.parse(input));
+        stream.next()
+    }
+
+    #[test]
+    fn test_ctrl_shift_home_end_vt_parsing() {
+        // Ctrl+Home -> ESC[1;5H, Ctrl+Shift+Home -> ESC[1;6H
+        // Ctrl+End  -> ESC[1;5F, Ctrl+Shift+End  -> ESC[1;6F
+        let cases = [
+            ("\x1b[1;5H", vk::HOME, kbmod::CTRL),
+            ("\x1b[1;6H", vk::HOME, kbmod::CTRL_SHIFT),
+            ("\x1b[1;5F", vk::END, kbmod::CTRL),
+            ("\x1b[1;6F", vk::END, kbmod::CTRL_SHIFT),
+            ("\x1b[H", vk::HOME, kbmod::NONE),
+            ("\x1b[F", vk::END, kbmod::NONE),
+        ];
+
+        for (seq, expected_key, expected_mod) in cases {
+            let input = parse_single(seq).expect("should parse");
+            match input {
+                Input::Keyboard(key) => {
+                    let expected = expected_mod | expected_key;
+                    assert_eq!(
+                        key.value(),
+                        expected.value(),
+                        "mismatch for {seq:?}: got {:#010x}, expected {:#010x}",
+                        key.value(),
+                        expected.value()
+                    );
+                }
+                _ => panic!("expected Keyboard for {seq:?}"),
+            }
+        }
+    }
+}
