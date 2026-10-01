@@ -32,12 +32,13 @@ See [definitions/README.md](definitions/README.md).
 ### Registers
 
 The virtual machine has 16 32-bit registers, named `r0` to `r15`.
-`r0` to `r2` currently have a fixed meaning:
-* `r0` is `off`, which is the text input offset
-* `r1` is `hs`, which describes the start of the next highlight range, emitted via a `yield` statement, corresponding to a `flush` instruction
-* `r2` is `pc`, the program counter, aka instruction offset
+`r0` to `r3` currently have a fixed meaning:
+* `r0` is `line`, the current input line number
+* `r1` is `off`, which is the text input offset
+* `r2` is `hs`, which describes the start of the next highlight range, emitted via a `yield` statement, corresponding to a `flush` instruction
+* `r3` is `pc`, the program counter, aka instruction offset
 
-Registers `r0` and `r1` are preserved between calls and `r2` to `r15` are caller saved.
+Registers `r0` to `r2` are preserved between calls and `r3` to `r15` are caller saved.
 
 > [!NOTE]
 > `pc` is pre-incremented when processing instructions.
@@ -93,7 +94,7 @@ Encoding:
 
 ### Instruction: call
 
-`call` pushes `r2` to `r15` on the stack and jumps to `tgt`.
+`call` pushes `r3` to `r15` on the stack and jumps to `tgt`.
 
 Mnemonic:
 ```
@@ -113,8 +114,8 @@ call:
 
 ### Instruction: ret
 
-`ret` restores and pops the last bundle of registers (`r2` to `r15`).
-When the call stack is empty, `ret` resets the VM to its entrypoint and clears registers `r2` to `r15`.
+`ret` restores and pops the last bundle of registers (`r3` to `r15`).
+When the call stack is empty, `ret` resets the VM to its entrypoint.
 
 Mnemonic:
 ```

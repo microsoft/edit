@@ -8,32 +8,44 @@ pub fn python() {
 
         if /#.*/ {
             yield comment;
-        } else if /'''/ {
-            loop {
-                yield string;
-                if /'''/ { yield string; break; }
-                await input;
-            }
-        } else if /"""/ {
-            loop {
-                yield string;
-                if /"""/ { yield string; break; }
-                await input;
-            }
         } else if /'/ {
-            until /$/ {
-                yield string;
-                if /\\./ {}
-                else if /'/ { yield string; break; }
-                await input;
+            if /''/ {
+                loop {
+                    if /\\.?/ {}
+                    else if /'''/ { break; }
+                    yield string;
+                    await input;
+                }
+            } else {
+                until /$/ {
+                    if /\\/ {
+                        if /$/ { yield string; await input; }
+                        else if /./ {}
+                    } else if /'/ {
+                        break;
+                    }
+                }
             }
+            yield string;
         } else if /"/ {
-            until /$/ {
-                yield string;
-                if /\\./ {}
-                else if /"/ { yield string; break; }
-                await input;
+            if /""/ {
+                loop {
+                    if /\\.?/ {}
+                    else if /"""/ { break; }
+                    yield string;
+                    await input;
+                }
+            } else {
+                until /$/ {
+                    if /\\/ {
+                        if /$/ { yield string; await input; }
+                        else if /./ {}
+                    } else if /"/ {
+                        break;
+                    }
+                }
             }
+            yield string;
         } else if /(?:break|case|continue|elif|else|except|finally|for|if|match|pass|raise|return|try|while|with)\>/ {
             yield keyword.control;
         } else if /(?:and|assert|async|as|await|class|def|del|from|global|import|in|is|lambda|nonlocal|not|or|type|yield)\>/ {

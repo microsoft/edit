@@ -31,6 +31,22 @@ Infinity;
 'single quotes with escape: \' \n \t \\';
 "double quotes with escape: \" \n \t \\";
 
+// Backslash-newline continuations
+'single-quoted continuation \
+with \'escaped quotes\' and // literal text'; true;
+"double-quoted continuation \
+with \"escaped quotes\" and // literal text"; false;
+
+'escaped backslash followed by continuation: \\\
+continued'; null;
+"escaped backslash followed by continuation: \\\
+continued"; null;
+
+'continuation before the closing quote \
+'; 42;
+"continuation before the closing quote \
+"; 42;
+
 // Control flow keywords
 if (true) {
 } else if (false) {

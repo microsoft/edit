@@ -23,6 +23,15 @@ None
 'single quotes: \' \n \t \\'
 "double quotes: \" \n \t \\"
 
+'single-quoted continuation \
+with \'quotes\' and # literal text'; True
+"double-quoted continuation \
+with \"quotes\" and # literal text"; False
+'escaped backslash and continuation: \\\
+continued'; None
+"closing quote on the next line \
+"; 42
+
 # Control flow keywords
 if True:
     pass
@@ -68,6 +77,11 @@ docstring (double quotes)
 Multi-line
 string (single quotes)
 '''
+
+'''escaped triple quote: \'''
+still a string'''; True
+"""escaped triple quote: \"""
+still a string"""; False
 
 # Prefixed strings (f, r, b)
 f"f-string: {1 + 2}"

@@ -126,6 +126,7 @@ impl<'pa, 'ps, 'pc> Runtime<'pa, 'ps, 'pc> {
         line: &[u8],
         mut res: R,
     ) {
+        self.registers.line = self.registers.line.wrapping_add(1);
         self.registers.off = 0;
         self.registers.hs = 0;
 
@@ -168,7 +169,11 @@ impl<'pa, 'ps, 'pc> Runtime<'pa, 'ps, 'pc> {
                 }
                 Return => {
                     if !self.registers.load_registers(&mut self.stack) {
-                        self.registers = Registers { pc: self.entrypoint, ..Default::default() };
+                        self.registers = Registers {
+                            line: self.registers.line,
+                            pc: self.entrypoint,
+                            ..Default::default()
+                        };
                         break;
                     }
                 }
@@ -364,12 +369,12 @@ impl<'pa, 'ps, 'pc> Runtime<'pa, 'ps, 'pc> {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Register {
-    // These two registers are shared across function calls...
+    // These three registers are shared across function calls...
+    InputLine,
     InputOffset,
     HighlightStart,
     // ...and the rest is caller-saved.
     ProgramCounter,
-    X3,
     X4,
     X5,
     X6,
@@ -385,7 +390,7 @@ pub enum Register {
 }
 
 impl Register {
-    pub const FIRST_USER_REG: usize = 3; // aka x3
+    pub const FIRST_USER_REG: usize = 4; // aka x4
     pub const COUNT: usize = 16;
 
     #[inline(always)]
@@ -396,10 +401,10 @@ impl Register {
 
     pub fn mnemonic(&self) -> &'static str {
         match self {
+            Register::InputLine => "line",
             Register::InputOffset => "off",
             Register::HighlightStart => "hs",
             Register::ProgramCounter => "pc",
-            Register::X3 => "x3",
             Register::X4 => "x4",
             Register::X5 => "x5",
             Register::X6 => "x6",
@@ -425,10 +430,10 @@ impl fmt::Display for Register {
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct Registers {
-    pub off: u32, // x0 = InputOffset
-    pub hs: u32,  // x1 = HighlightStart
-    pub pc: u32,  // x2 = ProgramCounter
-    pub x3: u32,
+    pub line: u32, // x0 = InputLine
+    pub off: u32,  // x1 = InputOffset
+    pub hs: u32,   // x2 = HighlightStart
+    pub pc: u32,   // x3 = ProgramCounter
     pub x4: u32,
     pub x5: u32,
     pub x6: u32,
@@ -458,21 +463,26 @@ impl Registers {
 
     #[inline(always)]
     fn save_registers(&self, vec: &mut Vec<u32>) {
-        const _: () = assert!(2 + 14 <= Register::COUNT);
-        unsafe { vec.extend_from_slice(std::slice::from_raw_parts(self.as_ptr().add(2), 14)) };
+        const START: usize = Register::ProgramCounter as usize;
+        const COUNT: usize = Register::COUNT - START;
+        unsafe {
+            vec.extend_from_slice(std::slice::from_raw_parts(self.as_ptr().add(START), COUNT))
+        };
     }
 
     #[inline(always)]
     fn load_registers(&mut self, vec: &mut Vec<u32>) -> bool {
+        const START: usize = Register::ProgramCounter as usize;
+        const COUNT: usize = Register::COUNT - START;
         unsafe {
-            if vec.len() < 14 {
+            if vec.len() < COUNT {
                 return false;
             }
 
-            let src = vec.as_ptr().add(vec.len() - 14);
-            let dst = self.as_mut_ptr().add(2);
-            std::ptr::copy_nonoverlapping(src, dst, 14);
-            vec.truncate(vec.len() - 14);
+            let src = vec.as_ptr().add(vec.len() - COUNT);
+            let dst = self.as_mut_ptr().add(START);
+            std::ptr::copy_nonoverlapping(src, dst, COUNT);
+            vec.truncate(vec.len() - COUNT);
             true
         }
     }
