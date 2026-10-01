@@ -96,6 +96,22 @@ struct TextBufferSelection {
     end: Point,
 }
 
+/// Self-explanatory.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum NewlineFormat {
+    Lf,
+    CrLf,
+}
+
+impl NewlineFormat {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Lf => "\n",
+            Self::CrLf => "\r\n",
+        }
+    }
+}
+
 /// In order to group actions into a single undo step,
 /// we need to know the type of action that was performed.
 /// This stores the action type.
@@ -109,7 +125,11 @@ enum HistoryType {
 /// An undo/redo entry.
 enum HistoryEntry {
     Text(TextHistoryEntry),
-    NewlineFormat { generation_before: u32, insertion_crlf: bool, normalization: Option<bool> },
+    NewlineFormat {
+        generation_before: u32,
+        insertion_crlf: NewlineFormat,
+        normalization: Option<NewlineFormat>,
+    },
 }
 
 impl HistoryEntry {
@@ -205,44 +225,6 @@ struct ActiveEditLineInfo {
     end_offset: usize,
 }
 
-impl ActiveEditLineInfo {
-    fn new(buffer: &TextBuffer, cursor: Cursor) -> Self {
-        let safe_start = buffer.goto_line_start(cursor, cursor.logical_pos.y);
-        let end = buffer
-            .cursor_move_to_logical_internal(cursor, Point { x: 0, y: cursor.logical_pos.y + 1 });
-        Self {
-            safe_start,
-            height_before: end.visual_pos.y - safe_start.visual_pos.y,
-            end_offset: end.offset,
-        }
-    }
-
-    fn prepare(&mut self, buffer: &TextBuffer, range: Range<usize>, inserted: usize) {
-        if range.end >= self.end_offset && self.end_offset < buffer.text_length() {
-            // Only the prefix has changed so far. The extra suffix height is still original.
-            let old_end = buffer.cursor_move_to_offset_internal(self.safe_start, self.end_offset);
-            let removed_end = buffer.cursor_move_to_offset_internal(old_end, range.end);
-            let new_end = buffer.cursor_move_to_logical_internal(
-                removed_end,
-                Point { x: 0, y: removed_end.logical_pos.y + 1 },
-            );
-            self.height_before += new_end.visual_pos.y - old_end.visual_pos.y;
-            self.end_offset = new_end.offset;
-        }
-        self.end_offset = self.end_offset - range.len() + inserted;
-    }
-
-    fn finish(self, buffer: &mut TextBuffer) {
-        let target = buffer.cursor.logical_pos;
-        buffer.cursor = buffer.cursor_move_to_logical_internal(self.safe_start, target);
-        let anchor =
-            if buffer.cursor.offset <= self.end_offset { buffer.cursor } else { self.safe_start };
-        let end = buffer.cursor_move_to_offset_internal(anchor, self.end_offset);
-        let height_after = end.visual_pos.y - self.safe_start.visual_pos.y;
-        buffer.stats.visual_lines += height_after - self.height_before;
-    }
-}
-
 /// Undo/redo grouping works by recording a set of "overrides",
 /// which are then applied in [`TextBuffer::edit_begin()`].
 /// This allows us to create a group of edits that all share a
@@ -329,9 +311,9 @@ pub struct TextBuffer {
     language: Option<&'static Language>,
     ruler: CoordType,
     encoding: &'static str,
-    newlines_are_crlf: bool,
+    newline_format: NewlineFormat,
     /// None preserves existing newline bytes; Some selects LF (false) or CRLF (true) on save.
-    newline_normalization: Option<bool>,
+    newline_normalization: Option<NewlineFormat>,
     insert_final_newline: bool,
     overtype: bool,
 
@@ -382,7 +364,7 @@ impl TextBuffer {
             language: None,
             ruler: 0,
             encoding: "UTF-8",
-            newlines_are_crlf: cfg!(windows), // Windows users want CRLF
+            newline_format: if cfg!(windows) { NewlineFormat::CrLf } else { NewlineFormat::Lf },
             newline_normalization: None,
             insert_final_newline: false, // NOTE: Even with POSIX, single-line buffers need this to be false
             overtype: false,
@@ -448,23 +430,19 @@ impl TextBuffer {
 
     /// The newline type used in the document. LF or CRLF.
     pub fn is_crlf(&self) -> bool {
-        self.newlines_are_crlf
+        self.newline_format == NewlineFormat::CrLf
     }
 
     /// Changes the newline type without normalizing the document.
     pub fn set_crlf(&mut self, crlf: bool) {
-        self.newlines_are_crlf = crlf;
-    }
-
-    /// The requested save-time newline normalization, independent of the stored bytes.
-    pub fn newline_normalization(&self) -> Option<bool> {
-        self.newline_normalization
+        self.newline_format = if crlf { NewlineFormat::CrLf } else { NewlineFormat::Lf };
     }
 
     /// Selects the insertion and output newline format without modifying stored text.
     /// Undo restores the previous preference, including preservation of mixed line endings.
     pub fn normalize_newlines(&mut self, crlf: bool) {
-        if self.newline_normalization == Some(crlf) && self.newlines_are_crlf == crlf {
+        let format = if crlf { NewlineFormat::CrLf } else { NewlineFormat::Lf };
+        if self.newline_normalization == Some(format) && self.newline_format == format {
             return;
         }
 
@@ -476,12 +454,12 @@ impl TextBuffer {
                 .active_edit_group
                 .as_ref()
                 .map_or(self.buffer.generation(), |group| group.generation_before),
-            insertion_crlf: self.newlines_are_crlf,
+            insertion_crlf: self.newline_format,
             normalization: self.newline_normalization,
         }));
 
-        self.newlines_are_crlf = crlf;
-        self.newline_normalization = Some(crlf);
+        self.newline_format = format;
+        self.newline_normalization = Some(format);
         self.buffer.bump_generation();
     }
 
@@ -842,6 +820,8 @@ impl TextBuffer {
 
             // We'll assume CRLF if more than half of the lines end in CRLF. If there is only a single line, we'll use the platform default.
             let newlines_are_crlf = if lines == 0 { cfg!(windows) } else { crlf_count > lines / 2 };
+            let newline_format =
+                if newlines_are_crlf { NewlineFormat::CrLf } else { NewlineFormat::Lf };
 
             // We'll assume tabs if there are more lines starting with tabs than with spaces.
             let indent_with_tabs = tab_indentations > space_indentations;
@@ -873,7 +853,7 @@ impl TextBuffer {
             // Add 1, because the last line doesn't end in a newline (it ends in the literal end).
             self.stats.logical_lines = lines + 1;
             self.stats.visual_lines = self.stats.logical_lines;
-            self.newlines_are_crlf = newlines_are_crlf;
+            self.newline_format = newline_format;
             self.insert_final_newline = final_newline;
             self.indent_with_tabs = indent_with_tabs;
             self.tab_size = tab_size;
@@ -1030,6 +1010,7 @@ impl TextBuffer {
         };
         let mut writer = EncodingWriter::new(file, scratch.alloc_uninit_array(), converter);
         let mut offset = 0;
+        let mut pending_cr = false;
 
         if bom {
             writer.write(b"\xEF\xBB\xBF")?;
@@ -1038,19 +1019,44 @@ impl TextBuffer {
         loop {
             let chunk = self.read_forward(offset);
             offset += chunk.len();
+
+            // If the last chunk ended on a CR, we need to check if it was a CRLF sequence.
+            // If it wasn't, we write the CR we swallowed previously.
+            if pending_cr {
+                if chunk.first() != Some(&b'\n') {
+                    writer.write(b"\r")?;
+                }
+                pending_cr = false;
+            }
+
             if chunk.is_empty() {
                 break;
             }
 
-            if let Some(crlf) = self.newline_normalization {
+            if let Some(newline) = self.newline_normalization {
+                let newline = newline.as_str().as_bytes();
                 let mut off = 0;
+
                 while off < chunk.len() {
                     let (next, lines) = simd::lines_fwd(chunk, off, 0, 1);
-                    let line = unicode::strip_newline(&chunk[off..next]);
+                    let line = &chunk[off..next];
+
+                    // Strip CR/LF from the line.
+                    let line = if lines > 0 {
+                        unicode::strip_newline(line)
+                    } else if let Some(prefix) = line.strip_suffix(b"\r") {
+                        // If the line ends on a CR, we defer decision to the next chunk to see if it was a CRLF.
+                        pending_cr = true;
+                        prefix
+                    } else {
+                        line
+                    };
+
                     writer.write(line)?;
                     if lines > 0 {
-                        writer.write(if crlf { b"\r\n" } else { b"\n" })?;
+                        writer.write(newline)?;
                     }
+
                     off = next;
                 }
             } else {
@@ -2424,7 +2430,7 @@ impl TextBuffer {
 
             // First, write the newline.
             newline_buffer.clear();
-            newline_buffer.push_str(&*scratch, if self.newlines_are_crlf { "\r\n" } else { "\n" });
+            newline_buffer.push_str(&*scratch, self.newline_format.as_str());
 
             if !raw {
                 // We'll give the next line the same indentation as the previous one.
@@ -2498,7 +2504,7 @@ impl TextBuffer {
             && self.cursor.logical_pos.x > 0
         {
             let cursor = self.cursor;
-            self.edit_write(if self.newlines_are_crlf { b"\r\n" } else { b"\n" });
+            self.edit_write(self.newline_format.as_str().as_bytes());
             // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
             self.cursor = cursor;
         }
@@ -2814,7 +2820,7 @@ impl TextBuffer {
 
         // Line copies (= Ctrl+C when there's no selection) always end with a newline.
         if line_copy && !out.ends_with(b"\n") {
-            out.replace_range(out.len().., if self.newlines_are_crlf { b"\r\n" } else { b"\n" });
+            out.replace_range(out.len().., self.newline_format.as_str().as_bytes());
         }
 
         out
@@ -2926,15 +2932,55 @@ impl TextBuffer {
         self.active_edit_context = None;
         self.highlighter_cache.invalidate_from(cursor.logical_pos.y);
 
-        // Wrapping may change even before the insertion point, back to the logical line start.
+        // Edits may impact line wrapping even before the insertion point.
         if self.word_wrap_column > 0 {
-            self.active_edit_line_info = Some(ActiveEditLineInfo::new(self, cursor));
+            self.active_edit_line_info = Some(self.edit_layout_begin(cursor));
         }
+    }
+
+    fn edit_layout_begin(&self, cursor: Cursor) -> ActiveEditLineInfo {
+        let safe_start = self.goto_line_start(cursor, cursor.logical_pos.y);
+        let end = self.goto_line_start(cursor, cursor.logical_pos.y + 1);
+        ActiveEditLineInfo {
+            safe_start,
+            height_before: end.visual_pos.y - safe_start.visual_pos.y,
+            end_offset: end.offset,
+        }
+    }
+
+    fn edit_layout_prepare(
+        &self,
+        info: &mut ActiveEditLineInfo,
+        range: Range<usize>,
+        inserted: usize,
+    ) {
+        if range.end >= info.end_offset && info.end_offset < self.text_length() {
+            // Only the prefix has changed so far. The extra suffix height is still original.
+            let old_end = self.cursor_move_to_offset_internal(info.safe_start, info.end_offset);
+            let removed_end = self.cursor_move_to_offset_internal(old_end, range.end);
+            let new_end = self.cursor_move_to_logical_internal(
+                removed_end,
+                Point { x: 0, y: removed_end.logical_pos.y + 1 },
+            );
+            info.height_before += new_end.visual_pos.y - old_end.visual_pos.y;
+            info.end_offset = new_end.offset;
+        }
+        info.end_offset = info.end_offset - range.len() + inserted;
+    }
+
+    fn edit_layout_finish(&mut self, info: ActiveEditLineInfo) {
+        self.cursor =
+            self.cursor_move_to_logical_internal(info.safe_start, self.cursor.logical_pos);
+        let anchor =
+            if self.cursor.offset <= info.end_offset { self.cursor } else { info.safe_start };
+        let end = self.cursor_move_to_offset_internal(anchor, info.end_offset);
+        let height_after = end.visual_pos.y - info.safe_start.visual_pos.y;
+        self.stats.visual_lines += height_after - info.height_before;
     }
 
     fn edit_prepare_layout(&mut self, range: Range<usize>, inserted: usize) {
         if let Some(mut info) = self.active_edit_line_info.take() {
-            info.prepare(self, range, inserted);
+            self.edit_layout_prepare(&mut info, range, inserted);
             self.active_edit_line_info = Some(info);
         }
     }
@@ -3098,6 +3144,7 @@ impl TextBuffer {
         if self.active_edit_depth > 0 {
             return;
         }
+
         if self.active_edit_context.take().is_some() {
             self.undo_barrier();
         }
@@ -3110,7 +3157,7 @@ impl TextBuffer {
         }
 
         if let Some(info) = self.active_edit_line_info.take() {
-            info.finish(self);
+            self.edit_layout_finish(info);
         } else {
             // If word-wrap is disabled the visual line count always matches the logical one.
             self.stats.visual_lines = self.stats.logical_lines;
@@ -3175,13 +3222,13 @@ impl TextBuffer {
                     entry_buffer_generation = Some(*generation_before);
                     self.buffer.set_generation(*generation_before);
                     *generation_before = buffer_generation;
-                    mem::swap(&mut self.newlines_are_crlf, insertion_crlf);
+                    mem::swap(&mut self.newline_format, insertion_crlf);
                     mem::swap(&mut self.newline_normalization, normalization);
                     continue;
                 }
             }
 
-            // Remember the generation of the change so we can stop popping undos/redos.
+            // Remember the buffer generation of the change so we can stop popping undos/redos.
             // Also, move to the point where the modification took place.
             let cursor = {
                 let change = change.borrow();
@@ -3200,8 +3247,7 @@ impl TextBuffer {
 
             damage_start = damage_start.min(cursor.logical_pos.y);
 
-            let mut line_info =
-                (self.word_wrap_column > 0).then(|| ActiveEditLineInfo::new(self, cursor));
+            let mut line_info = (self.word_wrap_column > 0).then(|| self.edit_layout_begin(cursor));
             {
                 let mut change = change.borrow_mut();
                 let change = change.text_mut();
@@ -3210,8 +3256,8 @@ impl TextBuffer {
                 mem::swap(&mut change.deleted, &mut change.added);
 
                 if let Some(info) = &mut line_info {
-                    info.prepare(
-                        self,
+                    self.edit_layout_prepare(
+                        info,
                         cursor.offset..cursor.offset + change.deleted.len(),
                         change.added.len(),
                     );
@@ -3243,7 +3289,7 @@ impl TextBuffer {
                 self.cursor = cursor_before;
             }
             if let Some(info) = line_info {
-                info.finish(self);
+                self.edit_layout_finish(info);
             }
         }
 
@@ -3451,6 +3497,7 @@ impl<'a> EncodingWriter<'a> {
 #[cfg(test)]
 mod tests {
     use super::{CoordType, CursorMovement, MoveLineDirection, Point, SearchOptions, TextBuffer};
+    use crate::buffer::NewlineFormat;
 
     fn buffer_contents(buf: &TextBuffer) -> String {
         let mut str = String::new();
@@ -4378,7 +4425,14 @@ mod tests {
 
     #[test]
     fn undo_redo_newline_format() {
-        for crlf in [false, true] {
+        for newline_format in [NewlineFormat::Lf, NewlineFormat::CrLf] {
+            let crlf = newline_format == NewlineFormat::CrLf;
+            let other_newline_format = if newline_format == NewlineFormat::Lf {
+                NewlineFormat::CrLf
+            } else {
+                NewlineFormat::Lf
+            };
+
             let mut buf = test_buffer("", crlf);
             buf.buffer.replace(0..0, b"a\r\nb\nc");
             buf.stats.logical_lines = 3;
@@ -4395,11 +4449,11 @@ mod tests {
             assert_eq!(buf.undo_stack.len(), 1);
             for _ in 0..3 {
                 assert_eq!(buffer_state(&buf), initial);
-                assert_eq!(buf.newline_normalization(), Some(!crlf));
+                assert_eq!(buf.newline_normalization, Some(other_newline_format));
                 assert_eq!(buf.is_crlf(), !crlf);
                 buf.undo();
                 assert_eq!(buffer_state(&buf), initial);
-                assert_eq!(buf.newline_normalization(), None);
+                assert_eq!(buf.newline_normalization, None);
                 assert_eq!(buf.is_crlf(), crlf);
                 assert_eq!(buf.generation(), generation);
                 assert!(!buf.is_dirty());
@@ -4412,10 +4466,10 @@ mod tests {
             assert_eq!(buf.generation(), changed_generation);
             buf.normalize_newlines(crlf);
             buf.undo();
-            assert_eq!(buf.newline_normalization(), Some(!crlf));
+            assert_eq!(buf.newline_normalization, Some(other_newline_format));
             buf.normalize_newlines(!crlf);
             buf.redo();
-            assert_eq!(buf.newline_normalization(), Some(crlf));
+            assert_eq!(buf.newline_normalization, Some(newline_format));
         }
     }
 
@@ -4440,23 +4494,23 @@ mod tests {
                 buf.undo();
                 if !grouped {
                     assert_eq!(buffer_state(&buf), first);
-                    assert_eq!(buf.newline_normalization(), Some(true));
+                    assert_eq!(buf.newline_normalization, Some(NewlineFormat::CrLf));
                     buf.undo();
                     assert_eq!(buffer_state(&buf), first);
-                    assert_eq!(buf.newline_normalization(), None);
+                    assert_eq!(buf.newline_normalization, None);
                     buf.undo();
                 }
                 assert_eq!(buffer_state(&buf), initial);
-                assert_eq!(buf.newline_normalization(), None);
+                assert_eq!(buf.newline_normalization, None);
                 buf.redo();
                 if !grouped {
                     assert_eq!(buffer_state(&buf), first);
                     buf.redo();
-                    assert_eq!(buf.newline_normalization(), Some(true));
+                    assert_eq!(buf.newline_normalization, Some(NewlineFormat::CrLf));
                     buf.redo();
                 }
                 assert_eq!(buffer_state(&buf), last);
-                assert_eq!(buf.newline_normalization(), Some(true));
+                assert_eq!(buf.newline_normalization, Some(NewlineFormat::CrLf));
                 assert_layout(&buf);
             }
         }
@@ -4469,13 +4523,13 @@ mod tests {
         let abandoned = buf.generation();
         buf.undo();
         buf.normalize_newlines(false);
-        assert_eq!(buf.newline_normalization(), Some(false));
+        assert_eq!(buf.newline_normalization, Some(NewlineFormat::Lf));
         assert_ne!(buf.generation(), abandoned);
         let generation = buf.generation();
         buf.redo();
         assert_eq!(buf.generation(), generation);
         buf.copy_from_str(&b"replacement".as_slice());
-        assert_eq!(buf.newline_normalization(), None);
+        assert_eq!(buf.newline_normalization, None);
         assert!(buf.undo_stack.is_empty());
         assert!(buf.redo_stack.is_empty());
     }
