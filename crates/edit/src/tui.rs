@@ -160,6 +160,9 @@ use crate::input::{InputKeyMod, kbmod, vk};
 use crate::oklab::StraightRgba;
 use crate::{input, simd, unicode};
 
+#[cfg(test)]
+mod grid_tests;
+
 const ROOT_ID: u64 = 0x14057B7EF767814F; // Knuth's MMIX constant
 const SHIFT_TAB: InputKey = vk::TAB.with_modifiers(kbmod::SHIFT);
 const KBMOD_FOR_WORD_NAV: InputKeyMod =
@@ -242,6 +245,23 @@ pub enum Position {
     Center,
     /// The child is positioned at the right edge of the parent.
     Right,
+}
+
+#[derive(Clone, Copy)]
+pub enum Display {
+    Block,
+    Grid,
+}
+
+/// Grid tracks use terminal cells; overflowing content is clipped.
+#[derive(Default, Clone, Copy, Debug)]
+pub enum GridTrack {
+    #[default]
+    Auto,
+    /// An exact cell count; negative sizes become zero.
+    Fixed(CoordType),
+    /// A fractional track with a zero minimum: `minmax(0, Nfr)`.
+    Fraction(u16),
 }
 
 /// Controls the text overflow behavior of a label
@@ -1694,6 +1714,37 @@ impl<'a> Context<'a, '_> {
     pub fn attr_position(&mut self, align: Position) {
         let mut last_node = self.tree.last_node.borrow_mut();
         last_node.attributes.position = align;
+    }
+
+    /// Selects block or grid layout on a block, including the implicit viewport root.
+    pub fn attr_display(&mut self, display: Display) {
+        let content = &mut self.tree.last_node.borrow_mut().content;
+        match (&*content, display) {
+            (NodeContent::None, Display::Grid) => *content = NodeContent::Grid(Default::default()),
+            (NodeContent::Grid(_), Display::Block) => *content = NodeContent::None,
+            (NodeContent::None, Display::Block) | (NodeContent::Grid(_), Display::Grid) => {}
+            _ => debug_assert!(false, "display requires a block"),
+        }
+    }
+
+    /// Sets columns on a grid. Children occupy cells in row-major order, excluding floats.
+    /// An empty template creates one Auto column; additional rows are Auto.
+    pub fn attr_grid_template_columns(&mut self, columns: &[GridTrack]) {
+        if let NodeContent::Grid(grid) = &mut self.tree.last_node.borrow_mut().content {
+            grid.columns = GridContent::tracks(self.arena(), columns);
+        } else {
+            debug_assert!(false, "grid-template-columns requires display: grid");
+        }
+    }
+
+    /// Sets rows on a grid. Items stretch vertically; Auto tracks retain intrinsic
+    /// sizes and share unused space when there are no positive fractional tracks.
+    pub fn attr_grid_template_rows(&mut self, rows: &[GridTrack]) {
+        if let NodeContent::Grid(grid) = &mut self.tree.last_node.borrow_mut().content {
+            grid.rows = GridContent::tracks(self.arena(), rows);
+        } else {
+            debug_assert!(false, "grid-template-rows requires display: grid");
+        }
     }
 
     /// Assigns padding to the current node.
@@ -3754,6 +3805,143 @@ struct TableContent<'a> {
     cell_gap: Size,
 }
 
+#[derive(Default)]
+struct GridTrackSize {
+    template: GridTrack,
+    intrinsic: CoordType,
+    start: CoordType,
+    end: CoordType,
+}
+
+#[derive(Default)]
+struct GridContent<'a> {
+    columns: BVec<'a, GridTrackSize>,
+    rows: BVec<'a, GridTrackSize>,
+}
+
+impl<'a> GridContent<'a> {
+    fn tracks(arena: &'a Arena, template: &[GridTrack]) -> BVec<'a, GridTrackSize> {
+        let mut tracks = BVec::empty();
+        for &template in template {
+            tracks.push(arena, GridTrackSize { template, ..Default::default() });
+        }
+        tracks
+    }
+
+    fn measure(&mut self, first: Option<&'a NodeCell<'a>>, arena: &'a Arena) -> Size {
+        if self.columns.is_empty() {
+            self.columns.push(arena, GridTrackSize::default());
+        }
+        for (index, child) in Tree::iterate_siblings(first).enumerate() {
+            let mut child = child.borrow_mut();
+            child.compute_intrinsic_size(arena);
+            let size = child.intrinsic_to_outer();
+            let row = index / self.columns.len();
+            if row == self.rows.len() {
+                self.rows.push(arena, GridTrackSize::default());
+            }
+            let column = index % self.columns.len();
+            self.columns[column].intrinsic = self.columns[column].intrinsic.max(size.width);
+            self.rows[row].intrinsic = self.rows[row].intrinsic.max(size.height);
+        }
+        Size {
+            width: Self::preferred_size(&self.columns),
+            height: Self::preferred_size(&self.rows),
+        }
+    }
+
+    fn preferred_size(tracks: &[GridTrackSize]) -> CoordType {
+        let mut size: CoordType = 0;
+        let mut unit = 0;
+        let mut weights: CoordType = 0;
+        for track in tracks {
+            match track.template {
+                GridTrack::Auto => size = size.saturating_add(track.intrinsic),
+                GridTrack::Fixed(fixed) => size = size.saturating_add(fixed.max(0)),
+                GridTrack::Fraction(0) => {}
+                GridTrack::Fraction(weight) => {
+                    let weight = weight as CoordType;
+                    // Round upward so each fractional track can fit its intrinsic content.
+                    unit = unit.max(
+                        track.intrinsic / weight + CoordType::from(track.intrinsic % weight != 0),
+                    );
+                    weights = weights.saturating_add(weight);
+                }
+            }
+        }
+        size.saturating_add(unit.saturating_mul(weights))
+    }
+
+    fn allocate(tracks: &mut [GridTrackSize], available: CoordType) {
+        let mut remaining = available.max(0);
+        let mut weights = 0u128;
+        let mut automatic = 0u128;
+        for track in tracks.iter_mut() {
+            track.end = match track.template {
+                GridTrack::Auto => {
+                    automatic += 1;
+                    track.intrinsic
+                }
+                GridTrack::Fixed(size) => size.max(0),
+                GridTrack::Fraction(weight) => {
+                    weights += u128::from(weight);
+                    0
+                }
+            };
+            remaining = remaining.saturating_sub(track.end).max(0);
+        }
+        let stretch_auto = weights == 0;
+        let total = if stretch_auto { automatic } else { weights };
+        let mut prefix = 0;
+        let mut assigned = 0;
+        let mut offset: CoordType = 0;
+        for track in tracks {
+            prefix += match track.template {
+                GridTrack::Auto if stretch_auto => 1,
+                GridTrack::Fraction(weight) => u128::from(weight),
+                _ => 0,
+            };
+            let share = (remaining as u128 * prefix).checked_div(total).unwrap_or(0) as CoordType;
+            track.start = offset;
+            track.end = offset.saturating_add(track.end).saturating_add(share - assigned);
+            offset = track.end;
+            assigned = share;
+        }
+    }
+
+    fn layout(&mut self, first: Option<&'a NodeCell<'a>>, inner: Rect, clip: Rect) {
+        Self::allocate(&mut self.columns, inner.width());
+        Self::allocate(&mut self.rows, inner.height());
+        for (index, child) in Tree::iterate_siblings(first).enumerate() {
+            let column = &self.columns[index % self.columns.len()];
+            let row = &self.rows[index / self.columns.len()];
+            let rect = Rect {
+                left: inner.left.saturating_add(column.start),
+                top: inner.top.saturating_add(row.start),
+                right: inner.left.saturating_add(column.end),
+                bottom: inner.top.saturating_add(row.end),
+            };
+            Self::place_item(&mut child.borrow_mut(), rect, inner, clip);
+        }
+    }
+
+    fn place_item(cell: &mut Node<'a>, mut rect: Rect, bounds: Rect, clip: Rect) {
+        let available = rect.width();
+        let width = cell.intrinsic_to_outer().width.min(available);
+        let remaining = available - width;
+        let (offset, width) = match cell.attributes.position {
+            Position::Stretch => (0, available),
+            Position::Left => (0, width),
+            Position::Center => (remaining / 2, width),
+            Position::Right => (remaining, width),
+        };
+        rect.left = rect.left.saturating_add(offset);
+        rect.right = rect.left.saturating_add(width);
+        cell.set_layout_rect(rect, bounds, clip);
+        cell.layout_children(cell.inner_clipped);
+    }
+}
+
 /// NOTE: Must not contain items that require drop().
 struct StyledTextChunk {
     offset: usize,
@@ -3802,6 +3990,7 @@ enum NodeContent<'a> {
     List(ListContent<'a>),
     Modal(BString<'a>), // title
     Table(TableContent<'a>),
+    Grid(GridContent<'a>),
     Text(TextContent<'a>),
     Textarea(TextareaContent<'a>),
     Scrollarea(ScrollareaContent),
@@ -3878,6 +4067,18 @@ struct Node<'a> {
 }
 
 impl<'a> Node<'a> {
+    fn set_layout_rect(&mut self, rect: Rect, bounds: Rect, clip: Rect) {
+        self.outer = Rect {
+            left: rect.left.clamp(bounds.left, bounds.right),
+            top: rect.top.clamp(bounds.top, bounds.bottom),
+            right: rect.right.clamp(bounds.left, bounds.right),
+            bottom: rect.bottom.clamp(bounds.top, bounds.bottom),
+        };
+        self.inner = self.outer_to_inner(self.outer);
+        self.outer_clipped = self.outer.intersect(clip);
+        self.inner_clipped = self.inner.intersect(clip);
+    }
+
     /// Given an outer rectangle (including padding and borders) of this node,
     /// this returns the inner rectangle (excluding padding and borders).
     fn outer_to_inner(&self, mut outer: Rect) -> Rect {
@@ -3886,10 +4087,14 @@ impl<'a> Node<'a> {
         let r = self.attributes.bordered || matches!(self.content, NodeContent::Scrollarea(..));
         let b = self.attributes.bordered;
 
-        outer.left += self.attributes.padding.left + l as CoordType;
-        outer.top += self.attributes.padding.top + t as CoordType;
-        outer.right -= self.attributes.padding.right + r as CoordType;
-        outer.bottom -= self.attributes.padding.bottom + b as CoordType;
+        let left = outer.left.saturating_add(self.attributes.padding.left);
+        let top = outer.top.saturating_add(self.attributes.padding.top);
+        let right = outer.right.saturating_sub(self.attributes.padding.right);
+        let bottom = outer.bottom.saturating_sub(self.attributes.padding.bottom);
+        outer.left = left.saturating_add(l as CoordType).min(outer.right);
+        outer.top = top.saturating_add(t as CoordType).min(outer.bottom);
+        outer.right = right.saturating_sub(r as CoordType).max(outer.left);
+        outer.bottom = bottom.saturating_sub(b as CoordType).max(outer.top);
         outer
     }
 
@@ -3916,6 +4121,13 @@ impl<'a> Node<'a> {
     /// Computes the intrinsic size of this node and its children.
     fn compute_intrinsic_size(&mut self, arena: &'a Arena) {
         match &mut self.content {
+            NodeContent::Grid(grid) => {
+                let size = grid.measure(self.children.first, arena);
+                if !self.intrinsic_size_set {
+                    self.intrinsic_size = size;
+                    self.intrinsic_size_set = true;
+                }
+            }
             NodeContent::Table(spec) => {
                 // Calculate each row's height and the maximum width of each of its columns.
                 for row in Tree::iterate_siblings(self.children.first) {
@@ -4003,11 +4215,21 @@ impl<'a> Node<'a> {
     /// Lays out the children of this node.
     /// The clip rect restricts "rendering" to a certain area (the viewport).
     fn layout_children(&mut self, clip: Rect) {
-        if self.children.first.is_none() || self.inner.is_empty() {
+        if self.children.first.is_none() {
+            return;
+        }
+        if self.inner.is_empty() {
+            let empty = Rect { right: self.inner.left, bottom: self.inner.top, ..self.inner };
+            for child in Tree::iterate_siblings(self.children.first) {
+                let mut child = child.borrow_mut();
+                child.set_layout_rect(empty, empty, clip);
+                child.layout_children(clip);
+            }
             return;
         }
 
         match &mut self.content {
+            NodeContent::Grid(grid) => grid.layout(self.children.first, self.inner, clip),
             NodeContent::Table(spec) => {
                 let width = self.inner.right - self.inner.left;
                 let mut x = self.inner.left;
