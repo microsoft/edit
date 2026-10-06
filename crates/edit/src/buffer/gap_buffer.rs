@@ -54,13 +54,13 @@ pub struct GapBuffer {
     gap_off: usize,
     /// Gap length.
     gap_len: usize,
-    /// The current text revision. Technically, this belongs into `TextBuffer`,
+    /// The current text revision. Technically, this belongs to [`super::TextBuffer`],
     /// who manages this value via its undo/redo system. However, moving it here ensures
     /// that we never forget to sync `generation_counter` and `generation` on mutations.
     generation: u32,
     /// Increments every time the buffer is modified.
     ///
-    /// For instance, saving to disk, typing, undoing it, should restore `TextBuffer`'s "clean" flag.
+    /// For instance, saving to disk, typing, undoing it, should restore [`super::TextBuffer`]'s "clean" flag.
     /// If one is typing from the undone state, naively incrementing the generation again would prevent identifying
     /// such diverging edits. E.g. type "a", undo, type "b" --> "b" _must_ have a different generation than "a".
     generation_counter: u32,
