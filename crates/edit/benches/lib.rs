@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::fs::File;
 use std::hint::black_box;
 use std::io::Cursor;
 use std::path::Path;
@@ -160,6 +161,22 @@ fn bench_buffer(c: &mut Criterion) {
         })
         .bench_function(BenchmarkId::new("TextBuffer", "rustcode"), |b| {
             b.iter(bench_text_buffer);
+        })
+        .throughput(Throughput::Bytes(data.end_content.len() as u64))
+        .bench_function(BenchmarkId::new("TextBuffer", "write_file/normalized"), |b| {
+            let mut buf = buffer::TextBuffer::new(false).unwrap();
+            buf.set_crlf(false);
+            buf.write_raw(data.end_content.as_bytes());
+            buf.normalize_newlines(true);
+
+            #[cfg(windows)]
+            let mut file = File::create("NUL").unwrap();
+            #[cfg(not(windows))]
+            let mut file = File::create("/dev/null").unwrap();
+
+            b.iter(|| {
+                buf.write_file(&mut file).unwrap();
+            });
         });
 }
 

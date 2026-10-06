@@ -61,6 +61,7 @@ const VISUAL_SPACE_PREFIX_ADD: usize = '･'.len_utf8() - 1;
 const VISUAL_TAB: &[u8] = "￫       ".as_bytes();
 const VISUAL_TAB_PREFIX_ADD: usize = '￫'.len_utf8() - 1;
 
+#[derive(Debug)]
 pub enum IoError {
     Io(io::Error),
     Icu(icu::Error),
@@ -97,6 +98,22 @@ struct TextBufferSelection {
     end: Point,
 }
 
+/// Self-explanatory.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum NewlineFormat {
+    Lf,
+    CrLf,
+}
+
+impl NewlineFormat {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Lf => "\n",
+            Self::CrLf => "\r\n",
+        }
+    }
+}
+
 /// In order to group actions into a single undo step,
 /// we need to know the type of action that was performed.
 /// This stores the action type.
@@ -108,7 +125,21 @@ enum HistoryType {
 }
 
 /// An undo/redo entry.
-struct HistoryEntry {
+enum HistoryEntry {
+    Text(TextHistoryEntry),
+    NewlineFormat(NewlineFormatHistoryEntry),
+}
+
+impl HistoryEntry {
+    fn generation_before(&self) -> u32 {
+        match self {
+            Self::Text(entry) => entry.generation_before,
+            Self::NewlineFormat(entry) => entry.generation_before,
+        }
+    }
+}
+
+struct TextHistoryEntry {
     /// [`TextBuffer::cursor`] position before the change was made.
     cursor_before: Point,
     /// [`TextBuffer::selection`] before the change was made.
@@ -126,6 +157,17 @@ struct HistoryEntry {
     deleted: Vec<u8>,
     /// Text that was added to the buffer.
     added: Vec<u8>,
+}
+
+struct NewlineFormatHistoryEntry {
+    /// [`GapBuffer::generation`] before the change was made.
+    ///
+    /// **NOTE:** Entries with the same generation are grouped together.
+    generation_before: u32,
+    /// Newline format before the change was made.
+    newline_format_before: NewlineFormat,
+    /// Newline normalization before the change was made.
+    newline_normalization_before: Option<NewlineFormat>,
 }
 
 /// Caches an ICU search operation.
@@ -265,7 +307,8 @@ pub struct TextBuffer {
     language: Option<&'static Language>,
     ruler: CoordType,
     encoding: &'static str,
-    newlines_are_crlf: bool,
+    newline_format: NewlineFormat,
+    newline_normalization: Option<NewlineFormat>,
     insert_final_newline: bool,
     overtype: bool,
 
@@ -315,7 +358,8 @@ impl TextBuffer {
             language: None,
             ruler: 0,
             encoding: "UTF-8",
-            newlines_are_crlf: cfg!(windows), // Windows users want CRLF
+            newline_format: if cfg!(windows) { NewlineFormat::CrLf } else { NewlineFormat::Lf },
+            newline_normalization: None,
             insert_final_newline: false, // NOTE: Even with POSIX, single-line buffers need this to be false
             overtype: false,
 
@@ -378,81 +422,38 @@ impl TextBuffer {
 
     /// The newline type used in the document. LF or CRLF.
     pub fn is_crlf(&self) -> bool {
-        self.newlines_are_crlf
+        self.newline_format == NewlineFormat::CrLf
     }
 
     /// Changes the newline type without normalizing the document.
     pub fn set_crlf(&mut self, crlf: bool) {
-        self.newlines_are_crlf = crlf;
+        self.newline_format = if crlf { NewlineFormat::CrLf } else { NewlineFormat::Lf };
     }
 
-    /// Changes the newline type used in the document.
-    ///
-    /// NOTE: Cannot be undone.
+    /// Selects the insertion and output newline format without modifying stored text.
+    /// Undo restores the previous preference, including preservation of mixed line endings.
     pub fn normalize_newlines(&mut self, crlf: bool) {
-        let newline: &[u8] = if crlf { b"\r\n" } else { b"\n" };
-        let mut off = 0;
-
-        let mut cursor_offset = self.cursor.offset;
-        let mut cursor_for_rendering_offset =
-            self.cursor_for_rendering.map_or(cursor_offset, |c| c.offset);
-
-        #[cfg(debug_assertions)]
-        let mut adjusted_newlines = 0;
-
-        'outer: loop {
-            // Seek to the offset of the next line start.
-            loop {
-                let chunk = self.read_forward(off);
-                if chunk.is_empty() {
-                    break 'outer;
-                }
-
-                let (delta, line) = simd::lines_fwd(chunk, 0, 0, 1);
-                off += delta;
-                if line == 1 {
-                    break;
-                }
-            }
-
-            // Get the preceding newline.
-            let chunk = self.read_backward(off);
-            let chunk_newline_len = if chunk.ends_with(b"\r\n") { 2 } else { 1 };
-            let chunk_newline = &chunk[chunk.len() - chunk_newline_len..];
-
-            if chunk_newline != newline {
-                // If this newline is still before our cursor position, then it still has an effect on its offset.
-                // Any newline adjustments past that cursor position are irrelevant.
-                let delta = newline.len() as isize - chunk_newline_len as isize;
-                if off <= cursor_offset {
-                    cursor_offset = cursor_offset.saturating_add_signed(delta);
-                    #[cfg(debug_assertions)]
-                    {
-                        adjusted_newlines += 1;
-                    }
-                }
-                if off <= cursor_for_rendering_offset {
-                    cursor_for_rendering_offset =
-                        cursor_for_rendering_offset.saturating_add_signed(delta);
-                }
-
-                // Replace the newline.
-                off -= chunk_newline_len;
-                self.buffer.replace(off..off + chunk_newline_len, newline);
-                off += newline.len();
-            }
+        let format = if crlf { NewlineFormat::CrLf } else { NewlineFormat::Lf };
+        if self.newline_normalization == Some(format) && self.newline_format == format {
+            return;
         }
 
-        // If this fails, the cursor offset calculation above is wrong.
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(adjusted_newlines, self.cursor.logical_pos.y);
+        self.undo_barrier();
 
-        self.cursor.offset = cursor_offset;
-        if let Some(cursor) = &mut self.cursor_for_rendering {
-            cursor.offset = cursor_for_rendering_offset;
-        }
+        self.redo_stack.clear();
+        self.undo_stack.push_back(SemiRefCell::new(HistoryEntry::NewlineFormat(
+            NewlineFormatHistoryEntry {
+                generation_before: self
+                    .active_edit_group
+                    .as_ref()
+                    .map_or(self.buffer.generation(), |group| group.generation_before),
+                newline_format_before: self.newline_format,
+                newline_normalization_before: self.newline_normalization,
+            },
+        )));
 
-        self.newlines_are_crlf = crlf;
+        self.newline_format = format;
+        self.newline_normalization = Some(format);
     }
 
     /// If enabled, automatically insert a final newline
@@ -696,6 +697,7 @@ impl TextBuffer {
         self.redo_stack.clear();
         self.undo_barrier();
         self.cursor = Default::default();
+        self.newline_normalization = None;
         self.set_selection(None);
         self.mark_as_clean();
         self.reflow();
@@ -811,6 +813,8 @@ impl TextBuffer {
 
             // We'll assume CRLF if more than half of the lines end in CRLF. If there is only a single line, we'll use the platform default.
             let newlines_are_crlf = if lines == 0 { cfg!(windows) } else { crlf_count > lines / 2 };
+            let newline_format =
+                if newlines_are_crlf { NewlineFormat::CrLf } else { NewlineFormat::Lf };
 
             // We'll assume tabs if there are more lines starting with tabs than with spaces.
             let indent_with_tabs = tab_indentations > space_indentations;
@@ -842,7 +846,7 @@ impl TextBuffer {
             // Add 1, because the last line doesn't end in a newline (it ends in the literal end).
             self.stats.logical_lines = lines + 1;
             self.stats.visual_lines = self.stats.logical_lines;
-            self.newlines_are_crlf = newlines_are_crlf;
+            self.newline_format = newline_format;
             self.insert_final_newline = final_newline;
             self.indent_with_tabs = indent_with_tabs;
             self.tab_size = tab_size;
@@ -983,58 +987,78 @@ impl TextBuffer {
 
     /// Writes the text buffer contents to a file, handling BOM and encoding.
     pub fn write_file(&mut self, file: &mut File) -> IoResult<()> {
-        let mut offset = 0;
-
-        if self.encoding.starts_with("UTF-8") {
-            if self.encoding == "UTF-8 BOM" {
-                file.write_all(b"\xEF\xBB\xBF")?;
-            }
-            loop {
-                let chunk = self.read_forward(offset);
-                if chunk.is_empty() {
-                    break;
-                }
-                file.write_all(chunk)?;
-                offset += chunk.len();
-            }
-        } else {
-            self.write_file_with_icu(file)?;
-        }
-
-        self.mark_as_clean();
-        Ok(())
-    }
-
-    fn write_file_with_icu(&mut self, file: &mut File) -> IoResult<()> {
-        let scratch = scratch_arena(None);
-        let pivot_buffer = scratch.alloc_uninit_slice(4 * KIBI);
-        let buf = scratch.alloc_uninit_slice(4 * KIBI);
-        let mut c = icu::Converter::new(pivot_buffer, "UTF-8", self.encoding)?;
-        let mut offset = 0;
-
-        // Write the BOM for the encodings we know need it.
-        if self.encoding.starts_with("UTF-16")
+        let utf8 = self.encoding.starts_with("UTF-8");
+        let bom = self.encoding == "UTF-8 BOM"
+            || self.encoding.starts_with("UTF-16")
             || self.encoding.starts_with("UTF-32")
-            || self.encoding == "GB18030"
-        {
-            let (_, output_advance) = c.convert(b"\xEF\xBB\xBF", buf)?;
-            let chunk = unsafe { buf[..output_advance].assume_init_ref() };
-            file.write_all(chunk)?;
+            || self.encoding == "GB18030";
+
+        let scratch = scratch_arena(None);
+        let converter = if !utf8 {
+            let pivot_buffer = scratch.alloc_uninit_slice(BUF_WRITER_CAP);
+            let c = icu::Converter::new(pivot_buffer, "UTF-8", self.encoding)?;
+            Some(c)
+        } else {
+            None
+        };
+        let mut writer = EncodingWriter::new(file, scratch.alloc_uninit_array(), converter);
+        let mut offset = 0;
+        let mut pending_cr = false;
+
+        if bom {
+            writer.write(b"\xEF\xBB\xBF")?;
         }
 
         loop {
             let chunk = self.read_forward(offset);
-            let (input_advance, output_advance) = c.convert(chunk, buf)?;
-            let chunk = unsafe { buf[..output_advance].assume_init_ref() };
+            offset += chunk.len();
 
-            file.write_all(chunk)?;
-            offset += input_advance;
+            // If the last chunk ended on a CR, we need to check if it was a CRLF sequence.
+            // If it wasn't, we write the CR we swallowed previously.
+            if pending_cr {
+                if chunk.first() != Some(&b'\n') {
+                    writer.write(b"\r")?;
+                }
+                pending_cr = false;
+            }
 
             if chunk.is_empty() {
                 break;
             }
+
+            if let Some(newline) = self.newline_normalization {
+                let newline = newline.as_str().as_bytes();
+                let mut off = 0;
+
+                loop {
+                    // NOTE: simd::lines_fwd is meant for traversing many lines efficiently. Its constant overhead
+                    // is much larger than for memchr2, whose use doubles write perf here (to ~7GB/s for me).
+                    let next = simd::memchr2(b'\n', b'\n', chunk, off);
+                    let hit = next < chunk.len();
+                    let line = &chunk[off..next];
+
+                    // If the line ends on a CR, we defer decision to the next chunk to see if it was a CRLF.
+                    pending_cr = !hit && line.ends_with(b"\r");
+
+                    // Strip CR/LF from the line.
+                    let line = unicode::strip_newline(line);
+
+                    writer.write(line)?;
+
+                    if hit {
+                        writer.write(newline)?;
+                        off = next + 1;
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                writer.write(chunk)?;
+            }
         }
 
+        writer.flush()?;
+        self.mark_as_clean();
         Ok(())
     }
 
@@ -2391,7 +2415,7 @@ impl TextBuffer {
 
             // First, write the newline.
             newline_buffer.clear();
-            newline_buffer.push_str(&*scratch, if self.newlines_are_crlf { "\r\n" } else { "\n" });
+            newline_buffer.push_str(&*scratch, self.newline_format.as_str());
 
             if !raw {
                 // We'll give the next line the same indentation as the previous one.
@@ -2465,7 +2489,7 @@ impl TextBuffer {
             && self.cursor.logical_pos.x > 0
         {
             let cursor = self.cursor;
-            self.edit_write(if self.newlines_are_crlf { b"\r\n" } else { b"\n" });
+            self.edit_write(self.newline_format.as_str().as_bytes());
             // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
             self.cursor = cursor;
         }
@@ -2770,7 +2794,7 @@ impl TextBuffer {
 
         // Line copies (= Ctrl+C when there's no selection) always end with a newline.
         if line_copy && !out.ends_with(b"\n") {
-            out.replace_range(out.len().., if self.newlines_are_crlf { b"\r\n" } else { b"\n" });
+            out.replace_range(out.len().., self.newline_format.as_str().as_bytes());
         }
 
         out
@@ -2855,7 +2879,7 @@ impl TextBuffer {
             }
 
             self.last_history_type = history_type;
-            self.undo_stack.push_back(SemiRefCell::new(HistoryEntry {
+            self.undo_stack.push_back(SemiRefCell::new(HistoryEntry::Text(TextHistoryEntry {
                 cursor_before: cursor_before.logical_pos,
                 selection_before: self.selection,
                 stats_before: self.stats,
@@ -2863,12 +2887,13 @@ impl TextBuffer {
                 cursor: cursor.logical_pos,
                 deleted: Vec::new(),
                 added: Vec::new(),
-            }));
+            })));
 
             if let Some(info) = &self.active_edit_group
                 && let Some(entry) = self.undo_stack.back()
             {
                 let mut entry = entry.borrow_mut();
+                let HistoryEntry::Text(entry) = &mut *entry else { unreachable!() };
                 entry.cursor_before = info.cursor_before;
                 entry.selection_before = info.selection_before;
                 entry.stats_before = info.stats_before;
@@ -2905,6 +2930,7 @@ impl TextBuffer {
         // Copy the written portion into the undo entry.
         {
             let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
+            let HistoryEntry::Text(undo) = &mut *undo else { unreachable!() };
             undo.added.extend_from_slice(text);
         }
 
@@ -2928,6 +2954,7 @@ impl TextBuffer {
         let mut out_off = usize::MAX;
 
         let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
+        let HistoryEntry::Text(undo) = &mut *undo else { unreachable!() };
 
         // If this is a continued backspace operation,
         // we need to prepend the deleted portion to the undo entry.
@@ -2959,11 +2986,16 @@ impl TextBuffer {
         #[cfg(debug_assertions)]
         {
             let entry = self.undo_stack.back_mut().unwrap().borrow_mut();
+            let HistoryEntry::Text(entry) = &*entry else { unreachable!() };
             debug_assert!(!entry.deleted.is_empty() || !entry.added.is_empty());
         }
 
         if let Some(info) = self.active_edit_line_info.take() {
-            let deleted_count = self.undo_stack.back_mut().unwrap().borrow_mut().deleted.len();
+            let deleted_count = {
+                let entry = self.undo_stack.back_mut().unwrap().borrow();
+                let HistoryEntry::Text(entry) = &*entry else { unreachable!() };
+                entry.deleted.len()
+            };
             let target = self.cursor.logical_pos;
 
             // From our safe position we can measure the actual visual position of the cursor.
@@ -3025,7 +3057,7 @@ impl TextBuffer {
 
                 // Only pop the entry if its buffer generation matches the previous one
                 let Some(g) = from.pop_back_if(|c| {
-                    entry_buffer_generation.is_none_or(|g| g == c.borrow().generation_before)
+                    entry_buffer_generation.is_none_or(|g| g == c.borrow().generation_before())
                 }) else {
                     break;
                 };
@@ -3038,91 +3070,106 @@ impl TextBuffer {
                 to.back().unwrap()
             };
 
-            // Remember the buffer generation of the change so we can stop popping undos/redos.
-            // Also, move to the point where the modification took place.
-            let cursor = {
-                let change = change.borrow();
-                entry_buffer_generation = Some(change.generation_before);
-                self.cursor_move_to_logical_internal(self.cursor, change.cursor)
-            };
+            match &mut *change.borrow_mut() {
+                HistoryEntry::Text(change) => {
+                    // Remember the buffer generation of the change so we can stop popping undos/redos.
+                    // Also, move to the point where the modification took place.
+                    let cursor = {
+                        entry_buffer_generation = Some(change.generation_before);
+                        self.cursor_move_to_logical_internal(self.cursor, change.cursor)
+                    };
 
-            let safe_cursor = if self.word_wrap_column > 0 {
-                // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
-                // This is because the undo/redo operation may have changed the visual position of the cursor.
-                self.goto_line_start(cursor, cursor.logical_pos.y)
-            } else {
-                cursor
-            };
+                    let safe_cursor = if self.word_wrap_column > 0 {
+                        // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
+                        // This is because the undo/redo operation may have changed the visual position of the cursor.
+                        self.goto_line_start(cursor, cursor.logical_pos.y)
+                    } else {
+                        cursor
+                    };
 
-            damage_start = damage_start.min(cursor.logical_pos.y);
+                    damage_start = damage_start.min(cursor.logical_pos.y);
 
-            {
-                let mut change = change.borrow_mut();
-                let change = &mut *change;
+                    // Undo: Whatever was deleted is now added and vice versa.
+                    mem::swap(&mut change.deleted, &mut change.added);
 
-                // Undo: Whatever was deleted is now added and vice versa.
-                mem::swap(&mut change.deleted, &mut change.added);
+                    // Delete the inserted portion.
+                    self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
 
-                // Delete the inserted portion.
-                self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
+                    // Reinsert the deleted portion.
+                    {
+                        let added = &change.added[..];
+                        let mut beg = 0;
+                        let mut offset = cursor.offset;
 
-                // Reinsert the deleted portion.
-                {
-                    let added = &change.added[..];
-                    let mut beg = 0;
-                    let mut offset = cursor.offset;
+                        while beg < added.len() {
+                            let (end, line) = simd::lines_fwd(added, beg, 0, 1);
+                            let has_newline = line != 0;
+                            let link = &added[beg..end];
+                            let line = unicode::strip_newline(link);
+                            let mut written;
 
-                    while beg < added.len() {
-                        let (end, line) = simd::lines_fwd(added, beg, 0, 1);
-                        let has_newline = line != 0;
-                        let link = &added[beg..end];
-                        let line = unicode::strip_newline(link);
-                        let mut written;
+                            {
+                                let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
+                                written = slice_copy_safe(gap, line);
 
-                        {
-                            let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
-                            written = slice_copy_safe(gap, line);
-
-                            if has_newline {
-                                if self.newlines_are_crlf && written < gap.len() {
-                                    gap[written] = b'\r';
-                                    written += 1;
+                                if has_newline {
+                                    if self.newline_format == NewlineFormat::CrLf
+                                        && written < gap.len()
+                                    {
+                                        gap[written] = b'\r';
+                                        written += 1;
+                                    }
+                                    if written < gap.len() {
+                                        gap[written] = b'\n';
+                                        written += 1;
+                                    }
                                 }
-                                if written < gap.len() {
-                                    gap[written] = b'\n';
-                                    written += 1;
-                                }
+
+                                self.buffer.commit_gap(written);
                             }
 
-                            self.buffer.commit_gap(written);
+                            beg = end;
+                            offset += written;
                         }
-
-                        beg = end;
-                        offset += written;
                     }
+
+                    // Restore the previous line statistics.
+                    mem::swap(&mut self.stats, &mut change.stats_before);
+
+                    // Restore the previous selection.
+                    mem::swap(&mut self.selection, &mut change.selection_before);
+
+                    // Pretend as if the buffer was never modified.
+                    self.buffer.set_generation(change.generation_before);
+                    change.generation_before = buffer_generation;
+
+                    // Restore the previous cursor.
+                    let cursor_before =
+                        self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
+                    change.cursor_before = self.cursor.logical_pos;
+                    // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
+                    self.cursor = cursor_before;
+
+                    if self.undo_stack.is_empty() {
+                        self.last_history_type = HistoryType::Other;
+                    }
+
+                    true
                 }
+                HistoryEntry::NewlineFormat(entry) => {
+                    entry_buffer_generation = Some(entry.generation_before);
 
-                // Restore the previous line statistics.
-                mem::swap(&mut self.stats, &mut change.stats_before);
+                    self.buffer.set_generation(entry.generation_before);
+                    entry.generation_before = buffer_generation;
+                    mem::swap(&mut self.newline_format, &mut entry.newline_format_before);
+                    mem::swap(
+                        &mut self.newline_normalization,
+                        &mut entry.newline_normalization_before,
+                    );
 
-                // Restore the previous selection.
-                mem::swap(&mut self.selection, &mut change.selection_before);
-
-                // Pretend as if the buffer was never modified.
-                self.buffer.set_generation(change.generation_before);
-                change.generation_before = buffer_generation;
-
-                // Restore the previous cursor.
-                let cursor_before =
-                    self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
-                change.cursor_before = self.cursor.logical_pos;
-                // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
-                self.cursor = cursor_before;
-
-                if self.undo_stack.is_empty() {
-                    self.last_history_type = HistoryType::Other;
+                    false
                 }
-            }
+            };
         }
 
         if damage_start == CoordType::MAX {
@@ -3131,14 +3178,11 @@ impl TextBuffer {
         }
 
         self.highlighter_cache.invalidate_from(damage_start);
-
-        if entry_buffer_generation.is_some() {
-            self.recalc_after_content_changed();
-        }
+        self.recalc_after_content_changed();
     }
 
     /// For interfacing with ICU.
-    pub(crate) fn read_backward(&self, off: usize) -> &[u8] {
+    pub fn read_backward(&self, off: usize) -> &[u8] {
         self.buffer.read_backward(off)
     }
 
@@ -3184,6 +3228,147 @@ fn detect_bom(bytes: &[u8]) -> Option<&'static str> {
         }
     }
     None
+}
+
+// We may be asked to write into an unbuffered file handle.
+// This makes it crucial that we aren't writing tiny 4KiB chunks.
+const BUF_WRITER_CAP: usize = 128 * KIBI; // In units, not bytes (multiply by 3).
+
+/// Essentially a [`std::io::BufWriter`] but for [`Arena`].
+struct BufWriter<'a> {
+    file: &'a mut File,
+    buf: &'a mut [MaybeUninit<u8>; BUF_WRITER_CAP],
+    len: usize,
+}
+
+impl<'a> BufWriter<'a> {
+    fn new(file: &'a mut File, buf: &'a mut [MaybeUninit<u8>; BUF_WRITER_CAP]) -> Self {
+        Self { file, buf, len: 0 }
+    }
+
+    /// Returns `true` if the buffer is empty.
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Returns the remainder of the buffer.
+    fn spare(&mut self) -> &mut [MaybeUninit<u8>] {
+        &mut self.buf[self.len..]
+    }
+
+    /// Returns the remaining capacity of the buffer.
+    fn spare_capacity(&self) -> usize {
+        self.buf.len() - self.len
+    }
+
+    /// Advances the buffer by `n` bytes.
+    fn advance(&mut self, n: usize) {
+        assert!(n <= self.buf.len() - self.len);
+        self.len += n;
+    }
+
+    /// Buffered write.
+    fn write(&mut self, mut data: &[u8]) -> IoResult<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        // Ensure we make good use of the existing buffer.
+        // This avoids pathological cases like a 4 byte buffer followed
+        // by a 128KiB write, followed by another 1 byte write.
+        if self.len > 0 {
+            let copy = self.spare_capacity().min(data.len());
+            self.buf[self.len..self.len + copy].write_copy_of_slice(&data[..copy]);
+            self.len += copy;
+
+            data = &data[copy..];
+            if data.is_empty() {
+                return Ok(());
+            }
+        }
+
+        self.flush()?;
+
+        if data.len() >= self.buf.len() {
+            // Huge chunk --> write to the file directly.
+            self.file.write_all(data)?;
+            Ok(())
+        } else {
+            // Write whatever is left into the now empty buffer.
+            self.buf[..data.len()].write_copy_of_slice(data);
+            self.len = data.len();
+            Ok(())
+        }
+    }
+
+    /// Flush the remainder. Does not flush the file.
+    fn flush(&mut self) -> IoResult<()> {
+        if self.len > 0 {
+            self.file.write_all(unsafe { self.buf[..self.len].assume_init_ref() })?;
+            self.len = 0;
+        }
+        Ok(())
+    }
+}
+
+/// Wraps [`BufWriter`] to handle optional encoding conversion.
+/// This is necessary to handle Rust's borrowing.
+struct EncodingWriter<'a> {
+    writer: BufWriter<'a>,
+    converter: Option<icu::Converter<'a>>,
+}
+
+impl<'a> EncodingWriter<'a> {
+    fn new(
+        file: &'a mut File,
+        buf: &'a mut [MaybeUninit<u8>; BUF_WRITER_CAP],
+        converter: Option<icu::Converter<'a>>,
+    ) -> Self {
+        Self { writer: BufWriter::new(file, buf), converter }
+    }
+
+    /// Buffered write + encoding conversion.
+    fn write(&mut self, data: &[u8]) -> IoResult<()> {
+        if self.converter.is_some() { self.write_converted(data) } else { self.writer.write(data) }
+    }
+
+    /// Flush the ICU encoder and the writer.
+    fn flush(&mut self) -> IoResult<()> {
+        if self.converter.is_some() { self.flush_converted() } else { self.writer.flush() }
+    }
+
+    #[cold]
+    fn write_converted(&mut self, mut data: &[u8]) -> IoResult<()> {
+        while !data.is_empty() {
+            data = self.convert_chunk(data)?;
+        }
+        Ok(())
+    }
+
+    #[cold]
+    fn flush_converted(&mut self) -> IoResult<()> {
+        loop {
+            // TODO: This does an extra iteration, which we could avoid if we knew
+            // whether `ucnv_convertEx` returned `U_BUFFER_OVERFLOW_ERROR` or not.
+            _ = self.convert_chunk(&[])?;
+            if self.writer.is_empty() {
+                break;
+            }
+            self.writer.flush()?;
+        }
+        Ok(())
+    }
+
+    fn convert_chunk<'d>(&mut self, data: &'d [u8]) -> IoResult<&'d [u8]> {
+        if self.writer.spare_capacity() < BUF_WRITER_CAP / 8 {
+            self.writer.flush()?;
+        }
+
+        let c = unsafe { self.converter.as_mut().unwrap_unchecked() };
+        let (in_advance, out_advance) = c.convert(data, self.writer.spare())?;
+        self.writer.advance(out_advance);
+        Ok(&data[in_advance..])
+    }
 }
 
 #[cfg(test)]
