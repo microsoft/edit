@@ -3072,87 +3072,87 @@ impl TextBuffer {
 
             match &mut *change.borrow_mut() {
                 HistoryEntry::Text(change) => {
-                    // Remember the buffer generation of the change so we can stop popping undos/redos.
-                    // Also, move to the point where the modification took place.
-                    let cursor = {
-                        entry_buffer_generation = Some(change.generation_before);
-                        self.cursor_move_to_logical_internal(self.cursor, change.cursor)
-                    };
+                // Remember the buffer generation of the change so we can stop popping undos/redos.
+                // Also, move to the point where the modification took place.
+                let cursor = {
+                    entry_buffer_generation = Some(change.generation_before);
+                    self.cursor_move_to_logical_internal(self.cursor, change.cursor)
+                };
 
-                    let safe_cursor = if self.word_wrap_column > 0 {
-                        // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
-                        // This is because the undo/redo operation may have changed the visual position of the cursor.
-                        self.goto_line_start(cursor, cursor.logical_pos.y)
-                    } else {
-                        cursor
-                    };
+                let safe_cursor = if self.word_wrap_column > 0 {
+                    // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
+                    // This is because the undo/redo operation may have changed the visual position of the cursor.
+                    self.goto_line_start(cursor, cursor.logical_pos.y)
+                } else {
+                    cursor
+                };
 
-                    damage_start = damage_start.min(cursor.logical_pos.y);
+                damage_start = damage_start.min(cursor.logical_pos.y);
 
-                    // Undo: Whatever was deleted is now added and vice versa.
-                    mem::swap(&mut change.deleted, &mut change.added);
+                // Undo: Whatever was deleted is now added and vice versa.
+                mem::swap(&mut change.deleted, &mut change.added);
 
-                    // Delete the inserted portion.
-                    self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
+                // Delete the inserted portion.
+                self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
 
-                    // Reinsert the deleted portion.
-                    {
-                        let added = &change.added[..];
-                        let mut beg = 0;
-                        let mut offset = cursor.offset;
+                // Reinsert the deleted portion.
+                {
+                    let added = &change.added[..];
+                    let mut beg = 0;
+                    let mut offset = cursor.offset;
 
-                        while beg < added.len() {
-                            let (end, line) = simd::lines_fwd(added, beg, 0, 1);
-                            let has_newline = line != 0;
-                            let link = &added[beg..end];
-                            let line = unicode::strip_newline(link);
-                            let mut written;
+                    while beg < added.len() {
+                        let (end, line) = simd::lines_fwd(added, beg, 0, 1);
+                        let has_newline = line != 0;
+                        let link = &added[beg..end];
+                        let line = unicode::strip_newline(link);
+                        let mut written;
 
-                            {
-                                let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
-                                written = slice_copy_safe(gap, line);
+                        {
+                            let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
+                            written = slice_copy_safe(gap, line);
 
-                                if has_newline {
-                                    if self.newline_format == NewlineFormat::CrLf
-                                        && written < gap.len()
-                                    {
-                                        gap[written] = b'\r';
-                                        written += 1;
-                                    }
-                                    if written < gap.len() {
-                                        gap[written] = b'\n';
-                                        written += 1;
-                                    }
+                            if has_newline {
+                                if self.newline_format == NewlineFormat::CrLf
+                                    && written < gap.len()
+                                {
+                                    gap[written] = b'\r';
+                                    written += 1;
                                 }
-
-                                self.buffer.commit_gap(written);
+                                if written < gap.len() {
+                                    gap[written] = b'\n';
+                                    written += 1;
+                                }
                             }
 
-                            beg = end;
-                            offset += written;
+                            self.buffer.commit_gap(written);
                         }
+
+                        beg = end;
+                        offset += written;
                     }
+                }
 
-                    // Restore the previous line statistics.
-                    mem::swap(&mut self.stats, &mut change.stats_before);
+                // Restore the previous line statistics.
+                mem::swap(&mut self.stats, &mut change.stats_before);
 
-                    // Restore the previous selection.
-                    mem::swap(&mut self.selection, &mut change.selection_before);
+                // Restore the previous selection.
+                mem::swap(&mut self.selection, &mut change.selection_before);
 
-                    // Pretend as if the buffer was never modified.
-                    self.buffer.set_generation(change.generation_before);
-                    change.generation_before = buffer_generation;
+                // Pretend as if the buffer was never modified.
+                self.buffer.set_generation(change.generation_before);
+                change.generation_before = buffer_generation;
 
-                    // Restore the previous cursor.
-                    let cursor_before =
-                        self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
-                    change.cursor_before = self.cursor.logical_pos;
-                    // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
-                    self.cursor = cursor_before;
+                // Restore the previous cursor.
+                let cursor_before =
+                    self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
+                change.cursor_before = self.cursor.logical_pos;
+                // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
+                self.cursor = cursor_before;
 
-                    if self.undo_stack.is_empty() {
-                        self.last_history_type = HistoryType::Other;
-                    }
+                if self.undo_stack.is_empty() {
+                    self.last_history_type = HistoryType::Other;
+                }
 
                     true
                 }
