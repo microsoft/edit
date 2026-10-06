@@ -2510,18 +2510,18 @@ impl TextBuffer {
         let (beg, end) = match self.selection_range_internal(false) {
             Some(r) => r,
             None => {
-            if (delta < 0 && self.cursor.offset == 0)
-                || (delta > 0 && self.cursor.offset >= self.text_length())
-            {
-                // Nothing to delete.
-                return;
-            }
+                if (delta < 0 && self.cursor.offset == 0)
+                    || (delta > 0 && self.cursor.offset >= self.text_length())
+                {
+                    // Nothing to delete.
+                    return;
+                }
 
                 let beg = self.cursor;
                 let end = self.cursor_move_delta_internal(beg, granularity, delta);
-            if beg.offset == end.offset {
-                return;
-            }
+                if beg.offset == end.offset {
+                    return;
+                }
 
                 (beg, end)
             }
@@ -2869,7 +2869,7 @@ impl TextBuffer {
         let cursor_before = self.cursor;
         self.set_cursor_internal(cursor);
 
-            self.redo_stack.clear();
+        self.redo_stack.clear();
 
         let (coalesces, previous_group) = if history_type != HistoryType::Other
             && history_type == self.last_history_type
@@ -2973,7 +2973,7 @@ impl TextBuffer {
 
         {
             let mut undo = self.undo_stack.last_mut().unwrap().borrow_mut();
-        let HistoryEntry::Text(undo) = &mut *undo else { unreachable!() };
+            let HistoryEntry::Text(undo) = &mut *undo else { unreachable!() };
 
             // Direction determines how the bytes extend the contiguous replacement.
             if backward {
@@ -3047,7 +3047,7 @@ impl TextBuffer {
         if text.is_empty() {
             // A nonempty deletion brings the surviving sides together.
             beg != end && unicode::graphemes_may_join(left, right)
-            } else {
+        } else {
             unicode::graphemes_may_join(left, text) || unicode::graphemes_may_join(text, right)
         }
     }
@@ -3206,13 +3206,13 @@ impl TextBuffer {
                             &entry.deleted,
                         ) {
                         self.cursor
-            } else {
+                    } else {
                         self.goto_line_start(self.cursor, entry.logical_y)
-            };
+                    };
 
                     damage_start = damage_start.min(entry.logical_y);
 
-                // Undo: Whatever was deleted is now added and vice versa.
+                    // Undo: Whatever was deleted is now added and vice versa.
                     mem::swap(&mut entry.deleted, &mut entry.added);
 
                     self.edit_word_wrap_layout_prepare(
@@ -3227,19 +3227,19 @@ impl TextBuffer {
                     // Restore the logical count; visual layout uses the replacement's height delta.
                     mem::swap(&mut self.stats.logical_lines, &mut entry.logical_lines_before);
 
-                // Restore the previous selection.
+                    // Restore the previous selection.
                     mem::swap(&mut self.selection, &mut entry.selection_before);
 
-                // Pretend as if the buffer was never modified.
+                    // Pretend as if the buffer was never modified.
                     self.buffer.set_generation(entry.generation_before);
                     entry.generation_before = buffer_generation;
 
-                // Restore the previous cursor.
-                let cursor_before =
+                    // Restore the previous cursor.
+                    let cursor_before =
                         self.cursor_move_to_logical_internal(safe_cursor, entry.cursor_before);
                     entry.cursor_before = self.cursor.logical_pos;
-                // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
-                self.cursor = cursor_before;
+                    // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
+                    self.cursor = cursor_before;
 
                     true
                 }
