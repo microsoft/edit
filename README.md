@@ -12,6 +12,13 @@ This editor pays homage to the classic [MS-DOS Editor](https://en.wikipedia.org/
 
 You can also download binaries from [our Releases page](https://github.com/microsoft/edit/releases/latest).
 
+### Ubuntu / Debian-based Linux (Snap)
+
+Edit is available as a Snap package. Install it with:
+
+```bash
+sudo snap install msedit
+```
 ### Windows
 
 You can install the latest version with WinGet:
