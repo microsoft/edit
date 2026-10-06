@@ -3072,22 +3072,22 @@ impl TextBuffer {
 
             match &mut *change.borrow_mut() {
                 HistoryEntry::Text(change) => {
-                // Remember the buffer generation of the change so we can stop popping undos/redos.
-                // Also, move to the point where the modification took place.
-                let cursor = {
-                    entry_buffer_generation = Some(change.generation_before);
-                    self.cursor_move_to_logical_internal(self.cursor, change.cursor)
-                };
+            // Remember the buffer generation of the change so we can stop popping undos/redos.
+            // Also, move to the point where the modification took place.
+            let cursor = {
+                entry_buffer_generation = Some(change.generation_before);
+                self.cursor_move_to_logical_internal(self.cursor, change.cursor)
+            };
 
-                let safe_cursor = if self.word_wrap_column > 0 {
-                    // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
-                    // This is because the undo/redo operation may have changed the visual position of the cursor.
-                    self.goto_line_start(cursor, cursor.logical_pos.y)
-                } else {
-                    cursor
-                };
+            let safe_cursor = if self.word_wrap_column > 0 {
+                // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
+                // This is because the undo/redo operation may have changed the visual position of the cursor.
+                self.goto_line_start(cursor, cursor.logical_pos.y)
+            } else {
+                cursor
+            };
 
-                damage_start = damage_start.min(cursor.logical_pos.y);
+            damage_start = damage_start.min(cursor.logical_pos.y);
 
                 // Undo: Whatever was deleted is now added and vice versa.
                 mem::swap(&mut change.deleted, &mut change.added);
