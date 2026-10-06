@@ -54,8 +54,16 @@ pub struct GapBuffer {
     gap_off: usize,
     /// Gap length.
     gap_len: usize,
-    /// Increments every time the buffer is modified.
+    /// The current text revision. Technically, this belongs into `TextBuffer`,
+    /// who manages this value via its undo/redo system. However, moving it here ensures
+    /// that we never forget to sync `generation_counter` and `generation` on mutations.
     generation: u32,
+    /// Increments every time the buffer is modified.
+    ///
+    /// For instance, saving to disk, typing, undoing it, should restore `TextBuffer`'s "clean" flag.
+    /// If one is typing from the undone state, naively incrementing the generation again would prevent identifying
+    /// such diverging edits. E.g. type "a", undo, type "b" --> "b" _must_ have a different generation than "a".
+    generation_counter: u32,
     /// If `Vec(..)`, the buffer is optimized for small amounts of text
     /// and uses the standard heap. Otherwise, it uses virtual memory.
     buffer: BackingBuffer,
@@ -85,6 +93,7 @@ impl GapBuffer {
             gap_off: 0,
             gap_len: 0,
             generation: 0,
+            generation_counter: 0,
             buffer,
         })
     }
@@ -127,12 +136,22 @@ impl GapBuffer {
         self.text_length
     }
 
+    /// The current revision.
+    ///
+    /// Automatically updated during all mutations.
     pub fn generation(&self) -> u32 {
         self.generation
     }
 
+    /// Restore a historical revision (for undo/redo).
     pub fn set_generation(&mut self, generation: u32) {
         self.generation = generation;
+    }
+
+    /// Assigns a fresh revision, including for document settings that affect serialization.
+    pub fn bump_generation(&mut self) {
+        self.generation_counter = self.generation_counter.wrapping_add(1);
+        self.generation = self.generation_counter;
     }
 
     /// WARNING: The returned slice must not necessarily be the same length as `len` (due to OOM).
@@ -156,7 +175,7 @@ impl GapBuffer {
             self.enlarge_gap(len);
         }
 
-        self.generation = self.generation.wrapping_add(1);
+        self.bump_generation();
         unsafe { slice::from_raw_parts_mut(self.text.add(self.gap_off).as_ptr(), self.gap_len) }
     }
 
@@ -266,7 +285,7 @@ impl GapBuffer {
     pub fn clear(&mut self) {
         self.gap_off = 0;
         self.gap_len += self.text_length;
-        self.generation = self.generation.wrapping_add(1);
+        self.bump_generation();
         self.text_length = 0;
     }
 

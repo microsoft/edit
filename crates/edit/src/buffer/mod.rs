@@ -25,7 +25,6 @@ mod navigation;
 
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
-use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read as _, Write as _};
 use std::mem::{self, MaybeUninit};
@@ -92,7 +91,7 @@ pub struct TextBufferStatistics {
 ///
 /// The two points are not sorted. Instead, `beg` refers to where the selection
 /// started being made and `end` refers to the currently being updated position.
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 struct TextBufferSelection {
     beg: Point,
     end: Point,
@@ -140,23 +139,24 @@ impl HistoryEntry {
 }
 
 struct TextHistoryEntry {
-    /// [`TextBuffer::cursor`] position before the change was made.
-    cursor_before: Point,
-    /// [`TextBuffer::selection`] before the change was made.
-    selection_before: Option<TextBufferSelection>,
-    /// [`TextBuffer::stats`] before the change was made.
-    stats_before: TextBufferStatistics,
     /// [`GapBuffer::generation`] before the change was made.
     ///
     /// **NOTE:** Entries with the same generation are grouped together.
     generation_before: u32,
-    /// Logical cursor position where the change took place.
-    /// The position is at the start of the changed range.
-    cursor: Point,
+    /// Exact replacement position, which may be inside a grapheme.
+    offset: usize,
+    /// Logical line number where the change took place.
+    logical_y: CoordType,
     /// Text that was deleted from the buffer.
     deleted: Vec<u8>,
     /// Text that was added to the buffer.
     added: Vec<u8>,
+    /// [`TextBuffer::cursor`] position before the change was made.
+    cursor_before: Point,
+    /// [`TextBuffer::selection`] before the change was made.
+    selection_before: Option<TextBufferSelection>,
+    /// Logical line count before the change was made.
+    logical_lines_before: CoordType,
 }
 
 struct NewlineFormatHistoryEntry {
@@ -210,17 +210,14 @@ enum RegexReplacement<'a> {
     Text(BVec<'a, u8>),
 }
 
-/// Caches the start and length of the active edit line for a single edit.
-/// This helps us avoid having to remeasure the buffer after an edit.
+/// Tracks the affected logical lines, ending at an unaffected line start or EOF.
 struct ActiveEditLineInfo {
     /// Points to the start of the currently being edited line.
     safe_start: Cursor,
-    /// Number of visual rows of the line that starts
-    /// at [`ActiveEditLineInfo::safe_start`].
-    line_height_in_rows: CoordType,
-    /// Byte distance from the start of the line at
-    /// [`ActiveEditLineInfo::safe_start`] to the next line.
-    distance_next_line_start: usize,
+    /// Height before editing, extended as deletions reach previously unaffected lines.
+    height_before: CoordType,
+    /// Follows byte shifts during editing; unlike a Cursor, it needs no coordinate updates.
+    end_offset: usize,
 }
 
 /// Undo/redo grouping works by recording a set of "overrides",
@@ -233,8 +230,8 @@ struct ActiveEditGroupInfo {
     cursor_before: Point,
     /// [`TextBuffer::selection`] before the change was made.
     selection_before: Option<TextBufferSelection>,
-    /// [`TextBuffer::stats`] before the change was made.
-    stats_before: TextBufferStatistics,
+    /// Logical line count before the group began.
+    logical_lines_before: CoordType,
     /// [`GapBuffer::generation`] before the change was made.
     ///
     /// **NOTE:** Entries with the same generation are grouped together.
@@ -274,13 +271,13 @@ pub type RcTextBuffer = Rc<TextBufferCell>;
 pub struct TextBuffer {
     buffer: GapBuffer,
 
-    undo_stack: VecDeque<SemiRefCell<HistoryEntry>>,
-    redo_stack: VecDeque<SemiRefCell<HistoryEntry>>,
+    undo_stack: Vec<SemiRefCell<HistoryEntry>>,
+    redo_stack: Vec<SemiRefCell<HistoryEntry>>,
     last_history_type: HistoryType,
     last_save_generation: u32,
 
     active_edit_group: Option<ActiveEditGroupInfo>,
-    active_edit_line_info: Option<ActiveEditLineInfo>,
+    active_edit_line_info: SemiRefCell<Option<ActiveEditLineInfo>>,
     active_edit_depth: i32,
     active_edit_off: usize,
 
@@ -335,7 +332,7 @@ impl TextBuffer {
             last_save_generation: 0,
 
             active_edit_group: None,
-            active_edit_line_info: None,
+            active_edit_line_info: SemiRefCell::new(None),
             active_edit_depth: 0,
             active_edit_off: 0,
 
@@ -389,21 +386,23 @@ impl TextBuffer {
         self.last_save_generation != self.buffer.generation()
     }
 
-    /// The buffer generation changes on every edit.
-    /// With this you can check if it has changed since
-    /// the last time you called this function.
+    /// The current document revision.
+    ///
+    /// Undo/redo restores historical generations.
     pub fn generation(&self) -> u32 {
         self.buffer.generation()
     }
 
     /// Force the buffer to be dirty (needs to be saved to disk).
     pub fn mark_as_dirty(&mut self) {
-        self.last_save_generation = self.buffer.generation().wrapping_sub(1);
+        // NOTE: This technically may collide after 2^32 edits. Is that a realistic concern?
+        self.last_save_generation = u32::MAX;
     }
 
     /// Force the buffer to be clean (has been saved to disk).
     /// Use this with caution. It's called automatically on write().
     pub fn mark_as_clean(&mut self) {
+        self.undo_barrier();
         self.last_save_generation = self.buffer.generation();
     }
 
@@ -441,7 +440,7 @@ impl TextBuffer {
         self.undo_barrier();
 
         self.redo_stack.clear();
-        self.undo_stack.push_back(SemiRefCell::new(HistoryEntry::NewlineFormat(
+        self.undo_stack.push(SemiRefCell::new(HistoryEntry::NewlineFormat(
             NewlineFormatHistoryEntry {
                 generation_before: self
                     .active_edit_group
@@ -454,6 +453,7 @@ impl TextBuffer {
 
         self.newline_format = format;
         self.newline_normalization = Some(format);
+        self.buffer.bump_generation();
     }
 
     /// If enabled, automatically insert a final newline
@@ -2507,12 +2507,9 @@ impl TextBuffer {
             return;
         }
 
-        let mut beg;
-        let mut end;
-
-        if let Some(r) = self.selection_range_internal(false) {
-            (beg, end) = r;
-        } else {
+        let (beg, end) = match self.selection_range_internal(false) {
+            Some(r) => r,
+            None => {
             if (delta < 0 && self.cursor.offset == 0)
                 || (delta > 0 && self.cursor.offset >= self.text_length())
             {
@@ -2520,15 +2517,15 @@ impl TextBuffer {
                 return;
             }
 
-            beg = self.cursor;
-            end = self.cursor_move_delta_internal(beg, granularity, delta);
+                let beg = self.cursor;
+                let end = self.cursor_move_delta_internal(beg, granularity, delta);
             if beg.offset == end.offset {
                 return;
             }
-            if beg.offset > end.offset {
-                mem::swap(&mut beg, &mut end);
+
+                (beg, end)
             }
-        }
+        };
 
         self.edit_begin(HistoryType::Delete, beg);
         self.edit_delete(end);
@@ -2846,16 +2843,19 @@ impl TextBuffer {
     }
 
     fn edit_begin_grouping(&mut self) {
+        debug_assert!(self.active_edit_group.is_none());
+        self.undo_barrier();
         self.active_edit_group = Some(ActiveEditGroupInfo {
             cursor_before: self.cursor.logical_pos,
             selection_before: self.selection,
-            stats_before: self.stats,
+            logical_lines_before: self.stats.logical_lines,
             generation_before: self.buffer.generation(),
         });
     }
 
     fn edit_end_grouping(&mut self) {
         self.active_edit_group = None;
+        self.undo_barrier();
     }
 
     /// Starts a new edit operation.
@@ -2869,67 +2869,72 @@ impl TextBuffer {
         let cursor_before = self.cursor;
         self.set_cursor_internal(cursor);
 
-        // If both the last and this are a Write/Delete operation, we skip allocating a new undo history item.
-        if history_type != self.last_history_type
-            || !matches!(history_type, HistoryType::Write | HistoryType::Delete)
-        {
             self.redo_stack.clear();
-            while self.undo_stack.len() > 1000 {
-                self.undo_stack.pop_front();
-            }
 
+        let (coalesces, previous_group) = if history_type != HistoryType::Other
+            && history_type == self.last_history_type
+            && let Some(entry) = self.undo_stack.last()
+            && let HistoryEntry::Text(entry) = &*entry.borrow()
+        {
+            // Check if we can write directly into the last history entry.
+            // This only works if the change is adjacent to the previous one.
+            let coalesces = match history_type {
+                HistoryType::Other => false,
+                // Writes append at the replacement's end.
+                HistoryType::Write => cursor.offset == entry.offset + entry.added.len(),
+                HistoryType::Delete => entry.added.is_empty() && cursor.offset == entry.offset,
+            };
+            // Disjoint changes need separate entries, but inherit the same generation.
+            let previous_group = (!coalesces).then_some(ActiveEditGroupInfo {
+                cursor_before: entry.cursor_before,
+                selection_before: entry.selection_before,
+                logical_lines_before: entry.logical_lines_before,
+                generation_before: entry.generation_before,
+            });
+            (coalesces, previous_group)
+        } else {
+            (false, None)
+        };
+
+        if !coalesces {
             self.last_history_type = history_type;
-            self.undo_stack.push_back(SemiRefCell::new(HistoryEntry::Text(TextHistoryEntry {
+            let mut entry = TextHistoryEntry {
                 cursor_before: cursor_before.logical_pos,
                 selection_before: self.selection,
-                stats_before: self.stats,
+                logical_lines_before: self.stats.logical_lines,
                 generation_before: self.buffer.generation(),
-                cursor: cursor.logical_pos,
+                offset: cursor.offset,
+                logical_y: cursor.logical_pos.y,
                 deleted: Vec::new(),
                 added: Vec::new(),
-            })));
+            };
 
-            if let Some(info) = &self.active_edit_group
-                && let Some(entry) = self.undo_stack.back()
-            {
-                let mut entry = entry.borrow_mut();
-                let HistoryEntry::Text(entry) = &mut *entry else { unreachable!() };
+            // Explicit grouping (e.g. Replace All) takes precedence over implicit typing groups.
+            if let Some(info) = self.active_edit_group.as_ref().or(previous_group.as_ref()) {
                 entry.cursor_before = info.cursor_before;
                 entry.selection_before = info.selection_before;
-                entry.stats_before = info.stats_before;
+                entry.logical_lines_before = info.logical_lines_before;
                 entry.generation_before = info.generation_before;
             }
+            self.undo_stack.push(SemiRefCell::new(HistoryEntry::Text(entry)));
         }
 
         self.active_edit_off = cursor.offset;
-        self.highlighter_cache.invalidate_from(cursor.logical_pos.y);
-
-        // If word-wrap is enabled, the visual layout of all logical lines affected by the write
-        // may have changed. This includes even text before the insertion point up to the line
-        // start, because this write may have joined with a word before the initial cursor.
-        // See other uses of `word_wrap_cursor_next_line` in this function.
-        if self.word_wrap_column > 0 {
-            let safe_start = self.goto_line_start(cursor, cursor.logical_pos.y);
-            let next_line = self.cursor_move_to_logical_internal(
-                cursor,
-                Point { x: 0, y: cursor.logical_pos.y + 1 },
-            );
-            self.active_edit_line_info = Some(ActiveEditLineInfo {
-                safe_start,
-                line_height_in_rows: next_line.visual_pos.y - safe_start.visual_pos.y,
-                distance_next_line_start: next_line.offset - cursor.offset,
-            });
-        }
     }
 
     /// Writes `text` into the buffer at the current cursor position.
     /// It records the change in the undo stack.
     fn edit_write(&mut self, text: &[u8]) {
-        let logical_y_before = self.cursor.logical_pos.y;
+        if text.is_empty() {
+            return;
+        }
+
+        let logical_y_before = self.edit_logical_y();
+        let (anchor, _) = self.edit_prepare(self.active_edit_off, text);
 
         // Copy the written portion into the undo entry.
         {
-            let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
+            let mut undo = self.undo_stack.last_mut().unwrap().borrow_mut();
             let HistoryEntry::Text(undo) = &mut *undo else { unreachable!() };
             undo.added.extend_from_slice(text);
         }
@@ -2940,38 +2945,59 @@ impl TextBuffer {
         // Move self.cursor to the end of the newly written text. Can't use `self.set_cursor_internal`,
         // because we're still in the progress of recalculating the line stats.
         self.active_edit_off += text.len();
-        self.cursor = self.cursor_move_to_offset_internal(self.cursor, self.active_edit_off);
-        self.stats.logical_lines += self.cursor.logical_pos.y - logical_y_before;
+        self.cursor = self.cursor_move_to_offset_internal(anchor, self.active_edit_off);
+
+        self.stats.logical_lines += self.edit_logical_y() - logical_y_before;
     }
 
-    /// Deletes the text between the current cursor position and `to`.
+    /// Deletes the text between the current edit position and `to`, in either direction.
     /// It records the change in the undo stack.
     fn edit_delete(&mut self, to: Cursor) {
-        debug_assert!(to.offset >= self.active_edit_off);
-
-        let logical_y_before = self.cursor.logical_pos.y;
-        let off = self.active_edit_off;
-        let mut out_off = usize::MAX;
-
-        let mut undo = self.undo_stack.back_mut().unwrap().borrow_mut();
-        let HistoryEntry::Text(undo) = &mut *undo else { unreachable!() };
-
-        // If this is a continued backspace operation,
-        // we need to prepend the deleted portion to the undo entry.
-        if self.cursor.logical_pos < undo.cursor {
-            out_off = 0;
-            undo.cursor = self.cursor.logical_pos;
+        if self.active_edit_off == to.offset {
+            return;
         }
 
-        // Copy the deleted portion into the undo entry.
-        let deleted = &mut undo.deleted;
-        self.buffer.extract_raw(off..to.offset, deleted, out_off);
+        let backward = to.offset < self.active_edit_off;
+        let (end, end_y) = if backward {
+            let end = self.active_edit_off;
+            let end_y = self.edit_logical_y();
+            self.set_cursor_internal(to);
+            self.active_edit_off = to.offset;
+            (end, end_y)
+        } else {
+            (to.offset, to.logical_pos.y)
+        };
 
+        let logical_y_before = self.edit_logical_y();
+        let (anchor, remeasure) = self.edit_prepare(end, b"");
+
+        {
+            let mut undo = self.undo_stack.last_mut().unwrap().borrow_mut();
+        let HistoryEntry::Text(undo) = &mut *undo else { unreachable!() };
+
+            // Direction determines how the bytes extend the contiguous replacement.
+            if backward {
+                assert!(undo.added.is_empty() && end == undo.offset);
+                undo.offset = self.active_edit_off;
+                undo.logical_y = logical_y_before;
+            } else {
+                assert_eq!(self.active_edit_off, undo.offset + undo.added.len());
+            }
+
+            self.buffer.extract_raw(
+                self.active_edit_off..end,
+                &mut undo.deleted,
+                if backward { 0 } else { usize::MAX },
+            );
+        }
         // Delete the portion from the buffer by enlarging the gap.
-        let count = to.offset - off;
-        self.buffer.allocate_gap(off, 0, count);
+        let count = end - self.active_edit_off;
+        self.buffer.allocate_gap(self.active_edit_off, 0, count);
 
-        self.stats.logical_lines += logical_y_before - to.logical_pos.y;
+        self.stats.logical_lines += logical_y_before - end_y;
+        if remeasure {
+            self.cursor = self.cursor_move_to_offset_internal(anchor, self.active_edit_off);
+        }
     }
 
     /// Finalizes the current edit operation
@@ -2983,48 +3009,141 @@ impl TextBuffer {
             return;
         }
 
-        #[cfg(debug_assertions)]
         {
-            let entry = self.undo_stack.back_mut().unwrap().borrow_mut();
-            let HistoryEntry::Text(entry) = &*entry else { unreachable!() };
+            let entry = self.undo_stack.last().unwrap().borrow();
+            let HistoryEntry::Text(entry) = &*entry else {
+                unreachable!();
+            };
             debug_assert!(!entry.deleted.is_empty() || !entry.added.is_empty());
+            self.highlighter_cache.invalidate_from(entry.logical_y);
         }
 
-        if let Some(info) = self.active_edit_line_info.take() {
-            let deleted_count = {
-                let entry = self.undo_stack.back_mut().unwrap().borrow();
-                let HistoryEntry::Text(entry) = &*entry else { unreachable!() };
-                entry.deleted.len()
-            };
-            let target = self.cursor.logical_pos;
+        self.edit_layout_finish();
+        self.recalc_after_content_changed();
+    }
 
-            // From our safe position we can measure the actual visual position of the cursor.
-            self.set_cursor_internal(self.cursor_move_to_logical_internal(info.safe_start, target));
+    /// Returns the line at the exact edit offset, before any grapheme rounding of the cursor.
+    ///
+    /// E.g. let's say you have the text "\rX\n". That's 3 graphemes. Deleting "X" however joins the
+    /// rest into the single "\r\n" grapheme and shifts the cursor to the next valid position after "\n".
+    /// This causes edit_write/delete to believe a newline was written/deleted.
+    /// CRLF is the only grapheme containing LF, so that's rather easy to account for.
+    ///
+    /// NOTE that it is necessary to call this before and after edits. This becomes relevant when e.g.
+    /// deleting "X" from "\rX\n" and then writing "Y" in its place within a single edit operation.
+    /// After deleting X, the cursor is on line 1, but the insertion offset is still on line 0.
+    /// The final line delta must remain 0.
+    fn edit_logical_y(&self) -> CoordType {
+        let crossed_lf = self.active_edit_off < self.cursor.offset
+            && self.read_backward(self.cursor.offset).last() == Some(&b'\n');
+        self.cursor.logical_pos.y - (crossed_lf as CoordType)
+    }
 
-            // If content is added at the insertion position, that's not a problem:
-            // We can just remeasure the height of this one line and calculate the delta.
-            // `deleted_count` is 0 in this case.
-            //
-            // The problem is when content is deleted, because it may affect lines
-            // beyond the end of the `next_line`. In that case we have to measure
-            // the entire buffer contents until the end to compute `self.stats.visual_lines`.
-            if deleted_count < info.distance_next_line_start {
-                // Now we can measure how many more visual rows this logical line spans.
-                let next_line = self
-                    .cursor_move_to_logical_internal(self.cursor, Point { x: 0, y: target.y + 1 });
-                let lines_before = info.line_height_in_rows;
-                let lines_after = next_line.visual_pos.y - info.safe_start.visual_pos.y;
-                self.stats.visual_lines += lines_after - lines_before;
+    /// Checks the boundaries exposed by a replacement, not the graphemes within `text`.
+    fn edit_may_join(&self, beg: usize, end: usize, text: &[u8]) -> bool {
+        let left = self.read_backward(beg);
+        let right = self.read_forward(end);
+
+        if text.is_empty() {
+            // A nonempty deletion brings the surviving sides together.
+            beg != end && unicode::graphemes_may_join(left, right)
             } else {
-                let end = self.cursor_move_to_logical_internal(self.cursor, Point::MAX);
-                self.stats.visual_lines = end.visual_pos.y + 1;
-            }
+            unicode::graphemes_may_join(left, text) || unicode::graphemes_may_join(text, right)
+        }
+    }
+
+    fn edit_prepare(&self, end: usize, text: &[u8]) -> (Cursor, bool) {
+        let remeasure = self.active_edit_off != self.cursor.offset
+            || self.edit_may_join(self.active_edit_off, end, text);
+
+        let anchor = if remeasure {
+            self.edit_line_start_for_offset(self.active_edit_off)
         } else {
-            // If word-wrap is disabled the visual line count always matches the logical one.
+            self.cursor
+        };
+
+        self.edit_word_wrap_layout_prepare(anchor, self.active_edit_off..end, text.len());
+
+        (anchor, remeasure)
+    }
+
+    /// Returns a cursor positioned at the start of the line containing the given offset.
+    #[cold]
+    fn edit_line_start_for_offset(&self, offset: usize) -> Cursor {
+        let mut line_start = self.cursor;
+        while {
+            line_start = self.goto_line_start(line_start, line_start.logical_pos.y - 1);
+            line_start.offset > offset
+        } {}
+        line_start
+    }
+
+    /// Word wrap layouts can shift around before and after the changed location.
+    /// This requires us to cache layout information for the affected lines.
+    fn edit_word_wrap_layout_prepare(&self, cursor: Cursor, range: Range<usize>, inserted: usize) {
+        if self.word_wrap_column > 0 {
+            self.edit_word_wrap_layout_prepare_impl(cursor, range, inserted);
+        }
+    }
+
+    #[cold]
+    fn edit_word_wrap_layout_prepare_impl(
+        &self,
+        cursor: Cursor,
+        range: Range<usize>,
+        inserted: usize,
+    ) {
+        // Initialize only once the actual edit position is known, including for backspace.
+        let mut info = self.active_edit_line_info.borrow_mut();
+        let info = info.get_or_insert_with(|| {
+            let safe_start = self.goto_line_start(cursor, cursor.logical_pos.y);
+            let end = self.goto_line_start(cursor, cursor.logical_pos.y + 1);
+            ActiveEditLineInfo {
+                safe_start,
+                height_before: end.visual_pos.y - safe_start.visual_pos.y,
+                end_offset: end.offset,
+            }
+        });
+
+        if range.end >= info.end_offset && info.end_offset < self.text_length() {
+            // Only the prefix has changed so far. The extra suffix height is still original.
+            let old_end = self.cursor_move_to_offset_internal(info.safe_start, info.end_offset);
+            let removed_end = self.cursor_move_to_offset_internal(old_end, range.end);
+            let new_end = self.cursor_move_to_logical_internal(
+                removed_end,
+                Point { x: 0, y: removed_end.logical_pos.y + 1 },
+            );
+            info.height_before += new_end.visual_pos.y - old_end.visual_pos.y;
+            info.end_offset = new_end.offset;
+        }
+
+        info.end_offset = info.end_offset - range.len() + inserted;
+    }
+
+    /// Word wrap layouts can shift around before and after the changed location.
+    /// This requires us to cache layout information for the affected lines.
+    fn edit_layout_finish(&mut self) {
+        if self.word_wrap_column > 0 {
+            self.edit_word_wrap_layout_finish();
+        } else {
             self.stats.visual_lines = self.stats.logical_lines;
         }
+    }
 
-        self.recalc_after_content_changed();
+    #[cold]
+    fn edit_word_wrap_layout_finish(&mut self) {
+        let info = self.active_edit_line_info.borrow_mut().take();
+        let Some(info) = info else {
+            return;
+        };
+
+        self.cursor =
+            self.cursor_move_to_logical_internal(info.safe_start, self.cursor.logical_pos);
+        let anchor =
+            if self.cursor.offset <= info.end_offset { self.cursor } else { info.safe_start };
+        let end = self.cursor_move_to_offset_internal(anchor, info.end_offset);
+        let height_after = end.visual_pos.y - info.safe_start.visual_pos.y;
+        self.stats.visual_lines += height_after - info.height_before;
     }
 
     /// Undo the last edit operation.
@@ -3042,6 +3161,9 @@ impl TextBuffer {
     }
 
     fn undo_redo(&mut self, undo: bool) {
+        assert_eq!(self.active_edit_depth, 0, "cannot undo/redo during an edit session");
+        self.undo_barrier();
+
         let buffer_generation = self.buffer.generation();
         let mut entry_buffer_generation = None;
         let mut damage_start = CoordType::MAX;
@@ -3055,104 +3177,69 @@ impl TextBuffer {
                     (&mut self.redo_stack, &mut self.undo_stack)
                 };
 
-                // Only pop the entry if its buffer generation matches the previous one
-                let Some(g) = from.pop_back_if(|c| {
+                // Only pop the entry if its buffer generation matches the previous one.
+                let Some(g) = from.pop_if(|c| {
                     entry_buffer_generation.is_none_or(|g| g == c.borrow().generation_before())
                 }) else {
                     break;
                 };
 
-                to.push_back(g);
+                to.push(g);
             }
 
             let change = {
                 let to = if undo { &self.redo_stack } else { &self.undo_stack };
-                to.back().unwrap()
+                to.last().unwrap()
             };
 
-            match &mut *change.borrow_mut() {
-                HistoryEntry::Text(change) => {
-            // Remember the buffer generation of the change so we can stop popping undos/redos.
-            // Also, move to the point where the modification took place.
-            let cursor = {
-                entry_buffer_generation = Some(change.generation_before);
-                self.cursor_move_to_logical_internal(self.cursor, change.cursor)
-            };
+            let text_changed = match &mut *change.borrow_mut() {
+                HistoryEntry::Text(entry) => {
+                    entry_buffer_generation = Some(entry.generation_before);
 
-            let safe_cursor = if self.word_wrap_column > 0 {
-                // If word-wrap is enabled, we need to move the cursor to the beginning of the line.
-                // This is because the undo/redo operation may have changed the visual position of the cursor.
-                self.goto_line_start(cursor, cursor.logical_pos.y)
+                    // Replay bytes at their exact offset, independently of grapheme cursor rounding.
+                    let safe_cursor = if self.word_wrap_column <= 0
+                        && self.cursor.offset <= entry.offset
+                        && self.cursor.logical_pos.y == entry.logical_y
+                        && !self.edit_may_join(
+                            entry.offset,
+                            entry.offset + entry.added.len(),
+                            &entry.deleted,
+                        ) {
+                        self.cursor
             } else {
-                cursor
+                        self.goto_line_start(self.cursor, entry.logical_y)
             };
 
-            damage_start = damage_start.min(cursor.logical_pos.y);
+                    damage_start = damage_start.min(entry.logical_y);
 
                 // Undo: Whatever was deleted is now added and vice versa.
-                mem::swap(&mut change.deleted, &mut change.added);
+                    mem::swap(&mut entry.deleted, &mut entry.added);
 
-                // Delete the inserted portion.
-                self.buffer.allocate_gap(cursor.offset, 0, change.deleted.len());
+                    self.edit_word_wrap_layout_prepare(
+                        safe_cursor,
+                        entry.offset..entry.offset + entry.deleted.len(),
+                        entry.added.len(),
+                    );
 
-                // Reinsert the deleted portion.
-                {
-                    let added = &change.added[..];
-                    let mut beg = 0;
-                    let mut offset = cursor.offset;
+                    self.buffer
+                        .replace(entry.offset..entry.offset + entry.deleted.len(), &entry.added);
 
-                    while beg < added.len() {
-                        let (end, line) = simd::lines_fwd(added, beg, 0, 1);
-                        let has_newline = line != 0;
-                        let link = &added[beg..end];
-                        let line = unicode::strip_newline(link);
-                        let mut written;
-
-                        {
-                            let gap = self.buffer.allocate_gap(offset, line.len() + 2, 0);
-                            written = slice_copy_safe(gap, line);
-
-                            if has_newline {
-                                if self.newline_format == NewlineFormat::CrLf
-                                    && written < gap.len()
-                                {
-                                    gap[written] = b'\r';
-                                    written += 1;
-                                }
-                                if written < gap.len() {
-                                    gap[written] = b'\n';
-                                    written += 1;
-                                }
-                            }
-
-                            self.buffer.commit_gap(written);
-                        }
-
-                        beg = end;
-                        offset += written;
-                    }
-                }
-
-                // Restore the previous line statistics.
-                mem::swap(&mut self.stats, &mut change.stats_before);
+                    // Restore the logical count; visual layout uses the replacement's height delta.
+                    mem::swap(&mut self.stats.logical_lines, &mut entry.logical_lines_before);
 
                 // Restore the previous selection.
-                mem::swap(&mut self.selection, &mut change.selection_before);
+                    mem::swap(&mut self.selection, &mut entry.selection_before);
 
                 // Pretend as if the buffer was never modified.
-                self.buffer.set_generation(change.generation_before);
-                change.generation_before = buffer_generation;
+                    self.buffer.set_generation(entry.generation_before);
+                    entry.generation_before = buffer_generation;
 
                 // Restore the previous cursor.
                 let cursor_before =
-                    self.cursor_move_to_logical_internal(safe_cursor, change.cursor_before);
-                change.cursor_before = self.cursor.logical_pos;
+                        self.cursor_move_to_logical_internal(safe_cursor, entry.cursor_before);
+                    entry.cursor_before = self.cursor.logical_pos;
                 // Can't use `set_cursor_internal` here, because we haven't updated the line stats yet.
                 self.cursor = cursor_before;
-
-                if self.undo_stack.is_empty() {
-                    self.last_history_type = HistoryType::Other;
-                }
 
                     true
                 }
@@ -3170,6 +3257,10 @@ impl TextBuffer {
                     false
                 }
             };
+
+            if text_changed {
+                self.edit_layout_finish();
+            }
         }
 
         if damage_start == CoordType::MAX {
