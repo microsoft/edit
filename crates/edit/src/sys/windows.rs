@@ -646,6 +646,31 @@ pub fn preferred_languages<'a>(arena: &'a Arena) -> BVec<'a, &'a str> {
     res
 }
 
+#[cfg(test)]
+pub fn memfd() -> io::Result<File> {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_TEMPORARY, FILE_FLAG_DELETE_ON_CLOSE,
+    };
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "edit-memfd-{}-{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+    ));
+
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .custom_flags(FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE)
+        .open(&path)
+}
+
 #[inline]
 #[cold]
 fn last_os_error() -> io::Error {

@@ -581,6 +581,31 @@ pub fn preferred_languages(arena: &Arena) -> BVec<'_, &'_ str> {
     locales
 }
 
+#[cfg(test)]
+pub fn memfd() -> io::Result<File> {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        let fd = check_int_return(libc::memfd_create(c"edit".as_ptr(), libc::MFD_CLOEXEC))?;
+        Ok(File::from_raw_fd(fd))
+    }
+    #[cfg(not(target_os = "linux"))]
+    unsafe {
+        let stream = libc::tmpfile();
+        if stream.is_null() {
+            return Err(last_os_error());
+        }
+
+        // Duplicate the descriptor so that closing the C stream doesn't close our file.
+        let file = check_int_return(libc::fcntl(libc::fileno(stream), libc::F_DUPFD_CLOEXEC, 0))
+            .map(|fd| File::from_raw_fd(fd));
+        let close = check_int_return(libc::fclose(stream));
+        let file = file?;
+        close?;
+
+        Ok(file)
+    }
+}
+
 #[inline]
 #[cold]
 fn errno() -> c_int {
