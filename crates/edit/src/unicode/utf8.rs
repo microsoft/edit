@@ -251,10 +251,10 @@ impl Iterator for Utf8Chars<'_> {
 impl iter::FusedIterator for Utf8Chars<'_> {}
 
 /// Returns the last character using the same invalid-UTF-8 recovery as `Utf8Chars`.
-/// Returns U+FFFD for an empty slice.
-pub fn utf8_decode_last(source: &[u8]) -> char {
+/// Returns `None` for an empty slice.
+pub fn utf8_decode_last(source: &[u8]) -> Option<char> {
     if source.is_empty() {
-        return Utf8Chars::fffd();
+        return None;
     }
 
     let mut offset = source.len();
@@ -262,7 +262,7 @@ pub fn utf8_decode_last(source: &[u8]) -> char {
 
     // ASCII? Simple.
     if c.is_ascii() {
-        return c as char;
+        return Some(c as char);
     }
 
     // Find the start of the last UTF8 sequence. It can't be longer than 4 bytes. `start` will
@@ -271,7 +271,7 @@ pub fn utf8_decode_last(source: &[u8]) -> char {
     while c & 0xC0 == 0x80 {
         offset -= 1;
         if offset <= lim {
-            return Utf8Chars::fffd();
+            return Some(Utf8Chars::fffd());
         }
         c = unsafe { *source.get_unchecked(offset - 1) };
     }
@@ -279,7 +279,7 @@ pub fn utf8_decode_last(source: &[u8]) -> char {
     // Parsing the last sequence is successful if the entire tail end was consumed.
     let mut chars = Utf8Chars::new(source, offset);
     let ch = chars.next_slow(c);
-    if chars.offset == source.len() { ch } else { Utf8Chars::fffd() }
+    Some(if chars.offset == source.len() { ch } else { Utf8Chars::fffd() })
 }
 
 #[cfg(test)]
@@ -335,20 +335,20 @@ mod tests {
 
     #[test]
     fn test_utf8_decode_last() {
-        let cases: &[(&[u8], char)] = &[
-            (b"", '\u{FFFD}'),
-            (b"\xFF\x7F", '\u{7F}'),
-            (b"\xC2\x80", '\u{80}'),
-            (b"\xFF\xE2\x82\xAC", '\u{20AC}'),
-            (b"\xFF\xF4\x8F\xBF\xBF", '\u{10FFFF}'),
+        let cases: &[(&[u8], Option<char>)] = &[
+            (b"", None),
+            (b"\xFF\x7F", Some('\u{7F}')),
+            (b"\xC2\x80", Some('\u{80}')),
+            (b"\xFF\xE2\x82\xAC", Some('\u{20AC}')),
+            (b"\xFF\xF4\x8F\xBF\xBF", Some('\u{10FFFF}')),
             // Truncated sequences.
-            (b"\xC2", '\u{FFFD}'),
-            (b"\xF0\x90\x80", '\u{FFFD}'),
+            (b"\xC2", Some('\u{FFFD}')),
+            (b"\xF0\x90\x80", Some('\u{FFFD}')),
             // Stray and excess continuation bytes.
-            (b"\x80", '\u{FFFD}'),
-            (b"\x80\x80\x80\x80\x80", '\u{FFFD}'),
-            (b"\xC2\x80\x80", '\u{FFFD}'),
-            (b"a\x80", '\u{FFFD}'),
+            (b"\x80", Some('\u{FFFD}')),
+            (b"\x80\x80\x80\x80\x80", Some('\u{FFFD}')),
+            (b"\xC2\x80\x80", Some('\u{FFFD}')),
+            (b"a\x80", Some('\u{FFFD}')),
         ];
 
         for &(source, expected) in cases {
