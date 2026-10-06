@@ -35,10 +35,9 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
 }
 
 fn draw_search(ctx: &mut Context, state: &mut State) {
-    if let Err(err) = icu::init() {
-        error_log_add(ctx, state, err.into());
-        state.wants_search.kind = StateSearchKind::Disabled;
-        return;
+    let mut icu_loaded = true;
+    if let Err(_) = icu::init() {
+        icu_loaded = false;
     }
 
     let Some(doc) = state.documents.active() else {
@@ -148,6 +147,13 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 
             if change {
                 action = change_action;
+            }
+            // put some label to mark that find/replace is in fallback mode
+            if !icu_loaded {
+                ctx.styled_label_begin("no-icu-label");
+                ctx.styled_label_set_attributes(edit::framebuffer::Attributes::Bold);
+                ctx.styled_label_add_text("UTF-8");
+                ctx.styled_label_end();
             }
         }
         ctx.table_end();
