@@ -9,7 +9,8 @@
 use std::ffi::{c_char, c_int, c_void};
 use std::fs::File;
 use std::mem::{self, ManuallyDrop, MaybeUninit};
-use std::os::fd::{AsRawFd as _, FromRawFd as _};
+use std::os::fd::FromRawFd as _;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
 use std::ptr::{self, NonNull, null_mut};
 use std::{io, time};
@@ -401,23 +402,17 @@ fn set_tty_nonblocking(nonblock: bool) {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct FileId {
-    st_dev: libc::dev_t,
-    st_ino: libc::ino_t,
+    dev: u64,
+    ino: u64,
 }
 
 /// Returns a unique identifier for the given file by handle or path.
 pub fn file_id(file: Option<&File>, path: &Path) -> io::Result<FileId> {
-    let file = match file {
-        Some(f) => f,
-        None => &File::open(path)?,
+    let metadata = match file {
+        Some(file) => file.metadata()?,
+        None => std::fs::metadata(path)?,
     };
-
-    unsafe {
-        let mut stat = MaybeUninit::<libc::stat>::uninit();
-        check_int_return(libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()))?;
-        let stat = stat.assume_init();
-        Ok(FileId { st_dev: stat.st_dev, st_ino: stat.st_ino })
-    }
+    Ok(FileId { dev: metadata.dev(), ino: metadata.ino() })
 }
 
 unsafe fn load_library(name: *const c_char) -> io::Result<NonNull<c_void>> {
