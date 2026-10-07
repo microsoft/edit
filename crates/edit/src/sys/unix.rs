@@ -89,7 +89,6 @@ pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> io::Result<()> {
 struct State {
     stdin: libc::c_int,
     stdin_flags: libc::c_int,
-    stdout: libc::c_int,
     stdout_initial_termios: Option<libc::termios>,
     resize_pending: bool,
     // Buffer for incomplete UTF-8 sequences (max 4 bytes needed)
@@ -99,8 +98,7 @@ struct State {
 
 static mut STATE: State = State {
     stdin: libc::STDIN_FILENO,
-    stdin_flags: 0,
-    stdout: libc::STDOUT_FILENO,
+    stdin_flags: -1,
     stdout_initial_termios: None,
     resize_pending: false,
     utf8_buf: [0; 4],
@@ -143,7 +141,7 @@ pub fn switch_modes() -> io::Result<()> {
 
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
-        check_int_return(libc::tcgetattr(STATE.stdout, termios.as_mut_ptr()))?;
+        check_int_return(libc::tcgetattr(libc::STDIN_FILENO, termios.as_mut_ptr()))?;
         let mut termios = termios.assume_init();
         STATE.stdout_initial_termios = Some(termios);
 
@@ -166,7 +164,14 @@ pub fn switch_modes() -> io::Result<()> {
             | libc::ICRNL
             // Disable software flow control.
             | libc::IXON
+            // Disable sending of start/stop characters.
+            | libc::IXOFF
         );
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            // Disable translating uppercase characters to lowercase.
+            termios.c_iflag &= !libc::IUCLC;
+        }
         // Disable output processing.
         termios.c_oflag &= !libc::OPOST;
         termios.c_cflag &= !(
@@ -175,8 +180,11 @@ pub fn switch_modes() -> io::Result<()> {
             // Disable parity generation.
             | libc::PARENB
         );
-        // Set character size back to 8 bits.
-        termios.c_cflag |= libc::CS8;
+        termios.c_cflag |=
+            // Set character size back to 8 bits.
+            libc::CS8
+            // Allow input to be received.
+            | libc::CREAD;
         termios.c_lflag &= !(
             // Disable signal generation (SIGINT, SIGTSTP, SIGQUIT).
             libc::ISIG
@@ -189,12 +197,22 @@ pub fn switch_modes() -> io::Result<()> {
             // Disable extended input processing (e.g. Ctrl-V).
             | libc::IEXTEN
         );
+        // Reset the TTY to standard blocking behavior (min 1 byte & no timeout).
+        termios.c_cc[libc::VMIN] = 1;
+        termios.c_cc[libc::VTIME] = 0;
 
-        // Set the terminal to raw mode.
-        termios.c_lflag &= !(libc::ICANON | libc::ECHO);
-        check_int_return(libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios))?;
+        termios_setattr(libc::STDOUT_FILENO, &termios)
+    }
+}
 
-        Ok(())
+fn termios_setattr(fd: c_int, termios: &libc::termios) -> io::Result<()> {
+    loop {
+        if unsafe { libc::tcsetattr(fd, libc::TCSANOW, termios) } == 0 {
+            return Ok(());
+        }
+        if errno() != libc::EINTR {
+            return Err(last_os_error());
+        }
     }
 }
 
@@ -206,7 +224,12 @@ impl Drop for Deinit {
             #[allow(static_mut_refs)]
             if let Some(termios) = STATE.stdout_initial_termios.take() {
                 // Restore the original terminal modes.
-                libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios);
+                _ = termios_setattr(libc::STDOUT_FILENO, &termios);
+            }
+
+            if STATE.stdin_flags != -1 {
+                libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
+                STATE.stdin_flags = -1;
             }
         }
     }
@@ -214,7 +237,7 @@ impl Drop for Deinit {
 
 pub fn get_window_size() -> io::Result<Size> {
     let mut winsz: libc::winsize = unsafe { mem::zeroed() };
-    let ret = unsafe { libc::ioctl(STATE.stdout, libc::TIOCGWINSZ, &raw mut winsz) };
+    let ret = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &raw mut winsz) };
     if ret != 0 {
         Err(last_os_error())
     } else if winsz.ws_row == 0 || winsz.ws_col == 0 {
