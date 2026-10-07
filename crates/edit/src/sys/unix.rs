@@ -345,30 +345,42 @@ pub fn read_stdin(
 }
 
 pub fn write_stdout(text: &str) {
-    if text.is_empty() {
-        return;
-    }
+    let mut buf = text.as_bytes();
 
-    // If we don't set the TTY to blocking mode,
-    // the write will potentially fail with EAGAIN.
-    set_tty_nonblocking(false);
+    while !buf.is_empty() {
+        let chunk = &buf[..buf.len().min(GIBI)];
+        let n = unsafe { libc::write(libc::STDOUT_FILENO, chunk.as_ptr().cast(), chunk.len()) };
 
-    let buf = text.as_bytes();
-    let mut written = 0;
-
-    while written < buf.len() {
-        let w = &buf[written..];
-        let w = &buf[..w.len().min(GIBI)];
-        let n = unsafe { libc::write(STATE.stdout, w.as_ptr().cast(), w.len()) };
-
-        if n >= 0 {
-            written += n as usize;
+        if n > 0 {
+            buf = &buf[n as usize..];
             continue;
         }
 
-        let err = errno();
-        if err != libc::EINTR {
-            return;
+        if n == 0 {
+            return; // broken pipe
+        }
+
+        #[allow(unreachable_patterns, reason = "On Linux EAGAIN and EWOULDBLOCK are the same")]
+        match errno() {
+            libc::EINTR => continue,
+            libc::EAGAIN | libc::EWOULDBLOCK => {
+                // Block until it becomes writable
+                let mut pollfd =
+                    libc::pollfd { fd: libc::STDOUT_FILENO, events: libc::POLLOUT, revents: 0 };
+                loop {
+                    let ret = unsafe { libc::poll(&mut pollfd, 1, -1) };
+                    if ret >= 0 {
+                        if pollfd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                            return; // broken pipe
+                        }
+                        break;
+                    }
+                    if errno() != libc::EINTR {
+                        return; // broken pipe
+                    }
+                }
+            }
+            _ => return, // broken pipe
         }
     }
 }
