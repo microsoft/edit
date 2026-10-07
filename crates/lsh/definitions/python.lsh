@@ -52,7 +52,7 @@ pub fn python() {
             yield keyword.other;
         } else if /(?:True|False|None)\>/ {
             yield constant.language;
-        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?j?)/ {
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|\d[\d_]*\.?[\d_]*|\.\d[\d_]*)(?:e[+-]?[\d_]+)?j?)/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {
