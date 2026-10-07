@@ -561,7 +561,7 @@ where
 pub fn preferred_languages(arena: &Arena) -> BVec<'_, &'_ str> {
     let mut locales = BVec::empty();
 
-    for key in ["LANGUAGE", "LC_ALL", "LANG"] {
+    for key in ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"] {
         if let Ok(val) = std::env::var(key)
             && !val.is_empty()
         {
@@ -574,7 +574,9 @@ pub fn preferred_languages(arena: &Arena) -> BVec<'_, &'_ str> {
             }
 
             locales.extend_sloppy(arena, val.split(':').filter(|s| !s.is_empty()));
-            break;
+            if !locales.is_empty() {
+                break;
+            }
         }
     }
 
