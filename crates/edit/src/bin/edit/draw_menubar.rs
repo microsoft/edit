@@ -20,7 +20,7 @@ pub fn draw_menubar(ctx: &mut Context, state: &mut State) {
         if ctx.menubar_menu_begin(loc(LocId::File), 'F') {
             draw_menu_file(ctx, state);
         }
-        if !contains_focus && ctx.consume_shortcut(vk::F10) {
+        if !contains_focus && (ctx.consume_shortcut(vk::F10) || ctx.consume_shortcut(vk::APPS)) {
             ctx.steal_focus();
         }
         if state.documents.active().is_some() {
