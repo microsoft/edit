@@ -141,7 +141,7 @@ pub fn switch_modes() -> io::Result<()> {
 
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
-        check_int_return(libc::tcgetattr(libc::STDIN_FILENO, termios.as_mut_ptr()))?;
+        check_int_return(libc::tcgetattr(libc::STDOUT_FILENO, termios.as_mut_ptr()))?;
         let mut termios = termios.assume_init();
         STATE.stdout_initial_termios = Some(termios);
 
