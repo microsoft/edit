@@ -11,17 +11,16 @@ use crate::localization::*;
 use crate::state::*;
 
 pub fn draw_editor(ctx: &mut Context, state: &mut State) {
+    ctx.block_begin("editor");
+    ctx.inherit_focus();
+    ctx.attr_display(Display::Grid);
+    ctx.attr_grid_template_columns(&[GridTrack::Fraction(1)]);
+    ctx.attr_grid_template_rows(&[GridTrack::Auto, GridTrack::Fraction(1)]);
+    ctx.block_begin("search-container");
     if !matches!(state.wants_search.kind, StateSearchKind::Hidden | StateSearchKind::Disabled) {
         draw_search(ctx, state);
     }
-
-    let size = ctx.size();
-    // TODO: The layout code should be able to just figure out the height on its own.
-    let height_reduction = match state.wants_search.kind {
-        StateSearchKind::Search => 4,
-        StateSearchKind::Replace => 5,
-        _ => 2,
-    };
+    ctx.block_end();
 
     if let Some(doc) = state.documents.active() {
         ctx.textarea("textarea", doc.buffer.clone());
@@ -31,7 +30,7 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
         ctx.block_end();
     }
 
-    ctx.attr_intrinsic_size(Size { width: 0, height: size.height - height_reduction });
+    ctx.block_end();
 }
 
 fn draw_search(ctx: &mut Context, state: &mut State) {
@@ -70,11 +69,19 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
             state.wants_search.kind = StateSearchKind::Hidden;
         }
 
-        ctx.table_begin("needle");
-        ctx.table_set_cell_gap(Size { width: 1, height: 0 });
+        ctx.block_begin("needle");
+        ctx.attr_display(Display::Grid);
+        ctx.attr_grid_auto_rows(GridTrack::Intrinsic(0));
+        ctx.attr_grid_template_columns(&[GridTrack::Intrinsic(0), GridTrack::Fraction(1)]);
+        ctx.attr_focus_navigation(FocusNavigation::Vertical);
+        ctx.attr_grid_gap(Size { width: 1, height: 0 });
         {
             {
-                ctx.table_next_row();
+                ctx.block_begin("row");
+                ctx.attr_display(Display::Grid);
+                ctx.attr_grid_column_subgrid();
+                ctx.attr_grid_align_items(GridAlignment::Start);
+                ctx.attr_focus_navigation(FocusNavigation::Horizontal);
                 ctx.label("label", loc(LocId::SearchNeedleLabel));
 
                 if ctx.editline("needle", &mut state.search_needle) {
@@ -84,7 +91,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                     ctx.attr_background_rgba(ctx.indexed(IndexedColor::Red));
                     ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::BrightWhite));
                 }
-                ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
+                ctx.attr_intrinsic_size(Size { width: 0, height: 1 });
                 if focus == StateSearchKind::Search {
                     ctx.steal_focus();
                 }
@@ -94,11 +101,17 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
             }
 
             if state.wants_search.kind == StateSearchKind::Replace {
-                ctx.table_next_row();
+                ctx.block_end();
+                ctx.next_block_id_mixin(1);
+                ctx.block_begin("row");
+                ctx.attr_display(Display::Grid);
+                ctx.attr_grid_column_subgrid();
+                ctx.attr_grid_align_items(GridAlignment::Start);
+                ctx.attr_focus_navigation(FocusNavigation::Horizontal);
                 ctx.label("label", loc(LocId::SearchReplacementLabel));
 
                 ctx.editline("replacement", &mut state.search_replacement);
-                ctx.attr_intrinsic_size(Size { width: COORD_TYPE_SAFE_MAX, height: 1 });
+                ctx.attr_intrinsic_size(Size { width: 0, height: 1 });
                 if focus == StateSearchKind::Replace {
                     ctx.steal_focus();
                 }
@@ -111,15 +124,24 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                 }
             }
         }
-        ctx.table_end();
+        ctx.block_end();
+        ctx.block_end();
 
-        ctx.table_begin("options");
-        ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+        ctx.block_begin("options");
+        ctx.attr_display(Display::Grid);
+        ctx.attr_grid_auto_columns(GridTrack::Intrinsic(0));
+        ctx.attr_grid_auto_rows(GridTrack::Intrinsic(0));
+        ctx.attr_focus_navigation(FocusNavigation::Vertical);
+        ctx.attr_grid_gap(Size { width: 2, height: 0 });
         {
             let mut change = false;
             let mut change_action = Some(SearchAction::Search);
 
-            ctx.table_next_row();
+            ctx.block_begin("row");
+            ctx.attr_display(Display::Grid);
+            ctx.attr_grid_column_subgrid();
+            ctx.attr_grid_align_items(GridAlignment::Start);
+            ctx.attr_focus_navigation(FocusNavigation::Horizontal);
 
             change |= ctx.checkbox(
                 "match-case",
@@ -150,7 +172,8 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
                 action = change_action;
             }
         }
-        ctx.table_end();
+        ctx.block_end();
+        ctx.block_end();
     }
     ctx.block_end();
 
@@ -237,13 +260,21 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
         ctx.label("description", loc(LocId::UnsavedChangesDialogDescription));
         ctx.attr_padding(Rect::three(1, 2, 1));
 
-        ctx.table_begin("choices");
+        ctx.block_begin("choices");
+        ctx.attr_display(Display::Grid);
+        ctx.attr_grid_auto_columns(GridTrack::Intrinsic(0));
+        ctx.attr_grid_auto_rows(GridTrack::Intrinsic(0));
+        ctx.attr_focus_navigation(FocusNavigation::Vertical);
         ctx.inherit_focus();
         ctx.attr_padding(Rect::three(0, 2, 1));
         ctx.attr_position(Position::Center);
-        ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+        ctx.attr_grid_gap(Size { width: 2, height: 0 });
         {
-            ctx.table_next_row();
+            ctx.block_begin("row");
+            ctx.attr_display(Display::Grid);
+            ctx.attr_grid_column_subgrid();
+            ctx.attr_grid_align_items(GridAlignment::Start);
+            ctx.attr_focus_navigation(FocusNavigation::Horizontal);
             ctx.inherit_focus();
 
             if ctx.button(
@@ -274,7 +305,8 @@ pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
                 }
             }
         }
-        ctx.table_end();
+        ctx.block_end();
+        ctx.block_end();
     }
     if ctx.modal_end() {
         action = Action::Cancel;

@@ -7,6 +7,8 @@ mod draw_editor;
 mod draw_filepicker;
 mod draw_menubar;
 mod draw_statusbar;
+#[cfg(test)]
+mod layout_tests;
 mod localization;
 mod settings;
 mod state;
@@ -340,6 +342,9 @@ fn print_version() {
 
 fn draw(tui: &mut Tui, input: Option<input::Input>, state: &mut State) {
     let ctx = &mut tui.create_context(input);
+    ctx.attr_display(Display::Grid);
+    ctx.attr_grid_template_columns(&[GridTrack::Fraction(1)]);
+    ctx.attr_grid_template_rows(&[GridTrack::Auto, GridTrack::Fraction(1), GridTrack::Auto]);
 
     draw_menubar(ctx, state);
     draw_editor(ctx, state);
@@ -505,13 +510,21 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
         }
         ctx.block_end();
 
-        ctx.table_begin("choices");
+        ctx.block_begin("choices");
+        ctx.attr_display(Display::Grid);
+        ctx.attr_grid_auto_columns(GridTrack::Intrinsic(0));
+        ctx.attr_grid_auto_rows(GridTrack::Intrinsic(0));
+        ctx.attr_focus_navigation(FocusNavigation::Vertical);
         ctx.inherit_focus();
         ctx.attr_padding(Rect::three(0, 2, 1));
         ctx.attr_position(Position::Center);
-        ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+        ctx.attr_grid_gap(Size { width: 2, height: 0 });
         {
-            ctx.table_next_row();
+            ctx.block_begin("row");
+            ctx.attr_display(Display::Grid);
+            ctx.attr_grid_column_subgrid();
+            ctx.attr_grid_align_items(GridAlignment::Start);
+            ctx.attr_focus_navigation(FocusNavigation::Horizontal);
             ctx.inherit_focus();
 
             if over_limit {
@@ -540,7 +553,8 @@ fn draw_handle_clipboard_change(ctx: &mut Context, state: &mut State) {
                 }
             }
         }
-        ctx.table_end();
+        ctx.block_end();
+        ctx.block_end();
     }
     if ctx.modal_end() {
         done = Some(false);
