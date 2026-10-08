@@ -7,25 +7,39 @@
 //! TODO: This reminds me that the sys API should probably be a trait.
 
 cfg_select! {
-    any(target_os = "linux", target_os = "android") => {
-        mod ppoll;
-        use ppoll::*;
-    }
     any(
         target_vendor = "apple",
         target_os = "freebsd",
-        target_os = "openbsd",
+        target_os = "dragonfly",
         target_os = "netbsd",
-        target_os = "dragonfly"
+        target_os = "openbsd",
     ) => {
-        mod kqueue;
-        use kqueue::*;
+        #[path = "unix/kqueue.rs"]
+        mod events;
+    }
+    any(target_os = "linux", target_os = "android") => {
+        #[path = "unix/ppoll.rs"]
+        mod events;
     }
     _ => {
-        mod selfpipe;
-        use selfpipe::*;
+        use selfpipe as events;
     }
 }
+
+#[cfg(any(
+    test,
+    not(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd",
+    ))
+))]
+#[path = "unix/selfpipe.rs"]
+mod selfpipe;
 
 use std::ffi::{c_char, c_int, c_void};
 use std::fs::File;
@@ -35,6 +49,12 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
 use std::ptr::{self, NonNull, null_mut};
 use std::{io, time};
+
+use events::Events;
+
+#[cfg(test)]
+#[path = "unix/tests.rs"]
+mod tests;
 
 use crate::arena::Arena;
 use crate::collections::{BString, BVec};
@@ -109,6 +129,19 @@ pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> io::Result<()> {
 
 struct State {
     events: Option<Events>,
+    #[cfg(any(
+        test,
+        not(any(
+            target_vendor = "apple",
+            target_os = "linux",
+            target_os = "android",
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "netbsd",
+            target_os = "openbsd",
+        ))
+    ))]
+    signal_pipe: selfpipe::SignalState,
     stdin: libc::c_int,
     stdin_flags: libc::c_int,
     stdout_initial_termios: Option<libc::termios>,
@@ -119,6 +152,19 @@ struct State {
 
 static mut STATE: State = State {
     events: None,
+    #[cfg(any(
+        test,
+        not(any(
+            target_vendor = "apple",
+            target_os = "linux",
+            target_os = "android",
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "netbsd",
+            target_os = "openbsd",
+        ))
+    ))]
+    signal_pipe: selfpipe::SignalState::new(),
     stdin: libc::STDIN_FILENO,
     stdin_flags: -1,
     stdout_initial_termios: None,
@@ -126,10 +172,14 @@ static mut STATE: State = State {
     utf8_len: 0,
 };
 
+/// Initializes terminal events on the input thread, before creating worker threads.
+/// On Linux/Android, workers must leave the inherited SIGWINCH mask blocked.
+/// The returned guard must outlive terminal input and be dropped on this thread.
 pub fn init() -> io::Result<Deinit> {
     unsafe {
         STATE.events = Some(Events::new()?);
     }
+
     Ok(Deinit)
 }
 
@@ -137,10 +187,7 @@ pub fn init() -> io::Result<Deinit> {
 pub fn reopen_stdin_if_redirected() -> io::Result<Option<File>> {
     unsafe {
         if libc::isatty(STATE.stdin) == 0 {
-            STATE.stdin = check_int_return(libc::open(
-                c"/dev/tty".as_ptr(),
-                libc::O_RDONLY | libc::O_CLOEXEC,
-            ))?;
+            STATE.stdin = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_RDONLY))?;
             Ok(Some(File::from_raw_fd(libc::STDIN_FILENO)))
         } else {
             Ok(None)
@@ -150,9 +197,7 @@ pub fn reopen_stdin_if_redirected() -> io::Result<Option<File>> {
 
 pub fn switch_modes() -> io::Result<()> {
     unsafe {
-        // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
         STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
-
         check_int_return(libc::fcntl(
             STATE.stdin,
             libc::F_SETFL,
@@ -243,7 +288,6 @@ impl Drop for Deinit {
         unsafe {
             #[allow(static_mut_refs)]
             if let Some(termios) = STATE.stdout_initial_termios.take() {
-                // Restore the original terminal modes.
                 _ = termios_setattr(libc::STDOUT_FILENO, &termios);
             }
 
@@ -251,6 +295,9 @@ impl Drop for Deinit {
                 libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
                 STATE.stdin_flags = -1;
             }
+
+            #[allow(static_mut_refs)]
+            drop(STATE.events.take());
         }
     }
 }
@@ -268,37 +315,20 @@ pub fn get_window_size() -> io::Result<Size> {
 }
 
 #[derive(Default)]
-pub struct Ready {
-    pub input: bool,
-    pub resize: bool,
+struct Ready {
+    input: bool,
+    resize: bool,
 }
 
 fn remaining(timeout: time::Duration, started: time::Instant) -> time::Duration {
     if timeout == time::Duration::MAX { timeout } else { timeout.saturating_sub(started.elapsed()) }
 }
 
-fn wait(
-    timeout: time::Duration,
-    mut poll: impl FnMut(*const libc::timespec) -> io::Result<Ready>,
-) -> io::Result<Ready> {
-    let started = time::Instant::now();
-    loop {
-        let remaining = remaining(timeout, started);
-        let timespec = libc::timespec {
-            tv_sec: remaining.as_secs().min(libc::time_t::MAX as u64) as libc::time_t,
-            tv_nsec: remaining.subsec_nanos() as libc::c_long,
-        };
-        let timespec = if remaining == time::Duration::MAX { ptr::null() } else { &timespec };
-        match poll(timespec) {
-            Ok(ready) if ready.input || ready.resize => return Ok(ready),
-            Ok(_) => {}
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-            Err(err) => return Err(err),
-        }
-        if self::remaining(timeout, started).is_zero() {
-            return Ok(Ready::default());
-        }
-    }
+fn timeout_timespec(timeout: time::Duration) -> Option<libc::timespec> {
+    (timeout != time::Duration::MAX).then(|| libc::timespec {
+        tv_sec: timeout.as_secs().min(libc::time_t::MAX as u64) as libc::time_t,
+        tv_nsec: timeout.subsec_nanos() as libc::c_long,
+    })
 }
 
 /// Reads from stdin.
@@ -310,7 +340,6 @@ pub fn read_stdin(arena: &Arena, timeout: time::Duration) -> Option<(Option<Size
     unsafe {
         #[allow(static_mut_refs)]
         let events = STATE.events.as_ref()?;
-        let stdin = STATE.stdin;
         let started = time::Instant::now();
         let mut resized = false;
         let mut buf = BVec::empty();
@@ -328,15 +357,31 @@ pub fn read_stdin(arena: &Arena, timeout: time::Duration) -> Option<(Option<Size
         }
 
         loop {
-            let ready = events.wait(stdin, remaining(timeout, started)).ok()?;
-            resized |= ready.resize;
-            if !ready.input {
-                break;
+            let timespec = timeout_timespec(remaining(timeout, started));
+            let result = events.wait(STATE.stdin, timespec.as_ref());
+
+            match result {
+                Ok(ready) => {
+                    resized |= ready.resize;
+                    if !ready.input {
+                        if resized || remaining(timeout, started).is_zero() {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                    if remaining(timeout, started).is_zero() {
+                        break;
+                    }
+                    continue;
+                }
+                Err(_) => return None,
             }
 
             // Read from stdin.
             let spare = buf.spare_capacity_mut();
-            let ret = libc::read(stdin, spare.as_mut_ptr().cast(), spare.len());
+            let ret = libc::read(STATE.stdin, spare.as_mut_ptr().cast(), spare.len());
             if ret > 0 {
                 buf.set_len(buf.len() + ret as usize);
                 break;
@@ -345,11 +390,9 @@ pub fn read_stdin(arena: &Arena, timeout: time::Duration) -> Option<(Option<Size
                 return None; // EOF
             }
             if ret < 0 {
+                #[allow(unreachable_patterns)]
                 match errno() {
-                    err if err == libc::EINTR
-                        || err == libc::EAGAIN
-                        || err == libc::EWOULDBLOCK =>
-                    {
+                    libc::EINTR | libc::EAGAIN | libc::EWOULDBLOCK => {
                         if resized || remaining(timeout, started).is_zero() {
                             break;
                         }
@@ -388,7 +431,7 @@ pub fn read_stdin(arena: &Arena, timeout: time::Duration) -> Option<(Option<Size
             }
         }
 
-        let resize = if resized { get_window_size().ok() } else { None };
+        let resize = if resized { Some(get_window_size().ok()?) } else { None };
 
         Some((resize, BString::from_utf8_lossy(arena, buf)))
     }
@@ -647,6 +690,27 @@ pub fn memfd() -> io::Result<File> {
         close?;
 
         Ok(file)
+    }
+}
+
+// "NIH syndrome can't be that bad." UNIX bros:
+fn errno_location() -> *mut c_int {
+    unsafe {
+        cfg_select! {
+            any(target_os = "solaris", target_os = "illumos") => libc::___errno(),
+            target_os = "aix" => libc::_Errno(),
+            target_os = "haiku" => libc::_errnop(),
+            target_os = "nto" => libc::__get_errno_ptr(),
+            any(target_vendor = "apple", target_os = "freebsd") => libc::__error(),
+            any(
+                target_os = "android",
+                target_os = "netbsd",
+                target_os = "openbsd",
+                target_os = "cygwin",
+                target_os = "nuttx"
+            ) => libc::__errno(),
+            _ => libc::__errno_location(),
+        }
     }
 }
 
