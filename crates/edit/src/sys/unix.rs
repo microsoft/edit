@@ -6,6 +6,27 @@
 //! Read the `windows` module for reference.
 //! TODO: This reminds me that the sys API should probably be a trait.
 
+cfg_select! {
+    any(target_os = "linux", target_os = "android") => {
+        mod ppoll;
+        use ppoll::*;
+    }
+    any(
+        target_vendor = "apple",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ) => {
+        mod kqueue;
+        use kqueue::*;
+    }
+    _ => {
+        mod selfpipe;
+        use selfpipe::*;
+    }
+}
+
 use std::ffi::{c_char, c_int, c_void};
 use std::fs::File;
 use std::mem::{self, ManuallyDrop, MaybeUninit};
@@ -87,38 +108,28 @@ pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> io::Result<()> {
 }
 
 struct State {
+    events: Option<Events>,
     stdin: libc::c_int,
     stdin_flags: libc::c_int,
     stdout_initial_termios: Option<libc::termios>,
-    resize_pending: bool,
     // Buffer for incomplete UTF-8 sequences (max 4 bytes needed)
     utf8_buf: [u8; 4],
     utf8_len: usize,
 }
 
 static mut STATE: State = State {
+    events: None,
     stdin: libc::STDIN_FILENO,
     stdin_flags: -1,
     stdout_initial_termios: None,
-    resize_pending: false,
     utf8_buf: [0; 4],
     utf8_len: 0,
 };
 
-extern "C" fn sigwinch_handler(_: libc::c_int) {
-    unsafe {
-        STATE.resize_pending = true;
-    }
-}
-
 pub fn init() -> io::Result<Deinit> {
     unsafe {
-        // Set STATE.resize_pending to true whenever we get a SIGWINCH.
-        let mut sigwinch_action: libc::sigaction = mem::zeroed();
-        sigwinch_action.sa_sigaction = sigwinch_handler as *const () as libc::sighandler_t;
-        check_int_return(libc::sigaction(libc::SIGWINCH, &sigwinch_action, null_mut()))?;
+        STATE.events = Some(Events::new()?);
     }
-
     Ok(Deinit)
 }
 
@@ -126,7 +137,10 @@ pub fn init() -> io::Result<Deinit> {
 pub fn reopen_stdin_if_redirected() -> io::Result<Option<File>> {
     unsafe {
         if libc::isatty(STATE.stdin) == 0 {
-            STATE.stdin = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_RDONLY))?;
+            STATE.stdin = check_int_return(libc::open(
+                c"/dev/tty".as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC,
+            ))?;
             Ok(Some(File::from_raw_fd(libc::STDIN_FILENO)))
         } else {
             Ok(None)
@@ -138,6 +152,12 @@ pub fn switch_modes() -> io::Result<()> {
     unsafe {
         // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
         STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
+
+        check_int_return(libc::fcntl(
+            STATE.stdin,
+            libc::F_SETFL,
+            STATE.stdin_flags | libc::O_NONBLOCK,
+        ))?;
 
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
@@ -247,21 +267,52 @@ pub fn get_window_size() -> io::Result<Size> {
     }
 }
 
+#[derive(Default)]
+pub struct Ready {
+    pub input: bool,
+    pub resize: bool,
+}
+
+fn remaining(timeout: time::Duration, started: time::Instant) -> time::Duration {
+    if timeout == time::Duration::MAX { timeout } else { timeout.saturating_sub(started.elapsed()) }
+}
+
+fn wait(
+    timeout: time::Duration,
+    mut poll: impl FnMut(*const libc::timespec) -> io::Result<Ready>,
+) -> io::Result<Ready> {
+    let started = time::Instant::now();
+    loop {
+        let remaining = remaining(timeout, started);
+        let timespec = libc::timespec {
+            tv_sec: remaining.as_secs().min(libc::time_t::MAX as u64) as libc::time_t,
+            tv_nsec: remaining.subsec_nanos() as libc::c_long,
+        };
+        let timespec = if remaining == time::Duration::MAX { ptr::null() } else { &timespec };
+        match poll(timespec) {
+            Ok(ready) if ready.input || ready.resize => return Ok(ready),
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
+        }
+        if self::remaining(timeout, started).is_zero() {
+            return Ok(Ready::default());
+        }
+    }
+}
+
 /// Reads from stdin.
 ///
 /// Returns `None` if there was an error reading from stdin.
 /// Returns `Some((_, ""))` if the given timeout was reached.
 /// Otherwise, it returns a pending resize and the read string.
-pub fn read_stdin(
-    arena: &Arena,
-    mut timeout: time::Duration,
-) -> Option<(Option<Size>, BString<'_>)> {
+pub fn read_stdin(arena: &Arena, timeout: time::Duration) -> Option<(Option<Size>, BString<'_>)> {
     unsafe {
-        if STATE.resize_pending {
-            timeout = time::Duration::ZERO;
-        }
-
-        let read_poll = timeout != time::Duration::MAX;
+        #[allow(static_mut_refs)]
+        let events = STATE.events.as_ref()?;
+        let stdin = STATE.stdin;
+        let started = time::Instant::now();
+        let mut resized = false;
         let mut buf = BVec::empty();
 
         // We don't know if the input is valid UTF8, so we first use a Vec and then
@@ -277,40 +328,15 @@ pub fn read_stdin(
         }
 
         loop {
-            if timeout != time::Duration::MAX {
-                let beg = time::Instant::now();
-
-                let mut pollfd = libc::pollfd { fd: STATE.stdin, events: libc::POLLIN, revents: 0 };
-                let ret;
-                #[cfg(target_os = "linux")]
-                {
-                    let ts = libc::timespec {
-                        tv_sec: timeout.as_secs() as libc::time_t,
-                        tv_nsec: timeout.subsec_nanos() as libc::c_long,
-                    };
-                    ret = libc::ppoll(&mut pollfd, 1, &ts, std::ptr::null());
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    ret = libc::poll(&mut pollfd, 1, timeout.as_millis() as libc::c_int);
-                }
-                if ret < 0 {
-                    return None; // Error? Let's assume it's an EOF.
-                }
-                if ret == 0 {
-                    break; // Timeout? We can stop reading.
-                }
-
-                timeout = timeout.saturating_sub(beg.elapsed());
-            };
-
-            // If we're asked for a non-blocking read we need
-            // to manipulate `O_NONBLOCK` and vice versa.
-            set_tty_nonblocking(read_poll);
+            let ready = events.wait(stdin, remaining(timeout, started)).ok()?;
+            resized |= ready.resize;
+            if !ready.input {
+                break;
+            }
 
             // Read from stdin.
             let spare = buf.spare_capacity_mut();
-            let ret = libc::read(STATE.stdin, spare.as_mut_ptr().cast(), spare.len());
+            let ret = libc::read(stdin, spare.as_mut_ptr().cast(), spare.len());
             if ret > 0 {
                 buf.set_len(buf.len() + ret as usize);
                 break;
@@ -320,9 +346,14 @@ pub fn read_stdin(
             }
             if ret < 0 {
                 match errno() {
-                    libc::EINTR if STATE.resize_pending => break,
-                    libc::EAGAIN if timeout == time::Duration::ZERO => break,
-                    libc::EINTR | libc::EAGAIN => {}
+                    err if err == libc::EINTR
+                        || err == libc::EAGAIN
+                        || err == libc::EWOULDBLOCK =>
+                    {
+                        if resized || remaining(timeout, started).is_zero() {
+                            break;
+                        }
+                    }
                     _ => return None,
                 }
             }
@@ -357,12 +388,7 @@ pub fn read_stdin(
             }
         }
 
-        let resize = if STATE.resize_pending {
-            STATE.resize_pending = false;
-            Some(get_window_size().ok()?)
-        } else {
-            None
-        };
+        let resize = if resized { get_window_size().ok() } else { None };
 
         Some((resize, BString::from_utf8_lossy(arena, buf)))
     }
@@ -405,20 +431,6 @@ pub fn write_stdout(text: &str) {
                 }
             }
             _ => return, // broken pipe
-        }
-    }
-}
-
-/// Sets/Resets `O_NONBLOCK` on the TTY handle.
-///
-/// Note that setting this flag applies to both stdin and stdout, because the
-/// TTY is a bidirectional device and both handles refer to the same thing.
-fn set_tty_nonblocking(nonblock: bool) {
-    unsafe {
-        let is_nonblock = (STATE.stdin_flags & libc::O_NONBLOCK) != 0;
-        if is_nonblock != nonblock {
-            STATE.stdin_flags ^= libc::O_NONBLOCK;
-            let _ = libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
         }
     }
 }
