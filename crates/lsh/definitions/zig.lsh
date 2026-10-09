@@ -23,7 +23,7 @@ pub fn zig() {
             yield storage.type;
         } else if /c_(?:char|short|ushort|int|uint|longdouble|longlong|long|ulonglong|ulong)\>/ {
             yield storage.type;
-        } else if /-?(?i:0x[\da-f_]+(?:\.[\da-f_]+)?(?:p[+-]?[\d_]+)?|0b[01_]+|0o[0-7_]+|\d[\d_]*(?:\.[\d_]+)?(?:e[+-]?[\d_]+)?)/ {
+        } else if /-?(?i:0x[\da-f_]+(?:\.[\da-f_]+)?(?:p[+-]?\d+[\d_]*)?|0b[01_]+|0o[0-7_]+|\d[\d_]*(?:\.\d+[\d_]*)?(?i:e[+-]?[\d_]+)?)\>/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {
