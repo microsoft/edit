@@ -433,6 +433,7 @@ impl<'doc> MeasurementConfig<'doc> {
                     if visual_pos_x_lookahead > self.word_wrap_column {
                         visual_pos_x -= wrap_opp_visual_pos_x;
                         visual_pos_y += 1;
+                        wrap_opp = false;
                         break;
                     } else if !ucd_line_break_joins(props_current_cluster, props_next_cluster) {
                         break;
@@ -579,7 +580,7 @@ mod test {
                 logical_pos: Point { x: 5, y: 0 },
                 visual_pos: Point { x: 1, y: 1 },
                 column: 5,
-                wrap_opp: true,
+                wrap_opp: false,
             }
         );
 
@@ -664,6 +665,26 @@ mod test {
                 wrap_opp: false,
             }
         );
+    }
+
+    #[test]
+    fn test_measure_forward_word_wrap_resume() {
+        //   |a␣    |
+        //   |bcdefg|
+        //   |h     |
+        let text = "a bcdefgh".as_bytes();
+        let cfg = MeasurementConfig::new(&text).with_word_wrap_column(6);
+
+        // The lookahead moves "bcdefgh" to the next line,
+        // which leaves no wrap opportunity on it before the cursor.
+        let cursor = cfg.clone().goto_logical(Point { x: 4, y: 0 });
+        assert_eq!(cursor.visual_pos, Point { x: 2, y: 1 });
+        assert!(!cursor.wrap_opp);
+
+        // Continuing from there must hard wrap "bcdefgh", same as measuring from the start.
+        let end = cfg.clone().with_cursor(cursor).goto_offset(text.len());
+        assert_eq!(end, cfg.clone().goto_offset(text.len()));
+        assert_eq!(end.visual_pos, Point { x: 1, y: 2 });
     }
 
     #[test]
