@@ -145,6 +145,7 @@
 
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
+use std::rc::{Rc, Weak};
 use std::{io, iter, mem, ptr, time};
 
 use crate::arena::{Arena, arena_format, arena_write_fmt, scratch_arena};
@@ -176,6 +177,33 @@ struct CachedTextBuffer {
     node_id: u64,
     editor: RcTextBuffer,
     seen: bool,
+}
+
+#[derive(Clone, Copy)]
+struct TextareaState {
+    scroll_offset: Point,
+    scroll_offset_y_drag_start: CoordType,
+    scroll_offset_x_max: CoordType,
+    thumb_height: CoordType,
+    preferred_column: CoordType,
+}
+
+impl Default for TextareaState {
+    fn default() -> Self {
+        Self {
+            scroll_offset: Default::default(),
+            scroll_offset_y_drag_start: CoordType::MIN,
+            scroll_offset_x_max: 0,
+            thumb_height: 0,
+            preferred_column: 0,
+        }
+    }
+}
+
+struct CachedTextareaState {
+    node_id: u64,
+    editor: Weak<TextBufferCell>,
+    state: TextareaState,
 }
 
 /// Since [`Context::editline()`] and [`Context::textarea()`]
@@ -367,6 +395,7 @@ pub struct Tui {
 
     /// A list of cached text buffers used for [`Context::editline()`].
     cached_text_buffers: Vec<CachedTextBuffer>,
+    cached_textarea_states: Vec<CachedTextareaState>,
 
     /// The clipboard contents.
     clipboard: Clipboard,
@@ -420,6 +449,7 @@ impl Tui {
             menubar_toggle_id: 0,
 
             cached_text_buffers: Vec::with_capacity(16),
+            cached_textarea_states: Vec::with_capacity(16),
 
             clipboard: Default::default(),
 
@@ -787,6 +817,7 @@ impl Tui {
 
         // Remove cached text editors that are no longer in use.
         self.cached_text_buffers.retain(|c| c.seen);
+        self.cached_textarea_states.retain(|c| c.editor.strong_count() != 0);
 
         for root in Tree::iterate_siblings(Some(self.prev_tree.root_first)) {
             let mut root = root.borrow_mut();
@@ -2128,6 +2159,10 @@ impl<'a> Context<'a, '_> {
 
         let mut node = self.tree.last_node.borrow_mut();
         let node = &mut *node;
+        let textarea_buffer = match &payload {
+            TextBufferPayload::Textarea(buffer) => Some(buffer.clone()),
+            TextBufferPayload::Editline(_) => None,
+        };
         let single_line = match &payload {
             TextBufferPayload::Editline(_) => true,
             TextBufferPayload::Textarea(_) => false,
@@ -2184,14 +2219,42 @@ impl<'a> Context<'a, '_> {
             content.buffer.borrow_mut().copy_from_str(*text);
         }
 
+        if let Some(buffer) = &textarea_buffer {
+            if let Some(node_prev) = self.tui.prev_node_map.get(node.id) {
+                let node_prev = node_prev.borrow();
+                if let NodeContent::Textarea(content_prev) = &node_prev.content
+                    && let Some(cached) =
+                        self.tui.cached_textarea_states.iter_mut().find(|cached| {
+                            cached.node_id == node.id
+                                && ptr::eq(cached.editor.as_ptr(), content_prev.buffer)
+                        })
+                {
+                    cached.state = TextareaState::from(content_prev);
+                }
+            }
+
+            let cached = match self.tui.cached_textarea_states.iter_mut().find(|cached| {
+                cached.node_id == node.id && ptr::eq(cached.editor.as_ptr(), Rc::as_ptr(buffer))
+            }) {
+                Some(cached) => cached,
+                None => {
+                    self.tui.cached_textarea_states.push(CachedTextareaState {
+                        node_id: node.id,
+                        editor: Rc::downgrade(buffer),
+                        state: Default::default(),
+                    });
+                    self.tui.cached_textarea_states.last_mut().unwrap()
+                }
+            };
+            cached.state.apply(content);
+        }
+
         if let Some(node_prev) = self.tui.prev_node_map.get(node.id) {
             let node_prev = node_prev.borrow();
             if let NodeContent::Textarea(content_prev) = &node_prev.content {
-                content.scroll_offset = content_prev.scroll_offset;
-                content.scroll_offset_y_drag_start = content_prev.scroll_offset_y_drag_start;
-                content.scroll_offset_x_max = content_prev.scroll_offset_x_max;
-                content.thumb_height = content_prev.thumb_height;
-                content.preferred_column = content_prev.preferred_column;
+                if single_line {
+                    TextareaState::from(content_prev).apply(content);
+                }
 
                 let mut text_width = node_prev.inner.width();
                 if !single_line {
@@ -2226,6 +2289,18 @@ impl<'a> Context<'a, '_> {
         }
 
         self.textarea_adjust_scroll_offset(content);
+
+        if let Some(buffer) = &textarea_buffer {
+            let cached = self
+                .tui
+                .cached_textarea_states
+                .iter_mut()
+                .find(|cached| {
+                    cached.node_id == node.id && ptr::eq(cached.editor.as_ptr(), Rc::as_ptr(buffer))
+                })
+                .unwrap();
+            cached.state = TextareaState::from(&*content);
+        }
 
         if single_line {
             node.attributes.fg = self.indexed(IndexedColor::Foreground);
@@ -3786,6 +3861,28 @@ struct TextareaContent<'a> {
     has_focus: bool,
 }
 
+impl TextareaState {
+    fn apply(self, content: &mut TextareaContent) {
+        content.scroll_offset = self.scroll_offset;
+        content.scroll_offset_y_drag_start = self.scroll_offset_y_drag_start;
+        content.scroll_offset_x_max = self.scroll_offset_x_max;
+        content.thumb_height = self.thumb_height;
+        content.preferred_column = self.preferred_column;
+    }
+}
+
+impl From<&TextareaContent<'_>> for TextareaState {
+    fn from(content: &TextareaContent) -> Self {
+        Self {
+            scroll_offset: content.scroll_offset,
+            scroll_offset_y_drag_start: content.scroll_offset_y_drag_start,
+            scroll_offset_x_max: content.scroll_offset_x_max,
+            thumb_height: content.thumb_height,
+            preferred_column: content.preferred_column,
+        }
+    }
+}
+
 /// NOTE: Must not contain items that require drop().
 #[derive(Clone)]
 struct ScrollareaContent {
@@ -4115,5 +4212,81 @@ impl<'a> Node<'a> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn multiline_buffer() -> RcTextBuffer {
+        let buffer = TextBuffer::new_rc(false).unwrap();
+        {
+            let mut buffer = buffer.borrow_mut();
+            buffer.write_raw(b"line\nline\nline\nline\nline\nline\nline\nline\n");
+            buffer.cursor_move_to_logical(Point::default());
+            buffer.take_cursor_visibility_request();
+        }
+        buffer
+    }
+
+    fn draw_textarea(tui: &mut Tui, classname: &'static str, buffer: RcTextBuffer) {
+        let mut context = tui.create_context(None);
+        context.textarea(classname, buffer);
+    }
+
+    fn textarea_scroll_offset(tui: &Tui, classname: &str) -> Point {
+        let id = hash_str(ROOT_ID, classname);
+        let node = tui.prev_node_map.get(id).unwrap().borrow();
+        let NodeContent::Textarea(content) = &node.content else {
+            unreachable!();
+        };
+        content.scroll_offset
+    }
+
+    fn set_textarea_scroll_offset(tui: &mut Tui, classname: &str, scroll_offset: Point) {
+        let id = hash_str(ROOT_ID, classname);
+        let mut node = tui.prev_node_map.get(id).unwrap().borrow_mut();
+        let NodeContent::Textarea(content) = &mut node.content else {
+            unreachable!();
+        };
+        content.scroll_offset = scroll_offset;
+    }
+
+    #[test]
+    fn textarea_scroll_positions_are_independent_between_buffers() {
+        let mut tui = Tui::new().unwrap();
+        let first = multiline_buffer();
+        let second = multiline_buffer();
+
+        draw_textarea(&mut tui, "textarea", first.clone());
+        draw_textarea(&mut tui, "textarea", second.clone());
+        draw_textarea(&mut tui, "textarea", first.clone());
+        set_textarea_scroll_offset(&mut tui, "textarea", Point { x: 0, y: 4 });
+
+        draw_textarea(&mut tui, "textarea", second.clone());
+        assert_eq!(textarea_scroll_offset(&tui, "textarea"), Point::default());
+        set_textarea_scroll_offset(&mut tui, "textarea", Point { x: 0, y: 2 });
+
+        draw_textarea(&mut tui, "textarea", first);
+        assert_eq!(textarea_scroll_offset(&tui, "textarea"), Point { x: 0, y: 4 });
+
+        draw_textarea(&mut tui, "textarea", second);
+        assert_eq!(textarea_scroll_offset(&tui, "textarea"), Point { x: 0, y: 2 });
+    }
+
+    #[test]
+    fn textarea_scroll_positions_are_independent_between_nodes() {
+        let mut tui = Tui::new().unwrap();
+        let buffer = multiline_buffer();
+
+        draw_textarea(&mut tui, "first", buffer.clone());
+        draw_textarea(&mut tui, "first", buffer.clone());
+        set_textarea_scroll_offset(&mut tui, "first", Point { x: 0, y: 4 });
+        draw_textarea(&mut tui, "first", buffer.clone());
+
+        draw_textarea(&mut tui, "second", buffer);
+
+        assert_eq!(textarea_scroll_offset(&tui, "second"), Point::default());
     }
 }
