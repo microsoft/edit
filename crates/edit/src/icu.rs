@@ -299,12 +299,20 @@ struct DoubleCache {
 /// Warning! No lifetime tracking is done here.
 /// I initially did it properly with a PhantomData marker for the TextBuffer
 /// lifetime, but it was a pain so now I don't. Not a big deal in our case.
-pub struct Text(&'static mut icu_ffi::UText);
+pub enum TextInner {
+    Ffi(*mut icu_ffi::UText),
+    Native(*const TextBuffer),
+}
+
+pub struct Text(pub TextInner);
 
 impl Drop for Text {
     fn drop(&mut self) {
-        let f = assume_loaded();
-        unsafe { (f.utext_close)(self.0) };
+        if let TextInner::Ffi(ptr) = self.0 {
+            if let Ok(f) = init_if_needed() {
+                unsafe { (f.utext_close)(ptr) };
+            }
+        }
     }
 }
 
@@ -315,41 +323,47 @@ impl Text {
     ///
     /// The caller must ensure that the given [`TextBuffer`]
     /// outlives the returned `Text` instance.
-    pub unsafe fn new(tb: &TextBuffer) -> Result<Self> {
-        let f = init_if_needed()?;
+    pub fn new(tb: &TextBuffer) -> Result<Self> {
+        match init_if_needed() {
+            Ok(f) => {
+                let mut status = icu_ffi::U_ZERO_ERROR;
+                let ptr = unsafe {
+                    (f.utext_setup)(null_mut(), size_of::<DoubleCache>() as i32, &mut status)
+                };
+                if status.is_failure() {
+                    return Err(status.as_error());
+                }
 
-        let mut status = icu_ffi::U_ZERO_ERROR;
-        let ptr =
-            unsafe { (f.utext_setup)(null_mut(), size_of::<DoubleCache>() as i32, &mut status) };
-        if status.is_failure() {
-            return Err(status.as_error());
+                const FUNCS: icu_ffi::UTextFuncs = icu_ffi::UTextFuncs {
+                    table_size: size_of::<icu_ffi::UTextFuncs>() as i32,
+                    reserved1: 0,
+                    reserved2: 0,
+                    reserved3: 0,
+                    clone: Some(utext_clone),
+                    native_length: Some(utext_native_length),
+                    access: Some(utext_access),
+                    extract: None,
+                    replace: None,
+                    copy: None,
+                    map_offset_to_native: Some(utext_map_offset_to_native),
+                    map_native_index_to_utf16: Some(utext_map_native_index_to_utf16),
+                    close: None,
+                    spare1: None,
+                    spare2: None,
+                    spare3: None,
+                };
+
+                let ut = unsafe { &mut *ptr };
+                ut.p_funcs = &FUNCS;
+                ut.context = tb as *const TextBuffer as *mut _;
+                ut.a = -1;
+
+                Ok(Self(TextInner::Ffi(ut)))
+            }
+            Err(_) => {
+                Ok(Self(TextInner::Native(tb as *const TextBuffer)))
+            }
         }
-
-        const FUNCS: icu_ffi::UTextFuncs = icu_ffi::UTextFuncs {
-            table_size: size_of::<icu_ffi::UTextFuncs>() as i32,
-            reserved1: 0,
-            reserved2: 0,
-            reserved3: 0,
-            clone: Some(utext_clone),
-            native_length: Some(utext_native_length),
-            access: Some(utext_access),
-            extract: None,
-            replace: None,
-            copy: None,
-            map_offset_to_native: Some(utext_map_offset_to_native),
-            map_native_index_to_utf16: Some(utext_map_native_index_to_utf16),
-            close: None,
-            spare1: None,
-            spare2: None,
-            spare3: None,
-        };
-
-        let ut = unsafe { &mut *ptr };
-        ut.p_funcs = &FUNCS;
-        ut.context = tb as *const TextBuffer as *mut _;
-        ut.a = -1;
-
-        Ok(Self(ut))
     }
 }
 
@@ -606,12 +620,25 @@ extern "C" fn utext_map_native_index_to_utf16(ut: &icu_ffi::UText, native_index:
 /// # Safety
 ///
 /// Warning! No lifetime tracking is done here.
-pub struct Regex(&'static mut icu_ffi::URegularExpression);
+pub enum RegexInner {
+    Ffi(*mut icu_ffi::URegularExpression),
+    Native {
+        re: regex::Regex,
+        scan_offset: usize,
+        text_ptr: *const TextBuffer,
+        current_groups: Vec<Option<Range<usize>>>,
+    },
+}
+
+pub struct Regex(pub RegexInner);
 
 impl Drop for Regex {
     fn drop(&mut self) {
-        let f = assume_loaded();
-        unsafe { (f.uregex_close)(self.0) };
+        if let RegexInner::Ffi(ptr) = self.0 {
+            if let Ok(f) = init_if_needed() {
+                unsafe { (f.uregex_close)(ptr) };
+            }
+        }
     }
 }
 
@@ -631,32 +658,52 @@ impl Regex {
     /// # Safety
     ///
     /// The caller must ensure that the given `Text` outlives the returned `Regex` instance.
-    pub unsafe fn new(pattern: &str, flags: i32, text: &Text) -> Result<Self> {
-        let f = init_if_needed()?;
-        unsafe {
-            let scratch = scratch_arena(None);
-            let mut utf16 = BVec::empty();
-            let mut status = icu_ffi::U_ZERO_ERROR;
+    pub fn new(pattern: &str, flags: i32, text: &Text) -> Result<Self> {
+        match &text.0 {
+            TextInner::Ffi(text_ptr) => {
+                let f = init_if_needed()?;
+                let scratch = scratch_arena(None);
+                let mut utf16 = BVec::empty();
+                let mut status = icu_ffi::U_ZERO_ERROR;
 
-            utf16.extend_sloppy(&*scratch, pattern.encode_utf16());
+                utf16.extend_sloppy(&*scratch, pattern.encode_utf16());
 
-            let ptr = (f.uregex_open)(
-                utf16.as_ptr(),
-                utf16.len() as i32,
-                icu_ffi::UREGEX_MULTILINE | icu_ffi::UREGEX_ERROR_ON_UNKNOWN_ESCAPES | flags,
-                None,
-                &mut status,
-            );
-            // ICU describes the time unit as being dependent on CPU performance
-            // and "typically [in] the order of milliseconds", but this claim seems
-            // highly outdated. On my CPU from 2021, a limit of 4096 equals roughly 600ms.
-            (f.uregex_setTimeLimit)(ptr, 4096, &mut status);
-            (f.uregex_setUText)(ptr, text.0 as *const _ as *mut _, &mut status);
-            if status.is_failure() {
-                return Err(status.as_error());
+                let ptr = unsafe {
+                    (f.uregex_open)(
+                        utf16.as_ptr(),
+                        utf16.len() as i32,
+                        icu_ffi::UREGEX_MULTILINE | icu_ffi::UREGEX_ERROR_ON_UNKNOWN_ESCAPES | flags,
+                        None,
+                        &mut status,
+                    )
+                };
+                // ICU describes the time unit as being dependent on CPU performance
+                // and "typically [in] the order of milliseconds", but this claim seems
+                // highly outdated. On my CPU from 2021, a limit of 4096 equals roughly 600ms.
+                unsafe {
+                    (f.uregex_setTimeLimit)(ptr, 4096, &mut status);
+                    (f.uregex_setUText)(ptr, *text_ptr, &mut status);
+                }
+                if status.is_failure() {
+                    return Err(status.as_error());
+                }
+
+                Ok(Self(RegexInner::Ffi(ptr)))
             }
-
-            Ok(Self(&mut *ptr))
+            TextInner::Native(tb_ptr) => {
+                let mut builder = regex::RegexBuilder::new(pattern);
+                builder.case_insensitive(flags & Self::CASE_INSENSITIVE != 0);
+                builder.multi_line(flags & Self::MULTILINE != 0);
+                let re = builder.build().map_err(|_| {
+                    icu_ffi::U_ZERO_ERROR.as_error()
+                })?;
+                Ok(Self(RegexInner::Native {
+                    re,
+                    scan_offset: 0,
+                    text_ptr: *tb_ptr,
+                    current_groups: Vec::new(),
+                }))
+            }
         }
     }
 
@@ -667,49 +714,82 @@ impl Regex {
     /// # Safety
     ///
     /// The caller must ensure that the given `Text` outlives the `Regex` instance.
-    pub unsafe fn set_text(&mut self, text: &mut Text, offset: usize) {
+    pub fn set_text(&mut self, text: &mut Text, offset: usize) {
         // Get `utext_access_impl` to detect the `TextBuffer::generation` change,
         // and refresh its contents. This ensures that ICU doesn't reuse
         // stale `UText::chunk_contents`, as it has no way tell that it's stale.
-        utext_access(text.0, offset as i64, true);
+        match (&mut self.0, &text.0) {
+            (RegexInner::Ffi(re_ptr), TextInner::Ffi(text_ptr)) => {
+                let utext_ref = unsafe { &mut **text_ptr };
+                utext_access(utext_ref, offset as i64, true);
 
-        let f = assume_loaded();
-        let mut status = icu_ffi::U_ZERO_ERROR;
-        unsafe { (f.uregex_setUText)(self.0, text.0 as *const _ as *mut _, &mut status) };
-        // `uregex_setUText` resets the regex to the start of the text.
-        // Because of this, we must also call `uregex_reset64`.
-        unsafe { (f.uregex_reset64)(self.0, offset as i64, &mut status) };
+                let f = assume_loaded();
+                let mut status = icu_ffi::U_ZERO_ERROR;
+                unsafe {
+                    (f.uregex_setUText)(*re_ptr, *text_ptr, &mut status);
+                // `uregex_setUText` resets the regex to the start of the text.
+                // Because of this, we must also call `uregex_reset64`.
+                    (f.uregex_reset64)(*re_ptr, offset as i64, &mut status);
+                }
+            }
+            (RegexInner::Native { text_ptr, scan_offset, current_groups, .. }, TextInner::Native(tb_ptr)) => {
+                *text_ptr = *tb_ptr;
+                *scan_offset = offset;
+                current_groups.clear();
+            }
+            _ => unreachable!("Mixing Native and Ffi text wrappers is not supported"),
+        }
     }
 
     /// Sets the regex to the absolute offset in the underlying text.
     pub fn reset(&mut self, offset: usize) {
-        let f = assume_loaded();
-        let mut status = icu_ffi::U_ZERO_ERROR;
-        unsafe { (f.uregex_reset64)(self.0, offset as i64, &mut status) };
+        match &mut self.0 {
+            RegexInner::Ffi(ptr) => {
+                let f = assume_loaded();
+                let mut status = icu_ffi::U_ZERO_ERROR;
+                unsafe { (f.uregex_reset64)(*ptr, offset as i64, &mut status) };
+            }
+            RegexInner::Native { scan_offset, current_groups, .. } => {
+                *scan_offset = offset;
+                current_groups.clear();
+            }
+        }
     }
 
     /// Gets captured group count.
     pub fn group_count(&mut self) -> i32 {
-        let f = assume_loaded();
-
-        let mut status = icu_ffi::U_ZERO_ERROR;
-        let count = unsafe { (f.uregex_groupCount)(self.0, &mut status) };
-        if status.is_failure() { 0 } else { count }
+        match &self.0 {
+            RegexInner::Ffi(ptr) => {
+                let f = assume_loaded();
+                let mut status = icu_ffi::U_ZERO_ERROR;
+                let count = unsafe { (f.uregex_groupCount)(*ptr, &mut status) };
+                if status.is_failure() { 0 } else { count }
+            }
+            RegexInner::Native { re, .. } => {
+                (re.captures_len() as i32) - 1
+            }
+        }
     }
 
     /// Gets the text range of a captured group by index.
     pub fn group(&mut self, group: i32) -> Option<Range<usize>> {
-        let f = assume_loaded();
-
-        let mut status = icu_ffi::U_ZERO_ERROR;
-        let start = unsafe { (f.uregex_start64)(self.0, group, &mut status) };
-        let end = unsafe { (f.uregex_end64)(self.0, group, &mut status) };
-        if status.is_failure() {
-            None
-        } else {
-            let start = start.max(0);
-            let end = end.max(start);
-            Some(start as usize..end as usize)
+        match &self.0 {
+            RegexInner::Ffi(ptr) => {
+                let f = assume_loaded();
+                let mut status = icu_ffi::U_ZERO_ERROR;
+                let start = unsafe { (f.uregex_start64)(*ptr, group, &mut status) };
+                let end = unsafe { (f.uregex_end64)(*ptr, group, &mut status) };
+                if status.is_failure() {
+                    None
+                } else {
+                    let start = start.max(0) as usize;
+                    let end = end.max(start as i64) as usize;
+                    Some(start..end)
+                }
+            }
+            RegexInner::Native { current_groups, .. } => {
+                current_groups.get(group as usize)?.clone()
+            }
         }
     }
 }
@@ -718,15 +798,34 @@ impl Iterator for Regex {
     type Item = Range<usize>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let f = assume_loaded();
+        match &mut self.0 {
+            RegexInner::Ffi(ptr) => {
+                let f = assume_loaded();
+                let mut status = icu_ffi::U_ZERO_ERROR;
+                let found = unsafe { (f.uregex_findNext)(*ptr, &mut status) };
 
-        let mut status = icu_ffi::U_ZERO_ERROR;
-        let ok = unsafe { (f.uregex_findNext)(self.0, &mut status) };
-        if !ok {
-            return None;
+                if status.is_failure() || !found { None } else { self.group(0) }
+            }
+            RegexInner::Native { re, scan_offset, text_ptr, current_groups } => {
+                current_groups.clear();
+                if text_ptr.is_null() { return None; }
+
+                let text_ref = unsafe { &**text_ptr };
+                let chunk_bytes = text_ref.read_forward(*scan_offset);
+                let chunk = std::str::from_utf8(chunk_bytes).ok()?;
+                let captures = re.captures(chunk)?;
+                let total_match = captures.get(0)?;
+                let start = *scan_offset + total_match.start();
+                let end = *scan_offset + total_match.end();
+
+                for g in captures.iter() {
+                    current_groups.push(g.map(|m| (*scan_offset + m.start())..(*scan_offset + m.end())));
+                }
+
+                *scan_offset = end;
+                Some(start..end)
+            }
         }
-
-        self.group(0)
     }
 }
 
