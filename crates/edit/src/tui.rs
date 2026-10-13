@@ -4117,3 +4117,87 @@ impl<'a> Node<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::buffer::TextBuffer;
+
+    fn handle_key(tui: &mut Tui, buffer: &TextBufferCell, key: InputKey) {
+        let mut content = TextareaContent {
+            buffer,
+            scroll_offset: Point::default(),
+            scroll_offset_y_drag_start: CoordType::MIN,
+            scroll_offset_x_max: 0,
+            thumb_height: 0,
+            preferred_column: 0,
+            single_line: false,
+            has_focus: true,
+        };
+        let node = Node::default();
+        let mut ctx = tui.create_context(Some(Input::Keyboard(key)));
+        assert!(ctx.textarea_handle_input(&mut content, &node, false));
+    }
+
+    fn selection_logical(tb: &TextBuffer) -> (Point, Point) {
+        let (beg, end) = tb.selection_range().expect("should have selection");
+        (beg.logical_pos, end.logical_pos)
+    }
+
+    #[test]
+    fn ctrl_shift_home_end_selects_to_file_bounds() -> io::Result<()> {
+        // Ctrl+Shift+Home/End should select to file start/end, not merely line start/end.
+        let mut tui = Tui::new()?;
+        let buffer = TextBuffer::new_rc(true)?;
+        {
+            let mut tb = buffer.borrow_mut();
+            tb.set_crlf(false);
+            tb.write_canon(b"a\nb\nc\nd\n");
+        }
+
+        let file_end = {
+            let mut tb = buffer.borrow_mut();
+            tb.cursor_move_to_logical(Point::MAX);
+            tb.cursor_logical_pos()
+        };
+        let mid = Point { x: 0, y: 2 };
+
+        {
+            let mut tb = buffer.borrow_mut();
+            tb.cursor_move_to_logical(mid);
+        }
+        handle_key(&mut tui, &buffer, kbmod::CTRL_SHIFT | vk::HOME);
+        {
+            let tb = buffer.borrow();
+            assert_eq!(selection_logical(&tb), (Point { x: 0, y: 0 }, mid));
+        }
+
+        {
+            let mut tb = buffer.borrow_mut();
+            tb.clear_selection();
+            tb.cursor_move_to_logical(mid);
+        }
+        // Shift+End without Ctrl only covers the current line.
+        handle_key(&mut tui, &buffer, kbmod::SHIFT | vk::END);
+        {
+            let tb = buffer.borrow();
+            let (beg, end) = selection_logical(&tb);
+            assert_eq!(beg, mid);
+            assert_eq!(end.y, mid.y);
+            assert_ne!(end, file_end);
+        }
+
+        {
+            let mut tb = buffer.borrow_mut();
+            tb.clear_selection();
+            tb.cursor_move_to_logical(mid);
+        }
+        handle_key(&mut tui, &buffer, kbmod::CTRL_SHIFT | vk::END);
+        {
+            let tb = buffer.borrow();
+            assert_eq!(selection_logical(&tb), (mid, file_end));
+        }
+
+        Ok(())
+    }
+}

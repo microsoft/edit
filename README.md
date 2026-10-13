@@ -44,6 +44,18 @@ You can install the latest version with Homebrew:
 brew install msedit
 ```
 
+## Keyboard Shortcuts
+
+Common shortcuts such as `Ctrl+S` (save), `Ctrl+Z`/`Ctrl+Y` (undo/redo), and `Ctrl+Home`/`Ctrl+End` (go to file start/end) work out of the box. `Shift` adds selection, e.g. `Shift+Home` selects to line start and `Ctrl+Shift+Home`/`Ctrl+Shift+End` select to file start/end.
+
+> **Windows Terminal:** `Ctrl+Shift+Home` and `Ctrl+Shift+End` are intercepted by the terminal by default. To enable them in `edit`, add the following to your Windows Terminal `settings.json`:
+> ```json
+> "keybindings": [
+>   { "id": null, "keys": "ctrl+shift+home" },
+>   { "id": null, "keys": "ctrl+shift+end" }
+> ]
+> ```
+
 ## Build Instructions
 
 * [Install Rust](https://www.rust-lang.org/tools/install)
