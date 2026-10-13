@@ -195,6 +195,9 @@ pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
         if doc.path.is_some() {
             if let Err(err) = doc.save(None) {
                 error_log_add(ctx, state, err);
+                // Don't keep trying to close the document (or exit) if it couldn't be saved.
+                state.wants_exit = false;
+                state.wants_close = false;
             }
         } else {
             // No path? Show the file picker.
