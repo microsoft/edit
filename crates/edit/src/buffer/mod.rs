@@ -1156,6 +1156,25 @@ impl TextBuffer {
 
     /// Find the next occurrence of the given `pattern` and select it.
     pub fn find_and_select(&mut self, pattern: &str, options: SearchOptions) -> icu::Result<()> {
+        self.find_and_select_impl(pattern, options, false)
+    }
+
+    /// Find the previous occurrence of the given `pattern` and select it.
+    /// Wraps around to the end of the buffer if there's no match before the cursor.
+    pub fn find_and_select_prev(
+        &mut self,
+        pattern: &str,
+        options: SearchOptions,
+    ) -> icu::Result<()> {
+        self.find_and_select_impl(pattern, options, true)
+    }
+
+    fn find_and_select_impl(
+        &mut self,
+        pattern: &str,
+        options: SearchOptions,
+        backwards: bool,
+    ) -> icu::Result<()> {
         if let Some(search) = &mut self.search {
             let search = search.get_mut();
             // When the search input changes we must reset the search.
@@ -1187,6 +1206,18 @@ impl TextBuffer {
         // If we previously searched through the entire document and found 0 matches,
         // then we can avoid searching again.
         if search.no_matches {
+            return Ok(());
+        }
+
+        if backwards {
+            // Search backwards from the start of the selection, or otherwise the cursor.
+            let limit = match self.selection {
+                Some(TextBufferSelection { beg, end }) => {
+                    self.cursor_move_to_logical_internal(self.cursor, beg.min(end)).offset
+                }
+                _ => self.cursor.offset,
+            };
+            self.find_select_prev(search, limit);
             return Ok(());
         }
 
@@ -1350,6 +1381,57 @@ impl TextBuffer {
             next_search_offset: 0,
             no_matches: false,
         })
+    }
+
+    /// Selects the last match that starts before `limit`.
+    /// If there is none, the last match in the entire buffer is selected.
+    fn find_select_prev(
+        &mut self,
+        search: &mut ActiveSearch,
+        limit: usize,
+    ) -> Option<Range<usize>> {
+        // Scan the entire buffer from the start. ICU has no backwards search.
+        if search.buffer_generation != self.buffer.generation() {
+            unsafe { search.regex.set_text(&mut search.text, 0) };
+            search.buffer_generation = self.buffer.generation();
+        } else {
+            search.regex.reset(0);
+        }
+
+        let mut before = None;
+        let mut last = None;
+        while let Some(range) = search.regex.next() {
+            if range.start < limit {
+                before = Some(range.clone());
+            } else if before.is_some() {
+                break;
+            }
+            last = Some(range);
+        }
+
+        let hit = before.or(last);
+
+        search.selection_generation = if let Some(range) = &hit {
+            // Continue forward searches from the end of this match.
+            search.next_search_offset = range.end;
+            search.regex.reset(range.end);
+
+            let beg = self.cursor_move_to_offset_internal(self.cursor, range.start);
+            let end = self.cursor_move_to_offset_internal(beg, range.end);
+
+            unsafe { self.set_cursor(end) };
+            self.make_cursor_visible();
+
+            self.set_selection(Some(TextBufferSelection {
+                beg: beg.logical_pos,
+                end: end.logical_pos,
+            }))
+        } else {
+            search.no_matches = true;
+            self.set_selection(None)
+        };
+
+        hit
     }
 
     fn find_select_next(
@@ -4189,5 +4271,36 @@ mod tests {
         .unwrap();
 
         assert_eq!(buffer_stored_bytes(&buf), b"ax\nbx\nx\n");
+    }
+
+    // Searching backwards must step through matches from the cursor towards the start,
+    // wrap around to the last match, and interoperate with forward searching.
+    #[test]
+    fn test_find_prev() {
+        let mut buf = prep_buffer("ab ab ab");
+        let opts = SearchOptions::default();
+        buf.cursor_move_to_logical(Point { x: 8, y: 0 });
+
+        let sel_x = |buf: &TextBuffer| {
+            let s = buf.selection.unwrap();
+            (s.beg.x, s.end.x)
+        };
+
+        buf.find_and_select_prev("ab", opts).unwrap();
+        assert_eq!(sel_x(&buf), (6, 8));
+        buf.find_and_select_prev("ab", opts).unwrap();
+        assert_eq!(sel_x(&buf), (3, 5));
+        buf.find_and_select_prev("ab", opts).unwrap();
+        assert_eq!(sel_x(&buf), (0, 2));
+        // Reached the start: wrap around to the end.
+        buf.find_and_select_prev("ab", opts).unwrap();
+        assert_eq!(sel_x(&buf), (6, 8));
+        // Forward search continues from the current match and wraps to the start.
+        buf.find_and_select("ab", opts).unwrap();
+        assert_eq!(sel_x(&buf), (0, 2));
+        buf.find_and_select("ab", opts).unwrap();
+        assert_eq!(sel_x(&buf), (3, 5));
+        buf.find_and_select_prev("ab", opts).unwrap();
+        assert_eq!(sel_x(&buf), (0, 2));
     }
 }

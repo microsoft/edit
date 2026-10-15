@@ -408,6 +408,8 @@ fn draw(tui: &mut Tui, input: Option<input::Input>, state: &mut State) {
             state.wants_search.focus = true;
         } else if key == vk::F3 {
             search_execute(ctx, state, SearchAction::Search);
+        } else if key == kbmod::SHIFT | vk::F3 {
+            search_execute(ctx, state, SearchAction::SearchPrev);
         } else {
             return;
         }

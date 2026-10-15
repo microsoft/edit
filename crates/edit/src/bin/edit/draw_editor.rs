@@ -161,6 +161,7 @@ fn draw_search(ctx: &mut Context, state: &mut State) {
 
 pub enum SearchAction {
     Search,
+    SearchPrev,
     Replace,
     ReplaceAll,
 }
@@ -173,6 +174,9 @@ pub fn search_execute(ctx: &mut Context, state: &mut State, action: SearchAction
     state.search_success = match action {
         SearchAction::Search => {
             doc.buffer.borrow_mut().find_and_select(&state.search_needle, state.search_options)
+        }
+        SearchAction::SearchPrev => {
+            doc.buffer.borrow_mut().find_and_select_prev(&state.search_needle, state.search_options)
         }
         SearchAction::Replace => doc.buffer.borrow_mut().find_and_replace(
             &state.search_needle,
