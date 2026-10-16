@@ -888,6 +888,28 @@ zh-hans = "全选"
 zh-hant = "全選"
 
 # A menu bar item
+# EN: Hard boundary alignment commands.
+# 中文：固定邊界對齊命令。
+[EditBoundaryAlign]
+en = "Boundary Alignment…"
+zh-hans = "边界对齐…"
+zh-hant = "邊界對齊…"
+
+[BoundaryAlignDialogTitle]
+en = "Boundary Alignment"
+zh-hans = "边界对齐"
+zh-hant = "邊界對齊"
+
+[BoundaryAlignDescription]
+en = "Right boundary column (positive integer):"
+zh-hans = "右边界字元位置（正整数）："
+zh-hant = "右邊界字元位置（正整數）："
+
+[BoundaryAlignInvalid]
+en = "Enter a positive integer."
+zh-hans = "请输入正整数。"
+zh-hant = "請輸入正整數。"
+
 [View]
 en = "View"
 ar = "عرض"
