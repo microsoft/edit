@@ -623,6 +623,7 @@ mod tests {
         assert_eq!(parse(&scratch, "3.15").unwrap().as_number(), Some(3.15));
         assert_eq!(parse(&scratch, "1e10").unwrap().as_number(), Some(1e10));
         assert_eq!(parse(&scratch, "1.5e-3").unwrap().as_number(), Some(0.0015));
+        assert_eq!(parse(&scratch, "0e400").unwrap().as_number(), Some(0.0));
     }
 
     #[test]
