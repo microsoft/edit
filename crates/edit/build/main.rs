@@ -3,8 +3,6 @@
 
 #![allow(irrefutable_let_patterns)]
 
-use stdext::arena::scratch_arena;
-
 use crate::helpers::env_opt;
 
 mod helpers;
@@ -18,8 +16,6 @@ enum TargetOs {
 }
 
 fn main() {
-    stdext::arena::init(128 * 1024 * 1024).unwrap();
-
     let target_os = match env_opt("CARGO_CFG_TARGET_OS").as_str() {
         "windows" => TargetOs::Windows,
         "macos" | "ios" => TargetOs::MacOS,
@@ -34,13 +30,11 @@ fn main() {
 }
 
 fn compile_lsh() {
-    let scratch = scratch_arena(None);
-
     let lsh_path = lsh::compiler::builtin_definitions_path();
     let out_dir = env_opt("OUT_DIR");
     let out_path = format!("{out_dir}/lsh_definitions.rs");
 
-    let mut generator = lsh::compiler::Generator::new(&scratch);
+    let mut generator = lsh::compiler::Generator::new();
     match generator.read_directory(lsh_path).and_then(|_| generator.generate_rust()) {
         Ok(c) => std::fs::write(out_path, c).unwrap(),
         Err(err) => {

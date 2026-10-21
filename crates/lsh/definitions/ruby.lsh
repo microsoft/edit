@@ -27,11 +27,25 @@ pub fn ruby() {
         } else if /'/ {
             single_quote_string();
         } else if /"/ {
-            double_quote_string();
+            until /$/ {
+                yield string;
+                if /\\./ {
+                    // Escape sequences. `\#{` escapes interpolation, so this must come first.
+                } else if /#\{[^}]*\}/ {
+                    // Interpolation. Nested braces, as in `#{ {a: 1} }`, are not supported.
+                    yield variable;
+                } else if /"/ {
+                    yield string;
+                    break;
+                }
+            }
         } else if /`/ {
             until /$/ {
+                yield string;
                 if /\\./ {
                     // Escape sequences
+                } else if /#\{[^}]*\}/ {
+                    yield variable;
                 } else if /`/ {
                     yield string;
                     break;
@@ -39,18 +53,15 @@ pub fn ruby() {
             }
         } else if /(?:begin|break|case|do|elsif|else|end|ensure|for|if|in|next|redo|rescue|retry|return|then|unless|until|when|while)\>/ {
             yield keyword.control;
-        } else if /def\s+\w+\.(\w+[!?=]?)/ {
-            // Singleton method, as in `def self.foo`.
-            yield keyword.other;
-            yield $1 as method;
-        } else if /def\s+(\w+[!?=]?)/ {
+        } else if /def\s+(?:\w+\.)?(\w+[!?=]?)/ {
+            // The optional prefix covers singleton methods, as in `def self.foo`.
             yield keyword.other;
             yield $1 as method;
         } else if /(?:BEGIN|END|__ENCODING__|__FILE__|__LINE__|alias|and|class|defined\?|def|module|not|or|self|super|undef|yield)\>/ {
             yield keyword.other;
         } else if /(?:true|false|nil)\>/ {
             yield constant.language;
-        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.[\d_]+(?:e[+-]?[\d_]+)?|[\d_]+(?:e[+-]?[\d_]+)?)r?i?)/ {
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|\d+[\d_]*(?:\.\d+[\d_]*)?(?:e[+-]?[\d_]+)?)r?i?)\>/ {
             // Floats need digits on both sides of the dot, so that `1..2` and
             // `1.upto(2)` don't swallow the dot.
             if /\w+/ {

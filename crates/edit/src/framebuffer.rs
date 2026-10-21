@@ -8,14 +8,13 @@ use std::ops::{BitOr, BitXor};
 use std::ptr;
 use std::slice::ChunksExact;
 
-use stdext::arena::Arena;
-use stdext::arena_write_fmt;
-use stdext::collections::BString;
-use stdext::simd::memset;
-
+use crate::arena::{Arena, arena_write_fmt, scratch_arena};
+use crate::collections::BString;
 use crate::helpers::{CoordType, Point, Rect, Size};
+use crate::maybe_owned::MaybeOwned;
 use crate::oklab::StraightRgba;
-use crate::unicode::MeasurementConfig;
+use crate::simd::memset;
+use crate::unicode::{MeasurementConfig, SanitizedControlChars, sanitize_control_chars};
 
 // Same constants as used in the PCG family of RNGs.
 #[cfg(target_pointer_width = "32")]
@@ -166,6 +165,10 @@ impl Framebuffer {
 
     /// Begins a new frame with the given `size`.
     pub fn flip(&mut self, size: Size) {
+        if size.is_empty() {
+            return;
+        }
+
         if size != self.buffers[0].bg_bitmap.size {
             for buffer in &mut self.buffers {
                 buffer.text = LineBuffer::new(size);
@@ -195,15 +198,61 @@ impl Framebuffer {
     /// Replaces text contents in a single line of the framebuffer.
     /// All coordinates are in viewport coordinates.
     /// Assumes that control characters have been replaced or escaped.
+    #[inline]
     pub fn replace_text(
         &mut self,
         y: CoordType,
         origin_x: CoordType,
         clip_right: CoordType,
-        text: &str,
+        text: &(impl AsRef<[u8]> + ?Sized),
     ) {
+        self.replace_text_impl(y, origin_x, clip_right, text.as_ref());
+    }
+
+    fn replace_text_impl(
+        &mut self,
+        y: CoordType,
+        origin_x: CoordType,
+        clip_right: CoordType,
+        text: &[u8],
+    ) {
+        let scratch = scratch_arena(None);
+        let sanitized = sanitize_control_chars(&scratch, text);
+
         let back = &mut self.buffers[self.frame_counter & 1];
-        back.text.replace_text(y, origin_x, clip_right, text)
+        back.text.replace_text(y, origin_x, clip_right, &sanitized);
+
+        if let MaybeOwned::Owned(sanitized) = &sanitized {
+            self.highlight_sanitized(y, origin_x, clip_right, sanitized);
+        }
+    }
+
+    /// Highlights the replacements that [`sanitize_control_chars`] made in yellow.
+    #[cold]
+    fn highlight_sanitized(
+        &mut self,
+        y: CoordType,
+        origin_x: CoordType,
+        clip_right: CoordType,
+        sanitized: &SanitizedControlChars,
+    ) {
+        let bg = self.indexed(IndexedColor::Yellow);
+        let fg = self.contrasted(bg);
+        let text = sanitized.text.as_bytes();
+        let mut cfg = MeasurementConfig::new(&text);
+
+        for range in sanitized.unsane_ranges.iter() {
+            // The ranges are sorted, so once we're past the right edge we're done.
+            let left = origin_x + cfg.goto_offset(range.start).visual_pos.x;
+            if left >= clip_right {
+                break;
+            }
+
+            let right = origin_x + cfg.goto_offset(range.end).visual_pos.x;
+            let rect = Rect { left, top: y, right: right.min(clip_right), bottom: y + 1 };
+            self.blend_bg(rect, bg);
+            self.blend_fg(rect, fg);
+        }
     }
 
     /// Draws a scrollbar in the given `track` rectangle.
@@ -307,15 +356,11 @@ impl Framebuffer {
         let mut fract_buf = [0xE2, 0x96, 0x88];
         if top_fract != 0 {
             fract_buf[2] = (0x88 - top_fract) as u8;
-            self.replace_text(thumb_top - 1, track_clipped.left, track_clipped.right, unsafe {
-                std::str::from_utf8_unchecked(&fract_buf)
-            });
+            self.replace_text(thumb_top - 1, track_clipped.left, track_clipped.right, &fract_buf);
         }
         if bottom_fract != 0 {
             fract_buf[2] = (0x88 - bottom_fract) as u8;
-            self.replace_text(thumb_bottom, track_clipped.left, track_clipped.right, unsafe {
-                std::str::from_utf8_unchecked(&fract_buf)
-            });
+            self.replace_text(thumb_bottom, track_clipped.left, track_clipped.right, &fract_buf);
             let rect = Rect {
                 left: track_clipped.left,
                 top: thumb_bottom,
@@ -435,6 +480,10 @@ impl Framebuffer {
             let front = &*ptr.add(1 - idx);
             (back, front)
         };
+
+        if front.text.size.is_empty() {
+            return BString::empty();
+        }
 
         let mut front_lines = front.text.lines.iter(); // hahaha
         let mut front_bgs = front.bg_bitmap.iter();
@@ -631,6 +680,7 @@ struct LineBuffer {
 
 impl LineBuffer {
     fn new(size: Size) -> Self {
+        debug_assert!(!size.is_empty());
         Self { lines: vec![String::new(); size.height as usize], size }
     }
 
@@ -778,6 +828,7 @@ struct Bitmap {
 
 impl Bitmap {
     fn new(size: Size) -> Self {
+        debug_assert!(!size.is_empty());
         Self { data: vec![StraightRgba::zero(); (size.width * size.height) as usize], size }
     }
 
@@ -888,6 +939,7 @@ struct AttributeBuffer {
 
 impl AttributeBuffer {
     fn new(size: Size) -> Self {
+        debug_assert!(!size.is_empty());
         Self { data: vec![Default::default(); (size.width * size.height) as usize], size }
     }
 

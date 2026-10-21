@@ -8,7 +8,7 @@ use std::mem;
 use std::ops::Range;
 use std::path::PathBuf;
 
-use stdext::ReplaceRange as _;
+use crate::helpers::ReplaceRange as _;
 
 /// An abstraction over reading from text containers.
 pub trait ReadableDocument {
@@ -20,7 +20,7 @@ pub trait ReadableDocument {
     ///   * The given offset may be out of bounds and you MUST clamp it.
     ///   * You should not assume that offsets are at grapheme cluster boundaries.
     /// * Be strict on outputs:
-    ///   * You MUST NOT break grapheme clusters across chunks.
+    ///   * You MUST NOT break codepoints across chunks.
     ///   * You MUST NOT return an empty slice unless the offset is at or beyond the end.
     fn read_forward(&self, off: usize) -> &[u8];
 
@@ -32,7 +32,7 @@ pub trait ReadableDocument {
     ///   * The given offset may be out of bounds and you MUST clamp it.
     ///   * You should not assume that offsets are at grapheme cluster boundaries.
     /// * Be strict on outputs:
-    ///   * You MUST NOT break grapheme clusters across chunks.
+    ///   * You MUST NOT break codepoints across chunks.
     ///   * You MUST NOT return an empty slice unless the offset is zero.
     fn read_backward(&self, off: usize) -> &[u8];
 }

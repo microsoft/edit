@@ -19,7 +19,7 @@ use crate::alloc::Allocator;
 /// It is completely valid for the same [`release::Arena`] to be borrowed multiple times at once,
 /// *as long as* you only use the most recent borrow. Bad example:
 /// ```should_panic
-/// use stdext::arena::scratch_arena;
+/// use edit::arena::scratch_arena;
 ///
 /// let mut scratch1 = scratch_arena(None);
 /// let mut scratch2 = scratch_arena(None);

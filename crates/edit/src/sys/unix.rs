@@ -9,23 +9,88 @@
 use std::ffi::{c_char, c_int, c_void};
 use std::fs::File;
 use std::mem::{self, ManuallyDrop, MaybeUninit};
-use std::os::fd::{AsRawFd as _, FromRawFd as _};
+use std::os::fd::FromRawFd as _;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
-use std::ptr::{NonNull, null_mut};
-use std::{io, thread, time};
+use std::ptr::{self, NonNull, null_mut};
+use std::{io, time};
 
-use stdext::arena::{Arena, scratch_arena};
-use stdext::arena_format;
-use stdext::collections::{BString, BVec};
-
+use crate::arena::Arena;
+use crate::collections::{BString, BVec};
 use crate::helpers::*;
+
+/// Reserves a virtual memory region of the given size.
+/// To commit the memory, use `virtual_commit`.
+/// To release the memory, use `virtual_release`.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Don't forget to release the memory when you're done with it or you'll leak it.
+pub unsafe fn virtual_reserve(size: usize) -> io::Result<NonNull<u8>> {
+    unsafe {
+        let ptr = libc::mmap(
+            null_mut(),
+            size,
+            desired_mprotect(libc::PROT_READ | libc::PROT_WRITE),
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if ptr.is_null() || ptr::eq(ptr, libc::MAP_FAILED) {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(NonNull::new_unchecked(ptr.cast()))
+        }
+    }
+}
+
+#[cfg(target_os = "netbsd")]
+const fn desired_mprotect(flags: c_int) -> c_int {
+    // NetBSD allows an mmap(2) caller to specify what protection flags they
+    // will use later via mprotect. It does not allow a caller to move from
+    // PROT_NONE to PROT_READ | PROT_WRITE.
+    //
+    // see PROT_MPROTECT in man 2 mmap
+    flags << 3
+}
+
+#[cfg(not(target_os = "netbsd"))]
+const fn desired_mprotect(_: c_int) -> c_int {
+    libc::PROT_NONE
+}
+
+/// Releases a virtual memory region of the given size.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Make sure to only pass pointers acquired from `virtual_reserve`.
+pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
+    unsafe {
+        libc::munmap(base.cast().as_ptr(), size);
+    }
+}
+
+/// Commits a virtual memory region of the given size.
+///
+/// # Safety
+///
+/// This function is unsafe because it uses raw pointers.
+/// Make sure to only pass pointers acquired from `virtual_reserve`
+/// and to pass a size less than or equal to the size passed to `virtual_reserve`.
+pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> io::Result<()> {
+    unsafe {
+        let status = libc::mprotect(base.cast().as_ptr(), size, libc::PROT_READ | libc::PROT_WRITE);
+        if status != 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
+    }
+}
 
 struct State {
     stdin: libc::c_int,
     stdin_flags: libc::c_int,
-    stdout: libc::c_int,
     stdout_initial_termios: Option<libc::termios>,
-    inject_resize: bool,
+    resize_pending: bool,
     // Buffer for incomplete UTF-8 sequences (max 4 bytes needed)
     utf8_buf: [u8; 4],
     utf8_len: usize,
@@ -33,22 +98,28 @@ struct State {
 
 static mut STATE: State = State {
     stdin: libc::STDIN_FILENO,
-    stdin_flags: 0,
-    stdout: libc::STDOUT_FILENO,
+    stdin_flags: -1,
     stdout_initial_termios: None,
-    inject_resize: false,
+    resize_pending: false,
     utf8_buf: [0; 4],
     utf8_len: 0,
 };
 
 extern "C" fn sigwinch_handler(_: libc::c_int) {
     unsafe {
-        STATE.inject_resize = true;
+        STATE.resize_pending = true;
     }
 }
 
-pub fn init() -> Deinit {
-    Deinit
+pub fn init() -> io::Result<Deinit> {
+    unsafe {
+        // Set STATE.resize_pending to true whenever we get a SIGWINCH.
+        let mut sigwinch_action: libc::sigaction = mem::zeroed();
+        sigwinch_action.sa_sigaction = sigwinch_handler as *const () as libc::sighandler_t;
+        check_int_return(libc::sigaction(libc::SIGWINCH, &sigwinch_action, null_mut()))?;
+    }
+
+    Ok(Deinit)
 }
 
 /// Reopen stdin if it's redirected (= piped input).
@@ -68,14 +139,9 @@ pub fn switch_modes() -> io::Result<()> {
         // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
         STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
 
-        // Set STATE.inject_resize to true whenever we get a SIGWINCH.
-        let mut sigwinch_action: libc::sigaction = mem::zeroed();
-        sigwinch_action.sa_sigaction = sigwinch_handler as *const () as libc::sighandler_t;
-        check_int_return(libc::sigaction(libc::SIGWINCH, &sigwinch_action, null_mut()))?;
-
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
-        check_int_return(libc::tcgetattr(STATE.stdout, termios.as_mut_ptr()))?;
+        check_int_return(libc::tcgetattr(libc::STDOUT_FILENO, termios.as_mut_ptr()))?;
         let mut termios = termios.assume_init();
         STATE.stdout_initial_termios = Some(termios);
 
@@ -98,7 +164,14 @@ pub fn switch_modes() -> io::Result<()> {
             | libc::ICRNL
             // Disable software flow control.
             | libc::IXON
+            // Disable sending of start/stop characters.
+            | libc::IXOFF
         );
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            // Disable translating uppercase characters to lowercase.
+            termios.c_iflag &= !libc::IUCLC;
+        }
         // Disable output processing.
         termios.c_oflag &= !libc::OPOST;
         termios.c_cflag &= !(
@@ -107,8 +180,11 @@ pub fn switch_modes() -> io::Result<()> {
             // Disable parity generation.
             | libc::PARENB
         );
-        // Set character size back to 8 bits.
-        termios.c_cflag |= libc::CS8;
+        termios.c_cflag |=
+            // Set character size back to 8 bits.
+            libc::CS8
+            // Allow input to be received.
+            | libc::CREAD;
         termios.c_lflag &= !(
             // Disable signal generation (SIGINT, SIGTSTP, SIGQUIT).
             libc::ISIG
@@ -121,12 +197,22 @@ pub fn switch_modes() -> io::Result<()> {
             // Disable extended input processing (e.g. Ctrl-V).
             | libc::IEXTEN
         );
+        // Reset the TTY to standard blocking behavior (min 1 byte & no timeout).
+        termios.c_cc[libc::VMIN] = 1;
+        termios.c_cc[libc::VTIME] = 0;
 
-        // Set the terminal to raw mode.
-        termios.c_lflag &= !(libc::ICANON | libc::ECHO);
-        check_int_return(libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios))?;
+        termios_setattr(libc::STDOUT_FILENO, &termios)
+    }
+}
 
-        Ok(())
+fn termios_setattr(fd: c_int, termios: &libc::termios) -> io::Result<()> {
+    loop {
+        if unsafe { libc::tcsetattr(fd, libc::TCSANOW, termios) } == 0 {
+            return Ok(());
+        }
+        if errno() != libc::EINTR {
+            return Err(last_os_error());
+        }
     }
 }
 
@@ -138,48 +224,40 @@ impl Drop for Deinit {
             #[allow(static_mut_refs)]
             if let Some(termios) = STATE.stdout_initial_termios.take() {
                 // Restore the original terminal modes.
-                libc::tcsetattr(STATE.stdout, libc::TCSANOW, &termios);
+                _ = termios_setattr(libc::STDOUT_FILENO, &termios);
+            }
+
+            if STATE.stdin_flags != -1 {
+                libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
+                STATE.stdin_flags = -1;
             }
         }
     }
 }
 
-pub fn inject_window_size_into_stdin() {
-    unsafe {
-        STATE.inject_resize = true;
-    }
-}
-
-fn get_window_size() -> (u16, u16) {
+pub fn get_window_size() -> io::Result<Size> {
     let mut winsz: libc::winsize = unsafe { mem::zeroed() };
-
-    for attempt in 1.. {
-        let ret = unsafe { libc::ioctl(STATE.stdout, libc::TIOCGWINSZ, &raw mut winsz) };
-        if ret == -1 || (winsz.ws_col != 0 && winsz.ws_row != 0) {
-            break;
-        }
-
-        if attempt == 10 {
-            winsz.ws_col = 80;
-            winsz.ws_row = 24;
-            break;
-        }
-
-        // Some terminals are bad emulators and don't report TIOCGWINSZ immediately.
-        thread::sleep(time::Duration::from_millis(10 * attempt));
+    let ret = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &raw mut winsz) };
+    if ret != 0 {
+        Err(last_os_error())
+    } else if winsz.ws_row == 0 || winsz.ws_col == 0 {
+        Err(io::Error::other("invalid terminal size"))
+    } else {
+        Ok(Size { width: winsz.ws_col as CoordType, height: winsz.ws_row as CoordType })
     }
-
-    (winsz.ws_col, winsz.ws_row)
 }
 
 /// Reads from stdin.
 ///
 /// Returns `None` if there was an error reading from stdin.
-/// Returns `Some("")` if the given timeout was reached.
-/// Otherwise, it returns the read, non-empty string.
-pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<'_>> {
+/// Returns `Some((_, ""))` if the given timeout was reached.
+/// Otherwise, it returns a pending resize and the read string.
+pub fn read_stdin(
+    arena: &Arena,
+    mut timeout: time::Duration,
+) -> Option<(Option<Size>, BString<'_>)> {
     unsafe {
-        if STATE.inject_resize {
+        if STATE.resize_pending {
             timeout = time::Duration::ZERO;
         }
 
@@ -242,7 +320,7 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
             }
             if ret < 0 {
                 match errno() {
-                    libc::EINTR if STATE.inject_resize => break,
+                    libc::EINTR if STATE.resize_pending => break,
                     libc::EAGAIN if timeout == time::Duration::ZERO => break,
                     libc::EINTR | libc::EAGAIN => {}
                     _ => return None,
@@ -279,49 +357,54 @@ pub fn read_stdin(arena: &Arena, mut timeout: time::Duration) -> Option<BString<
             }
         }
 
-        let mut result = BString::from_utf8_lossy(arena, buf);
+        let resize = if STATE.resize_pending {
+            STATE.resize_pending = false;
+            Some(get_window_size().ok()?)
+        } else {
+            None
+        };
 
-        // We received a SIGWINCH? Add a fake window size sequence for our input parser.
-        // I prepend it so that on startup, the TUI system gets first initialized with a size.
-        if STATE.inject_resize {
-            STATE.inject_resize = false;
-            let (w, h) = get_window_size();
-            if w > 0 && h > 0 {
-                let scratch = scratch_arena(Some(arena));
-                let seq = arena_format!(&*scratch, "\x1b[8;{h};{w}t");
-                result.replace_range(arena, 0..0, &seq);
-            }
-        }
-
-        Some(result)
+        Some((resize, BString::from_utf8_lossy(arena, buf)))
     }
 }
 
 pub fn write_stdout(text: &str) {
-    if text.is_empty() {
-        return;
-    }
+    let mut buf = text.as_bytes();
 
-    // If we don't set the TTY to blocking mode,
-    // the write will potentially fail with EAGAIN.
-    set_tty_nonblocking(false);
+    while !buf.is_empty() {
+        let chunk = &buf[..buf.len().min(GIBI)];
+        let n = unsafe { libc::write(libc::STDOUT_FILENO, chunk.as_ptr().cast(), chunk.len()) };
 
-    let buf = text.as_bytes();
-    let mut written = 0;
-
-    while written < buf.len() {
-        let w = &buf[written..];
-        let w = &buf[..w.len().min(GIBI)];
-        let n = unsafe { libc::write(STATE.stdout, w.as_ptr().cast(), w.len()) };
-
-        if n >= 0 {
-            written += n as usize;
+        if n > 0 {
+            buf = &buf[n as usize..];
             continue;
         }
 
-        let err = errno();
-        if err != libc::EINTR {
-            return;
+        if n == 0 {
+            return; // broken pipe
+        }
+
+        #[allow(unreachable_patterns, reason = "On Linux EAGAIN and EWOULDBLOCK are the same")]
+        match errno() {
+            libc::EINTR => continue,
+            libc::EAGAIN | libc::EWOULDBLOCK => {
+                // Block until it becomes writable
+                let mut pollfd =
+                    libc::pollfd { fd: libc::STDOUT_FILENO, events: libc::POLLOUT, revents: 0 };
+                loop {
+                    let ret = unsafe { libc::poll(&mut pollfd, 1, -1) };
+                    if ret >= 0 {
+                        if pollfd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                            return; // broken pipe
+                        }
+                        break;
+                    }
+                    if errno() != libc::EINTR {
+                        return; // broken pipe
+                    }
+                }
+            }
+            _ => return, // broken pipe
         }
     }
 }
@@ -342,23 +425,17 @@ fn set_tty_nonblocking(nonblock: bool) {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct FileId {
-    st_dev: libc::dev_t,
-    st_ino: libc::ino_t,
+    dev: u64,
+    ino: u64,
 }
 
 /// Returns a unique identifier for the given file by handle or path.
 pub fn file_id(file: Option<&File>, path: &Path) -> io::Result<FileId> {
-    let file = match file {
-        Some(f) => f,
-        None => &File::open(path)?,
+    let metadata = match file {
+        Some(file) => file.metadata()?,
+        None => std::fs::metadata(path)?,
     };
-
-    unsafe {
-        let mut stat = MaybeUninit::<libc::stat>::uninit();
-        check_int_return(libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()))?;
-        let stat = stat.assume_init();
-        Ok(FileId { st_dev: stat.st_dev, st_ino: stat.st_ino })
-    }
+    Ok(FileId { dev: metadata.dev(), ino: metadata.ino() })
 }
 
 unsafe fn load_library(name: *const c_char) -> io::Result<NonNull<c_void>> {
@@ -514,7 +591,7 @@ where
 pub fn preferred_languages(arena: &Arena) -> BVec<'_, &'_ str> {
     let mut locales = BVec::empty();
 
-    for key in ["LANGUAGE", "LC_ALL", "LANG"] {
+    for key in ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"] {
         if let Ok(val) = std::env::var(key)
             && !val.is_empty()
         {
@@ -527,11 +604,38 @@ pub fn preferred_languages(arena: &Arena) -> BVec<'_, &'_ str> {
             }
 
             locales.extend_sloppy(arena, val.split(':').filter(|s| !s.is_empty()));
-            break;
+            if !locales.is_empty() {
+                break;
+            }
         }
     }
 
     locales
+}
+
+#[cfg(test)]
+pub fn memfd() -> io::Result<File> {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        let fd = check_int_return(libc::memfd_create(c"edit".as_ptr(), libc::MFD_CLOEXEC))?;
+        Ok(File::from_raw_fd(fd))
+    }
+    #[cfg(not(target_os = "linux"))]
+    unsafe {
+        let stream = libc::tmpfile();
+        if stream.is_null() {
+            return Err(last_os_error());
+        }
+
+        // Duplicate the descriptor so that closing the C stream doesn't close our file.
+        let file = check_int_return(libc::fcntl(libc::fileno(stream), libc::F_DUPFD_CLOEXEC, 0))
+            .map(|fd| File::from_raw_fd(fd));
+        let close = check_int_return(libc::fclose(stream));
+        let file = file?;
+        close?;
+
+        Ok(file)
+    }
 }
 
 #[inline]

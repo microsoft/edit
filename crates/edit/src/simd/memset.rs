@@ -93,7 +93,13 @@ static mut MEMSET_DISPATCH: unsafe fn(beg: *mut u8, end: *mut u8, val: u64) = me
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn memset_dispatch(beg: *mut u8, end: *mut u8, val: u64) {
-    let func = if is_x86_feature_detected!("avx2") { memset_avx2 } else { memset_sse2 };
+    let func = if is_x86_feature_detected!("avx2") {
+        memset_avx2
+    } else if is_x86_feature_detected!("sse2") {
+        memset_sse2
+    } else {
+        memset_fallback
+    };
     unsafe { MEMSET_DISPATCH = func };
     unsafe { func(beg, end, val) }
 }

@@ -16,6 +16,15 @@ pub fn yaml() {
             // Key: (Value follows)
         }
 
+        yield other;
+
+        if /!![\w-]+/ {
+            yield storage.type;
+            if /\s+/ {
+                yield other;
+            }
+        }
+
         if /[|>][-+]?.*/ {
             // If we see a multiline string inducer, capture content until indentation is back to before.
             // Since we'll skip multiple lines, we need to use nested loops here.
@@ -46,6 +55,26 @@ pub fn yaml() {
 
     if /---/ {
         yield other;
+    } else if /'/ {
+        loop {
+            if /''/ {
+            } else if /'/ {
+                yield string;
+                break;
+            }
+            yield string;
+            await input;
+        }
+    } else if /"/ {
+        loop {
+            if /\\./ {
+            } else if /"/ {
+                yield string;
+                break;
+            }
+            yield string;
+            await input;
+        }
     } else if /true|false|yes|no|null|~/ {
         // If it looks like a keyword, check if it's actually a string (e.g. "foo: true false").
         // TODO: Ideally this would not consume the last chunk of /\s+/ before a /# comment/.
@@ -54,8 +83,7 @@ pub fn yaml() {
         } else {
             yield constant.language;
         }
-    } else if /-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/ {
-        // Same as with keywords above.
+    } else if /[+-]?(?i:\.inf|\.nan|(?:0x[\da-f_]+|0o[0-7_]+|0b[01_]+|\d+\.?\d*|\.\d+)(?i:e[+-]?\d+)?)\>/ {
         if /\s*[^\s#]+[^#]*/ {
             yield string;
         } else {

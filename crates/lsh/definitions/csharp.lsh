@@ -58,7 +58,7 @@ pub fn csharp() {
             yield constant.language;
         } else if /(?:bool|byte|char|decimal|double|float|int|long|nint|nuint|object|sbyte|short|string|uint|ulong|ushort|void)\>/ {
             yield storage.type;
-        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?[dflmu]{0,2})/ {
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|\d+[\d_]*\.?[\d_]*|\.\d+[\d_]*)(?:e[+-]?[\d_]+)?[dflmu]{0,2})\>/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {

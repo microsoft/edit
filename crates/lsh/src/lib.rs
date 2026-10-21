@@ -12,7 +12,7 @@
 //! → `backend` (regalloc + codegen) → bytecode
 //! → `runtime` (execute)
 //!
-//! The IR is a graph of `RefCell<IR>` nodes. Each node has a `.next` pointer and `If` nodes
+//! The IR is a graph of `Node`s. Each node has a `.next` pointer and `If` nodes
 //! in particular have a `.then` pointer. This makes CFG manipulation trivial but means you can't
 //! iterate in program order without linearization (see `backend::LivenessAnalysis`).
 //!
@@ -32,8 +32,7 @@
 //! ## Gotchas
 //!
 //! - Physical VS virtual registers:
-//!   `IRReg.physical` being `Some` means it's pre-colored (e.g., `off` register).
-//!   The backend must preserve these assignments.
+//!   Fixed physical registers (e.g., `off`) have reserved virtual register IDs.
 //! - Semi-SSA:
 //!   The frontend emits IR where each vreg is written once,
 //!   but physical registers like `off` are mutated repeatedly.
@@ -50,5 +49,8 @@
 
 #![allow(irrefutable_let_patterns, clippy::upper_case_acronyms)]
 
+#[cfg(feature = "compiler")]
 pub mod compiler;
+#[cfg(feature = "glob")]
+pub mod glob;
 pub mod runtime;

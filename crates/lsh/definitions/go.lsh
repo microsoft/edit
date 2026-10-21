@@ -36,7 +36,7 @@ pub fn go() {
             yield constant.language;
         } else if /(?:any|bool|byte|comparable|complex128|complex64|error|float32|float64|int8|int16|int32|int64|int|rune|string|uint8|uint16|uint32|uint64|uintptr|uint)\>/ {
             yield storage.type;
-        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|\d[\d_]*\.?[\d_]*|\.[\d_]+)(?:[ep][+-]?[\d_]+)?i?)/ {
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|\d[\d_]*\.?[\d_]*|\.\d+[\d_]*)(?:[ep][+-]?[\d_]+)?i?)\>/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {

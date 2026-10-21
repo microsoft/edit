@@ -1,19 +1,20 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use std::fs::File;
 use std::hint::black_box;
 use std::io::Cursor;
 use std::path::Path;
 use std::{mem, vec};
 
+use ::lsh::glob;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use edit::arena::{self, scratch_arena};
+use edit::collections::BVec;
+use edit::float::parse_f64_approx;
 use edit::helpers::*;
+use edit::unicode::Utf8Chars;
 use edit::{buffer, hash, json, lsh, oklab, simd, unicode};
-use stdext::arena::{self, scratch_arena};
-use stdext::collections::BVec;
-use stdext::float::parse_f64_approx;
-use stdext::glob;
-use stdext::unicode::Utf8Chars;
 
 struct EditingTracePatch<'a>(usize, usize, &'a str);
 
@@ -65,7 +66,14 @@ fn bench_buffer(c: &mut Criterion) {
         res
     };
 
-    let mut patches_with_coords = Vec::new();
+    enum Op<'a> {
+        Move { pos: Point },
+        Replace { len: usize, text: &'a str },
+        Insert { text: &'a str },
+        Delete { len: usize },
+    }
+
+    let mut ops = Vec::new();
     {
         let mut tb = buffer::TextBuffer::new(false).unwrap();
         tb.set_crlf(false);
@@ -73,19 +81,25 @@ fn bench_buffer(c: &mut Criterion) {
 
         for t in &data.txns {
             for p in &t.patches {
-                tb.cursor_move_to_offset(p.0);
-                let beg = tb.cursor_logical_pos();
+                if p.0 != tb.cursor_offset() {
+                    tb.cursor_move_to_offset(p.0);
+                    ops.push(Op::Move { pos: tb.cursor_logical_pos() });
+                }
 
-                tb.delete(buffer::CursorMovement::Grapheme, p.1 as CoordType);
-
-                tb.write_raw(p.2.as_bytes());
-                patches_with_coords.push((beg, p.1 as CoordType, p.2));
+                if p.1 > 0 && !p.2.is_empty() {
+                    tb.selection_update_delta(buffer::CursorMovement::Grapheme, p.1 as CoordType);
+                    tb.write_raw(p.2.as_bytes());
+                    ops.push(Op::Replace { len: p.1, text: p.2 });
+                } else if p.1 > 0 {
+                    tb.delete(buffer::CursorMovement::Grapheme, p.1 as CoordType);
+                    ops.push(Op::Delete { len: p.1 });
+                } else {
+                    assert!(!p.2.is_empty());
+                    tb.write_raw(p.2.as_bytes());
+                    ops.push(Op::Insert { text: p.2 });
+                }
             }
         }
-
-        let mut actual = String::new();
-        tb.save_as_string(&mut actual);
-        assert_eq!(actual, data.end_content);
     }
 
     let bench_gap_buffer = || {
@@ -106,10 +120,22 @@ fn bench_buffer(c: &mut Criterion) {
         tb.set_crlf(false);
         tb.write_raw(data.start_content.as_bytes());
 
-        for p in &patches_with_coords {
-            tb.cursor_move_to_logical(p.0);
-            tb.delete(buffer::CursorMovement::Grapheme, p.1);
-            tb.write_raw(p.2.as_bytes());
+        for op in &ops {
+            match op {
+                Op::Move { pos } => {
+                    tb.cursor_move_to_logical(*pos);
+                }
+                Op::Replace { len, text } => {
+                    tb.selection_update_delta(buffer::CursorMovement::Grapheme, *len as CoordType);
+                    tb.write_raw(text.as_bytes());
+                }
+                Op::Insert { text } => {
+                    tb.write_raw(text.as_bytes());
+                }
+                Op::Delete { len } => {
+                    tb.delete(buffer::CursorMovement::Grapheme, *len as CoordType);
+                }
+            }
         }
 
         tb
@@ -135,6 +161,22 @@ fn bench_buffer(c: &mut Criterion) {
         })
         .bench_function(BenchmarkId::new("TextBuffer", "rustcode"), |b| {
             b.iter(bench_text_buffer);
+        })
+        .throughput(Throughput::Bytes(data.end_content.len() as u64))
+        .bench_function(BenchmarkId::new("TextBuffer", "write_file/normalized"), |b| {
+            let mut buf = buffer::TextBuffer::new(false).unwrap();
+            buf.set_crlf(false);
+            buf.write_raw(data.end_content.as_bytes());
+            buf.normalize_newlines(true);
+
+            #[cfg(windows)]
+            let mut file = File::create("NUL").unwrap();
+            #[cfg(not(windows))]
+            let mut file = File::create("/dev/null").unwrap();
+
+            b.iter(|| {
+                buf.write_file(&mut file).unwrap();
+            });
         });
 }
 
@@ -189,31 +231,44 @@ fn bench_json(c: &mut Criterion) {
 }
 
 fn bench_lsh(c: &mut Criterion) {
-    let bytes = include_bytes!("../../../assets/highlighting-tests/markdown.md");
-    let bytes = &bytes[..];
-    let lang = lsh::LANGUAGES.iter().find(|lang| lang.id == "markdown").unwrap();
-    let highlighter = lsh::Highlighter::new(black_box(&bytes), lang);
+    // It would be overkill to include all types of files, so this is a subset of
+    // those which are particularly complex or those I expect to be very large files.
+    const TESTS: &[(&str, &[u8])] = &[
+        ("javascript", include_bytes!("../../../assets/highlighting-tests/javascript.js")),
+        ("markdown", include_bytes!("../../../assets/highlighting-tests/markdown.md")),
+        ("sql", include_bytes!("../../../assets/highlighting-tests/sql.sql")),
+    ];
 
-    c.benchmark_group("lsh").throughput(Throughput::Bytes(bytes.len() as u64)).bench_function(
-        "markdown",
-        |b| {
-            b.iter(|| {
-                let mut h = highlighter.clone();
-                loop {
-                    let scratch = scratch_arena(None);
-                    let res = h.parse_next_line(&scratch);
-                    if res.is_empty() {
-                        break;
-                    }
-                }
-            })
-        },
-    );
+    let mut group = c.benchmark_group("lsh");
 
-    c.benchmark_group("lsh").bench_function("process_file_associations", |b| {
+    group.bench_function("process_file_associations", |b| {
         let path = Path::new("/some/long/path/to/file/foo.bar.foo.bar.foo.bar");
         b.iter(|| lsh::process_file_associations(lsh::FILE_ASSOCIATIONS, black_box(path)))
     });
+
+    for &(id, bytes) in TESTS {
+        let (_, lines) = simd::lines_fwd(bytes, 0, 0, CoordType::MAX);
+        let lang = lsh::LANGUAGES.iter().find(|lang| lang.id == id).unwrap();
+        let highlighter = lsh::Highlighter::new(&bytes, lang);
+
+        group
+            .throughput(Throughput::ElementsAndBytes {
+                elements: lines as u64,
+                bytes: bytes.len() as u64,
+            })
+            .bench_function(id, |b| {
+                b.iter(|| {
+                    let mut h = highlighter.clone();
+                    loop {
+                        let scratch = scratch_arena(None);
+                        let res = h.parse_next_line(&scratch);
+                        if res.is_empty() {
+                            break;
+                        }
+                    }
+                })
+            });
+    }
 }
 
 fn bench_oklab(c: &mut Criterion) {
@@ -279,7 +334,7 @@ fn bench_simd_memset<T: Copy + Default>(c: &mut Criterion) {
             &bytes,
             |b, &bytes| {
                 let slice = unsafe { buf.get_unchecked_mut(..bytes / size) };
-                b.iter(|| stdext::simd::memset(black_box(slice), Default::default()));
+                b.iter(|| edit::simd::memset(black_box(slice), Default::default()));
             },
         );
     }

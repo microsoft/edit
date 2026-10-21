@@ -89,10 +89,10 @@
 //! # Example
 //!
 //! ```
+//! use edit::arena::{self, arena_format};
 //! use edit::helpers::Size;
 //! use edit::input::Input;
 //! use edit::tui::*;
-//! use stdext::{arena, arena_format};
 //!
 //! struct State {
 //!     counter: i32,
@@ -147,13 +147,11 @@
 use std::collections::HashSet;
 use std::{io, iter, mem, ptr, time};
 
-use stdext::arena::{Arena, scratch_arena};
-use stdext::collections::{BString, BVec};
-use stdext::{ReplaceRange, arena_format, arena_write_fmt, opt_ptr_eq, str_from_raw_parts};
-
+use crate::arena::{Arena, arena_format, arena_write_fmt, scratch_arena};
 use crate::buffer::{CursorMovement, MoveLineDirection, RcTextBuffer, TextBuffer, TextBufferCell};
 use crate::cell::*;
 use crate::clipboard::Clipboard;
+use crate::collections::{BString, BVec};
 use crate::document::WriteableDocument;
 use crate::framebuffer::{Attributes, Framebuffer, INDEXED_COLORS_COUNT, IndexedColor};
 use crate::hash::*;
@@ -276,7 +274,7 @@ impl ButtonStyle {
     pub fn accelerator(self, char: char) -> Self {
         Self { accelerator: Some(char), ..self }
     }
-    /// Draw a checkbox prefix: `[🗹 Example Button]`
+    /// Draw a checkbox prefix: `[◼ Example Button]`
     pub fn checked(self, checked: bool) -> Self {
         Self { checked: Some(checked), ..self }
     }
@@ -367,6 +365,10 @@ pub struct Tui {
     /// need to scroll the node into view if it's within a scrollarea.
     focused_node_for_scrolling: u64,
 
+    /// The menubar button whose menu is open and can be closed by clicking it again.
+    /// Only set once the press that opened the menu has ended.
+    menubar_toggle_id: u64,
+
     /// A list of cached text buffers used for [`Context::editline()`].
     cached_text_buffers: Vec<CachedTextBuffer>,
 
@@ -404,7 +406,7 @@ impl Tui {
             modal_default_bg: StraightRgba::zero(),
             modal_default_fg: StraightRgba::zero(),
 
-            size: Size { width: 0, height: 0 },
+            size: Size { width: 80, height: 24 },
             mouse_position: Point::MIN,
             mouse_down_position: Point::MIN,
             left_mouse_down_target: 0,
@@ -421,6 +423,7 @@ impl Tui {
 
             focused_node_path: Vec::with_capacity(16),
             focused_node_for_scrolling: ROOT_ID,
+            menubar_toggle_id: 0,
 
             cached_text_buffers: Vec::with_capacity(16),
 
@@ -428,7 +431,7 @@ impl Tui {
 
             settling_have: 0,
             settling_want: 0,
-            read_timeout: time::Duration::MAX,
+            read_timeout: time::Duration::ZERO,
         };
         Self::clean_node_path(&mut tui.mouse_hover_node_path);
         Self::clean_node_path(&mut tui.mouse_down_node_path);
@@ -483,6 +486,11 @@ impl Tui {
         // We don't use the size stored in the framebuffer, because until
         // `render()` is called, the framebuffer will use a stale size.
         self.size
+    }
+
+    /// Set the viewport size.
+    pub fn set_size(&mut self, size: Size) {
+        self.size = size;
     }
 
     /// Returns an indexed color from the framebuffer.
@@ -1516,6 +1524,11 @@ impl<'a> Context<'a, '_> {
         // At this point, it's more like "focus_well?" instead of "focus_well!".
         let focus_well = self.tree.last_node;
 
+        // Only blocks containing the focus participate in focus traversal.
+        if !self.tui.is_subtree_focused(&focus_well.borrow()) {
+            return;
+        }
+
         // Remember the focused node, if any, because once the code below runs,
         // we need it for the `Tree::visit_all` call.
         if self.is_focused() {
@@ -1528,14 +1541,9 @@ impl<'a> Context<'a, '_> {
             return;
         };
 
-        // Filter down to nodes that are focus wells and contain the focus. They're
-        // basically the "tab container". We test for the node depth to ensure that
-        // we don't accidentally pick a focus well next to or inside the focused node.
-        {
-            let n = focus_well.borrow();
-            if !n.attributes.focus_well || n.depth > focused.borrow().depth {
-                return;
-            }
+        // Focus wells are the containers within which Tab traversal wraps.
+        if !focus_well.borrow().attributes.focus_well {
+            return;
         }
 
         // Filter down to Tab/Shift+Tab inputs.
@@ -2100,7 +2108,7 @@ impl<'a> Context<'a, '_> {
         if self.is_focused() {
             self.attr_reverse();
         }
-        self.styled_label_add_text(if *checked { "[🗹 " } else { "[☐ " });
+        self.styled_label_add_text(if *checked { "[◼ " } else { "[◻ " });
         self.styled_label_add_text(text);
         self.styled_label_add_text("]");
         self.styled_label_end();
@@ -2320,14 +2328,19 @@ impl<'a> Context<'a, '_> {
 
                     // If the editor is only 1 line tall we can't possibly scroll up or down.
                     if height >= 2 {
-                        fn calc(min: CoordType, max: CoordType, mouse: CoordType) -> CoordType {
+                        fn calc(
+                            min: CoordType,
+                            max: CoordType,
+                            down: CoordType,
+                            mouse: CoordType,
+                        ) -> CoordType {
                             // Otherwise, the scroll zone is up to 3 lines at the top/bottom.
                             let zone_height = ((max - min) / 2).min(3);
 
                             // The .y positions where the scroll zones begin:
                             // Mouse coordinates above top and below bottom respectively.
-                            let scroll_min = min + zone_height;
-                            let scroll_max = max - zone_height - 1;
+                            let scroll_min = down.min(min + zone_height);
+                            let scroll_max = down.max(max - zone_height - 1);
 
                             // Calculate the delta for scrolling up or down.
                             let delta_min = (mouse - scroll_min).clamp(-zone_height, 0);
@@ -2337,12 +2350,13 @@ impl<'a> Context<'a, '_> {
                             let idx = 3 + delta_min + delta_max;
 
                             const SPEEDS: [CoordType; 7] = [-9, -3, -1, 0, 1, 3, 9];
-                            let idx = idx.clamp(0, SPEEDS.len() as CoordType) as usize;
+                            let idx = idx.clamp(0, SPEEDS.len() as CoordType - 1) as usize;
                             SPEEDS[idx]
                         }
 
-                        let delta_x = calc(text_rect.left, text_rect.right, mouse.x);
-                        let delta_y = calc(text_rect.top, text_rect.bottom, mouse.y);
+                        let down = self.tui.mouse_down_position;
+                        let delta_x = calc(text_rect.left, text_rect.right, down.x, mouse.x);
+                        let delta_y = calc(text_rect.top, text_rect.bottom, down.y, mouse.y);
 
                         tc.scroll_offset.x += delta_x;
                         tc.scroll_offset.y += delta_y;
@@ -2430,7 +2444,11 @@ impl<'a> Context<'a, '_> {
                     } else {
                         CursorMovement::Grapheme
                     };
-                    tb.delete(granularity, -1);
+                    if single_line {
+                        tb.delete(granularity, -1);
+                    } else {
+                        tb.backspace_with_auto_unindent(granularity);
+                    }
                 }
                 vk::TAB => {
                     if single_line {
@@ -3225,6 +3243,14 @@ impl<'a> Context<'a, '_> {
             && !contains_focus
             && self.consume_shortcut(kbmod::ALT | InputKey::new(accelerator as u32));
 
+        let button_id = self.tree.last_node.borrow().id;
+
+        if self.button_activated() && self.tui.menubar_toggle_id == button_id {
+            self.tui.menubar_toggle_id = 0;
+            self.toss_focus_up();
+            return false;
+        }
+
         // If the menubar is already active (another menu is open) and we are hovered,
         // steal the focus to open this menu automatically.
         if !contains_focus && self.is_hovered() {
@@ -3244,6 +3270,12 @@ impl<'a> Context<'a, '_> {
         }
 
         if contains_focus || keyboard_focus {
+            // Arming this only while no button is held keeps the press
+            // that opened the menu from closing it again right away.
+            if self.tui.mouse_state != InputMouseState::Left {
+                self.tui.menubar_toggle_id = button_id;
+            }
+
             self.next_block_id_mixin(mixin);
             self.table_begin("flyout");
             self.attr_float(FloatSpec {
@@ -3351,6 +3383,10 @@ impl<'a> Context<'a, '_> {
     /// Ends the current menubar.
     pub fn menubar_end(&mut self) {
         self.table_end();
+
+        if !self.contains_focus() {
+            self.tui.menubar_toggle_id = 0;
+        }
     }
 
     /// Returns whether the current node is hovered.
@@ -3371,7 +3407,7 @@ impl<'a> Context<'a, '_> {
             self.styled_label_add_text("[");
         }
         if let Some(checked) = style.checked {
-            self.styled_label_add_text(if checked { "🗹 " } else { "  " });
+            self.styled_label_add_text(if checked { "◼ " } else { "  " });
         }
         // Label text
         match style.accelerator {

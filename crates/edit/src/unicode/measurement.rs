@@ -1,12 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use stdext::cold_path;
-use stdext::unicode::Utf8Chars;
-
 use super::tables::*;
 use crate::document::ReadableDocument;
-use crate::helpers::{CoordType, Point};
+use crate::helpers::{CoordType, Point, cold_path};
+use crate::unicode::Utf8Chars;
 
 // On one hand it's disgusting that I wrote this as a global variable, but on the
 // other hand, this isn't a public library API, and it makes the code a lot cleaner,
@@ -210,11 +208,9 @@ impl<'doc> MeasurementConfig<'doc> {
                 width += ucd_grapheme_cluster_character_width(props_next_cluster, ambiguous_width())
                     as CoordType;
 
-                // The `Document::read_forward` interface promises us that it will not split
-                // grapheme clusters across chunks. Therefore, we can safely break here.
                 let ch = match chunk_iter.next() {
                     Some(ch) => ch,
-                    None => break,
+                    None => break, // End of document
                 };
 
                 // Get the properties of the next cluster.
@@ -391,11 +387,9 @@ impl<'doc> MeasurementConfig<'doc> {
                             ambiguous_width(),
                         ) as CoordType;
 
-                        // The `Document::read_forward` interface promises us that it will not split
-                        // grapheme clusters across chunks. Therefore, we can safely break here.
                         let ch = match chunk_iter.next() {
                             Some(ch) => ch,
-                            None => break,
+                            None => break, // End of document
                         };
 
                         // Get the properties of the next cluster.

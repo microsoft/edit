@@ -7,20 +7,20 @@ At a high level:
 * The compiler lowers them into bytecode
 * The runtime executes the bytecode on the input text line by line
 
-For debugging and optimizing language definitions use `lsh-bin`.
+For debugging and optimizing language definitions use `lsh`'s executable, `lshc`.
 To see the generated assembly, for example:
 ```sh
 # Show the generated assembly of a file or directory
-cargo run -p lsh-bin -- assembly crates/lsh/definitions/diff.lsh
+cargo run -p lsh -- assembly crates/lsh/definitions/diff.lsh
 
 # Due to the lack of include statements, you must specify included files manually.
 # Here, git_commit.lsh implicitly relies on diff() from diff.lsh.
-cargo run -p lsh-bin -- assembly crates/lsh/definitions/git_commit.lsh crates/lsh/definitions/diff.lsh
+cargo run -p lsh -- assembly crates/lsh/definitions/git_commit.lsh crates/lsh/definitions/diff.lsh
 ```
 
 Or to render a file:
 ```sh
-cargo run -p lsh-bin -- render --input assets/highlighting-tests/html.html crates/lsh/definitions
+cargo run -p lsh -- render --input assets/highlighting-tests/html.html crates/lsh/definitions
 ```
 
 ## Language
@@ -32,12 +32,13 @@ See [definitions/README.md](definitions/README.md).
 ### Registers
 
 The virtual machine has 16 32-bit registers, named `r0` to `r15`.
-`r0` to `r2` currently have a fixed meaning:
-* `r0` is `off`, which is the text input offset
-* `r1` is `hs`, which describes the start of the next highlight range, emitted via a `yield` statement, corresponding to a `flush` instruction
-* `r2` is `pc`, the program counter, aka instruction offset
+`r0` to `r3` currently have a fixed meaning:
+* `r0` is `line`, the current input line number
+* `r1` is `off`, which is the text input offset
+* `r2` is `hs`, which describes the start of the next highlight range, emitted via a `yield` statement, corresponding to a `flush` instruction
+* `r3` is `pc`, the program counter, aka instruction offset
 
-Registers `r0` and `r1` are preserved between calls and `r2` to `r15` are caller saved.
+Registers `r0` to `r2` are preserved between calls and `r3` to `r15` are caller saved.
 
 > [!NOTE]
 > `pc` is pre-incremented when processing instructions.
@@ -93,7 +94,7 @@ Encoding:
 
 ### Instruction: call
 
-`call` pushes `r2` to `r15` on the stack and jumps to `tgt`.
+`call` pushes `r3` to `r15` on the stack and jumps to `tgt`.
 
 Mnemonic:
 ```
@@ -113,8 +114,8 @@ call:
 
 ### Instruction: ret
 
-`ret` restores and pops the last bundle of registers (`r2` to `r15`).
-When the call stack is empty, `ret` resets the VM to its entrypoint and clears registers `r2` to `r15`.
+`ret` restores and pops the last bundle of registers (`r3` to `r15`).
+When the call stack is empty, `ret` resets the VM to its entrypoint.
 
 Mnemonic:
 ```

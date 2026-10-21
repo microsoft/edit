@@ -33,7 +33,7 @@ pub fn rust() {
             yield keyword.other;
         } else if /(?:false|true)\>/ {
             yield constant.language;
-        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*)(?:e[+-]?[\d_]+)?)(?:[iu](?:8|16|32|64|128|size)|f32|f64)?/ {
+        } else if /(?i:-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|\d+[\d_]*\.?[\d_]*)(?i:e[+-]?[\d_]+)?)(?:[iu](?:8|16|32|64|128|size)|f32|f64)?\>/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {

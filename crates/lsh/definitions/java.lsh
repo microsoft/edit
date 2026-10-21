@@ -38,7 +38,7 @@ pub fn java() {
             yield constant.language;
         } else if /(?:boolean|byte|char|double|float|int|long|short|void)\>/ {
             yield storage.type;
-        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?[dfl]?)/ {
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|\d+[\d_]*\.?[\d_]*|\.\d+[\d_]*)(?:e[+-]?[\d_]+)?[dfl]?)\>/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {

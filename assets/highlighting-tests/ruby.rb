@@ -39,7 +39,9 @@ MAX_SIZE = 10
 'single quotes with escape: \' \n \t \\'
 "double quotes with escape: \" \n \t \\"
 "interpolated: #{1 + 1} and a # that is not a comment"
+"escaped \#{1 + 1} is not interpolated"
 `echo shell command`
+`echo #{Time.now}`
 
 # Symbols and variables
 :symbol
