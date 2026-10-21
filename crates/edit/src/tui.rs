@@ -348,6 +348,12 @@ pub struct Tui {
     mouse_hover_node_path: Vec<u64>,
     /// The path to the node that was clicked on.
     mouse_down_node_path: Vec<u64>,
+    /// Path to the node currently under the mouse cursor.
+    hovered_node_path: Vec<u64>,
+    /// Whether hover interactions are enabled by the caller.
+    mouse_hover_enabled: bool,
+    /// Whether mouse input is more recent than keyboard input.
+    mouse_hover_active: bool,
     /// The position of the first click in a double/triple click series.
     first_click_position: Point,
     /// The node ID of the node that was first clicked on
@@ -412,6 +418,9 @@ impl Tui {
             mouse_click_counter: 0,
             mouse_hover_node_path: Vec::with_capacity(16),
             mouse_down_node_path: Vec::with_capacity(16),
+            hovered_node_path: Vec::with_capacity(16),
+            mouse_hover_enabled: false,
+            mouse_hover_active: false,
             first_click_position: Point::MIN,
             first_click_target: 0,
 
@@ -429,8 +438,23 @@ impl Tui {
         };
         Self::clean_node_path(&mut tui.mouse_hover_node_path);
         Self::clean_node_path(&mut tui.mouse_down_node_path);
+        Self::clean_node_path(&mut tui.hovered_node_path);
         Self::clean_node_path(&mut tui.focused_node_path);
         Ok(tui)
+    }
+
+    /// Enables highlighting and menu switching on hover.
+    /// The caller must also configure terminal mouse motion reporting.
+    pub fn set_mouse_hover_enabled(&mut self, enabled: bool) {
+        if self.mouse_hover_enabled != enabled {
+            self.mouse_hover_enabled = enabled;
+            self.needs_more_settling();
+        }
+    }
+
+    // Helper to check if a node is in the hover path
+    fn is_subtree_hovered(&self, node: &Node) -> bool {
+        self.hovered_node_path.get(node.depth) == Some(&node.id)
     }
 
     /// Sets up the framebuffer's color palette.
@@ -560,6 +584,7 @@ impl Tui {
                 self.size = resize;
             }
             Some(Input::Text(text)) => {
+                self.mouse_hover_active = false;
                 input_text = Some(text);
                 // TODO: the .len()==1 check causes us to ignore keyboard inputs that are faster than we process them.
                 // For instance, imagine the user presses "A" twice and we happen to read it in a single chunk.
@@ -572,15 +597,18 @@ impl Tui {
                 }
             }
             Some(Input::Paste(paste)) => {
+                self.mouse_hover_active = false;
                 let clipboard = self.clipboard_mut();
                 clipboard.write(paste);
                 clipboard.mark_as_synchronized();
                 input_keyboard = Some(kbmod::CTRL | vk::V);
             }
             Some(Input::Keyboard(keyboard)) => {
+                self.mouse_hover_active = false;
                 input_keyboard = Some(keyboard);
             }
             Some(Input::Mouse(mouse)) => {
+                self.mouse_hover_active = true;
                 let mut next_state = mouse.state;
                 let next_position = mouse.position;
                 let mut next_scroll = mouse.scroll;
@@ -595,14 +623,13 @@ impl Tui {
 
                 let mut hovered_node = None; // Needed for `mouse_down`
                 let mut focused_node = None; // Needed for `mouse_down` and `is_click`
-                // Roots (aka windows) are ordered in Z order, so we iterate
-                // them in reverse order, from topmost to bottommost.
+
+                // Calculate the hovered node for ALL mouse events, not just clicks.
+                // Roots (aka windows) are ordered in Z order...
                 for root in self.prev_tree.iterate_roots_rev() {
-                    // Find the node that contains the cursor.
                     Tree::visit_all(root, root, true, |node| {
                         let n = node.borrow();
                         if !n.outer_clipped.contains(next_position) {
-                            // Skip the entire sub-tree, because it doesn't contain the cursor.
                             return VisitControl::SkipChildren;
                         }
                         hovered_node = Some(node);
@@ -623,6 +650,14 @@ impl Tui {
                     if matches!(root.borrow().content, NodeContent::Modal(_)) {
                         break;
                     }
+                }
+
+                // Update the hovered path and trigger redraw if it changed
+                let mut next_hovered_path = Vec::with_capacity(16);
+                Self::build_node_path(hovered_node, &mut next_hovered_path);
+                if self.mouse_hover_enabled && self.hovered_node_path != next_hovered_path {
+                    self.hovered_node_path = next_hovered_path;
+                    self.needs_more_settling();
                 }
 
                 Self::build_node_path(hovered_node, &mut self.mouse_hover_node_path);
@@ -3228,19 +3263,29 @@ impl<'a> Context<'a, '_> {
             return false;
         }
 
+        // If the menubar is already active (another menu is open) and we are hovered,
+        // steal the focus to open this menu automatically.
+        if !contains_focus && self.is_hovered() {
+            let menubar_active = self.tui.is_subtree_focused(&self.tree.current_node.borrow());
+            if menubar_active {
+                self.steal_focus();
+            }
+        }
+
+        let is_highlighted = self.is_focused() || self.is_hovered();
+        if is_highlighted {
+            self.attr_background_rgba(self.indexed(IndexedColor::Green));
+            self.attr_foreground_rgba(self.contrasted(self.indexed(IndexedColor::Green)));
+        } else if contains_focus || keyboard_focus {
+            self.attr_background_rgba(self.tui.floater_default_bg);
+            self.attr_foreground_rgba(self.tui.floater_default_fg);
+        }
+
         if contains_focus || keyboard_focus {
             // Arming this only while no button is held keeps the press
             // that opened the menu from closing it again right away.
             if self.tui.mouse_state != InputMouseState::Left {
                 self.tui.menubar_toggle_id = button_id;
-            }
-
-            self.attr_background_rgba(self.tui.floater_default_bg);
-            self.attr_foreground_rgba(self.tui.floater_default_fg);
-
-            if self.is_focused() {
-                self.attr_background_rgba(self.indexed(IndexedColor::Green));
-                self.attr_foreground_rgba(self.contrasted(self.indexed(IndexedColor::Green)));
             }
 
             self.next_block_id_mixin(mixin);
@@ -3254,6 +3299,9 @@ impl<'a> Context<'a, '_> {
             });
             self.attr_border();
             self.attr_focus_well();
+
+            self.attr_background_rgba(self.tui.floater_default_bg);
+            self.attr_foreground_rgba(self.tui.floater_default_fg);
 
             if keyboard_focus {
                 self.steal_focus();
@@ -3292,7 +3340,7 @@ impl<'a> Context<'a, '_> {
             self.inherit_focus();
         }
 
-        if self.is_focused() {
+        if self.is_focused() || self.is_hovered() {
             self.attr_background_rgba(self.indexed(IndexedColor::Green));
             self.attr_foreground_rgba(self.contrasted(self.indexed(IndexedColor::Green)));
         }
@@ -3351,6 +3399,15 @@ impl<'a> Context<'a, '_> {
         if !self.contains_focus() {
             self.tui.menubar_toggle_id = 0;
         }
+    }
+
+    /// Returns whether the current node is hovered.
+    pub fn is_hovered(&mut self) -> bool {
+        if !self.tui.mouse_hover_enabled || !self.tui.mouse_hover_active {
+            return false;
+        }
+        let last_node = self.tree.last_node.borrow();
+        self.tui.is_subtree_hovered(&last_node)
     }
 
     /// Renders a button label with an optional accelerator character

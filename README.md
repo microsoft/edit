@@ -44,6 +44,21 @@ You can install the latest version with Homebrew:
 brew install msedit
 ```
 
+## Settings
+
+Open **File > Preferences** to edit `settings.json`. Settings take effect after restarting Edit.
+
+To enable menu highlighting and switching between open menus with the mouse:
+
+```json
+{
+  "mouse.hover": true
+}
+```
+
+`mouse.hover` defaults to `false`. When enabled, Edit requests all mouse motion
+from the terminal. When disabled, mouse clicks and dragging remain available.
+
 ## Build Instructions
 
 * [Install Rust](https://www.rust-lang.org/tools/install)
