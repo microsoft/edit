@@ -10,6 +10,7 @@ use crate::apperr;
 
 pub struct Settings {
     pub path: PathBuf,
+    pub mouse_hover: bool,
     pub file_associations: Vec<(String, &'static Language)>,
 }
 
@@ -27,7 +28,7 @@ impl Settings {
     }
 
     const fn new() -> Self {
-        Settings { path: PathBuf::new(), file_associations: Vec::new() }
+        Settings { path: PathBuf::new(), mouse_hover: false, file_associations: Vec::new() }
     }
 
     pub fn borrow() -> Ref<'static, Settings> {
@@ -57,12 +58,22 @@ impl Settings {
             Err(err) => return Err(err.into()),
             Ok(str) => str,
         };
-        let Ok(json) = json::parse(&scratch, &str) else {
+        self.load_json(&str)
+    }
+
+    fn load_json(&mut self, text: &str) -> apperr::Result<()> {
+        let scratch = scratch_arena(None);
+        let Ok(json) = json::parse(&scratch, text) else {
             return Err(apperr::Error::SettingsInvalid("Invalid JSON"));
         };
         let Some(root) = json.as_object() else {
             return Err(apperr::Error::SettingsInvalid("Non-object root"));
         };
+
+        if let Some(value) = root.get("mouse.hover") {
+            self.mouse_hover =
+                value.as_bool().ok_or(apperr::Error::SettingsInvalid("mouse.hover"))?;
+        }
 
         if let Some(f) = root.get_object("files.associations") {
             for &(mut key, ref value) in f.iter() {
@@ -114,5 +125,34 @@ fn config_dir() -> Option<PathBuf> {
         var_path("XDG_CONFIG_HOME")
             .or_else(|| var_path("HOME").map(|p| push(p, ".config")))
             .map(|p| push(p, "msedit"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mouse_hover_settings() {
+        for (text, expected) in [
+            ("{}", false),
+            (r#"{"mouse.hover": false}"#, false),
+            (r#"{"mouse.hover": true}"#, true),
+        ] {
+            let mut settings = Settings::new();
+            settings.load_json(text).unwrap();
+            assert_eq!(settings.mouse_hover, expected);
+        }
+    }
+
+    #[test]
+    fn mouse_hover_rejects_invalid_types() {
+        for value in ["null", "0", r#""true""#, "[]", "{}"] {
+            let mut settings = Settings::new();
+            assert!(matches!(
+                settings.load_json(&format!(r#"{{"mouse.hover": {value}}}"#)),
+                Err(apperr::Error::SettingsInvalid("mouse.hover"))
+            ));
+        }
     }
 }

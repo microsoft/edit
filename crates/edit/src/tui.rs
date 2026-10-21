@@ -350,8 +350,10 @@ pub struct Tui {
     mouse_down_node_path: Vec<u64>,
     /// Path to the node currently under the mouse cursor.
     hovered_node_path: Vec<u64>,
-    /// This is check mouse hover enabled
+    /// Whether hover interactions are enabled by the caller.
     mouse_hover_enabled: bool,
+    /// Whether mouse input is more recent than keyboard input.
+    mouse_hover_active: bool,
     /// The position of the first click in a double/triple click series.
     first_click_position: Point,
     /// The node ID of the node that was first clicked on
@@ -417,7 +419,8 @@ impl Tui {
             mouse_hover_node_path: Vec::with_capacity(16),
             mouse_down_node_path: Vec::with_capacity(16),
             hovered_node_path: Vec::with_capacity(16),
-            mouse_hover_enabled: true,
+            mouse_hover_enabled: false,
+            mouse_hover_active: false,
             first_click_position: Point::MIN,
             first_click_target: 0,
 
@@ -438,6 +441,15 @@ impl Tui {
         Self::clean_node_path(&mut tui.hovered_node_path);
         Self::clean_node_path(&mut tui.focused_node_path);
         Ok(tui)
+    }
+
+    /// Enables highlighting and menu switching on hover.
+    /// The caller must also configure terminal mouse motion reporting.
+    pub fn set_mouse_hover_enabled(&mut self, enabled: bool) {
+        if self.mouse_hover_enabled != enabled {
+            self.mouse_hover_enabled = enabled;
+            self.needs_more_settling();
+        }
     }
 
     // Helper to check if a node is in the hover path
@@ -572,7 +584,7 @@ impl Tui {
                 self.size = resize;
             }
             Some(Input::Text(text)) => {
-                self.mouse_hover_enabled = false;
+                self.mouse_hover_active = false;
                 input_text = Some(text);
                 // TODO: the .len()==1 check causes us to ignore keyboard inputs that are faster than we process them.
                 // For instance, imagine the user presses "A" twice and we happen to read it in a single chunk.
@@ -585,18 +597,18 @@ impl Tui {
                 }
             }
             Some(Input::Paste(paste)) => {
-                self.mouse_hover_enabled = false;
+                self.mouse_hover_active = false;
                 let clipboard = self.clipboard_mut();
                 clipboard.write(paste);
                 clipboard.mark_as_synchronized();
                 input_keyboard = Some(kbmod::CTRL | vk::V);
             }
             Some(Input::Keyboard(keyboard)) => {
-                self.mouse_hover_enabled = false;
+                self.mouse_hover_active = false;
                 input_keyboard = Some(keyboard);
             }
             Some(Input::Mouse(mouse)) => {
-                self.mouse_hover_enabled = true;
+                self.mouse_hover_active = true;
                 let mut next_state = mouse.state;
                 let next_position = mouse.position;
                 let mut next_scroll = mouse.scroll;
@@ -643,7 +655,7 @@ impl Tui {
                 // Update the hovered path and trigger redraw if it changed
                 let mut next_hovered_path = Vec::with_capacity(16);
                 Self::build_node_path(hovered_node, &mut next_hovered_path);
-                if self.hovered_node_path != next_hovered_path {
+                if self.mouse_hover_enabled && self.hovered_node_path != next_hovered_path {
                     self.hovered_node_path = next_hovered_path;
                     self.needs_more_settling();
                 }
@@ -3391,7 +3403,7 @@ impl<'a> Context<'a, '_> {
 
     /// Returns whether the current node is hovered.
     pub fn is_hovered(&mut self) -> bool {
-        if !self.tui.mouse_hover_enabled {
+        if !self.tui.mouse_hover_enabled || !self.tui.mouse_hover_active {
             return false;
         }
         let last_node = self.tree.last_node.borrow();
