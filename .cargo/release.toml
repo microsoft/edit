@@ -4,11 +4,22 @@
 # See: https://github.com/rust-lang/cargo/issues/11214
 # See: https://github.com/rust-lang/cargo/issues/13894
 
+# opt-level=s results in poor codegen again and again, and I'm tired of seeing it.
+# This is best demonstrated by how turning MIR inlining back on _reduces_ binary size.
+# I have contemplated using `-Copt-level=2 -Cllvm-args=--inline-threshold=50`.
+[target.'cfg(not(all(target_os = "windows", target_env = "msvc")))']
+rustflags = [
+    "-Copt-level=s",
+    "-Zinline-mir",
+]
+
 # Avoid linking with vcruntime140.dll by statically linking everything,
 # and then explicitly linking with ucrtbase.dll dynamically.
 # We do this, because vcruntime140.dll is an optional Windows component.
 [target.'cfg(all(target_os = "windows", target_env = "msvc"))']
 rustflags = [
+    "-Copt-level=2",
+    "-Zinline-mir",
     "-Ctarget-feature=+crt-static",
     "-Clink-args=/DEFAULTLIB:ucrt.lib",
     "-Clink-args=/NODEFAULTLIB:vcruntime.lib",

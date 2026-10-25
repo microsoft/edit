@@ -471,6 +471,9 @@ impl Framebuffer {
     /// Renders the framebuffer contents accumulated since the
     /// last call to `flip()` and returns them serialized as VT.
     pub fn render<'a>(&mut self, arena: &'a Arena) -> BString<'a> {
+        const SYNCHRONIZED_OUTPUT_ENABLE: &str = "\x1b[?2026h";
+        const SYNCHRONIZED_OUTPUT_DISABLE: &str = "\x1b[?2026l";
+
         let idx = self.frame_counter & 1;
         // Borrows the front/back buffers without letting Rust know that we have a reference to self.
         // SAFETY: Well this is certainly correct, but whether Rust and its strict rules likes it is another question.
@@ -499,6 +502,8 @@ impl Framebuffer {
         let mut last_bg = u64::MAX;
         let mut last_fg = u64::MAX;
         let mut last_attr = Attributes::None;
+
+        result.push_str(arena, SYNCHRONIZED_OUTPUT_ENABLE);
 
         for y in 0..front.text.size.height {
             // SAFETY: The only thing that changes the size of these containers,
@@ -597,6 +602,10 @@ impl Framebuffer {
             } {}
         }
 
+        if result.len() <= SYNCHRONIZED_OUTPUT_ENABLE.len() {
+            result.clear();
+        }
+
         // If the cursor has changed since the last frame we naturally need to update it,
         // but this also applies if the code above wrote to the screen,
         // as it uses CUP sequences to reposition the cursor for writing.
@@ -617,6 +626,10 @@ impl Framebuffer {
                 // DECTCEM to hide the cursor.
                 result.push_str(arena, "\x1b[?25l");
             }
+        }
+
+        if !result.is_empty() {
+            result.push_str(arena, SYNCHRONIZED_OUTPUT_DISABLE);
         }
 
         result
