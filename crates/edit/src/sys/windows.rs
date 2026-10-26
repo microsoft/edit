@@ -195,7 +195,7 @@ pub fn reopen_stdin_if_redirected() -> io::Result<Option<File>> {
 }
 
 /// Switches the terminal into raw mode, etc.
-pub fn switch_modes() -> io::Result<()> {
+pub fn switch_modes() -> io::Result<Size> {
     unsafe {
         // `kernel32.dll` doesn't exist on OneCore variants of Windows.
         // NOTE: `kernelbase.dll` is NOT a stable API to rely on. In our case it's the best option though.
@@ -253,7 +253,7 @@ pub fn switch_modes() -> io::Result<()> {
         check_bool_return(Console::SetConsoleCP(Globalization::CP_UTF8))?;
         check_bool_return(Console::SetConsoleOutputCP(Globalization::CP_UTF8))?;
 
-        Ok(())
+        get_window_size()
     }
 }
 
@@ -282,7 +282,7 @@ impl Drop for Deinit {
     }
 }
 
-pub fn get_window_size() -> io::Result<Size> {
+fn get_window_size() -> io::Result<Size> {
     unsafe {
         let mut info: Console::CONSOLE_SCREEN_BUFFER_INFOEX = mem::zeroed();
         info.cbSize = mem::size_of::<Console::CONSOLE_SCREEN_BUFFER_INFOEX>() as u32;
