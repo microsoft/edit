@@ -401,6 +401,9 @@ extern "C" fn utext_native_length(ut: &mut icu_ffi::UText) -> i64 {
 }
 
 extern "C" fn utext_access(ut: &mut icu_ffi::UText, native_index: i64, forward: bool) -> bool {
+    let tb = text_buffer_from_utext(ut);
+    let native_index = native_index.clamp(0, tb.text_length() as i64);
+
     if let Some(cache) = utext_access_impl(ut, native_index, forward) {
         let native_off = native_index as usize - cache.utf8_range.start;
         ut.chunk_contents = cache.utf16.as_ptr();
@@ -411,6 +414,21 @@ extern "C" fn utext_access(ut: &mut icu_ffi::UText, native_index: i64, forward: 
         ut.native_indexing_limit = cache.native_indexing_limit as i32;
         true
     } else {
+        // There's no text in the requested direction: `native_index` is at the end of the text
+        // (forward) or at its start (backward). The `UTextAccess` contract says that the iteration
+        // position must then be left at that end of the string. If we leave the previous chunk
+        // in place, ICU keeps iterating from wherever that chunk was (for instance `uregex_reset`
+        // would resume the search at offset 0 instead of the end of the text).
+        //
+        // An empty chunk at `native_index` does that. Since `native_indexing_limit` is 0, ICU won't
+        // call `utext_map_offset_to_native` or `utext_map_native_index_to_utf16` for this chunk.
+        let double_cache = double_cache_from_utext(ut);
+        ut.chunk_contents = double_cache.cache[0].utf16.as_ptr();
+        ut.chunk_length = 0;
+        ut.chunk_offset = 0;
+        ut.chunk_native_start = native_index;
+        ut.chunk_native_limit = native_index;
+        ut.native_indexing_limit = 0;
         false
     }
 }

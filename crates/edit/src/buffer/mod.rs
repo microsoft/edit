@@ -4190,4 +4190,45 @@ mod tests {
 
         assert_eq!(buffer_stored_bytes(&buf), b"ax\nbx\nx\n");
     }
+
+    // Replace All must not search the text again from the start after
+    // replacing a match that ends at the end of the text.
+    #[test]
+    fn test_replace_all_match_at_end_of_text() {
+        for (text, pattern, replacement, expected) in [
+            ("x foo", "foo", "Foo", "x Foo"),
+            ("x foo", "foo", "foo", "x foo"),
+            ("foo foo", "foo", "Foo", "Foo Foo"),
+            ("x a", "a", "aa", "x aa"),
+        ] {
+            let mut buf = prep_buffer(text);
+            buf.find_and_replace_all(pattern, Default::default(), replacement.as_bytes()).unwrap();
+            assert_eq!(buffer_stored_bytes(&buf), expected.as_bytes(), "{text:?}");
+        }
+    }
+
+    // Same as above, but with "insert final newline" adding a newline after the last match.
+    #[test]
+    fn test_replace_all_match_at_end_of_text_final_newline() {
+        let mut buf = prep_buffer("x a");
+        buf.set_insert_final_newline(true);
+
+        buf.find_and_replace_all("a", Default::default(), b"aa").unwrap();
+
+        assert_eq!(buffer_stored_bytes(&buf), b"x aa\n");
+    }
+
+    // After Replace hits a match that ends at the end of the text,
+    // the search must wrap around instead of finding the replaced text again.
+    #[test]
+    fn test_replace_match_at_end_of_text_wraps_around() {
+        let mut buf = prep_buffer("foo x foo");
+        buf.find_and_select("foo", Default::default()).unwrap();
+        buf.find_and_select("foo", Default::default()).unwrap();
+        buf.find_and_replace("foo", Default::default(), b"Foo").unwrap();
+
+        assert_eq!(buffer_stored_bytes(&buf), b"foo x Foo");
+        let (beg, end) = buf.selection_range().unwrap();
+        assert_eq!((beg.offset, end.offset), (0, 3));
+    }
 }
