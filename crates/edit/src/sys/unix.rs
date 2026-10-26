@@ -6,16 +6,19 @@
 //! Read the `windows` module for reference.
 //! TODO: This reminds me that the sys API should probably be a trait.
 
+// TODO: Get rid of that `State` global.
+#![allow(static_mut_refs)]
+
 use std::ffi::{c_char, c_int, c_void};
 use std::fs::File;
-use std::mem::{self, ManuallyDrop, MaybeUninit};
+use std::mem::{self, MaybeUninit};
 use std::os::fd::FromRawFd as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
 use std::ptr::{self, NonNull, null_mut};
 use std::{io, time};
 
-use crate::arena::Arena;
+use crate::arena::{Arena, scratch_arena};
 use crate::collections::{BString, BVec};
 use crate::helpers::*;
 
@@ -38,7 +41,7 @@ pub unsafe fn virtual_reserve(size: usize) -> io::Result<NonNull<u8>> {
             0,
         );
         if ptr.is_null() || ptr::eq(ptr, libc::MAP_FAILED) {
-            Err(io::Error::last_os_error())
+            Err(last_os_error())
         } else {
             Ok(NonNull::new_unchecked(ptr.cast()))
         }
@@ -82,7 +85,7 @@ pub unsafe fn virtual_release(base: NonNull<u8>, size: usize) {
 pub unsafe fn virtual_commit(base: NonNull<u8>, size: usize) -> io::Result<()> {
     unsafe {
         let status = libc::mprotect(base.cast().as_ptr(), size, libc::PROT_READ | libc::PROT_WRITE);
-        if status != 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
+        if status != 0 { Err(last_os_error()) } else { Ok(()) }
     }
 }
 
@@ -90,7 +93,7 @@ struct State {
     stdin: libc::c_int,
     stdin_flags: libc::c_int,
     stdout_initial_termios: Option<libc::termios>,
-    resize_pending: bool,
+    sigwinch: Pipe,
     // Buffer for incomplete UTF-8 sequences (max 4 bytes needed)
     utf8_buf: [u8; 4],
     utf8_len: usize,
@@ -100,25 +103,35 @@ static mut STATE: State = State {
     stdin: libc::STDIN_FILENO,
     stdin_flags: -1,
     stdout_initial_termios: None,
-    resize_pending: false,
+    sigwinch: Pipe::default(),
     utf8_buf: [0; 4],
     utf8_len: 0,
 };
 
+/// We use a self-pipe trick to handle SIGWINCH + stdin polling.
+///
+/// There are technically superior alternatives on Linux with epoll+signalfd and BSDs with kqueue.
+/// I ran tests on Linux and epoll+signalfd improves startup CPU 1.03us -> 0.96us and memory use
+/// 2.38KiB (+4KiB once a signal was delivered) -> 1.05KiB. CPU usage per delivery 7us -> 5us.
+///
+/// This is certainly nice, but way way way too little difference relative to the sum of all
+/// other operations in this editor. It is worth considering if we ever need our own mio/tokio.
+/// (On that note, it is worth avoiding tokio, due to lack of support for rare platforms such as UEFI.)
 extern "C" fn sigwinch_handler(_: libc::c_int) {
     unsafe {
-        STATE.resize_pending = true;
+        let saved_errno = errno();
+        let fd = STATE.sigwinch.writer;
+
+        if fd >= 0 {
+            let b = 0u8;
+            while libc::write(fd, (&raw const b).cast(), 1) < 0 && errno() == libc::EINTR {}
+        }
+
+        set_errno(saved_errno);
     }
 }
 
 pub fn init() -> io::Result<Deinit> {
-    unsafe {
-        // Set STATE.resize_pending to true whenever we get a SIGWINCH.
-        let mut sigwinch_action: libc::sigaction = mem::zeroed();
-        sigwinch_action.sa_sigaction = sigwinch_handler as *const () as libc::sighandler_t;
-        check_int_return(libc::sigaction(libc::SIGWINCH, &sigwinch_action, null_mut()))?;
-    }
-
     Ok(Deinit)
 }
 
@@ -126,7 +139,7 @@ pub fn init() -> io::Result<Deinit> {
 pub fn reopen_stdin_if_redirected() -> io::Result<Option<File>> {
     unsafe {
         if libc::isatty(STATE.stdin) == 0 {
-            STATE.stdin = check_int_return(libc::open(c"/dev/tty".as_ptr(), libc::O_RDONLY))?;
+            STATE.stdin = libc::open(c"/dev/tty".as_ptr(), libc::O_RDONLY).check()?;
             Ok(Some(File::from_raw_fd(libc::STDIN_FILENO)))
         } else {
             Ok(None)
@@ -134,14 +147,11 @@ pub fn reopen_stdin_if_redirected() -> io::Result<Option<File>> {
     }
 }
 
-pub fn switch_modes() -> io::Result<()> {
+pub fn switch_modes() -> io::Result<Size> {
     unsafe {
-        // Store the stdin flags so we can more easily toggle `O_NONBLOCK` later on.
-        STATE.stdin_flags = check_int_return(libc::fcntl(STATE.stdin, libc::F_GETFL))?;
-
         // Get the original terminal modes so we can disable raw mode on exit.
         let mut termios = MaybeUninit::<libc::termios>::uninit();
-        check_int_return(libc::tcgetattr(libc::STDOUT_FILENO, termios.as_mut_ptr()))?;
+        libc::tcgetattr(libc::STDOUT_FILENO, termios.as_mut_ptr()).check()?;
         let mut termios = termios.assume_init();
         STATE.stdout_initial_termios = Some(termios);
 
@@ -201,7 +211,24 @@ pub fn switch_modes() -> io::Result<()> {
         termios.c_cc[libc::VMIN] = 1;
         termios.c_cc[libc::VTIME] = 0;
 
-        termios_setattr(libc::STDOUT_FILENO, &termios)
+        termios_setattr(libc::STDOUT_FILENO, &termios)?;
+
+        // Set up the SIGWINCH self-pipe...
+        STATE.sigwinch = Pipe::new(libc::O_CLOEXEC | libc::O_NONBLOCK)?;
+
+        // ...and the SIGWINCH handler.
+        let mut sigwinch_action: libc::sigaction = mem::zeroed();
+        sigwinch_action.sa_sigaction = sigwinch_handler as *const () as libc::sighandler_t;
+        libc::sigemptyset(&mut sigwinch_action.sa_mask);
+        libc::sigaction(libc::SIGWINCH, &sigwinch_action, null_mut()).check()?;
+
+        // Since we'll use poll(), stdin must be non-blocking.
+        STATE.stdin_flags = libc::fcntl(STATE.stdin, libc::F_GETFL).check()?;
+        libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags | libc::O_NONBLOCK).check()?;
+
+        // NOTE: It's crucial to get the initial window size AFTER
+        // setting up the signal handler to avoid missing an update.
+        get_window_size()
     }
 }
 
@@ -235,7 +262,7 @@ impl Drop for Deinit {
     }
 }
 
-pub fn get_window_size() -> io::Result<Size> {
+fn get_window_size() -> io::Result<Size> {
     let mut winsz: libc::winsize = unsafe { mem::zeroed() };
     let ret = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &raw mut winsz) };
     if ret != 0 {
@@ -257,12 +284,15 @@ pub fn read_stdin(
     mut timeout: time::Duration,
 ) -> Option<(Option<Size>, BString<'_>)> {
     unsafe {
-        if STATE.resize_pending {
-            timeout = time::Duration::ZERO;
-        }
-
-        let read_poll = timeout != time::Duration::MAX;
+        let deadline = (timeout != time::Duration::MAX)
+            .then_some(timeout)
+            .and_then(|t| time::Instant::now().checked_add(t));
+        let mut resized = false;
         let mut buf = BVec::empty();
+        let mut fds = [
+            libc::pollfd { fd: STATE.sigwinch.reader, events: libc::POLLIN, revents: 0 },
+            libc::pollfd { fd: STATE.stdin, events: libc::POLLIN, revents: 0 },
+        ];
 
         // We don't know if the input is valid UTF8, so we first use a Vec and then
         // later turn it into UTF8 using `from_utf8_lossy_owned`.
@@ -277,53 +307,114 @@ pub fn read_stdin(
         }
 
         loop {
-            if timeout != time::Duration::MAX {
-                let beg = time::Instant::now();
-
-                let mut pollfd = libc::pollfd { fd: STATE.stdin, events: libc::POLLIN, revents: 0 };
-                let ret;
-                #[cfg(target_os = "linux")]
-                {
-                    let ts = libc::timespec {
-                        tv_sec: timeout.as_secs() as libc::time_t,
+            // Wait for stdin or SIGWINCH.
+            cfg_select! {
+                any(
+                    target_os = "linux",     // tier 1
+                    target_os = "android",   // tier 2
+                    target_os = "freebsd",   // tier 2
+                    target_os = "fuchsia",   // tier 2
+                    target_os = "netbsd",    // tier 2
+                    target_os = "cygwin",    // tier 3
+                    target_os = "dragonfly", // tier 3
+                    target_os = "haiku",     // tier 3
+                    target_os = "hurd",      // tier 3
+                    target_os = "l4re",      // tier 3
+                    target_os = "openbsd",   // tier 3
+                ) => {
+                    let t = timeout.as_secs().try_into().ok().map(|tv_sec| libc::timespec {
+                        tv_sec,
                         tv_nsec: timeout.subsec_nanos() as libc::c_long,
-                    };
-                    ret = libc::ppoll(&mut pollfd, 1, &ts, std::ptr::null());
+                    });
+                    let ret =
+                        libc::ppoll(fds.as_mut_ptr(), 2, opt_ptr(t.as_ref()), std::ptr::null());
                 }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    ret = libc::poll(&mut pollfd, 1, timeout.as_millis() as libc::c_int);
+                _ => {
+                    let t = timeout.as_millis().try_into().unwrap_or(-1);
+                    let ret = libc::poll(fds.as_mut_ptr(), 2, t);
                 }
-                if ret < 0 {
-                    return None; // Error? Let's assume it's an EOF.
-                }
-                if ret == 0 {
-                    break; // Timeout? We can stop reading.
+            }
+
+            if ret == 0 {
+                break; // Timeout? We can stop reading.
+            } else if ret > 0 {
+                // Drain SIGWINCH events from the self-pipe.
+                if fds[0].revents & libc::POLLIN != 0 {
+                    let scratch = scratch_arena(Some(arena));
+                    let buf = scratch.alloc_uninit_array::<256, u8>();
+
+                    loop {
+                        let ret =
+                            libc::read(STATE.sigwinch.reader, buf.as_mut_ptr().cast(), buf.len());
+                        if ret > 0 {
+                            resized = true;
+                        } else if ret == 0 {
+                            return None; // Unexpected error
+                        } else {
+                            #[allow(
+                                unreachable_patterns,
+                                reason = "On some platforms EAGAIN == EWOULDBLOCK"
+                            )]
+                            match errno() {
+                                libc::EAGAIN | libc::EWOULDBLOCK => break, // finished draining the pipe
+                                libc::EINTR => {}
+                                _ => return None, // Unexpected error
+                            }
+                        }
+                    }
                 }
 
-                timeout = timeout.saturating_sub(beg.elapsed());
-            };
+                // Read from stdin if available.
+                if fds[1].revents & libc::POLLIN != 0 {
+                    let spare = buf.spare_capacity_mut();
+                    let ret = libc::read(STATE.stdin, spare.as_mut_ptr().cast(), spare.len());
+                    if ret > 0 {
+                        buf.set_len(buf.len() + ret as usize);
+                    } else if ret == 0 {
+                        return None; // EOF
+                    } else {
+                        #[allow(
+                            unreachable_patterns,
+                            reason = "On some platforms EAGAIN == EWOULDBLOCK"
+                        )]
+                        if !matches!(errno(), libc::EINTR | libc::EAGAIN | libc::EWOULDBLOCK) {
+                            return None; // Unexpected error
+                        }
+                    }
+                }
+            } else {
+                // poll() can fail with EAGAIN if the kernel was OOM and we can retry.
+                // Linux returns ENOMEM, but I'm not sure if one is expected to retry that.
+                if !matches!(errno(), libc::EINTR | libc::EAGAIN) {
+                    return None; // Unexpected error
+                }
+            }
 
-            // If we're asked for a non-blocking read we need
-            // to manipulate `O_NONBLOCK` and vice versa.
-            set_tty_nonblocking(read_poll);
-
-            // Read from stdin.
-            let spare = buf.spare_capacity_mut();
-            let ret = libc::read(STATE.stdin, spare.as_mut_ptr().cast(), spare.len());
-            if ret > 0 {
-                buf.set_len(buf.len() + ret as usize);
+            // We got something? Great!
+            if resized || !buf.is_empty() {
                 break;
             }
-            if ret == 0 {
-                return None; // EOF
+
+            // Check for broken pipe events, etc.
+            // We do this after draining stdin to avoid missing out on trailing, buffered inputs
+            // after the TTY got closed. Technically we don't need to do that, reading that input
+            // should not be meaningful. But this is technically the right way to do it.
+            if ret > 0 {
+                for fd in &fds {
+                    if fd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                        return None; // Unexpected error
+                    }
+                }
             }
-            if ret < 0 {
-                match errno() {
-                    libc::EINTR if STATE.resize_pending => break,
-                    libc::EAGAIN if timeout == time::Duration::ZERO => break,
-                    libc::EINTR | libc::EAGAIN => {}
-                    _ => return None,
+
+            // Recalculate the remaining timeout if we need to retry.
+            if timeout.is_zero() {
+                break;
+            }
+            if let Some(deadline) = deadline {
+                timeout = deadline.saturating_duration_since(time::Instant::now());
+                if timeout.is_zero() {
+                    break;
                 }
             }
         }
@@ -357,12 +448,7 @@ pub fn read_stdin(
             }
         }
 
-        let resize = if STATE.resize_pending {
-            STATE.resize_pending = false;
-            Some(get_window_size().ok()?)
-        } else {
-            None
-        };
+        let resize = if resized { get_window_size().ok() } else { None };
 
         Some((resize, BString::from_utf8_lossy(arena, buf)))
     }
@@ -405,20 +491,6 @@ pub fn write_stdout(text: &str) {
                 }
             }
             _ => return, // broken pipe
-        }
-    }
-}
-
-/// Sets/Resets `O_NONBLOCK` on the TTY handle.
-///
-/// Note that setting this flag applies to both stdin and stdout, because the
-/// TTY is a bidirectional device and both handles refer to the same thing.
-fn set_tty_nonblocking(nonblock: bool) {
-    unsafe {
-        let is_nonblock = (STATE.stdin_flags & libc::O_NONBLOCK) != 0;
-        if is_nonblock != nonblock {
-            STATE.stdin_flags ^= libc::O_NONBLOCK;
-            let _ = libc::fcntl(STATE.stdin, libc::F_SETFL, STATE.stdin_flags);
         }
     }
 }
@@ -617,7 +689,7 @@ pub fn preferred_languages(arena: &Arena) -> BVec<'_, &'_ str> {
 pub fn memfd() -> io::Result<File> {
     #[cfg(target_os = "linux")]
     unsafe {
-        let fd = check_int_return(libc::memfd_create(c"edit".as_ptr(), libc::MFD_CLOEXEC))?;
+        let fd = libc::memfd_create(c"edit".as_ptr(), libc::MFD_CLOEXEC).check()?;
         Ok(File::from_raw_fd(fd))
     }
     #[cfg(not(target_os = "linux"))]
@@ -628,9 +700,10 @@ pub fn memfd() -> io::Result<File> {
         }
 
         // Duplicate the descriptor so that closing the C stream doesn't close our file.
-        let file = check_int_return(libc::fcntl(libc::fileno(stream), libc::F_DUPFD_CLOEXEC, 0))
+        let file = libc::fcntl(libc::fileno(stream), libc::F_DUPFD_CLOEXEC, 0)
+            .check()
             .map(|fd| File::from_raw_fd(fd));
-        let close = check_int_return(libc::fclose(stream));
+        let close = libc::fclose(stream).check();
         let file = file?;
         close?;
 
@@ -638,16 +711,115 @@ pub fn memfd() -> io::Result<File> {
     }
 }
 
-#[inline]
-#[cold]
+/// Represents a classic unidirectional pipe.
+#[repr(C)]
+struct Pipe {
+    reader: c_int,
+    writer: c_int,
+}
+
+impl Pipe {
+    #[inline(always)]
+    const fn default() -> Self {
+        Self { reader: -1, writer: -1 }
+    }
+
+    fn new(flags: c_int) -> io::Result<Self> {
+        let mut fds = [-1, -1];
+
+        // Ironically, this is 1000% unneeded, because glibc, musl, etc., have shims for pipe2,
+        // *but as always*, the required extern_weak marker is an unstable feature. SINCE 2015.
+        // This repeated target-flaggery is a waste of everybody's time.
+        cfg_select! {
+            any(
+                target_os = "linux",      // tier 1
+                target_os = "android",    // tier 2
+                target_os = "emscripten", // tier 2
+                target_os = "freebsd",    // tier 2
+                target_os = "fuchsia",    // tier 2
+                target_os = "netbsd",     // tier 2
+                target_os = "redox",      // tier 2
+                target_os = "solaris",    // tier 2
+                target_os = "cygwin",     // tier 3
+                target_os = "dragonfly",  // tier 3
+                target_os = "hurd",       // tier 3
+                target_os = "illumos",    // tier 3
+                target_os = "l4re",       // tier 3
+                target_os = "openbsd",    // tier 3
+                target_env = "newlib"     // varies by target_os
+            ) => unsafe {
+                libc::pipe2(fds.as_mut_ptr(), flags).check()?;
+            },
+            _ => unsafe {
+                libc::pipe(fds.as_mut_ptr()).check()?;
+                for fd in fds {
+                    if flags & libc::O_CLOEXEC != 0 {
+                        libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC).check()?;
+                    }
+                    if flags & libc::O_NONBLOCK != 0 {
+                        libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK).check()?;
+                    }
+                }
+            },
+        }
+
+        Ok(Self { reader: fds[0], writer: fds[1] })
+    }
+}
+
+// "NIH syndrome can't be that bad." UNIX bros:
+#[inline(always)]
+fn errno_location() -> *mut c_int {
+    unsafe {
+        cfg_select! {
+            any(
+                target_os = "linux",      // tier 1
+                target_os = "emscripten", // tier 2
+                target_os = "fuchsia",    // tier 2
+                target_os = "redox",      // tier 2
+                target_os = "dragonfly",  // tier 3
+                target_os = "hurd",       // tier 3
+                target_os = "l4re",       // tier 3
+            ) => libc::__errno_location(),
+            any(
+                target_os = "android", // tier 2
+                target_os = "netbsd",  // tier 2
+                target_os = "cygwin",  // tier 3
+                target_os = "nuttx",   // tier 3
+                target_os = "openbsd", // tier 3
+                target_env = "newlib", // varies by target_os
+            ) => libc::__errno(),
+            any(
+                target_os = "solaris", // tier 2
+                target_os = "illumos", // tier 2
+            ) => libc::___errno(),
+            any(
+                target_vendor = "apple", // tier 1
+                target_os = "freebsd",   // tier 2
+            ) => libc::__error(),
+            any(
+                target_os = "haiku", // tier 3
+            ) => libc::_errnop(),
+            any(
+                target_os = "aix", // tier 3
+            ) => libc::_Errno(),
+            any(
+                target_os = "nto", // tier 3
+                target_os = "qnx", // tier 3
+            ) => libc::__get_errno_ptr(),
+            _ => compile_error!("unsupported platform"),
+        }
+    }
+}
+
+#[inline(always)]
 fn errno() -> c_int {
-    // libc unfortunately doesn't export an alias for `errno` (WHY?).
-    // As such we (ab)use the stdlib and use its internal errno implementation.
-    //
-    // Under `-O -Copt-level=s` the 1.87 compiler fails to fully inline and
-    // remove the raw_os_error() call. This leaves us with the drop() call.
-    // ManuallyDrop fixes that and results in a direct `std::sys::os::errno` call.
-    ManuallyDrop::new(io::Error::last_os_error()).raw_os_error().unwrap_or(0)
+    unsafe { *errno_location() }
+}
+
+#[inline(always)]
+pub fn set_errno(e: c_int) {
+    unsafe { *errno_location() = e }
 }
 
 #[inline]
@@ -662,6 +834,12 @@ fn from_raw_os_error(code: c_int) -> io::Error {
     io::Error::from_raw_os_error(code)
 }
 
-fn check_int_return(ret: libc::c_int) -> io::Result<libc::c_int> {
-    if ret < 0 { Err(last_os_error()) } else { Ok(ret) }
+trait CheckIntReturn {
+    fn check(self) -> io::Result<c_int>;
+}
+
+impl CheckIntReturn for c_int {
+    fn check(self) -> io::Result<c_int> {
+        if self < 0 { Err(last_os_error()) } else { Ok(self) }
+    }
 }

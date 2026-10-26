@@ -85,13 +85,13 @@ fn run() -> apperr::Result<()> {
     let mut vt_parser = vt::Parser::new();
     let mut input_parser = input::Parser::new();
     let mut tui = Tui::new()?;
-    tui.set_size(sys::get_window_size()?);
 
     // Switch the terminal to raw mode which prevents the user from pressing Ctrl+C.
     // `handle_args` may want to print a help message (must not fail),
     // and reads files (may hang; should be cancelable with Ctrl+C).
     // As such, we call this after `handle_args`.
-    sys::switch_modes()?;
+    let initial_size = sys::switch_modes()?;
+    tui.set_size(initial_size);
 
     let _restore = setup_terminal(&mut tui, &mut state, &mut vt_parser);
 
