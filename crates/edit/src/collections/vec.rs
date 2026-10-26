@@ -93,6 +93,28 @@ impl<'a, T> BVec<'a, T> {
         unsafe { Vec::from_raw_parts(self.ptr.as_ptr(), self.len, self.cap) }
     }
 
+    /// Constructs a [`BVec`] from ptr, length, and capacity.
+    ///
+    /// # Safety
+    ///
+    /// If you pass invalid arguments, this code will `rm -rf` your disk.
+    #[inline]
+    pub unsafe fn from_raw_parts(buf: *mut T, length: usize, capacity: usize) -> Self {
+        Self {
+            ptr: unsafe { NonNull::new_unchecked(buf) },
+            len: length,
+            cap: capacity,
+            _marker: PhantomData,
+            #[cfg(debug_assertions)]
+            alloc: None,
+        }
+    }
+
+    #[inline]
+    pub fn into_raw_parts(mut self) -> (*mut T, usize, usize) {
+        (self.as_mut_ptr(), self.len(), self.capacity())
+    }
+
     /// Number of initialized elements.
     #[inline]
     pub fn len(&self) -> usize {
