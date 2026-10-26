@@ -471,6 +471,11 @@ impl Framebuffer {
     /// Renders the framebuffer contents accumulated since the
     /// last call to `flip()` and returns them serialized as VT.
     pub fn render<'a>(&mut self, arena: &'a Arena) -> BString<'a> {
+        // DEC private mode 2026, Synchronized Output, lets us avoid flickering / tearing.
+        const SYNCHRONIZED_OUTPUT_ENABLE: &str = "\x1b[?2026h";
+        const SYNCHRONIZED_OUTPUT_DISABLE: &str = "\x1b[?2026l";
+        const OUTPUT_PREFIX_LEN: usize = SYNCHRONIZED_OUTPUT_ENABLE.len();
+
         let idx = self.frame_counter & 1;
         // Borrows the front/back buffers without letting Rust know that we have a reference to self.
         // SAFETY: Well this is certainly correct, but whether Rust and its strict rules likes it is another question.
@@ -500,6 +505,8 @@ impl Framebuffer {
         let mut last_fg = u64::MAX;
         let mut last_attr = Attributes::None;
 
+        result.push_str(arena, SYNCHRONIZED_OUTPUT_ENABLE);
+
         for y in 0..front.text.size.height {
             // SAFETY: The only thing that changes the size of these containers,
             // is the reset() method and it always resets front/back to the same size.
@@ -527,7 +534,10 @@ impl Framebuffer {
             let mut cfg = MeasurementConfig::new(&line_bytes);
             let mut chunk_end = 0;
 
-            if result.is_empty() {
+            // Since we don't retain the `last_attr` between frames and start with
+            // `last_attr = None` we have to reset all attributes to get a clean
+            // initial state. This only applies if we print any text, of course.
+            if result.len() <= OUTPUT_PREFIX_LEN {
                 result.push_str(arena, "\x1b[m");
             }
             arena_write_fmt!(arena, result, "\x1b[{};1H", y + 1);
@@ -600,7 +610,7 @@ impl Framebuffer {
         // If the cursor has changed since the last frame we naturally need to update it,
         // but this also applies if the code above wrote to the screen,
         // as it uses CUP sequences to reposition the cursor for writing.
-        if !result.is_empty() || back.cursor != front.cursor {
+        if result.len() > OUTPUT_PREFIX_LEN || back.cursor != front.cursor {
             if back.cursor.pos.x >= 0 && back.cursor.pos.y >= 0 {
                 // CUP to the cursor position.
                 // DECSCUSR to set the cursor style.
@@ -616,6 +626,26 @@ impl Framebuffer {
             } else {
                 // DECTCEM to hide the cursor.
                 result.push_str(arena, "\x1b[?25l");
+            }
+        }
+
+        if !result.is_empty() {
+            if result.len() <= 512 {
+                // Synchronized Output carries a certain overhead in most terminals that implement it.
+                // It can be slightly beneficial to avoid this. The problem is that there's no amount of
+                // bytes where a write into a TTY is rendered atomically. But IME, 512 bytes is pretty safe.
+                //
+                // Although, there may be a part in this story where the code primarily exists, because I found
+                // the thought of cutting off the head of the string while keeping its spare capacity hilarious.
+                unsafe {
+                    let (mut ptr, mut len, mut cap) = result.into_raw_parts();
+                    ptr = ptr.add(SYNCHRONIZED_OUTPUT_ENABLE.len());
+                    len -= SYNCHRONIZED_OUTPUT_ENABLE.len();
+                    cap -= SYNCHRONIZED_OUTPUT_ENABLE.len();
+                    result = BString::from_raw_parts(ptr, len, cap);
+                }
+            } else {
+                result.push_str(arena, SYNCHRONIZED_OUTPUT_DISABLE);
             }
         }
 

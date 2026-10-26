@@ -100,6 +100,21 @@ impl<'a> BString<'a> {
         res
     }
 
+    /// Constructs a [`BString`] from ptr, length, and capacity.
+    ///
+    /// # Safety
+    ///
+    /// If you pass invalid arguments, this code will `rm -rf` your disk.
+    #[inline]
+    pub unsafe fn from_raw_parts(buf: *mut u8, length: usize, capacity: usize) -> Self {
+        unsafe { Self { vec: BVec::from_raw_parts(buf, length, capacity) } }
+    }
+
+    #[inline]
+    pub fn into_raw_parts(self) -> (*mut u8, usize, usize) {
+        self.vec.into_raw_parts()
+    }
+
     /// Length in bytes, not characters.
     #[inline]
     pub fn len(&self) -> usize {
