@@ -17,7 +17,7 @@ pub use utf8::*;
 pub fn graphemes_may_join(left: &[u8], right: &[u8]) -> bool {
     use tables::*;
 
-    let Some(left) = utf8_decode_last(left) else {
+    let Some((left, _)) = utf8_decode_last(left) else {
         return false;
     };
     let Some(right) = Utf8Chars::new(right, 0).next() else {
