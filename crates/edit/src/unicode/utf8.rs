@@ -343,6 +343,7 @@ mod tests {
 
     #[test]
     fn test_utf8_decode_last() {
+        #[allow(clippy::type_complexity)]
         let cases: &[(&[u8], Option<(char, usize)>)] = &[
             (b"", None),
             (b"\xFF\x7F", Some(('\u{7F}', 1))),
