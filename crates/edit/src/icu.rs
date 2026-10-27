@@ -15,7 +15,7 @@ use crate::arena::{Arena, arena_format, scratch_arena};
 use crate::buffer::TextBuffer;
 use crate::collections::{BString, BVec};
 use crate::sys;
-use crate::unicode::Utf8Chars;
+use crate::unicode::{Utf8Chars, utf8_decode_last};
 
 pub(crate) const ILLEGAL_ARGUMENT_ERROR: Error = Error(1); // U_ILLEGAL_ARGUMENT_ERROR
 pub const ICU_MISSING_ERROR: Error = Error(0);
@@ -401,37 +401,39 @@ extern "C" fn utext_native_length(ut: &mut icu_ffi::UText) -> i64 {
 }
 
 extern "C" fn utext_access(ut: &mut icu_ffi::UText, native_index: i64, forward: bool) -> bool {
-    if let Some(cache) = utext_access_impl(ut, native_index, forward) {
-        let native_off = native_index as usize - cache.utf8_range.start;
-        ut.chunk_contents = cache.utf16.as_ptr();
-        ut.chunk_length = cache.utf16_len as i32;
-        ut.chunk_offset = cache.utf8_to_utf16_offsets[native_off] as i32;
-        ut.chunk_native_start = cache.utf8_range.start as i64;
-        ut.chunk_native_limit = cache.utf8_range.end as i64;
-        ut.native_indexing_limit = cache.native_indexing_limit as i32;
+    let tb = text_buffer_from_utext(ut);
+    let length = tb.text_length();
+
+    // ICU may ask for out-of-bound indices and it's on us to clamp it.
+    // The chunk is "accessible" when the index with the given reading direction will produce text.
+    let native_index = native_index.clamp(0, length as i64) as usize;
+    let accessible = if forward { native_index < length } else { native_index > 0 };
+
+    // When we're asked to load text at the absolute start or end of the buffer,
+    // we must enforce forward and reverse reading respectively.
+    // This ensures we give the caller a valid chunk and don't waste the request.
+    let load_forward = if native_index == 0 {
         true
-    } else {
+    } else if native_index >= length {
         false
-    }
+    } else {
+        forward
+    };
+    let cache = utext_access_impl(ut, native_index, load_forward);
+
+    let native_off = native_index - cache.utf8_range.start;
+    ut.chunk_contents = cache.utf16.as_ptr();
+    ut.chunk_length = cache.utf16_len as i32;
+    ut.chunk_offset = cache.utf8_to_utf16_offsets[native_off] as i32;
+    ut.chunk_native_start = cache.utf8_range.start as i64;
+    ut.chunk_native_limit = cache.utf8_range.end as i64;
+    ut.native_indexing_limit = cache.native_indexing_limit as i32;
+    accessible
 }
 
-fn utext_access_impl<'a>(
-    ut: &mut icu_ffi::UText,
-    native_index: i64,
-    forward: bool,
-) -> Option<&'a mut Cache> {
+fn utext_access_impl<'a>(ut: &mut icu_ffi::UText, native_index: usize, forward: bool) -> &'a Cache {
     let tb = text_buffer_from_utext(ut);
-    let mut index_contained = native_index;
-
-    if !forward {
-        index_contained -= 1;
-    }
-    if index_contained < 0 || index_contained as usize >= tb.text_length() {
-        return None;
-    }
-
-    let index_contained = index_contained as usize;
-    let native_index = native_index as usize;
+    let index_contained = if forward { native_index } else { native_index - 1 };
     let double_cache = double_cache_from_utext(ut);
     let dirty = ut.a != tb.generation() as i64;
 
@@ -446,53 +448,51 @@ fn utext_access_impl<'a>(
         ut.a = tb.generation() as i64;
     } else {
         // Check if one of the caches already contains the requested range.
-        for (i, cache) in double_cache.cache.iter_mut().enumerate() {
+        for (i, cache) in double_cache.cache.iter().enumerate() {
             if cache.utf8_range.contains(&index_contained) {
                 double_cache.mru = i != 0;
-                return Some(cache);
+                return cache;
             }
         }
     }
 
     // Turn the least recently used cache into the most recently used one.
-    let double_cache = double_cache_from_utext(ut);
     double_cache.mru = !double_cache.mru;
     let cache = &mut double_cache.cache[double_cache.mru as usize];
 
     // In order to safely fit any UTF-8 character into our cache,
     // we must assume the worst case of a 4-byte long encoding.
     const UTF16_LEN_LIMIT: usize = CACHE_SIZE - 4;
-    let utf8_len_limit;
-    let native_start;
 
-    if forward {
-        utf8_len_limit = (tb.text_length() - native_index).min(UTF16_LEN_LIMIT);
-        native_start = native_index;
+    let mut native_start = if forward {
+        native_index
     } else {
-        // The worst case ratio for UTF-8 to UTF-16 is 1:1, when the text is ASCII.
-        // This allows us to safely subtract the UTF-16 buffer size
-        // and assume that whatever we read as UTF-8 will fit.
-        // TODO: Test what happens if you have lots of invalid UTF-8 text blow up to U+FFFD.
-        utf8_len_limit = native_index.min(UTF16_LEN_LIMIT);
+        // -3 ensures we can read backward and find a codepoint boundary.
+        native_index.saturating_sub(UTF16_LEN_LIMIT - 3)
+    };
 
-        // Since simply subtracting an offset may end up in the middle of a codepoint sequence,
-        // we must align the offset to the next codepoint boundary.
-        // Here we skip trail bytes until we find a lead.
-        let mut beg = native_index - utf8_len_limit;
-        let chunk = tb.read_forward(beg);
-        for &c in chunk {
-            if c & 0b1100_0000 != 0b1000_0000 {
-                break;
-            }
-            beg += 1;
+    // Adjust `native_start` to the start of a valid UTF-8 character.
+    // This mimics ICU's `U8_SET_CP_START` and is crucial, because ICU
+    // makes no promises about the alignment of the requested indices.
+    //
+    // TODO: It may be worth avoiding this if requested index
+    // neighbors the previous block during linear scans by ICU.
+    if native_start < tb.text_length() {
+        let off = native_start + 1;
+        let chunk = tb.read_backward(off);
+        if let Some((_, rest)) = utf8_decode_last(chunk) {
+            let delta = chunk.len() - rest.len();
+            native_start = off - delta;
         }
-
-        native_start = beg;
     }
 
+    let utf8_len_limit = if forward {
+        (tb.text_length() - native_start).min(UTF16_LEN_LIMIT)
+    } else {
+        native_index - native_start
+    };
+
     // Translate the given range from UTF-8 to UTF-16.
-    // NOTE: This code makes the assumption that the `native_index` is always
-    // at UTF-8 codepoint boundaries which technically isn't guaranteed.
     let mut utf16_len = 0;
     let mut utf8_len = 0;
     let mut ascii_len = 0;
@@ -529,7 +529,7 @@ fn utext_access_impl<'a>(
             utf16_len += len;
             utf8_len += len;
             it.seek(len);
-            if ascii_len >= UTF16_LEN_LIMIT {
+            if utf8_len >= utf8_len_limit {
                 break;
             }
         }
@@ -579,7 +579,7 @@ fn utext_access_impl<'a>(
     // literally half the CPU time is spent on it.
     cache.native_indexing_limit = ascii_len;
     cache.utf8_range = native_start..native_limit;
-    Some(cache)
+    cache
 }
 
 extern "C" fn utext_map_offset_to_native(ut: &icu_ffi::UText) -> i64 {
@@ -660,6 +660,22 @@ impl Regex {
         }
     }
 
+    /// Advances to the next match and yields its range.
+    #[allow(clippy::should_implement_trait, reason = "no fallible iterators in the stdlib")]
+    pub fn next(&mut self) -> Result<Option<Range<usize>>> {
+        let f = assume_loaded();
+
+        let mut status = icu_ffi::U_ZERO_ERROR;
+        let ok = unsafe { (f.uregex_findNext)(self.0, &mut status) };
+        if status.is_failure() {
+            Err(status.as_error())
+        } else if ok {
+            Ok(self.group(0))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Updates the regex pattern with the given text.
     /// If the text contents have changed, you can pass the same text as you used
     /// initially and it'll trigger ICU to reload the text and invalidate its caches.
@@ -668,7 +684,7 @@ impl Regex {
     ///
     /// The caller must ensure that the given `Text` outlives the `Regex` instance.
     pub unsafe fn set_text(&mut self, text: &mut Text, offset: usize) {
-        // Get `utext_access_impl` to detect the `TextBuffer::generation` change,
+        // Get `utext_access` to detect the `TextBuffer::generation` change,
         // and refresh its contents. This ensures that ICU doesn't reuse
         // stale `UText::chunk_contents`, as it has no way tell that it's stale.
         utext_access(text.0, offset as i64, true);
@@ -711,22 +727,6 @@ impl Regex {
             let end = end.max(start);
             Some(start as usize..end as usize)
         }
-    }
-}
-
-impl Iterator for Regex {
-    type Item = Range<usize>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let f = assume_loaded();
-
-        let mut status = icu_ffi::U_ZERO_ERROR;
-        let ok = unsafe { (f.uregex_findNext)(self.0, &mut status) };
-        if !ok {
-            return None;
-        }
-
-        self.group(0)
     }
 }
 
@@ -888,6 +888,7 @@ pub fn fold_case<'a>(arena: &'a Arena, input: &str) -> BString<'a> {
         if status == icu_ffi::U_BUFFER_OVERFLOW_ERROR && output_len > 0 {
             output.reserve_exact(arena, output_len as usize);
             let output = output.spare_capacity_mut();
+            status = icu_ffi::U_ZERO_ERROR;
             output_len = unsafe {
                 (f.ucasemap_utf8FoldCase)(
                     casemap,

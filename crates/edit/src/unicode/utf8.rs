@@ -250,20 +250,24 @@ impl Iterator for Utf8Chars<'_> {
 
 impl iter::FusedIterator for Utf8Chars<'_> {}
 
-/// Returns the last character using the same invalid-UTF-8 recovery as `Utf8Chars`.
+/// Returns the last character and the remaining prefix,
+/// using the same invalid-UTF-8 recovery as `Utf8Chars`.
 /// Returns `None` for an empty slice.
-pub fn utf8_decode_last(source: &[u8]) -> Option<char> {
-    if source.is_empty() {
-        return None;
+#[inline]
+pub fn utf8_decode_last(source: &[u8]) -> Option<(char, &[u8])> {
+    let (&ch, rest) = source.split_last()?;
+    if ch.is_ascii() { Some((ch as char, rest)) } else { utf8_decode_last_slow(source) }
+}
+
+#[cold]
+fn utf8_decode_last_slow(source: &[u8]) -> Option<(char, &[u8])> {
+    #[inline(always)]
+    fn slice(source: &[u8], off: usize) -> &[u8] {
+        unsafe { source.get_unchecked(..off - 1) }
     }
 
     let mut offset = source.len();
     let mut c = unsafe { *source.get_unchecked(offset - 1) };
-
-    // ASCII? Simple.
-    if c.is_ascii() {
-        return Some(c as char);
-    }
 
     // Find the start of the last UTF8 sequence. It can't be longer than 4 bytes. `start` will
     // trail the offset on loop exit, as this matches the expectation of `Utf8Chars::next_slow`.
@@ -271,7 +275,7 @@ pub fn utf8_decode_last(source: &[u8]) -> Option<char> {
     while c & 0xC0 == 0x80 {
         offset -= 1;
         if offset <= lim {
-            return Some(Utf8Chars::fffd());
+            return Some((Utf8Chars::fffd(), slice(source, source.len())));
         }
         c = unsafe { *source.get_unchecked(offset - 1) };
     }
@@ -279,7 +283,11 @@ pub fn utf8_decode_last(source: &[u8]) -> Option<char> {
     // Parsing the last sequence is successful if the entire tail end was consumed.
     let mut chars = Utf8Chars::new(source, offset);
     let ch = chars.next_slow(c);
-    Some(if chars.offset == source.len() { ch } else { Utf8Chars::fffd() })
+    if chars.offset == source.len() {
+        Some((ch, slice(source, offset)))
+    } else {
+        Some((Utf8Chars::fffd(), slice(source, source.len())))
+    }
 }
 
 #[cfg(test)]
@@ -335,23 +343,33 @@ mod tests {
 
     #[test]
     fn test_utf8_decode_last() {
-        let cases: &[(&[u8], Option<char>)] = &[
+        #[allow(clippy::type_complexity)]
+        let cases: &[(&[u8], Option<(char, usize)>)] = &[
             (b"", None),
-            (b"\xFF\x7F", Some('\u{7F}')),
-            (b"\xC2\x80", Some('\u{80}')),
-            (b"\xFF\xE2\x82\xAC", Some('\u{20AC}')),
-            (b"\xFF\xF4\x8F\xBF\xBF", Some('\u{10FFFF}')),
+            (b"\xFF\x7F", Some(('\u{7F}', 1))),
+            (b"\xC2\x80", Some(('\u{80}', 2))),
+            (b"\xFF\xE2\x82\xAC", Some(('\u{20AC}', 3))),
+            (b"\xFF\xF4\x8F\xBF\xBF", Some(('\u{10FFFF}', 4))),
             // Truncated sequences.
-            (b"\xC2", Some('\u{FFFD}')),
-            (b"\xF0\x90\x80", Some('\u{FFFD}')),
+            (b"\xC2", Some(('\u{FFFD}', 1))),
+            (b"\xE1\x80", Some(('\u{FFFD}', 2))),
+            (b"\xFF\xF0\x90\x80", Some(('\u{FFFD}', 3))),
             // Stray and excess continuation bytes.
-            (b"\x80", Some('\u{FFFD}')),
-            (b"\x80\x80\x80\x80\x80", Some('\u{FFFD}')),
-            (b"\xC2\x80\x80", Some('\u{FFFD}')),
-            (b"a\x80", Some('\u{FFFD}')),
+            (b"\x80", Some(('\u{FFFD}', 1))),
+            (b"\x80\x80\x80\x80\x80", Some(('\u{FFFD}', 1))),
+            (b"\xC2\x80\x80", Some(('\u{FFFD}', 1))),
+            (b"a\x80", Some(('\u{FFFD}', 1))),
+            // Invalid leads, overlong encodings, surrogates, and out-of-range values.
+            (b"\xFF", Some(('\u{FFFD}', 1))),
+            (b"\xC1\xBF", Some(('\u{FFFD}', 1))),
+            (b"\xE0\x9F", Some(('\u{FFFD}', 1))),
+            (b"\xED\xA0", Some(('\u{FFFD}', 1))),
+            (b"\xF0\x8F", Some(('\u{FFFD}', 1))),
+            (b"\xF4\x90\x80\x80", Some(('\u{FFFD}', 1))),
         ];
 
         for &(source, expected) in cases {
+            let expected = expected.map(|(ch, len)| (ch, &source[..source.len() - len]));
             assert_eq!(utf8_decode_last(source), expected, "{source:x?}");
         }
     }
