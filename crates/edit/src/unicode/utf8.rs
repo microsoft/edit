@@ -3,6 +3,8 @@
 
 use std::{hint, iter};
 
+use crate::helpers::cold_path;
+
 /// An iterator over UTF-8 encoded characters.
 ///
 /// This differs from [`std::str::Chars`] in that it works on unsanitized
@@ -58,7 +60,7 @@ impl<'a> Utf8Chars<'a> {
 
     // I found that on mixed 50/50 English/Non-English text,
     // performance actually suffers when this gets inlined.
-    #[cold]
+    #[inline(never)]
     fn next_slow(&mut self, c: u8) -> char {
         if self.offset >= self.source.len() {
             return Self::fffd();
@@ -235,6 +237,7 @@ impl Iterator for Utf8Chars<'_> {
         } else {
             // Weirdly enough, adding a hint here to assert that `next_slow`
             // only returns codepoints >= 0x80 makes `ucd` ~5% slower.
+            cold_path();
             Some(self.next_slow(c))
         }
     }
@@ -261,33 +264,28 @@ pub fn utf8_decode_last(source: &[u8]) -> Option<(char, &[u8])> {
 
 #[cold]
 fn utf8_decode_last_slow(source: &[u8]) -> Option<(char, &[u8])> {
-    #[inline(always)]
-    fn slice(source: &[u8], off: usize) -> &[u8] {
-        unsafe { source.get_unchecked(..off - 1) }
-    }
+    let mut iter = source.iter();
 
-    let mut offset = source.len();
-    let mut c = unsafe { *source.get_unchecked(offset - 1) };
-
-    // Find the start of the last UTF8 sequence. It can't be longer than 4 bytes. `start` will
-    // trail the offset on loop exit, as this matches the expectation of `Utf8Chars::next_slow`.
-    let lim = offset.saturating_sub(4);
-    while c & 0xC0 == 0x80 {
-        offset -= 1;
-        if offset <= lim {
-            return Some((Utf8Chars::fffd(), slice(source, source.len())));
+    // Find the start of the last UTF8 sequence. It can't be longer than 4 bytes.
+    let lim = source.len().saturating_sub(4);
+    loop {
+        let c = *iter.next_back()?;
+        if c & 0xC0 != 0x80 {
+            // Parsing the last sequence is successful if the entire tail end was consumed.
+            let rest = iter.as_slice();
+            let mut chars = Utf8Chars::new(source, rest.len() + 1);
+            let ch = chars.next_slow(c);
+            if chars.offset == source.len() {
+                return Some((ch, rest));
+            }
+            break;
         }
-        c = unsafe { *source.get_unchecked(offset - 1) };
+        if iter.len() <= lim {
+            break;
+        }
     }
 
-    // Parsing the last sequence is successful if the entire tail end was consumed.
-    let mut chars = Utf8Chars::new(source, offset);
-    let ch = chars.next_slow(c);
-    if chars.offset == source.len() {
-        Some((ch, slice(source, offset)))
-    } else {
-        Some((Utf8Chars::fffd(), slice(source, source.len())))
-    }
+    Some((Utf8Chars::fffd(), &source[..source.len() - 1]))
 }
 
 #[cfg(test)]
@@ -371,6 +369,9 @@ mod tests {
         for &(source, expected) in cases {
             let expected = expected.map(|(ch, len)| (ch, &source[..source.len() - len]));
             assert_eq!(utf8_decode_last(source), expected, "{source:x?}");
+            if source.last().is_none_or(|c| !c.is_ascii()) {
+                assert_eq!(utf8_decode_last_slow(source), expected, "{source:x?}");
+            }
         }
     }
 }
