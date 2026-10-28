@@ -119,9 +119,12 @@ pub fn parse_f64_approx(input: &[u8]) -> Option<f64> {
 
     let mut value = mantissa as f64;
 
-    if exponent != 0 {
+    // A zero mantissa stays zero. Scaling it by 10^exponent would turn
+    // e.g. "0e400" into 0 * inf = NaN.
+    if exponent != 0 && mantissa != 0 {
         const TABLE: [f64; 8] = [1e-3, 1e-2, 1e-1, 1e0, 1e1, 1e2, 1e3, 1e4];
-        value *= match TABLE.get((exponent + 3) as usize) {
+        // The exponent saturates at i32::MAX/MIN above, so the offset must not overflow.
+        value *= match TABLE.get(exponent.wrapping_add(3) as usize) {
             Some(&v) => v,
             None => 10f64.powi(exponent),
         };
@@ -209,6 +212,22 @@ mod tests {
         // 19+ digit integer — truncation kicks in but result is close
         let v = p("12345678901234567890");
         assert!((v - 12345678901234567890.0f64).abs() / v < 1e-15);
+    }
+
+    // ---- Edge: zero with a large exponent ----
+    #[test]
+    fn zero_with_large_exponent() {
+        assert_eq!(p("0e400"), 0.0);
+        assert_eq!(p("0.0e999"), 0.0);
+        assert!(p("-0e400").is_sign_negative());
+    }
+
+    // ---- Edge: exponent close to i32::MAX ----
+    #[test]
+    fn huge_exponent() {
+        assert_eq!(p("1e2147483645"), f64::INFINITY);
+        assert_eq!(p("1e99999999999"), f64::INFINITY);
+        assert_eq!(p("1e-99999999999"), 0.0);
     }
 
     // ---- Errors ----
