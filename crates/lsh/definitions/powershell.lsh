@@ -49,6 +49,11 @@ pub fn powershell() {
                 else if /"/ { yield string; break; }
                 await input;
             }
+        } else if /[\w\d?:]+-[\w\d?:-]*/ {
+            // Commands like ForEach-Object or Invoke-WebRequest, which may begin with a keyword
+            yield method;
+        } else if /-[a-zA-Z]\w*/ {
+            // Operators and parameters like -in or -Path, which may contain a keyword
         } else if /(?i:begin|class|clean|data|define|dynamicparam|end|enum|filter|from|function|hidden|in|param|process|static|using|var)/ {
             if /\w+/ {
                 yield other;
@@ -75,8 +80,6 @@ pub fn powershell() {
             }
         } else if /[$@][\w\d?:]+/ {
             yield variable;
-        } else if /[\w\d?:]+-[\w\d?:-]*/ {
-            yield method;
         } else if /[\w\d?:]+/ {
             // Gobble any other tokens that should not be highlighted
         }

@@ -76,3 +76,8 @@ Write-Host "2 + 2 = $($array[0] + $array[1])"
 # Command substitution
 $pwdPath = $(Get-Location).Path
 Write-Host "Current directory: $pwdPath"
+
+# Commands and operators that begin with a keyword
+Get-ChildItem | ForEach-Object { $_.Name } | Format-Table
+Invoke-WebRequest -Uri "https://example.com"
+if (42 -in $array) { Exit-PSSession }
