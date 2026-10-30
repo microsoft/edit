@@ -154,6 +154,7 @@ pub struct State {
     pub search_replacement: String,
     pub search_options: buffer::SearchOptions,
     pub search_success: bool,
+    pub editor_context_menu_position: Option<Point>,
 
     pub wants_language_picker: bool,
 
@@ -204,6 +205,7 @@ impl State {
             search_replacement: Default::default(),
             search_options: Default::default(),
             search_success: true,
+            editor_context_menu_position: None,
 
             wants_language_picker: false,
 

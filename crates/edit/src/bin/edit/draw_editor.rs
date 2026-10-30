@@ -26,12 +26,57 @@ pub fn draw_editor(ctx: &mut Context, state: &mut State) {
     if let Some(doc) = state.documents.active() {
         ctx.textarea("textarea", doc.buffer.clone());
         ctx.inherit_focus();
+        if let Some(position) = ctx.take_textarea_context_menu_position() {
+            state.editor_context_menu_position = Some(position);
+        }
     } else {
         ctx.block_begin("empty");
         ctx.block_end();
     }
 
     ctx.attr_intrinsic_size(Size { width: 0, height: size.height - height_reduction });
+
+    draw_editor_context_menu(ctx, state);
+}
+
+fn draw_editor_context_menu(ctx: &mut Context, state: &mut State) {
+    let Some(position) = state.editor_context_menu_position else {
+        return;
+    };
+    let Some(buffer) = state.documents.active().map(|doc| doc.buffer.clone()) else {
+        state.editor_context_menu_position = None;
+        return;
+    };
+
+    ctx.context_menu_begin("editor_context_menu", position);
+
+    if ctx.context_menu_button(loc(LocId::EditCut), 'T', kbmod::CTRL | vk::X) {
+        buffer.borrow_mut().cut(ctx.clipboard_mut());
+        ctx.needs_rerender();
+    }
+    if ctx.context_menu_button(loc(LocId::EditCopy), 'C', kbmod::CTRL | vk::C) {
+        buffer.borrow_mut().copy(ctx.clipboard_mut());
+        ctx.needs_rerender();
+    }
+    if ctx.context_menu_button(loc(LocId::EditPaste), 'P', kbmod::CTRL | vk::V) {
+        buffer.borrow_mut().paste(ctx.clipboard_ref(), false);
+        ctx.needs_rerender();
+    }
+    if ctx.context_menu_button(loc(LocId::EditSelectAll), 'A', kbmod::CTRL | vk::A) {
+        buffer.borrow_mut().select_all();
+        ctx.needs_rerender();
+    }
+    if state.wants_search.kind != StateSearchKind::Disabled
+        && ctx.context_menu_button(loc(LocId::EditFind), 'F', kbmod::CTRL | vk::F)
+    {
+        state.wants_search.kind = StateSearchKind::Search;
+        state.wants_search.focus = true;
+        ctx.needs_rerender();
+    }
+
+    if ctx.context_menu_end() {
+        state.editor_context_menu_position = None;
+    }
 }
 
 fn draw_search(ctx: &mut Context, state: &mut State) {
@@ -352,4 +397,72 @@ fn validate_goto_point(line: &str) -> Option<Point> {
         return None;
     }
     Some(Point { x: coords[0], y: coords[1] })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use edit::input::{Input, InputMouse, InputMouseState};
+    use stdext::arena;
+
+    fn draw_frame(tui: &mut Tui, state: &mut State, input: Option<Input<'_>>) {
+        let mut ctx = tui.create_context(input);
+        draw_editor(&mut ctx, state);
+    }
+
+    fn settle(tui: &mut Tui, state: &mut State) {
+        while tui.needs_settling() {
+            draw_frame(tui, state, None);
+        }
+    }
+
+    #[test]
+    fn right_clicking_selected_text_opens_context_menu() {
+        let _ = arena::init(128 * MEBI);
+        let mut tui = Tui::new().unwrap();
+        let mut state = State::new().unwrap();
+        let buffer = state.documents.add_untitled().unwrap().buffer.clone();
+
+        {
+            let mut tb = buffer.borrow_mut();
+            tb.copy_from_str(&String::from("selected text"));
+            tb.cursor_move_to_logical(Point { x: 0, y: 0 });
+            tb.start_selection();
+            tb.selection_update_logical(Point { x: 8, y: 0 });
+        }
+
+        draw_frame(&mut tui, &mut state, Some(Input::Resize(Size { width: 80, height: 24 })));
+        settle(&mut tui, &mut state);
+
+        let margin = buffer.borrow().margin_width();
+        draw_frame(
+            &mut tui,
+            &mut state,
+            Some(Input::Mouse(InputMouse {
+                state: InputMouseState::Right,
+                modifiers: kbmod::NONE,
+                position: Point { x: margin + 1, y: 0 },
+                scroll: Point::default(),
+                drag: false,
+            })),
+        );
+        settle(&mut tui, &mut state);
+
+        let scratch = arena::scratch_arena(None);
+        let layout = tui.debug_layout(&scratch);
+        assert!(
+            layout.contains("editor_context_menu"),
+            "right-clicking selected text should open the context menu:\n{layout}"
+        );
+        for id in [
+            LocId::EditCut,
+            LocId::EditCopy,
+            LocId::EditPaste,
+            LocId::EditSelectAll,
+            LocId::EditFind,
+        ] {
+            let label = format!("text:         \"  {}\"", loc(id));
+            assert!(layout.contains(&label), "missing context-menu label {label}:\n{layout}");
+        }
+    }
 }
