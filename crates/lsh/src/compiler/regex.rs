@@ -37,7 +37,8 @@
 //!
 //! # Gotchas
 //!
-//! - `\w` includes bytes 0xC2-0xF4 (UTF-8 leading bytes) so that it can consume multibyte characters.
+//! - `\w` includes bytes 0xC2-0xF4 (UTF-8 leading bytes) and 0x80-0xBF
+//!   (UTF-8 continuation bytes), so that it can consume multibyte characters.
 //!   This isn't Unicode-correct but works for identifiers in most programming languages.
 //! - We don't create loops to keep the IR generation and optimization simple.
 //!   This means that e.g. (a|b)+ is not supported. For now that's fine.
@@ -50,16 +51,14 @@ use super::charset::Charset;
 use super::ir::*;
 use crate::runtime::Register;
 
-// 0xC2-0xF4 are UTF-8 leading bytes for multibyte sequences. Including them lets
-// `\w+` consume entire multibyte characters, which is important for identifiers
-// containing non-ASCII letters (e.g., `naïve`, `café`).
 const ASCII_WORD_CHARSET: Charset = {
     let mut charset = Charset::no();
     charset.set_range(b'0'..=b'9', true);
     charset.set_range(b'A'..=b'Z', true);
     charset.set_range(b'_'..=b'_', true);
     charset.set_range(b'a'..=b'z', true);
-    charset.set_range(0xC2..=0xF4, true);
+    charset.set_range(0xC2..=0xF4, true); // UTF8 leading bytes
+    charset.set_range(0x80..=0xBF, true); // UTF8 continuation bytes
     charset
 };
 
