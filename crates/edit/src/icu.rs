@@ -448,11 +448,15 @@ fn utext_access_impl<'a>(ut: &mut icu_ffi::UText, native_index: usize, forward: 
         ut.a = tb.generation() as i64;
     } else {
         // Check if one of the caches already contains the requested range.
-        for (i, cache) in double_cache.cache.iter().enumerate() {
-            if cache.utf8_range.contains(&index_contained) {
-                double_cache.mru = i != 0;
-                return cache;
-            }
+        //
+        // TODO: Due to borrowing issues in stable Rust 1.99 (and possibly subsequent versions),
+        // we cannot use any methods on double_cache (e.g. iterators or indexing helpers).
+        if double_cache.cache[0].utf8_range.contains(&index_contained) {
+            double_cache.mru = false; // aka 0
+            return &double_cache.cache[0];
+        } else if double_cache.cache[1].utf8_range.contains(&index_contained) {
+            double_cache.mru = true; // aka 1
+            return &double_cache.cache[1];
         }
     }
 
