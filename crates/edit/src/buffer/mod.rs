@@ -1341,8 +1341,8 @@ impl TextBuffer {
         // Move the start of the search to the start of the selection,
         // or otherwise to the current cursor position.
 
-        let text = unsafe { icu::Text::new(self)? };
-        let regex = unsafe { icu::Regex::new(&sanitized_pattern, flags, &text)? };
+        let text = icu::Text::new(self)?;
+        let regex = icu::Regex::new(&sanitized_pattern, flags, &text)?;
 
         Ok(ActiveSearch {
             pattern: pattern.to_string(),
@@ -1363,7 +1363,7 @@ impl TextBuffer {
         wrap: bool,
     ) -> icu::Result<Option<Range<usize>>> {
         if search.buffer_generation != self.buffer.generation() {
-            unsafe { search.regex.set_text(&mut search.text, offset) };
+            search.regex.set_text(&mut search.text, offset);
             search.buffer_generation = self.buffer.generation();
             search.next_search_offset = offset;
         } else if search.next_search_offset != offset {
