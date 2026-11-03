@@ -161,6 +161,7 @@ pub mod vk {
     pub const Y: InputKey = InputKey::new('Y' as u32);
     pub const Z: InputKey = InputKey::new('Z' as u32);
 
+    pub const APPS: InputKey = InputKey::new(0x5D);
     pub const NUMPAD0: InputKey = InputKey::new(0x60);
     pub const NUMPAD1: InputKey = InputKey::new(0x61);
     pub const NUMPAD2: InputKey = InputKey::new(0x62);
@@ -212,11 +213,19 @@ pub mod kbmod {
     pub const CTRL: InputKeyMod = InputKeyMod::new(0x01000000);
     pub const ALT: InputKeyMod = InputKeyMod::new(0x02000000);
     pub const SHIFT: InputKeyMod = InputKeyMod::new(0x04000000);
+    pub const SUPER: InputKeyMod = InputKeyMod::new(0x08000000);
 
     pub const CTRL_ALT: InputKeyMod = InputKeyMod::new(0x03000000);
     pub const CTRL_SHIFT: InputKeyMod = InputKeyMod::new(0x05000000);
     pub const ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x06000000);
     pub const CTRL_ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x07000000);
+    pub const SUPER_CTRL: InputKeyMod = InputKeyMod::new(0x09000000);
+    pub const SUPER_ALT: InputKeyMod = InputKeyMod::new(0x0A000000);
+    pub const SUPER_CTRL_ALT: InputKeyMod = InputKeyMod::new(0x0B000000);
+    pub const SUPER_SHIFT: InputKeyMod = InputKeyMod::new(0x0C000000);
+    pub const SUPER_CTRL_SHIFT: InputKeyMod = InputKeyMod::new(0x0D000000);
+    pub const SUPER_ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x0E000000);
+    pub const SUPER_CTRL_ALT_SHIFT: InputKeyMod = InputKeyMod::new(0x0F000000);
 }
 
 /// Mouse input state. Up/Down, Left/Right, etc.
@@ -448,6 +457,73 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                         'M' if csi.param_count == 0 => {
                             self.parser.x10_mouse_want = true;
                         }
+                        'u' => {
+                            // Kitty keyboard events
+                            let key = match csi.params[0] {
+                                97 ..= 122 => Some(InputKey::new(csi.params[0] as u32 & !0x20)), // Shift a-z to A-Z
+                                127 => Some(vk::BACK),
+
+                                // F13-F24
+                                57376 => Some(vk::F13),
+                                57377 => Some(vk::F14),
+                                57378 => Some(vk::F15),
+                                57379 => Some(vk::F16),
+                                57380 => Some(vk::F17),
+                                57381 => Some(vk::F18),
+                                57382 => Some(vk::F19),
+                                57383 => Some(vk::F20),
+                                57384 => Some(vk::F21),
+                                57385 => Some(vk::F22),
+                                57386 => Some(vk::F23),
+                                57387 => Some(vk::F24),
+
+                                // Number pad keys
+                                57399 => Some(vk::NUMPAD0),
+                                57400 => Some(vk::NUMPAD1),
+                                57401 => Some(vk::NUMPAD2),
+                                57402 => Some(vk::NUMPAD3),
+                                57403 => Some(vk::NUMPAD4),
+                                57404 => Some(vk::NUMPAD5),
+                                57405 => Some(vk::NUMPAD6),
+                                57406 => Some(vk::NUMPAD7),
+                                57407 => Some(vk::NUMPAD8),
+                                57408 => Some(vk::NUMPAD9),
+                                57409 => Some(vk::DECIMAL),
+                                57410 => Some(vk::DIVIDE),
+                                57411 => Some(vk::MULTIPLY),
+                                57412 => Some(vk::SUBTRACT),
+                                57413 => Some(vk::ADD),
+                                57414 => Some(vk::RETURN),
+                                57415 => Some(InputKey::new('=' as u32)),
+                                57416 => Some(vk::SEPARATOR),
+                                57417 => Some(vk::LEFT),
+                                57418 => Some(vk::RIGHT),
+                                57419 => Some(vk::UP),
+                                57420 => Some(vk::DOWN),
+                                57421 => Some(vk::PRIOR),
+                                57422 => Some(vk::NEXT),
+                                57423 => Some(vk::HOME),
+                                57424 => Some(vk::END),
+                                57425 => Some(vk::INSERT),
+                                57426 => Some(vk::DELETE),
+                                57363 => Some(vk::APPS), // Menu
+
+                                // Keys to Ignore
+                                57358 => None, // Caps Lock
+                                57359 => None, // Scroll Lock
+                                57360 => None, // Num Lock
+                                57361 => None, // Print Screen
+                                57362 => None, // Pause
+                                57388 ..= 57398 => None, // F25-F35
+                                57428 ..= 57440 => None, // Media and Volume
+                                57441 ..= 57454 => None, // Left/Right Modifiers
+
+                                _ => Some(InputKey::new(csi.params[0] as u32)),
+                            }?;
+                            return Some(Input::Keyboard(
+                                key | Self::parse_modifiers(csi),
+                            ));
+                        }
                         _ => {}
                     }
                 }
@@ -536,6 +612,9 @@ impl<'input> Stream<'_, '_, 'input> {
         }
         if (p1 & 0x04) != 0 {
             modifiers |= kbmod::CTRL;
+        }
+        if (p1 & 0x08) != 0 {
+            modifiers |= kbmod::SUPER;
         }
         modifiers
     }
