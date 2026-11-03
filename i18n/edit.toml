@@ -1,6 +1,7 @@
 __default__ = [
     "en",
     # --------
+    "cs",
     "de",
     "es",
     "fr",
@@ -26,15 +27,18 @@ zh = "zh-hans"
 # The keyboard key
 [Ctrl]
 en = "Ctrl"
+cs = "Ctrl"
 de = "Strg"
 
 # The keyboard key
 [Alt]
 en = "Alt"
+cs = "Alt"
 
 # The keyboard key
 [Shift]
 en = "Shift"
+cs = "Shift"
 da = "Skift"
 de = "Umschalt"
 es = "Mayús"
@@ -231,6 +235,7 @@ zh-hant = "總是"
 # A generic settings load failure, e.g. "Invalid Settings: files.associations"
 [SettingsInvalid]
 en = "Invalid Settings: "
+cs = "Neplatná nastavení: "
 de = "Ungültige Einstellungen: "
 es = "Configuración no válida: "
 fr = "Paramètres non valides : "
@@ -435,6 +440,7 @@ zh-hant = "另存新檔…"
 
 [FilePreferences]
 en = "Preferences"
+cs = "Předvolby"
 de = "Einstellungen"
 es = "Configuración"
 fr = "Paramètres"
@@ -1857,6 +1863,7 @@ zh-hant = "關閉"
 
 [LanguageSelectMode]
 en = "Select Language Mode"
+cs = "Vybrat režim jazyka"
 de = "Sprachmodus auswählen"
 es = "Seleccionar modo de lenguaje"
 fr = "Sélectionner le mode du langage"
@@ -1876,6 +1883,7 @@ zh-hant = "選擇語言模式"
 
 [LanguageAutoDetect]
 en = "Auto Detect"
+cs = "Automaticky rozpoznat"
 de = "Automatisch erkennen"
 es = "Detección automática"
 fr = "Détection automatique"
