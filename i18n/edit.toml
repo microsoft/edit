@@ -925,6 +925,28 @@ vi = "Xem"
 zh-hans = "视图"
 zh-hant = "檢視"
 
+# EN: Markdown navigation pane labels.
+# 中文：Markdown 導覽視窗文字。
+[ViewNavigation]
+en = "Navigation Pane…"
+zh-hans = "导航窗口…"
+zh-hant = "導覽視窗…"
+
+[NavigationDialogTitle]
+en = "[Navigation Pane]"
+zh-hans = "[导航窗口]"
+zh-hant = "[導覽視窗]"
+
+[NavigationNoContent]
+en = "No headings or text"
+zh-hans = "没有标题或文字"
+zh-hant = "沒有標題或文字"
+
+[NavigationEscapeHint]
+en = "ESC Cancel"
+zh-hans = "ESC取消"
+zh-hant = "ESC取消"
+
 [ViewFocusStatusbar]
 en = "Focus Statusbar"
 ar = "تركيز شريط الحالة"

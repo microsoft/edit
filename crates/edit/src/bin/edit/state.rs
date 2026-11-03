@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::{Path, PathBuf};
@@ -166,6 +167,9 @@ pub struct State {
     pub wants_statusbar_focus: bool,
     pub wants_indentation_picker: bool,
     pub wants_go_to_file: bool,
+    pub wants_navigation: bool,
+    pub navigation_collapsed: BTreeSet<usize>,
+    pub navigation_path: Option<PathBuf>,
     pub wants_about: bool,
     pub wants_close: bool,
     pub wants_exit: bool,
@@ -216,6 +220,9 @@ impl State {
             wants_encoding_change: StateEncodingChange::None,
             wants_indentation_picker: false,
             wants_go_to_file: false,
+            wants_navigation: false,
+            navigation_collapsed: Default::default(),
+            navigation_path: None,
             wants_about: false,
             wants_close: false,
             wants_exit: false,
