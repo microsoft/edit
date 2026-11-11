@@ -452,7 +452,8 @@ impl<'a, 'i> Parser<'a, 'i> {
 
             if self.is_str("//") {
                 self.pos += 2;
-                while self.pos < self.bytes.len() && self.bytes[self.pos] != b'\n' {
+                while self.pos < self.bytes.len() && !matches!(self.bytes[self.pos], b'\n' | b'\r')
+                {
                     self.pos += 1;
                 }
             } else if self.is_str("/*") {
@@ -666,6 +667,16 @@ mod tests {
         let obj = value.as_object().unwrap();
         assert_eq!(obj.get_number("a"), Some(1.0));
         assert_eq!(obj.get_number("b"), Some(2.0));
+    }
+
+    #[test]
+    fn test_line_comment_newlines() {
+        let scratch = scratch_arena(None);
+        for newline in ["\n", "\r\n", "\r"] {
+            let input = format!("{{// comment{newline}\"a\": 1}}");
+            let value = parse(&scratch, &input).unwrap();
+            assert_eq!(value.as_object().unwrap().get_number("a"), Some(1.0));
+        }
     }
 
     #[test]
