@@ -1,0 +1,92 @@
+#[display_name = "Fish"]
+#[path = "**/*.fish"]
+pub fn fish() {
+    until /$/ {
+        yield other;
+
+        if /\s*/ {}
+        yield other;
+
+        if /(?:and|begin|else|if|not|or|time|while)\>/ {
+            // Another command follows these, so the next word is still in command position.
+            yield keyword.control;
+            continue;
+        } else if /(?:break|case|continue|end|return|switch)\>/ {
+            yield keyword.control;
+        } else if /for\>/ {
+            yield keyword.control;
+            if /\s+\w+/ {
+                yield other;
+                if /\s+in\>/ {
+                    yield keyword.control;
+                }
+            }
+        } else if /function\>/ {
+            yield keyword.other;
+            if /\s+(\w+)/ {
+                yield $1 as method;
+            }
+        } else if /(?:abbr|alias|builtin|command|exec|set|source)\>/ {
+            yield keyword.other;
+        } else if /(?:argparse|bg|cd|commandline|contains|count|disown|echo|emit|eval|exit|fg|functions|history|jobs|kill|math|printf|pwd|random|read|realpath|set_color|status|string|test|type|ulimit|umask|wait)\>/ {
+            // TODO: Highlight `string` subcommands (match, replace, ...).
+            yield keyword.other;
+        }
+
+        // (cmd) and $(cmd) are tokenized flat with the same rules. Nesting is not tracked.
+        until /$/ {
+            yield other;
+
+            if /#.*/ {
+                yield comment;
+            } else if /'/ {
+                // Only \' and \\ are escapes. A trailing backslash is literal.
+                loop {
+                    if /\\['\\]/ {}
+                    else if /'/ { yield string; break; }
+                    yield string;
+                    await input;
+                }
+            } else if /"/ {
+                loop {
+                    yield string;
+                    if /\\.?/ {}
+                    else if /\$+[A-Za-z_]\w*(?:\[[^\]\s]*\])?|\$\([^)]*\)/ {
+                        yield variable;
+                    }
+                    else if /"/ { yield string; break; }
+                    yield string;
+                    await input;
+                }
+            } else if /\\(?:x[\da-fA-F]{1,2}|u[\da-fA-F]{1,4}|U[\da-fA-F]{1,8}|c.|.)?/ {
+                // Escape sequences: \x41, \e, \ (escaped space), line continuation, etc.
+                yield string;
+            } else if /\$+[A-Za-z_]\w*(?:\[[^\]\s]*\])?/ {
+                // $var, $$ref, $argv[1]
+                yield variable;
+            } else if /\$\(/ {
+                // Only the opener is colored
+                yield variable;
+                break;
+            } else if /\d*(?:>>|>&|<&|>\||>\?|&>|&\||[<>])\d*/ {
+                // Redirections (2>, >&2) must not be colored as numbers.
+            } else if /[;|&()]+/ {
+                //Separators and substitution boundaries mark the end of the arguments. The next word is treated as a command
+                break;
+            } else if /--?[A-Za-z][\w-]*|\/[\w.\/-]*/ {
+                // Options (--set-cursor) and paths (/bin/true) are treated normally.
+            } else if /\[[-\d.]+\]|%\d+|[{,][\w.-]*/ {
+                // Indices ([1], [2..-1]), job ids (%1) and brace items ({1,2}) aren't treated as numbers.
+            } else if /(?:true|false)\>/ {
+                yield constant.language;
+            } else if /(?:(?i:0x[\da-fA-F]+)|-?(?:\d+\.?\d*|\.\d+)(?:(?i:e)[+-]?\d+)?)\>/ {
+                yield constant.numeric;
+            } else if /\w+#*/ {
+                // Consume word characters so the next iteration starts at a word boundary.
+                // Consume a trailing `#` so `foo#bar` isn't treated as a comment.
+            }
+
+            yield other;
+        }
+    }
+}
