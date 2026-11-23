@@ -206,10 +206,9 @@ impl<'input> Stream<'_, 'input> {
                         self.parser.state = State::Dcs;
                     }
                     '\x1b' => {
-                        // ESC ESC: the first one was a lone Escape key press (e.g. while
-                        // holding Esc). Stay in the Esc state so that whatever follows
-                        // (e.g. `[A`) is still parsed as a sequence and not as text.
-                        return Some(Token::Esc('\0'));
+                        // Per VT100, a new ESC cancels the escape sequence in progress
+                        // and stays in the Esc state so whatever follows (e.g. `[A`)
+                        // is still parsed as a sequence instead of leaking as text.
                     }
                     c => {
                         self.parser.state = State::Ground;
