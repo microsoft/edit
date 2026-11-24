@@ -67,13 +67,13 @@ pub fn toml() {
             yield constant.language;
         } else if /\+?-?(?:inf|nan)\>/ {
             yield constant.language;
-        } else if /(?i:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:z|[+-]\d{2}:\d{2})?)?)/ {
+        } else if /(?i:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:z|[+-]\d{2}:\d{2})?)?)\>/ {
             // Offset date-time, local date-time and local date.
             yield constant.numeric;
-        } else if /\d{2}:\d{2}:\d{2}(?:\.\d+)?/ {
+        } else if /\d{2}:\d{2}:\d{2}(?:\.\d+)?\>/ {
             // Local time.
             yield constant.numeric;
-        } else if /(?i:\+?-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?)/ {
+        } else if /(?i:\+?-?(?:0x[\da-fA-F_]+|0b[01_]+|0o[0-7_]+|\d+[\d_]*\.?[\d_]*|\.\d+[\d_]*)(?:e[+-]?[\d_]+)?)\>/ {
             if /\w+/ {
                 // Not a number after all.
             } else {

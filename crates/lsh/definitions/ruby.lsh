@@ -61,7 +61,7 @@ pub fn ruby() {
             yield keyword.other;
         } else if /(?:true|false|nil)\>/ {
             yield constant.language;
-        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+(?:\.[\d_]+)?(?:e[+-]?[\d_]+)?)r?i?)/ {
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|\d+[\d_]*(?:\.\d+[\d_]*)?(?:e[+-]?[\d_]+)?)r?i?)\>/ {
             // Floats need digits on both sides of the dot, so that `1..2` and
             // `1.upto(2)` don't swallow the dot.
             if /\w+/ {

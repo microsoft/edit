@@ -83,7 +83,7 @@ pub fn yaml() {
         } else {
             yield constant.language;
         }
-    } else if /[+-]?(?i:\.inf|\.nan|(?:0x[\da-f_]+|0o[0-7_]+|0b[01_]+|\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)/ {
+    } else if /[+-]?(?i:\.inf|\.nan|(?:0x[\da-f_]+|0o[0-7_]+|0b[01_]+|\d+\.?\d*|\.\d+)(?i:e[+-]?\d+)?)\>/ {
         if /\s*[^\s#]+[^#]*/ {
             yield string;
         } else {

@@ -38,7 +38,7 @@ pub fn cpp() {
             yield constant.language;
         } else if /(?:auto|bool|char8_t|char16_t|char32_t|char|double|float|int|long|short|signed|unsigned|void|wchar_t)\>/ {
             yield storage.type;
-        } else if /(?i:-?(?:0x[\da-f']+|0b[01']+|[\d']+\.?[\d']*|\.[\d']+)(?:[ep][+-]?[\d']+)?[fluz]*)/ {
+        } else if /(?i:-?(?:0x[\da-f']+|0b[01']+|[\d']+\.?[\d']*|\.[\d']+)(?:[ep][+-]?[\d']+)?[fluz]*)\>/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {

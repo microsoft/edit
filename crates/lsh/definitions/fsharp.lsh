@@ -65,7 +65,7 @@ pub fn fsharp() {
             yield constant.language;
         } else if /(?:bigint|bool|byte|char|decimal|double|exn|float32|float|int8|int16|int32|int64|int|nativeint|obj|sbyte|single|string|uint8|uint16|uint32|uint64|unativeint|uint|unit|void)\>/ {
             yield storage.type;
-        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|[\d_]+\.?[\d_]*|\.[\d_]+)(?:e[+-]?[\d_]+)?[filmnsuy]{0,2})/ {
+        } else if /(?i:-?(?:0x[\da-f_]+|0b[01_]+|0o[0-7_]+|\d+[\d_]*\.?[\d_]*|\.\d+[\d_]*)(?:e[+-]?[\d_]+)?[filmnsuy]{0,2})\>/ {
             if /\w+/ {
                 // Invalid numeric literal
             } else {
