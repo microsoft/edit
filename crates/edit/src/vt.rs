@@ -205,6 +205,11 @@ impl<'input> Stream<'_, 'input> {
                     'P' => {
                         self.parser.state = State::Dcs;
                     }
+                    '\x1b' => {
+                        // Per VT100, a new ESC cancels the escape sequence in progress
+                        // and stays in the Esc state so whatever follows (e.g. `[A`)
+                        // is still parsed as a sequence instead of leaking as text.
+                    }
                     c => {
                         self.parser.state = State::Ground;
                         return Some(Token::Esc(c));
