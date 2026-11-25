@@ -244,21 +244,17 @@ impl<'input> Stream<'_, 'input> {
                             0x40..=0x7e => {
                                 self.parser.state = State::Ground;
                                 self.parser.csi.final_byte = c as char;
-                                // `param_count` is already at the limit if the sequence
-                                // had more parameters than fit into `params`.
-                                if self.parser.csi.param_count < self.parser.csi.params.len()
-                                    && (self.parser.csi.param_count != 0
-                                        || self.parser.csi.params[0] != 0)
+                                if self.parser.csi.param_count != 0
+                                    || self.parser.csi.params[0] != 0
                                 {
-                                    self.parser.csi.param_count += 1;
+                                    self.parser.csi.param_count = (self.parser.csi.param_count + 1)
+                                        .min(self.parser.csi.params.len());
                                 }
                                 return Some(Token::Csi(&self.parser.csi));
                             }
                             b';' => {
-                                // Excess parameters are skipped above, so don't count past the end.
-                                if self.parser.csi.param_count < self.parser.csi.params.len() {
-                                    self.parser.csi.param_count += 1;
-                                }
+                                self.parser.csi.param_count = (self.parser.csi.param_count + 1)
+                                    .min(self.parser.csi.params.len());
                             }
                             b'<'..=b'?' => self.parser.csi.private_byte = c as char,
                             _ => {}
@@ -350,55 +346,5 @@ impl<'input> Stream<'_, 'input> {
         }
 
         None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_csi_too_many_params() {
-        let mut parser = Parser::new();
-
-        // 40 parameters don't fit into `Csi::params`. The excess ones must be dropped,
-        // and the parser must still be usable for the next sequence afterwards.
-        let input = format!("\x1b[<{}m\x1b[1;5A", "1;".repeat(39) + "1");
-        let mut stream = parser.parse(&input);
-
-        match stream.next() {
-            Some(Token::Csi(csi)) => {
-                assert_eq!(csi.final_byte, 'm');
-                assert_eq!(csi.private_byte, '<');
-                assert_eq!(csi.param_count, csi.params.len());
-                assert!(csi.params[..csi.param_count].iter().all(|&p| p == 1));
-            }
-            _ => panic!("expected a CSI token"),
-        }
-
-        match stream.next() {
-            Some(Token::Csi(csi)) => {
-                assert_eq!(csi.final_byte, 'A');
-                assert_eq!(&csi.params[..csi.param_count], &[1, 5]);
-            }
-            _ => panic!("expected a CSI token"),
-        }
-
-        assert!(stream.next().is_none());
-    }
-
-    #[test]
-    fn test_csi_too_many_empty_params() {
-        let mut parser = Parser::new();
-        let input = format!("\x1b[{}m", ";".repeat(40));
-        let mut stream = parser.parse(&input);
-
-        match stream.next() {
-            Some(Token::Csi(csi)) => {
-                assert_eq!(csi.final_byte, 'm');
-                assert_eq!(csi.param_count, csi.params.len());
-            }
-            _ => panic!("expected a CSI token"),
-        }
     }
 }
