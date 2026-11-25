@@ -782,6 +782,7 @@ impl Tui {
         {
             if self.focused_node_path.contains(&id) {
                 self.focused_node_path = path;
+                needs_settling = true;
             }
         }
 
