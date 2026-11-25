@@ -252,11 +252,15 @@ impl<'input> Stream<'_, 'input> {
                                 if self.parser.csi.param_count != 0
                                     || self.parser.csi.params[0] != 0
                                 {
-                                    self.parser.csi.param_count += 1;
+                                    self.parser.csi.param_count = (self.parser.csi.param_count + 1)
+                                        .min(self.parser.csi.params.len());
                                 }
                                 return Some(Token::Csi(&self.parser.csi));
                             }
-                            b';' => self.parser.csi.param_count += 1,
+                            b';' => {
+                                self.parser.csi.param_count = (self.parser.csi.param_count + 1)
+                                    .min(self.parser.csi.params.len());
+                            }
                             b'<'..=b'?' => self.parser.csi.private_byte = c as char,
                             _ => {}
                         }
