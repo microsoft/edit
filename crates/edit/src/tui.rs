@@ -360,6 +360,9 @@ pub struct Tui {
     /// This way we can track if the focus changed, because then we
     /// need to scroll the node into view if it's within a scrollarea.
     focused_node_for_scrolling: u64,
+    /// For each open modal, its node ID and the focus path from before it opened.
+    /// Once the modal is gone, the focus is returned to that path.
+    modal_focus_stack: Vec<(u64, Vec<u64>)>,
 
     /// The menubar button whose menu is open and can be closed by clicking it again.
     /// Only set once the press that opened the menu has ended.
@@ -417,6 +420,7 @@ impl Tui {
 
             focused_node_path: Vec::with_capacity(16),
             focused_node_for_scrolling: ROOT_ID,
+            modal_focus_stack: Vec::new(),
             menubar_toggle_id: 0,
 
             cached_text_buffers: Vec::with_capacity(16),
@@ -770,6 +774,16 @@ impl Tui {
         // If the user pressed Escape, we move the focus to a parent node.
         if !ctx.input_consumed && ctx.consume_shortcut(vk::ESCAPE) {
             focus_path_pop_min = 1;
+        }
+
+        // If a modal was closed while it had the focus, return the focus to where it was before.
+        while let Some((id, path)) =
+            self.modal_focus_stack.pop_if(|(id, _)| self.prev_node_map.get(*id).is_none())
+        {
+            if self.focused_node_path.contains(&id) {
+                self.focused_node_path = path;
+                needs_settling = true;
+            }
         }
 
         // Remove any unknown nodes from the focus path.
@@ -1796,6 +1810,11 @@ impl<'a> Context<'a, '_> {
         self.attr_background_rgba(self.tui.modal_default_bg);
         self.attr_foreground_rgba(self.tui.modal_default_fg);
         self.attr_focus_well();
+
+        let id = self.tree.last_node.borrow().id;
+        if self.tui.prev_node_map.get(id).is_none() {
+            self.tui.modal_focus_stack.push((id, self.tui.focused_node_path.clone()));
+        }
         self.focus_on_first_present();
 
         let mut last_node = self.tree.last_node.borrow_mut();
