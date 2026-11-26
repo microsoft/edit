@@ -10,6 +10,7 @@
 #ifndef F_CPU
 #  define F_CPU 16000000
 #endif
+%define BUFSIZE 64
 
 // Directives
 .section .text
@@ -64,6 +65,16 @@ delay:  dec r18
         movl -4(%rbp), %eax
         call puts@PLT
         rep movsb
+
+.intel_syntax noprefix
+        mov eax, dword ptr [rbp - 4]
+        lea rsi, [rip + msg]
+        movzx ecx, byte ptr [rsi + rcx*2]
+        mov rax, qword ptr fs:[0x28]
+        mov r8d, 0FFh
+        vmovdqu ymm0, ymmword ptr [rdi]
+        mov rdi, offset msg
+.att_syntax
 
         push {ip, lr}
         mov r0, #5

@@ -19,6 +19,9 @@ pub fn gas() {
     } else if /#.*/ {
         // A `#` at the start of a line is a comment on every target.
         yield comment;
+    } else if /%[A-Za-z_]\w*/ {
+        // NASM directive, as in `%define`
+        yield keyword.preprocessor;
     } else if /([A-Za-z_.$][\w.$]*)\s*=/ {
         yield $1 as variable;
         yield other;
@@ -51,7 +54,7 @@ pub fn gas() {
         } else if /'\\?.'?/ {
             // GAS also accepts character constants without the closing quote: `'A`
             yield string;
-        } else if /[$#]?-?(?i:0x[\da-f]+|0b[01]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)\>/ {
+        } else if /[$#]?-?(?i:0x[\da-f]+|\d[\da-f]*h|0b[01]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)\>/ {
             yield constant.numeric;
         } else if /\d+[bf]\>/ {
             yield method;
@@ -64,6 +67,12 @@ pub fn gas() {
             yield variable;
         } else if /(?i:[rxwvastdqbh]\d+|f[ast]?\d+|sp|wsp|lr|pc|fp|ip|ra|gp|tp|zero|xzr|wzr)\>/ {
             yield variable;
+        } else if /(?i:(?:si|di|bp|sp)l|[re]?(?:[abcd]x|si|di|bp|sp|ip)|[abcd][lh]|r\d+[dwb]|[xyz]?mm\d+|[c-gs]s|[cd]r\d+)\>/ {
+            yield variable;
+        } else if /(?i:byte|word|dword|fword|qword|tbyte|tword|oword|xmmword|ymmword|zmmword|ptr)\>/ {
+            yield storage.type;
+        } else if /(?i:offset)\>/ {
+            yield keyword.other;
         } else if /[XYZ][LH]?\>/ {
             yield variable;
         } else if /\\\w+/ {
