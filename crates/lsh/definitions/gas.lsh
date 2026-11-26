@@ -6,7 +6,7 @@ pub fn gas() {
             yield other;
         }
 
-        if /([A-Za-z_.$][\w.$]*|\d+)\s*:/ {
+        if /([A-Za-z_.$][\w.$]*|\d+|@@)\s*:/ {
             yield $1 as method;
             yield other;
         } else {
@@ -27,6 +27,12 @@ pub fn gas() {
         yield other;
     } else if /\.[A-Za-z_][\w.]*/ {
         yield keyword.preprocessor;
+    } else if /([A-Za-z_.$][\w.$]*)\s+(?i:equ)\>/ {
+        yield $1 as variable;
+        yield keyword.other;
+    } else if /([A-Za-z_.$][\w.$]*)\s+(?i:proc|endp|d[bwdqtoyz]|res[bwdqtoyz]|times)\>/ {
+        yield $1 as method;
+        yield keyword.other;
     } else if /[A-Za-z_][\w.]*/ {
         yield keyword.other;
     }
@@ -56,7 +62,7 @@ pub fn gas() {
             yield string;
         } else if /[$#]?-?(?i:0x[\da-f]+|\d[\da-f]*h|0b[01]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)\>/ {
             yield constant.numeric;
-        } else if /\d+[bf]\>/ {
+        } else if /(?:\d+[bf]|@[BbFf])\>/ {
             yield method;
         } else if /[A-Za-z_.$][\w.$]*\s*\(,?(%\w+)/ {
             // Memory operand, as in `msg(%rip)`

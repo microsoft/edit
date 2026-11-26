@@ -19,6 +19,8 @@
 .equ BAUD, 9600
 .set COUNT, 10
 LIMIT = 100
+BUFLEN equ 64
+buffer times BUFLEN db 0
 
 // Labels
 main:
@@ -75,6 +77,12 @@ delay:  dec r18
         vmovdqu ymm0, ymmword ptr [rdi]
         mov rdi, offset msg
 .att_syntax
+
+main PROC
+@@:     dec ecx
+        jnz @B
+        ret
+main ENDP
 
         push {ip, lr}
         mov r0, #5
