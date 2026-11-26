@@ -1108,6 +1108,26 @@ vi = "Giới thiệu"
 zh-hans = "关于"
 zh-hant = "關於"
 
+[ExternalChangeDescription]
+en = "This file changed on disk while you have unsaved edits. Keep your changes or reopen from disk (discarding your edits)?"
+zh-hans = "您有未保存的更改，同时磁盘上的文件已更改。保留您的更改，还是从磁盘重新打开（丢弃您的更改）？"
+zh-hant = "您有未儲存的變更，同時磁碟上的檔案已變更。保留您的變更，還是從磁碟重新開啟（捨棄您的變更）？"
+
+[ExternalOverwriteDescription]
+en = "This file has changed on disk. Overwrite the external changes?"
+zh-hans = "此文件在磁盘上已更改。是否覆盖外部更改？"
+zh-hant = "此檔案在磁碟上已變更。是否覆蓋外部變更？"
+
+[ExternalKeepChanges]
+en = "Keep Changes"
+zh-hans = "保留更改"
+zh-hant = "保留變更"
+
+[ExternalReopen]
+en = "Reopen"
+zh-hans = "重新打开"
+zh-hant = "重新開啟"
+
 [UnsavedChangesDialogTitle]
 en = "Unsaved Changes"
 ar = "تغييرات غير محفوظة"

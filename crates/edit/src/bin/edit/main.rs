@@ -12,7 +12,7 @@ mod settings;
 mod state;
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{env, process};
 
 use draw_editor::*;
@@ -118,6 +118,8 @@ fn run() -> apperr::Result<()> {
     #[cfg(feature = "debug-latency")]
     let mut last_latency_width = 0;
 
+    let mut file_check = FileCheckTimer::new(Instant::now(), Duration::from_millis(500));
+
     loop {
         #[cfg(feature = "debug-latency")]
         let time_beg;
@@ -125,12 +127,15 @@ fn run() -> apperr::Result<()> {
         let mut passes;
 
         // Process a batch of input.
+        let native_focus;
         {
             let scratch = scratch_arena(None);
-            let read_timeout = vt_parser.read_timeout().min(tui.read_timeout());
-            let Some((resize, input)) = sys::read_stdin(&scratch, read_timeout) else {
+            let file_timeout = file_check.timeout(state.documents.has_files(), Instant::now());
+            let read_timeout = vt_parser.read_timeout().min(tui.read_timeout()).min(file_timeout);
+            let Some((resize, input, focus)) = sys::read_stdin(&scratch, read_timeout) else {
                 break;
             };
+            native_focus = focus;
 
             #[cfg(feature = "debug-latency")]
             {
@@ -161,6 +166,31 @@ fn run() -> apperr::Result<()> {
 
                 more
             } {}
+        }
+
+        if let Some(focused) = input_parser.take_focus_change().or(native_focus) {
+            file_check.set_focus(focused, Instant::now());
+        }
+        if file_check.is_due(state.documents.has_files(), Instant::now()) {
+            file_check.checked(Instant::now());
+            let mut changed = false;
+            for (path, result) in state.documents.check_for_changes() {
+                match result {
+                    Ok(documents::DiskChange::Reloaded) => changed = true,
+                    Ok(documents::DiskChange::Conflict) => {
+                        state.external_change_warnings.push_back(path);
+                        changed = true;
+                    }
+                    Err(err) => {
+                        state.add_error(err);
+                        changed = true;
+                    }
+                    Ok(documents::DiskChange::None) => {}
+                }
+            }
+            if changed {
+                draw(&mut tui, None, &mut state);
+            }
         }
 
         // Continue rendering until the layout has settled.
@@ -236,6 +266,74 @@ fn run() -> apperr::Result<()> {
     }
 
     Ok(())
+}
+
+/// Pauses file checks while the terminal is unfocused and checks immediately on activation.
+/// Terminals without focus reporting remain focused, preserving periodic checks.
+struct FileCheckTimer {
+    focused: bool,
+    interval: Duration,
+    next_check: Instant,
+}
+
+impl FileCheckTimer {
+    fn new(now: Instant, interval: Duration) -> Self {
+        Self { focused: true, interval, next_check: now + interval }
+    }
+
+    fn set_focus(&mut self, focused: bool, now: Instant) {
+        self.focused = focused;
+        if focused {
+            // Even if focus was lost and regained in a single input batch, check now.
+            self.next_check = now;
+        }
+    }
+
+    fn timeout(&self, has_files: bool, now: Instant) -> Duration {
+        if self.focused && has_files {
+            self.next_check.saturating_duration_since(now)
+        } else {
+            Duration::MAX
+        }
+    }
+
+    fn is_due(&self, has_files: bool, now: Instant) -> bool {
+        self.focused && has_files && now >= self.next_check
+    }
+
+    fn checked(&mut self, now: Instant) {
+        self.next_check = now + self.interval;
+    }
+}
+
+#[cfg(test)]
+mod file_check_tests {
+    use super::*;
+
+    #[test]
+    fn checks_only_when_focused_and_rechecks_immediately_on_activation() {
+        let now = Instant::now();
+        let interval = Duration::from_millis(500);
+        let mut timer = FileCheckTimer::new(now, interval);
+
+        assert_eq!(timer.timeout(true, now), interval);
+        assert!(!timer.is_due(true, now));
+        assert!(!timer.is_due(false, now + interval));
+        assert_eq!(timer.timeout(false, now), Duration::MAX);
+
+        timer.set_focus(false, now + Duration::from_millis(100));
+        assert_eq!(timer.timeout(true, now + interval), Duration::MAX);
+        assert!(!timer.is_due(true, now + interval * 10));
+
+        let activated = now + interval * 10;
+        timer.set_focus(true, activated);
+        assert_eq!(timer.timeout(true, activated), Duration::ZERO);
+        assert!(timer.is_due(true, activated));
+        timer.checked(activated);
+        assert!(!timer.is_due(true, activated));
+        assert_eq!(timer.timeout(true, activated), interval);
+        assert!(timer.is_due(true, activated + interval));
+    }
 }
 
 // Returns true if the application should exit early.
@@ -359,6 +457,12 @@ fn draw(tui: &mut Tui, input: Option<input::Input>, state: &mut State) {
     }
     if state.wants_save {
         draw_handle_save(ctx, state);
+    }
+    if state.wants_overwrite_external {
+        draw_handle_overwrite_external(ctx, state);
+    }
+    if !state.external_change_warnings.is_empty() {
+        draw_handle_external_change_warning(ctx, state);
     }
     if state.wants_language_picker {
         draw_dialog_language_change(ctx, state);
@@ -584,7 +688,7 @@ impl Drop for RestoreModes {
         // Same as in the beginning but in the reverse order.
         // It also includes DECSCUSR 0 to reset the cursor style and DECTCEM to show the cursor.
         // We specifically don't reset mode 1036, because most applications expect it to be set nowadays.
-        sys::write_stdout("\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1002;1006;2004l\x1b[?1049l");
+        sys::write_stdout("\x1b[0 q\x1b[?25h\x1b]0;\x07\x1b[?1002;1004;1006;2004l\x1b[?1049l");
     }
 }
 
@@ -594,10 +698,11 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         //   I put the ASB switch in the beginning, just in case the terminal performs
         //   some additional state tracking beyond the modes we enable/disable.
         // 1002: Cell Motion Mouse Tracking
+        // 1004: Focus In/Out Events (CSI I / CSI O)
         // 1006: SGR Mouse Mode
         // 2004: Bracketed Paste Mode
         // 1036: Xterm: "meta sends escape" (Alt keypresses should be encoded with ESC + char)
-        "\x1b[?1049h\x1b[?1002;1006;2004h\x1b[?1036h",
+        "\x1b[?1049h\x1b[?1002;1004;1006;2004h\x1b[?1036h",
         // OSC 4 color table requests for indices 0 through 15 (base colors).
         "\x1b]4;0;?;1;?;2;?;3;?;4;?;5;?;6;?;7;?\x07",
         "\x1b]4;8;?;9;?;10;?;11;?;12;?;13;?;14;?;15;?\x07",
@@ -627,7 +732,7 @@ fn setup_terminal(tui: &mut Tui, state: &mut State, vt_parser: &mut vt::Parser) 
         // We explicitly set a high read timeout, because we're not
         // waiting for user keyboard input. If we encounter a lone ESC,
         // it's unlikely to be from a ESC keypress, but rather from a VT sequence.
-        let Some((resize, input)) = sys::read_stdin(&scratch, Duration::from_secs(3)) else {
+        let Some((resize, input, _)) = sys::read_stdin(&scratch, Duration::from_secs(3)) else {
             break;
         };
 

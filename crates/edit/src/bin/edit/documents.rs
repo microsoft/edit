@@ -4,6 +4,7 @@
 use std::ffi::OsStr;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use std::{fs, io};
 
 use edit::buffer::{RcTextBuffer, TextBuffer};
@@ -15,50 +16,140 @@ use crate::apperr;
 use crate::settings::Settings;
 use crate::state::DisplayablePathBuf;
 
+#[derive(PartialEq, Eq)]
+struct FileVersion {
+    id: sys::FileId,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+fn file_version(file: &File, path: &Path) -> io::Result<FileVersion> {
+    let metadata = file.metadata()?;
+    Ok(FileVersion {
+        id: sys::file_id(Some(file), path)?,
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+fn version_at_path(path: &Path) -> io::Result<Option<FileVersion>> {
+    match File::open(path) {
+        Ok(file) => file_version(&file, path).map(Some),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum DiskChange {
+    None,
+    Reloaded,
+    Conflict,
+}
+
 pub struct Document {
     pub buffer: RcTextBuffer,
     pub path: Option<PathBuf>,
     pub dir: Option<DisplayablePathBuf>,
     pub filename: String,
     pub file_id: Option<sys::FileId>,
+    disk_version: Option<FileVersion>,
+    conflict_reported: bool,
+    pending_version: Option<FileVersion>,
     pub new_file_counter: usize,
     pub language_override: Option<Option<&'static Language>>,
 }
 
 impl Document {
+    pub fn disk_differs(&self) -> io::Result<bool> {
+        let Some(path) = self.path.as_deref() else { return Ok(false) };
+        Ok(version_at_path(path)? != self.disk_version)
+    }
+
+    pub fn check_for_changes(&mut self) -> apperr::Result<DiskChange> {
+        let Some(path) = self.path.as_deref() else { return Ok(DiskChange::None) };
+        let version = match version_at_path(path) {
+            Ok(version) => version,
+            Err(_) if self.conflict_reported => return Ok(DiskChange::None),
+            Err(err) => {
+                self.conflict_reported = true;
+                return Err(err.into());
+            }
+        };
+        if version == self.disk_version {
+            self.conflict_reported = false;
+            self.pending_version = None;
+            return Ok(DiskChange::None);
+        }
+        if self.buffer.borrow().is_dirty() {
+            if !self.conflict_reported {
+                self.conflict_reported = true;
+                return Ok(DiskChange::Conflict);
+            }
+            return Ok(DiskChange::None);
+        }
+        // A missing file may be in the middle of an atomic replacement. Retry later.
+        if version.is_none() {
+            return Ok(DiskChange::None);
+        }
+        // Wait for the same version on two polls, so an in-place formatter's
+        // truncate/write sequence is less likely to be mistaken for a complete file.
+        if self.pending_version.as_ref() != version.as_ref() {
+            self.pending_version = version;
+            return Ok(DiskChange::None);
+        }
+        match self.reread(None) {
+            Ok(()) => Ok(DiskChange::Reloaded),
+            Err(_) if self.conflict_reported => Ok(DiskChange::None),
+            Err(err) => {
+                self.conflict_reported = true;
+                Err(err)
+            }
+        }
+    }
+
     pub fn save(&mut self, new_path: Option<PathBuf>) -> apperr::Result<()> {
+        self.save_inner(new_path, false)
+    }
+
+    pub fn save_overwriting(&mut self) -> apperr::Result<()> {
+        self.save_inner(None, true)
+    }
+
+    fn save_inner(&mut self, new_path: Option<PathBuf>, overwrite: bool) -> apperr::Result<()> {
         let path = new_path.as_deref().unwrap_or_else(|| self.path.as_ref().unwrap().as_path());
+        if new_path.is_none() && !overwrite && self.disk_differs()? {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "file changed on disk").into());
+        }
         let mut file = DocumentManager::open_for_writing(path)?;
-
-        {
-            let mut tb = self.buffer.borrow_mut();
-            tb.write_file(&mut file)?;
-        }
-
-        if let Ok(id) = sys::file_id(None, path) {
-            self.file_id = Some(id);
-        }
+        self.buffer.borrow_mut().write_file(&mut file)?;
+        let version = file_version(&file, path)?;
+        self.file_id = Some(sys::file_id(Some(&file), path)?);
+        self.disk_version = Some(version);
+        self.conflict_reported = false;
+        self.pending_version = None;
 
         if let Some(path) = new_path {
             self.set_path(path);
         }
-
         Ok(())
     }
 
     pub fn reread(&mut self, encoding: Option<&'static str>) -> apperr::Result<()> {
         let path = self.path.as_ref().unwrap().as_path();
         let mut file = DocumentManager::open_for_reading(path)?;
-
-        {
-            let mut tb = self.buffer.borrow_mut();
-            tb.read_file(&mut file, encoding)?;
-        }
-
-        if let Ok(id) = sys::file_id(None, path) {
-            self.file_id = Some(id);
-        }
-
+        let version = file_version(&file, path)?;
+        self.buffer.borrow_mut().reload_file(&mut file, encoding, || {
+            if version_at_path(path)?.as_ref() == Some(&version) {
+                Ok(())
+            } else {
+                Err(io::Error::other("file changed while reading").into())
+            }
+        })?;
+        self.file_id = Some(sys::file_id(Some(&file), path)?);
+        self.disk_version = Some(version);
+        self.conflict_reported = false;
+        self.pending_version = None;
         Ok(())
     }
 
@@ -132,6 +223,10 @@ impl DocumentManager {
         self.list.len()
     }
 
+    pub fn has_files(&self) -> bool {
+        self.list.iter().any(|doc| doc.path.is_some())
+    }
+
     #[inline]
     pub fn active(&self) -> Option<&Document> {
         self.list.last()
@@ -186,6 +281,9 @@ impl DocumentManager {
             dir: Default::default(),
             filename: Default::default(),
             file_id: None,
+            disk_version: None,
+            conflict_reported: false,
+            pending_version: None,
             new_file_counter: 0,
             language_override: None,
         };
@@ -216,7 +314,8 @@ impl DocumentManager {
             Err(err) => return Err(err.into()),
         };
 
-        let file_id = if file.is_some() { Some(sys::file_id(file.as_ref(), &path)?) } else { None };
+        let disk_version = file.as_ref().map(|file| file_version(file, &path)).transpose()?;
+        let file_id = file.as_ref().map(|file| sys::file_id(Some(file), &path)).transpose()?;
 
         // Check if the file is already open.
         if file_id.is_some() && self.update_active(|doc| doc.file_id == file_id) {
@@ -238,6 +337,9 @@ impl DocumentManager {
             dir: None,
             filename: Default::default(),
             file_id,
+            disk_version,
+            conflict_reported: false,
+            pending_version: None,
             new_file_counter: 0,
             language_override: None,
         };
@@ -255,6 +357,28 @@ impl DocumentManager {
 
         self.list.push(doc);
         Ok(self.list.last_mut().unwrap())
+    }
+
+    /// Reopens the document named by a pending external-change warning, if still open.
+    pub fn reopen_path(&mut self, path: &Path) -> apperr::Result<()> {
+        if let Some(doc) = self.list.iter_mut().find(|doc| doc.path.as_deref() == Some(path)) {
+            doc.reread(None)?;
+        }
+        Ok(())
+    }
+
+    pub fn check_for_changes(&mut self) -> Vec<(PathBuf, apperr::Result<DiskChange>)> {
+        self.list
+            .iter_mut()
+            .filter_map(|doc| {
+                let result = doc.check_for_changes();
+                if matches!(result, Ok(DiskChange::None)) {
+                    None
+                } else {
+                    Some((doc.path.clone()?, result))
+                }
+            })
+            .collect()
     }
 
     pub fn reflow_all(&self) {
@@ -358,6 +482,159 @@ pub fn parse_filename_goto(path: &Path) -> (&Path, Option<Point>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
+
+    struct TestFile(PathBuf);
+
+    impl TestFile {
+        fn new(contents: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "edit-219-{}-{}",
+                std::process::id(),
+                NEXT_FILE.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::write(&path, contents).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn reload_clean_file_and_keep_dirty_file() {
+        let file = TestFile::new("before");
+        let mut manager = DocumentManager::default();
+        manager.add_file_path(&file.0).unwrap();
+        assert_eq!(manager.active_mut().unwrap().check_for_changes().unwrap(), DiskChange::None);
+
+        fs::write(&file.0, "after external formatting").unwrap();
+        let doc = manager.active_mut().unwrap();
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::None);
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::Reloaded);
+        assert_eq!(doc.buffer.borrow().read_forward(0), b"after external formatting");
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::None);
+
+        doc.buffer.borrow_mut().mark_as_dirty();
+        fs::write(&file.0, "external edit").unwrap();
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::Conflict);
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::None);
+        assert_eq!(doc.buffer.borrow().read_forward(0), b"after external formatting");
+        assert!(doc.save(None).is_err());
+        assert_eq!(fs::read(&file.0).unwrap(), b"external edit");
+        manager.reopen_path(&file.0).unwrap();
+        assert_eq!(manager.active().unwrap().buffer.borrow().read_forward(0), b"external edit");
+        assert!(!manager.active().unwrap().buffer.borrow().is_dirty());
+        let doc = manager.active_mut().unwrap();
+        fs::write(&file.0, "another external edit").unwrap();
+        assert!(doc.save(None).is_err());
+        doc.save_overwriting().unwrap();
+        assert_eq!(fs::read(&file.0).unwrap(), b"external edit");
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::None);
+    }
+
+    #[test]
+    fn atomic_replace_and_self_save() {
+        let file = TestFile::new("old");
+        let replacement = TestFile::new("new text");
+        let mut manager = DocumentManager::default();
+        manager.add_file_path(&file.0).unwrap();
+
+        fs::remove_file(&file.0).unwrap();
+        assert_eq!(manager.active_mut().unwrap().check_for_changes().unwrap(), DiskChange::None);
+        fs::rename(&replacement.0, &file.0).unwrap();
+        let doc = manager.active_mut().unwrap();
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::None);
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::Reloaded);
+        doc.save(None).unwrap();
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::None);
+    }
+
+    #[test]
+    fn checks_inactive_files_but_ignores_untitled() {
+        let file1 = TestFile::new("first");
+        let file2 = TestFile::new("second");
+        let mut manager = DocumentManager::default();
+        manager.add_file_path(&file1.0).unwrap();
+        manager.add_file_path(&file2.0).unwrap();
+        manager.add_untitled().unwrap();
+        fs::write(&file1.0, "first changed and longer").unwrap();
+        assert!(manager.check_for_changes().is_empty());
+        let results = manager.check_for_changes();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, file1.0);
+        assert_eq!(results[0].1.as_ref().unwrap(), &DiskChange::Reloaded);
+    }
+
+    #[test]
+    fn keeping_changes_does_not_reload_and_save_stays_guarded() {
+        let file = TestFile::new("saved text");
+        let mut manager = DocumentManager::default();
+        let doc = manager.add_file_path(&file.0).unwrap();
+        doc.buffer.borrow_mut().mark_as_dirty();
+        fs::write(&file.0, "external edit").unwrap();
+
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::Conflict);
+        // "Keep Changes" dismisses the warning without reopening the document.
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::None);
+        assert_eq!(doc.buffer.borrow().read_forward(0), b"saved text");
+        assert!(doc.buffer.borrow().is_dirty());
+        assert!(doc.save(None).is_err());
+        assert_eq!(fs::read(&file.0).unwrap(), b"external edit");
+    }
+
+    #[test]
+    fn failed_reopen_preserves_dirty_contents() {
+        let file = TestFile::new("unsaved text");
+        let mut manager = DocumentManager::default();
+        let doc = manager.add_file_path(&file.0).unwrap();
+        doc.buffer.borrow_mut().mark_as_dirty();
+        fs::remove_file(&file.0).unwrap();
+
+        // "Reopen" cannot discard edits if the file is temporarily missing.
+        assert!(manager.reopen_path(&file.0).is_err());
+        let doc = manager.active().unwrap();
+        assert!(doc.buffer.borrow().is_dirty());
+        assert_eq!(doc.buffer.borrow().read_forward(0), b"unsaved text");
+    }
+
+    #[test]
+    fn newly_created_file_reloads_clean_missing_document() {
+        let file = TestFile::new("placeholder");
+        fs::remove_file(&file.0).unwrap();
+        let mut manager = DocumentManager::default();
+        let doc = manager.add_file_path(&file.0).unwrap();
+        fs::write(&file.0, "new file").unwrap();
+
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::None);
+        assert_eq!(doc.check_for_changes().unwrap(), DiskChange::Reloaded);
+        assert_eq!(doc.buffer.borrow().read_forward(0), b"new file");
+    }
+
+    #[test]
+    fn failed_reload_preserves_contents_and_cursor() {
+        let file = TestFile::new("first line\nsecond line");
+        let mut manager = DocumentManager::default();
+        let doc = manager.add_file_path(&file.0).unwrap();
+        doc.buffer.borrow_mut().cursor_move_to_logical(Point { x: 3, y: 1 });
+        let cursor = doc.buffer.borrow().cursor_logical_pos();
+        let mut open = File::open(&file.0).unwrap();
+        assert!(
+            doc.buffer
+                .borrow_mut()
+                .reload_file(&mut open, None, || {
+                    Err(io::Error::other("interrupted read").into())
+                })
+                .is_err()
+        );
+        assert_eq!(doc.buffer.borrow().read_forward(0), b"first line\nsecond line");
+        assert_eq!(doc.buffer.borrow().cursor_logical_pos(), cursor);
+    }
 
     #[test]
     fn test_parse_last_numbers() {

@@ -6,6 +6,7 @@ use edit::helpers::*;
 use edit::icu;
 use edit::input::{kbmod, vk};
 use edit::tui::*;
+use edit::unicode::MeasurementConfig;
 
 use crate::localization::*;
 use crate::state::*;
@@ -193,8 +194,19 @@ pub fn search_execute(ctx: &mut Context, state: &mut State, action: SearchAction
 pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
     if let Some(doc) = state.documents.active_mut() {
         if doc.path.is_some() {
-            if let Err(err) = doc.save(None) {
-                error_log_add(ctx, state, err);
+            match doc.disk_differs() {
+                Ok(true) => {
+                    state.wants_overwrite_external = true;
+                    state.wants_save = false;
+                    ctx.needs_rerender();
+                    return;
+                }
+                Err(err) => error_log_add(ctx, state, err.into()),
+                Ok(false) => {
+                    if let Err(err) = doc.save(None) {
+                        error_log_add(ctx, state, err);
+                    }
+                }
             }
         } else {
             // No path? Show the file picker.
@@ -205,6 +217,126 @@ pub fn draw_handle_save(ctx: &mut Context, state: &mut State) {
     }
 
     state.wants_save = false;
+}
+
+pub fn draw_handle_overwrite_external(ctx: &mut Context, state: &mut State) {
+    ctx.modal_begin("external-change", loc(LocId::WarningDialogTitle));
+    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Yellow));
+    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
+    draw_wrapped_warning(ctx, "description", loc(LocId::ExternalOverwriteDescription));
+    ctx.attr_padding(Rect::three(1, 2, 1));
+    let contains_focus = ctx.contains_focus();
+    ctx.table_begin("choices");
+    ctx.inherit_focus();
+    ctx.attr_position(Position::Center);
+    ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+    ctx.table_next_row();
+    ctx.inherit_focus();
+    let mut overwrite = ctx.button("yes", loc(LocId::Yes), ButtonStyle::default());
+    ctx.inherit_focus();
+    let mut cancel = ctx.button("no", loc(LocId::No), ButtonStyle::default());
+    if contains_focus {
+        overwrite |= ctx.consume_shortcut(vk::Y);
+        cancel |= ctx.consume_shortcut(vk::N);
+    }
+    ctx.table_end();
+    let closed = ctx.modal_end();
+    if cancel || closed {
+        state.wants_overwrite_external = false;
+    } else if overwrite {
+        state.wants_overwrite_external = false;
+        if let Some(doc) = state.documents.active_mut()
+            && let Err(err) = doc.save_overwriting()
+        {
+            error_log_add(ctx, state, err);
+        }
+        ctx.needs_rerender();
+    }
+}
+
+/// Split at display columns, including wide glyphs and explicit line breaks.
+fn warning_lines(text: &str, width: CoordType) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    while start < text.len() {
+        let remaining = &text[start..];
+        let bytes = remaining.as_bytes();
+        let mut measure = MeasurementConfig::new(&bytes);
+        let mut end = text.len();
+        for (off, ch) in remaining.char_indices() {
+            if ch == '\n' {
+                end = start + off;
+                break;
+            }
+            if measure.goto_offset(off + ch.len_utf8()).column > width && off != 0 {
+                end = start + off;
+                break;
+            }
+        }
+        lines.push(&text[start..end]);
+        start = end + usize::from(text.as_bytes().get(end) == Some(&b'\n'));
+    }
+    lines
+}
+
+fn draw_wrapped_warning(ctx: &mut Context, block: &'static str, text: &str) {
+    let width = (ctx.size().width - 8).max(1);
+    ctx.block_begin(block);
+    for (line, segment) in warning_lines(text, width).into_iter().enumerate() {
+        ctx.next_block_id_mixin(line as u64);
+        ctx.label("line", segment);
+    }
+    ctx.block_end();
+}
+
+pub fn draw_handle_external_change_warning(ctx: &mut Context, state: &mut State) {
+    let Some(path) = state.external_change_warnings.front() else { return };
+    ctx.modal_begin("external-warning", loc(LocId::WarningDialogTitle));
+    ctx.attr_background_rgba(ctx.indexed(IndexedColor::Yellow));
+    ctx.attr_foreground_rgba(ctx.indexed(IndexedColor::Black));
+    draw_wrapped_warning(ctx, "path", &path.to_string_lossy());
+    draw_wrapped_warning(ctx, "description", loc(LocId::ExternalChangeDescription));
+    let contains_focus = ctx.contains_focus();
+    ctx.table_begin("choices");
+    ctx.inherit_focus();
+    ctx.attr_position(Position::Center);
+    ctx.table_set_cell_gap(Size { width: 2, height: 0 });
+    ctx.table_next_row();
+    ctx.inherit_focus();
+    let mut keep = ctx.button("keep", loc(LocId::ExternalKeepChanges), ButtonStyle::default());
+    ctx.inherit_focus();
+    let mut reopen = ctx.button("reopen", loc(LocId::ExternalReopen), ButtonStyle::default());
+    if contains_focus {
+        keep |= ctx.consume_shortcut(vk::K);
+        reopen |= ctx.consume_shortcut(vk::R);
+    }
+    ctx.table_end();
+    keep |= ctx.modal_end();
+
+    if keep || reopen {
+        if reopen {
+            let result = state.documents.reopen_path(path);
+            if let Err(err) = result {
+                error_log_add(ctx, state, err);
+            }
+        }
+        state.external_change_warnings.pop_front();
+        ctx.needs_rerender();
+    }
+}
+
+#[cfg(test)]
+mod warning_tests {
+    use super::warning_lines;
+
+    #[test]
+    fn wraps_wide_characters_and_long_words() {
+        assert_eq!(warning_lines("Hello 世界!", 6), ["Hello ", "世界!"]);
+        assert_eq!(warning_lines("abcdefgh", 3), ["abc", "def", "gh"]);
+        assert_eq!(warning_lines("line one\nline two", 8), ["line one", "line two"]);
+        assert_eq!(warning_lines("路径/文件", 4), ["路径", "/文", "件"]);
+        assert_eq!(warning_lines("ab\n\ncd", 2), ["ab", "", "cd"]);
+    }
 }
 
 pub fn draw_handle_wants_close(ctx: &mut Context, state: &mut State) {
