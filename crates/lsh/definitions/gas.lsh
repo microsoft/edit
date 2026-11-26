@@ -57,7 +57,9 @@ pub fn gas() {
             yield comment;
         } else if /"/ {
             double_quote_string();
-        } else if /'\\?.'?/ {
+        } else if /'\\.'|'[^']*'/ {
+            yield string;
+        } else if /'\\?./ {
             // GAS also accepts character constants without the closing quote: `'A`
             yield string;
         } else if /[$#]?-?(?i:0x[\da-f]+|\d[\da-f]*h|0b[01]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)\>/ {

@@ -40,6 +40,7 @@ start:  nop
 .ascii "escapes: \" \\ \n \t"
 .asciz "unterminated
 .byte 'A', '\n', 'B
+db 'Hello, World!', 10
 
 // Macros
 .macro push_pair a, b
