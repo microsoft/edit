@@ -305,14 +305,15 @@ fn get_window_size() -> io::Result<Size> {
 /// # Returns
 ///
 /// * `None` if there was an error reading from stdin.
-/// * `Some((_, ""))` if the given timeout was reached.
-/// * Otherwise, it returns a pending resize and the read string.
+/// * `Some((_, "", None))` if the given timeout was reached.
+/// * Otherwise, it returns a pending resize, read string, and optional focus event.
 pub fn read_stdin(
     arena: &Arena,
     mut timeout: time::Duration,
-) -> Option<(Option<Size>, BString<'_>)> {
+) -> Option<(Option<Size>, BString<'_>, Option<bool>)> {
     let scratch = scratch_arena(Some(arena));
     let mut resize_event = None;
+    let mut focus_event = None;
 
     let read_poll = timeout != time::Duration::MAX; // there is a timeout -> don't block in read()
     let input_buf = scratch.alloc_uninit_slice(4 * KIBI);
@@ -377,6 +378,9 @@ pub fn read_stdin(
                         utf16_buf_len += 1;
                     }
                 }
+                Console::FOCUS_EVENT => {
+                    focus_event = Some(unsafe { inp.Event.FocusEvent.bSetFocus != 0 });
+                }
                 Console::WINDOW_BUFFER_SIZE_EVENT => {
                     let event = unsafe { &inp.Event.WindowBufferSizeEvent };
                     let w = event.dwSize.X as CoordType;
@@ -391,7 +395,7 @@ pub fn read_stdin(
             }
         }
 
-        if resize_event.is_some() || utf16_buf_len != 0 {
+        if resize_event.is_some() || focus_event.is_some() || utf16_buf_len != 0 {
             break;
         }
     }
@@ -435,7 +439,7 @@ pub fn read_stdin(
         }
     }
 
-    Some((resize_event, text))
+    Some((resize_event, text, focus_event))
 }
 
 /// Writes a string to stdout.

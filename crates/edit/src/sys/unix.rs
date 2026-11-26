@@ -277,12 +277,12 @@ fn get_window_size() -> io::Result<Size> {
 /// Reads from stdin.
 ///
 /// Returns `None` if there was an error reading from stdin.
-/// Returns `Some((_, ""))` if the given timeout was reached.
-/// Otherwise, it returns a pending resize and the read string.
+/// Returns `Some((_, "", None))` if the given timeout was reached.
+/// Otherwise, it returns a pending resize, read string, and optional focus event.
 pub fn read_stdin(
     arena: &Arena,
     mut timeout: time::Duration,
-) -> Option<(Option<Size>, BString<'_>)> {
+) -> Option<(Option<Size>, BString<'_>, Option<bool>)> {
     unsafe {
         let deadline = (timeout != time::Duration::MAX)
             .then_some(timeout)
@@ -450,7 +450,7 @@ pub fn read_stdin(
 
         let resize = if resized { get_window_size().ok() } else { None };
 
-        Some((resize, BString::from_utf8_lossy(arena, buf)))
+        Some((resize, BString::from_utf8_lossy(arena, buf), None))
     }
 }
 

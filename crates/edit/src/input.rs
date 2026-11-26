@@ -267,6 +267,7 @@ pub enum Input<'input> {
 
 /// Parses VT sequences into input events.
 pub struct Parser {
+    focus_change: Option<bool>,
     bracketed_paste: bool,
     bracketed_paste_buf: Vec<u8>,
     x10_mouse_want: bool,
@@ -280,12 +281,18 @@ impl Parser {
     /// Keep the instance alive for the lifetime of the input stream.
     pub fn new() -> Self {
         Self {
+            focus_change: None,
             bracketed_paste: false,
             bracketed_paste_buf: Vec::new(),
             x10_mouse_want: false,
             x10_mouse_buf: ['\0'; 3],
             x10_mouse_len: 0,
         }
+    }
+
+    /// Returns the last terminal focus event encountered since the previous call.
+    pub fn take_focus_change(&mut self) -> Option<bool> {
+        self.focus_change.take()
     }
 
     /// Takes an [`vt::Stream`] and returns a [`Stream`]
@@ -376,6 +383,13 @@ impl<'input> Iterator for Stream<'_, '_, 'input> {
                     _ => {}
                 },
                 vt::Token::Csi(csi) => {
+                    if csi.param_count == 0 && csi.private_byte == '\0' {
+                        match csi.final_byte {
+                            'I' => self.parser.focus_change = Some(true),
+                            'O' => self.parser.focus_change = Some(false),
+                            _ => {}
+                        }
+                    }
                     match csi.final_byte {
                         'A'..='H' => {
                             let vk = KEYPAD_LUT[csi.final_byte as usize - 'A' as usize];
@@ -589,5 +603,29 @@ impl<'input> Stream<'_, '_, 'input> {
         mouse.modifiers |= if (btn & CTRL) != 0 { kbmod::CTRL } else { kbmod::NONE };
 
         Some(Input::Mouse(mouse))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_focus_events_are_not_keyboard_input() {
+        let mut vt = vt::Parser::new();
+        let mut parser = Parser::new();
+        for (text, focused) in [("\x1b[O", false), ("\x1b[I", true)] {
+            let mut input = parser.parse(vt.parse(text));
+            assert!(input.next().is_none());
+            drop(input);
+            assert_eq!(parser.take_focus_change(), Some(focused));
+            assert_eq!(parser.take_focus_change(), None);
+        }
+
+        // The last focus event in a batch wins; focus tokens are not passed as keys.
+        let mut input = parser.parse(vt.parse("\x1b[O\x1b[I"));
+        assert!(input.next().is_none());
+        drop(input);
+        assert_eq!(parser.take_focus_change(), Some(true));
     }
 }

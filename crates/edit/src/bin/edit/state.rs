@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::{Path, PathBuf};
@@ -163,6 +164,8 @@ pub struct State {
     pub encoding_picker_results: Option<Vec<icu::Encoding>>,
 
     pub wants_save: bool,
+    pub wants_overwrite_external: bool,
+    pub external_change_warnings: VecDeque<PathBuf>,
     pub wants_statusbar_focus: bool,
     pub wants_indentation_picker: bool,
     pub wants_go_to_file: bool,
@@ -212,6 +215,8 @@ impl State {
             encoding_picker_results: Default::default(),
 
             wants_save: false,
+            wants_overwrite_external: false,
+            external_change_warnings: VecDeque::new(),
             wants_statusbar_focus: false,
             wants_encoding_change: StateEncodingChange::None,
             wants_indentation_picker: false,

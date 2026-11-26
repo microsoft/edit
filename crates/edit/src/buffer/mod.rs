@@ -856,6 +856,32 @@ impl TextBuffer {
         Ok(())
     }
 
+    /// Reads a file without changing the existing buffer if reading fails.
+    /// Keeps the user's viewport settings and restores the cursor as far as the new text allows.
+    pub fn reload_file(
+        &mut self,
+        file: &mut File,
+        encoding: Option<&'static str>,
+        verify: impl FnOnce() -> IoResult<()>,
+    ) -> IoResult<()> {
+        let mut replacement = Self::new(false)?;
+        replacement.read_file(file, encoding)?;
+        verify()?;
+
+        let cursor = self.cursor_logical_pos();
+        std::mem::swap(&mut self.buffer, &mut replacement.buffer);
+        self.stats = replacement.stats;
+        self.encoding = replacement.encoding;
+        self.newline_format = replacement.newline_format;
+        self.insert_final_newline = replacement.insert_final_newline;
+        self.indent_with_tabs = replacement.indent_with_tabs;
+        self.tab_size = replacement.tab_size;
+        self.search = None;
+        self.recalc_after_content_swap();
+        self.cursor_move_to_logical(cursor);
+        Ok(())
+    }
+
     fn read_file_as_utf8(
         &mut self,
         file: &mut File,
