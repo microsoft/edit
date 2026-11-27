@@ -345,7 +345,8 @@ fn draw(tui: &mut Tui, input: Option<input::Input>, state: &mut State) {
     draw_editor(ctx, state);
     draw_statusbar(ctx, state);
 
-    if state.wants_close {
+    // While the document is being saved via the file picker, hide the unsaved changes dialog.
+    if state.wants_close && state.wants_file_picker == StateFilePicker::None {
         draw_handle_wants_close(ctx, state);
     }
     if state.wants_exit {

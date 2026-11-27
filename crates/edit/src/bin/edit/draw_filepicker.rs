@@ -190,6 +190,10 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
         }
     }
     if ctx.modal_end() {
+        // Cancelling the picker also cancels closing the document (or exiting) if we're
+        // here because the unsaved changes dialog asked to save it first.
+        state.wants_exit = false;
+        state.wants_close = false;
         done = true;
     }
 
