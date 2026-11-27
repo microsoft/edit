@@ -62,11 +62,19 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 
             ctx.label("name-label", loc(LocId::SaveAsDialogNameLabel));
 
+            let name_before_edit = state.file_picker_pending_name.clone();
             let name_changed = ctx.editline("name", &mut state.file_picker_pending_name);
             ctx.inherit_focus();
 
             if ctx.contains_focus() {
-                if name_changed && ctx.is_focused() {
+                if ctx.is_focused()
+                    && editline_changed_name(
+                        name_changed,
+                        &name_before_edit,
+                        &state.file_picker_pending_name,
+                    )
+                {
+                    state.file_picker_pending_name_is_typed = true;
                     update_autocomplete_suggestions(state);
                 }
             } else if !state.file_picker_autocomplete.is_empty() {
@@ -96,6 +104,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                         let sel = ctx.list_item(false, suggestion.as_str());
                         if sel != ListSelection::Unchanged {
                             state.file_picker_pending_name = suggestion.as_path().into();
+                            state.file_picker_pending_name_is_typed = false;
                         }
                         if sel == ListSelection::Activated {
                             autocomplete_done = true;
@@ -158,9 +167,14 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
                     match ctx.list_item(false, entry.as_str()) {
                         ListSelection::Unchanged => {}
                         ListSelection::Selected => {
-                            state.file_picker_pending_name = entry.as_path().into()
+                            state.file_picker_pending_name = entry.as_path().into();
+                            state.file_picker_pending_name_is_typed = false;
                         }
-                        ListSelection::Activated => activated = true,
+                        ListSelection::Activated => {
+                            state.file_picker_pending_name = entry.as_path().into();
+                            state.file_picker_pending_name_is_typed = false;
+                            activated = true;
+                        }
                     }
                     ctx.attr_overflow(Overflow::TruncateMiddle);
                 }
@@ -260,6 +274,7 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
     if done {
         state.wants_file_picker = StateFilePicker::None;
         state.file_picker_pending_name = Default::default();
+        state.file_picker_pending_name_is_typed = false;
         state.file_picker_entries = Default::default();
         state.file_picker_overwrite_warning = Default::default();
         state.file_picker_autocomplete = Default::default();
@@ -269,7 +284,14 @@ pub fn draw_file_picker(ctx: &mut Context, state: &mut State) {
 // Returns Some(path) if the path refers to a file.
 fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     let old_path = state.file_picker_pending_dir.as_path();
-    let path = old_path.join(&state.file_picker_pending_name);
+    let entered_path = if state.wants_file_picker == StateFilePicker::Open
+        && state.file_picker_pending_name_is_typed
+    {
+        path::expand(&state.file_picker_pending_name)
+    } else {
+        state.file_picker_pending_name.clone()
+    };
+    let path = old_path.join(entered_path);
     let path = path::normalize(&path);
 
     let (dir, name) = if path.is_dir() {
@@ -299,6 +321,7 @@ fn draw_file_picker_update_path(state: &mut State) -> Option<PathBuf> {
     }
 
     state.file_picker_pending_name = name;
+    state.file_picker_pending_name_is_typed = false;
     if state.file_picker_pending_name.as_os_str().is_empty() { None } else { Some(path) }
 }
 
@@ -352,6 +375,10 @@ fn draw_dialog_saveas_refresh_files(state: &mut State) {
     state.file_picker_entries = Some(dirs_files);
 }
 
+fn editline_changed_name(name_changed: bool, before: &Path, after: &Path) -> bool {
+    name_changed && before != after
+}
+
 #[inline(never)]
 fn update_autocomplete_suggestions(state: &mut State) {
     state.file_picker_autocomplete.clear();
@@ -400,4 +427,151 @@ fn update_autocomplete_suggestions(state: &mut State) {
     }
 
     state.file_picker_autocomplete = matches;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    static NEXT_TEMP_DIR: AtomicUsize = AtomicUsize::new(0);
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "edit-filepicker-{}-{}",
+                std::process::id(),
+                NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    fn picker_state(dir: &Path, name: &str, mode: StateFilePicker, is_typed: bool) -> State {
+        let mut state = State::new().unwrap();
+        state.wants_file_picker = mode;
+        state.file_picker_pending_dir = DisplayablePathBuf::from_path(dir.to_path_buf());
+        state.file_picker_pending_name = name.into();
+        state.file_picker_pending_name_is_typed = is_typed;
+        state
+    }
+
+    #[test]
+    fn test_typed_open_path_is_expanded() {
+        let temp = TestDir::new();
+        #[cfg(windows)]
+        let home = std::env::var_os("USERPROFILE");
+        #[cfg(not(windows))]
+        let home = std::env::var_os("HOME");
+        let home = PathBuf::from(home.expect("home directory environment variable"));
+        let name = Path::new("~").join("file with spaces.txt");
+        let mut state = picker_state(&temp.0, name.to_str().unwrap(), StateFilePicker::Open, true);
+
+        let path = draw_file_picker_update_path(&mut state).unwrap();
+
+        assert_eq!(path, home.join("file with spaces.txt"));
+        assert_eq!(state.file_picker_pending_dir.as_path(), home.as_path());
+        assert_eq!(state.file_picker_pending_name.as_path(), Path::new("file with spaces.txt"));
+        assert!(!state.file_picker_pending_name_is_typed);
+    }
+
+    #[test]
+    fn test_selected_entry_with_expansion_syntax_is_literal() {
+        let temp = TestDir::new();
+        let filename = "$HOME-%WINDIR%.txt";
+        fs::write(temp.0.join(filename), "").unwrap();
+        let mut state = picker_state(&temp.0, "", StateFilePicker::Open, false);
+        state.file_picker_pending_name = filename.into();
+        let name_before_edit = state.file_picker_pending_name.clone();
+
+        // A change report without a changed backing value must not mark the
+        // selected entry as manually entered.
+        if editline_changed_name(true, &name_before_edit, &state.file_picker_pending_name) {
+            state.file_picker_pending_name_is_typed = true;
+        }
+        assert!(!state.file_picker_pending_name_is_typed);
+
+        let path = draw_file_picker_update_path(&mut state).unwrap();
+
+        assert_eq!(path, temp.0.join(filename));
+        assert_eq!(state.file_picker_pending_dir.as_path(), temp.0.as_path());
+        assert_eq!(state.file_picker_pending_name.as_path(), Path::new(filename));
+    }
+
+    #[test]
+    fn test_editline_content_change_marks_manual_path_typed() {
+        let mut state = picker_state(Path::new("/tmp"), "", StateFilePicker::Open, false);
+        let previous_name = state.file_picker_pending_name.clone();
+        state.file_picker_pending_name = "$HOME/sample.txt".into();
+
+        if editline_changed_name(true, &previous_name, &state.file_picker_pending_name) {
+            state.file_picker_pending_name_is_typed = true;
+        }
+
+        assert!(state.file_picker_pending_name_is_typed);
+    }
+
+    #[test]
+    fn test_selected_directory_with_expansion_syntax_is_literal() {
+        let temp = TestDir::new();
+        let dirname = "$HOME-%WINDIR%";
+        fs::create_dir(temp.0.join(dirname)).unwrap();
+        let mut state = picker_state(&temp.0, dirname, StateFilePicker::Open, false);
+
+        assert!(draw_file_picker_update_path(&mut state).is_none());
+
+        assert_eq!(state.file_picker_pending_dir.as_path(), temp.0.join(dirname).as_path());
+        assert!(state.file_picker_pending_name.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn test_typed_open_environment_path_navigates_to_existing_directory() {
+        #[cfg(windows)]
+        let (variable, home) = ("%USERPROFILE%", std::env::var_os("USERPROFILE"));
+        #[cfg(not(windows))]
+        let (variable, home) = ("$HOME", std::env::var_os("HOME"));
+        let home = PathBuf::from(home.expect("home directory environment variable"));
+        assert!(home.is_dir());
+
+        let temp = TestDir::new();
+        let mut state = picker_state(&temp.0, variable, StateFilePicker::Open, true);
+        state.file_picker_pending_dir_revision = 7;
+        state.file_picker_entries = Some([Vec::new(), Vec::new(), Vec::new()]);
+
+        assert!(draw_file_picker_update_path(&mut state).is_none());
+
+        assert_eq!(state.file_picker_pending_dir.as_path(), path::normalize(&home));
+        assert!(state.file_picker_pending_name.as_os_str().is_empty());
+        assert!(!state.file_picker_pending_name_is_typed);
+        assert_eq!(state.file_picker_pending_dir_revision, 8);
+        assert!(state.file_picker_entries.is_none());
+    }
+
+    #[test]
+    fn test_save_as_paths_are_not_expanded() {
+        for mode in [StateFilePicker::SaveAs, StateFilePicker::SaveAsShown] {
+            let temp = TestDir::new();
+            let name = Path::new("~").join("$HOME").join("%WINDIR%");
+            let mut state = picker_state(&temp.0, name.to_str().unwrap(), mode, true);
+
+            let path = draw_file_picker_update_path(&mut state).unwrap();
+
+            let expected = path::normalize(&temp.0.join(&name));
+            assert_eq!(path, expected);
+            assert_eq!(state.file_picker_pending_dir.as_path(), expected.parent().unwrap());
+            assert_eq!(state.file_picker_pending_name.as_path(), Path::new("%WINDIR%"));
+        }
+    }
 }
