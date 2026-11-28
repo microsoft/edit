@@ -1,0 +1,94 @@
+#[display_name = "Assembly (GNU)"]
+#[path = "**/*.s"]
+pub fn gas() {
+    loop {
+        if /\s+/ {
+            yield other;
+        }
+
+        if /([A-Za-z_.$][\w.$]*|\d+|@@)\s*:/ {
+            yield $1 as method;
+            yield other;
+        } else {
+            break;
+        }
+    }
+
+    if /#\s*(?:assert|define|elif|else|endif|error|ident|ifdef|ifndef|if|import|include_next|include|line|pragma|sccs|unassert|undef|warning)\>/ {
+        yield keyword.preprocessor;
+    } else if /#.*/ {
+        // A `#` at the start of a line is a comment on every target.
+        yield comment;
+    } else if /%[A-Za-z_]\w*/ {
+        // NASM directive, as in `%define`
+        yield keyword.preprocessor;
+    } else if /([A-Za-z_.$][\w.$]*)\s*=/ {
+        yield $1 as variable;
+        yield other;
+    } else if /\.[A-Za-z_][\w.]*/ {
+        yield keyword.preprocessor;
+    } else if /([A-Za-z_.$][\w.$]*)\s+(?i:equ)\>/ {
+        yield $1 as variable;
+        yield keyword.other;
+    } else if /([A-Za-z_.$][\w.$]*)\s+(?i:proc|endp|d[bwdqtoyz]|res[bwdqtoyz]|times)\>/ {
+        yield $1 as method;
+        yield keyword.other;
+    } else if /[A-Za-z_][\w.]*/ {
+        yield keyword.other;
+    }
+
+    until /$/ {
+        yield other;
+
+        if /\/\*/ {
+            loop {
+                yield comment;
+                await input;
+                if /\*\// {
+                    yield comment;
+                    break;
+                }
+            }
+        } else if /(?:\/\/|;).*/ {
+            // On x86 `;` separates statements.
+            yield comment;
+        } else if /[#@](?:\s|$).*/ {
+            // Without the whitespace these are ARM immediates (`#5`) and x86 symbol types (`@function`).
+            yield comment;
+        } else if /"/ {
+            double_quote_string();
+        } else if /'\\.'|'[^']*'/ {
+            yield string;
+        } else if /'\\?./ {
+            // GAS also accepts character constants without the closing quote: `'A`
+            yield string;
+        } else if /[$#]?-?(?i:0x[\da-f]+|\d[\da-f]*h|0b[01]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)\>/ {
+            yield constant.numeric;
+        } else if /(?:\d+[bf]|@[BbFf])\>/ {
+            yield method;
+        } else if /[A-Za-z_.$][\w.$]*\s*\(,?(%\w+)/ {
+            // Memory operand, as in `msg(%rip)`
+            yield $1 as variable;
+        } else if /(%?[A-Za-z_][\w.]*)\s*\(/ {
+            yield $1 as method;
+        } else if /%[A-Za-z_]\w*/ {
+            yield variable;
+        } else if /(?i:[rxwvastdqbh]\d+|f[ast]?\d+|sp|wsp|lr|pc|fp|ip|ra|gp|tp|zero|xzr|wzr)\>/ {
+            yield variable;
+        } else if /(?i:(?:si|di|bp|sp)l|[re]?(?:[abcd]x|si|di|bp|sp|ip)|[abcd][lh]|r\d+[dwb]|[xyz]?mm\d+|[c-gs]s|[cd]r\d+)\>/ {
+            yield variable;
+        } else if /(?i:byte|word|dword|fword|qword|tbyte|tword|oword|xmmword|ymmword|zmmword|ptr)\>/ {
+            yield storage.type;
+        } else if /(?i:offset)\>/ {
+            yield keyword.other;
+        } else if /[XYZ][LH]?\>/ {
+            yield variable;
+        } else if /\\\w+/ {
+            yield variable;
+        } else if /[A-Za-z_.$][\w.$]*/ {
+            // Gobble word chars to align the next iteration on a word boundary.
+        }
+
+        yield other;
+    }
+}
